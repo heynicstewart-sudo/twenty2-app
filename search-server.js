@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 
 const app = express();
 app.use(cors());
@@ -70,7 +71,7 @@ app.get('/api/search-contact', async (req, res) => {
 });
 
 app.get('/', (req, res) => {
-  res.json({ status: 'ok', service: 'twenty2-search-server' });
+  res.sendFile(path.join(__dirname, 't2c-outreach-crm.html'));
 });
 
 const PORT = process.env.PORT || 3000;
