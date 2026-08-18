@@ -13,12 +13,26 @@ function extractName(title){
   return title.split(' - ')[0].split(' | ')[0].trim();
 }
 
+const INVALID_NAME_PATTERN = /linkedin|sign in|log in|search results?|profiles?|jobs?|^\d+\+?\s*(connections|followers)/i;
+
+function isValidName(name){
+  if(!name) return false;
+  const n = name.trim();
+  if(n.length < 3 || n.length > 60) return false;
+  if(INVALID_NAME_PATTERN.test(n)) return false;
+  if(!n.includes(' ')) return false;
+  return /^[A-Za-z][A-Za-z.'\- ]+$/.test(n);
+}
+
 function isConfidentMatch(result, companyWords, titleWords){
-  if(!result.link || !result.link.includes('linkedin.com/in/')) return false;
+  if(!result.link || !/linkedin\.com\/in\/[A-Za-z0-9\-_%]+\/?$/i.test(result.link.split('?')[0])) return false;
   const haystack = `${result.title || ''} ${result.snippet || ''}`.toLowerCase();
   const hasTitle = titleWords.every(w => haystack.includes(w));
-  const hasCompany = companyWords.some(w => w.length > 2 && haystack.includes(w));
-  return hasTitle && hasCompany;
+  const meaningfulCompanyWords = companyWords.filter(w => w.length > 2);
+  const hasCompany = meaningfulCompanyWords.length
+    ? meaningfulCompanyWords.every(w => haystack.includes(w))
+    : companyWords.some(w => haystack.includes(w));
+  return hasTitle && hasCompany && isValidName(extractName(result.title));
 }
 
 app.get('/api/search-contact', async (req, res) => {

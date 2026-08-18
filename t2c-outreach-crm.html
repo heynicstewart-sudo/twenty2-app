@@ -171,10 +171,11 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .legend{display:flex;gap:16px;margin-top:14px;flex-wrap:wrap;}
 .legend-item{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);font-weight:600;}
 .legend-swatch{width:12px;height:12px;border-radius:4px;}
-.dropzone-upload{border:2px dashed var(--border);border-radius:14px;padding:26px;text-align:center;color:var(--muted);margin-top:20px;background:#fff;}
-.shot-box{border:1px dashed var(--border);border-radius:10px;padding:10px;background:#faf6f1;}
+.dropzone-upload{border:2px dashed var(--border);border-radius:14px;padding:26px;text-align:center;color:var(--muted);margin-top:20px;background:#fff;transition:border-color .15s,background .15s;}
+.dropzone-upload.dragover{border-color:var(--accent);background:#faf3e8;}
+.shot-box{border:1px dashed var(--border);border-radius:10px;padding:10px;background:#faf6f1;transition:border-color .15s,background .15s;}
+.shot-box.dragover{border-color:var(--accent);background:#faf3e8;}
 .shot-hint{font-size:11.5px;color:var(--muted);margin-bottom:8px;line-height:1.5;}
-.shot-upload-btn{cursor:pointer;display:inline-flex;}
 .shot-files{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
 .shot-file-chip{background:#fff;border:1px solid var(--border);border-radius:20px;padding:3px 6px 3px 10px;font-size:11px;font-weight:600;display:inline-flex;align-items:center;gap:6px;}
 .shot-file-chip button{background:none;border:none;color:var(--muted);cursor:pointer;font-size:13px;line-height:1;}
@@ -687,12 +688,12 @@ function renderHowItWorks(){
   <div class="howto-grid">
     <div class="howto-item">
       <div class="howto-item-head"><div class="howto-num">1</div><h4><i class="ti ti-grid-dots"></i> Grid — find people</h4></div>
-      <p>Start here. Each row is a company from your market map, each column a job title you're targeting. Click <strong>Run daily search</strong> and it works through every empty cell in turn, searching live and filling in a name or leaving "No match found".</p>
+      <p>Start here. Each row is a company from your market map, each column a job title you're targeting. Click <strong>Run daily search</strong> and it works through every empty cell in turn, searching live and filling in a name or leaving "No confident match" if it can't verify a real profile.</p>
       <ul>
         <li>Click a contact's name to open their LinkedIn profile in a new tab</li>
         <li>The badge on each card shows days since found, colour-coded green / amber / red</li>
-        <li>Add extra job title columns any time with the field above the table</li>
-        <li>After you've sent connection requests in LinkedIn, drop a screenshot in the panel below and hit <strong>Simulate AI read</strong> to mark accepted contacts as connected</li>
+        <li>Add extra companies or job title columns any time with the fields above the table</li>
+        <li>After you've sent connection requests in LinkedIn, drop or upload a screenshot of your connections list in the panel below and hit <strong>Read screenshot(s)</strong> to mark accepted contacts as connected</li>
       </ul>
     </div>
     <div class="howto-item">
@@ -761,8 +762,14 @@ function renderHowItWorks(){
 
 function renderGrid(){
   const cols = state.gridColumns;
+  window.__connectionsShots = [];
   return `
   <div class="toolbar">
+    <div class="field">
+      <label>Add company</label>
+      <input id="newCompanyInput" placeholder="e.g. BHP">
+    </div>
+    <button class="btn btn-secondary" onclick="addGridCompany()"><i class="ti ti-plus"></i> Add company</button>
     <div class="field">
       <label>Add job title column</label>
       <input id="newColInput" placeholder="e.g. Head of Delivery">
@@ -792,11 +799,16 @@ function renderGrid(){
     <div class="legend-item"><span class="legend-swatch" style="background:#e8f4fa;"></span> Messaging</div>
   </div>
 
-  <div class="dropzone-upload" id="dropZoneUpload">
+  <div class="dropzone-upload" id="dropZoneUpload" ondragover="onConnectionsDragOver(event)" ondragleave="onConnectionsDragLeave(event)" ondrop="onConnectionsDrop(event)">
     <i class="ti ti-photo" style="font-size:26px;"></i>
     <div style="margin:8px 0;font-weight:700;color:var(--text);">Drop a screenshot of your LinkedIn connections</div>
     <div style="font-size:12px;margin-bottom:14px;">We'll match names against contacts awaiting acceptance</div>
-    <button class="btn btn-accent" onclick="simulateScreenshotRead()"><i class="ti ti-wand"></i> Simulate AI read</button>
+    <button type="button" class="btn btn-secondary" onclick="document.getElementById('connectionsShotInput').click()">
+      <i class="ti ti-upload"></i> Upload screenshot(s)
+    </button>
+    <input type="file" id="connectionsShotInput" accept="image/*" multiple style="display:none;" onchange="handleConnectionsUpload(event)">
+    <div class="shot-files" id="connectionsShotFiles" style="justify-content:center;margin-top:10px;"></div>
+    <button class="btn btn-accent" id="readConnectionsBtn" style="margin-top:14px;" onclick="readConnectionsScreenshot()"><i class="ti ti-wand"></i> Read screenshot(s)</button>
   </div>
 
   <div class="status-bar"><span class="live-dot"></span> Live · ${state.contacts.length} contacts tracked across ${state.companies.length} companies</div>
@@ -837,6 +849,16 @@ function addGridColumn(){
   toast('Column "'+val+'" added','success');
 }
 
+function addGridCompany(){
+  const input = document.getElementById('newCompanyInput');
+  const val = input.value.trim();
+  if(!val) return;
+  if(state.companies.includes(val)){ toast('Company already on the grid','warn'); return; }
+  state.companies.push(val);
+  renderPage();
+  toast('"'+val+'" added to the grid','success');
+}
+
 function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
 
 async function runDailySearch(){
@@ -872,11 +894,11 @@ async function runDailySearch(){
         foundCount++;
         if(cellEl) cellEl.outerHTML = renderGridCellHTML(newContact);
       } else {
-        if(cellEl) cellEl.outerHTML = `<div class="cell-empty" data-company="${esc(company)}" data-role="${esc(role)}">No match found</div>`;
+        if(cellEl) cellEl.outerHTML = `<div class="cell-empty" data-company="${esc(company)}" data-role="${esc(role)}" title="Couldn't find a verified LinkedIn profile — try an alternative search method">No confident match — try again</div>`;
       }
     } catch(err){
       console.warn('Search failed for', company, role, err.message);
-      if(cellEl) cellEl.outerHTML = `<div class="cell-empty" data-company="${esc(company)}" data-role="${esc(role)}">Search failed</div>`;
+      if(cellEl) cellEl.outerHTML = `<div class="cell-empty" data-company="${esc(company)}" data-role="${esc(role)}" title="The search request itself failed — try again">Search error — try again</div>`;
     }
     if(i < emptyCells.length - 1) await sleep(300);
   }
@@ -904,19 +926,115 @@ function resetGrid(){
   renderPage();
 }
 
-function simulateScreenshotRead(){
+function onConnectionsDragOver(e){
+  e.preventDefault();
+  document.getElementById('dropZoneUpload').classList.add('dragover');
+}
+function onConnectionsDragLeave(e){
+  document.getElementById('dropZoneUpload').classList.remove('dragover');
+}
+function onConnectionsDrop(e){
+  e.preventDefault();
+  document.getElementById('dropZoneUpload').classList.remove('dragover');
+  const files = Array.from(e.dataTransfer.files || []).filter(f => f.type.startsWith('image/'));
+  if(files.length) processConnectionsFiles(files);
+}
+function handleConnectionsUpload(e){
+  const files = Array.from(e.target.files || []);
+  if(files.length) processConnectionsFiles(files);
+  e.target.value = '';
+}
+function processConnectionsFiles(files){
+  window.__connectionsShots = window.__connectionsShots || [];
+  let pending = files.length;
+  files.forEach(file => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const match = String(reader.result).match(/^data:([^;]+);base64,(.*)$/);
+      if(match){
+        window.__connectionsShots.push({ name: file.name, mediaType: match[1], base64: match[2] });
+      }
+      pending--;
+      if(pending === 0){
+        renderConnectionsShotFiles();
+        toast(files.length+' screenshot'+(files.length===1?'':'s')+' attached', 'success');
+      }
+    };
+    reader.readAsDataURL(file);
+  });
+}
+function renderConnectionsShotFiles(){
+  const el = document.getElementById('connectionsShotFiles');
+  if(!el) return;
+  el.innerHTML = (window.__connectionsShots || []).map((f,i) => `<span class="shot-file-chip">${esc(f.name)}<button onclick="removeConnectionsShot(${i})">&times;</button></span>`).join('');
+}
+function removeConnectionsShot(idx){
+  window.__connectionsShots.splice(idx,1);
+  renderConnectionsShotFiles();
+}
+
+async function readConnectionsScreenshot(){
+  const shots = window.__connectionsShots || [];
   const candidates = state.contacts.filter(c => (c.state==='found' || c.state==='opened') && !c.connDate);
+  if(!candidates.length){ toast('No pending contacts to match against a screenshot','warn'); return; }
+
+  const btn = document.getElementById('readConnectionsBtn');
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<i class="ti ti-loader-2"></i> Reading...';
+
+  if(!shots.length){
+    demoMatchConnections(candidates);
+    btn.disabled = false;
+    btn.innerHTML = original;
+    return;
+  }
+
+  const list = candidates.map(c => `${c.id}: ${c.name} (${c.company})`).join('\n');
+  const prompt = `Here is a screenshot of a LinkedIn connections list. Cross-reference the names visible in the screenshot against this list of contacts awaiting connection acceptance:\n${list}\n\nReturn ONLY a JSON array of the contact ids (e.g. ["c4","c9"]) whose names appear in the screenshot as accepted connections. If none appear, return [].`;
+  const images = shots.map(f => ({ mediaType: f.mediaType, base64: f.base64 }));
+  const raw = await callAI(prompt, 200, null, images);
+
+  btn.disabled = false;
+  btn.innerHTML = original;
+
+  if(raw === null){
+    demoMatchConnections(candidates);
+    return;
+  }
+
+  let matchedIds = [];
+  try {
+    const jsonMatch = raw.match(/\[[\s\S]*\]/);
+    matchedIds = JSON.parse(jsonMatch ? jsonMatch[0] : raw);
+  } catch(e){ matchedIds = []; }
+
+  const matched = candidates.filter(c => matchedIds.includes(c.id));
+  if(!matched.length){
+    toast("Couldn't match anyone from that screenshot — try a clearer image", 'warn');
+    return;
+  }
+
+  markContactsConnected(matched);
+  toast(`${matched.length} contact${matched.length===1?'':'s'} matched and marked as connected: ${matched.map(p=>p.name).join(', ')}`, 'success');
+  renderPage();
+}
+
+function demoMatchConnections(candidates){
   const picks = candidates.slice(0,2);
-  if(!picks.length){ toast('No pending contacts to match against a screenshot','warn'); return; }
-  picks.forEach(c => {
+  markContactsConnected(picks);
+  toast(`${picks.length} contacts matched and marked as connected: ${picks.map(p=>p.name).join(', ')}`, 'success');
+  renderPage();
+}
+
+function markContactsConnected(contacts){
+  contacts.forEach(c => {
     c.state = 'connected';
     c.connReqDate = c.connReqDate || isoDate(TODAY);
     c.connDate = isoDate(TODAY);
     c.thread.connSent = isoDate(TODAY);
     state.activity.unshift({ type:'connected', text:`${c.name} (${c.company}) accepted your connection`, date: isoDate(TODAY) });
   });
-  toast(`${picks.length} contacts matched and marked as connected: ${picks.map(p=>p.name).join(', ')}`, 'success');
-  renderPage();
 }
 
 /* ===================== ROADMAP PAGE ===================== */
@@ -1409,19 +1527,41 @@ function openGenerateModal(cid, stageKey, onDone){
 
 function screenshotBoxHtml(kind, hint){
   return `
-    <div class="shot-box" id="shotbox-${kind}">
+    <div class="shot-box" id="shotbox-${kind}" ondragover="onShotDragOver(event,'${kind}')" ondragleave="onShotDragLeave(event,'${kind}')" ondrop="onShotDrop(event,'${kind}')">
       <div class="shot-hint"><i class="ti ti-camera"></i> ${hint}</div>
-      <label class="btn btn-secondary btn-sm shot-upload-btn">
+      <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('shotinput-${kind}').click()">
         <i class="ti ti-upload"></i> Upload screenshot(s)
-        <input type="file" accept="image/*" multiple style="display:none;" onchange="handleScreenshotUpload(event,'${kind}')">
-      </label>
+      </button>
+      <input type="file" id="shotinput-${kind}" accept="image/*" multiple style="display:none;" onchange="handleScreenshotUpload(event,'${kind}')">
       <div class="shot-files" id="shotfiles-${kind}"></div>
     </div>`;
 }
 
+function onShotDragOver(e, kind){
+  e.preventDefault();
+  e.stopPropagation();
+  const box = document.getElementById('shotbox-'+kind);
+  if(box) box.classList.add('dragover');
+}
+function onShotDragLeave(e, kind){
+  const box = document.getElementById('shotbox-'+kind);
+  if(box) box.classList.remove('dragover');
+}
+function onShotDrop(e, kind){
+  e.preventDefault();
+  e.stopPropagation();
+  const box = document.getElementById('shotbox-'+kind);
+  if(box) box.classList.remove('dragover');
+  const files = Array.from(e.dataTransfer.files || []).filter(f => f.type.startsWith('image/'));
+  if(files.length) processShotFiles(files, kind);
+}
 function handleScreenshotUpload(event, kind){
   const files = Array.from(event.target.files || []);
-  if(!files.length || !window.__genCtx) return;
+  if(files.length) processShotFiles(files, kind);
+  event.target.value = '';
+}
+function processShotFiles(files, kind){
+  if(!window.__genCtx) return;
   const arrKey = kind === 'profile' ? 'profileImages' : 'convoImages';
   let pending = files.length;
   files.forEach(file => {
@@ -1439,7 +1579,6 @@ function handleScreenshotUpload(event, kind){
     };
     reader.readAsDataURL(file);
   });
-  event.target.value = '';
 }
 function renderShotFiles(kind){
   const arrKey = kind === 'profile' ? 'profileImages' : 'convoImages';
