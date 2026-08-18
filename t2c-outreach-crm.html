@@ -1025,7 +1025,10 @@ function renderMsgStep(c, key, label){
           <button class="reply-btn ${step.replied?'active-yes':''}" onclick="setReply('${c.id}','${key}',true)">Yes</button>
           <button class="reply-btn ${!step.replied?'active-no':''}" onclick="setReply('${c.id}','${key}',false)">No</button>
         </div>
-      ` : `<button class="btn btn-secondary btn-sm" onclick="markSent('${c.id}','${key}')"><i class="ti ti-send"></i> Mark sent</button>`}
+      ` : `
+        <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();openGenerateModal('${c.id}','${key}', ()=>renderPage())"><i class="ti ti-copy"></i> Write &amp; copy message</button>
+        <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();markSent('${c.id}','${key}')">Already sent, mark done</button>
+      `}
     </div>
   </div>`;
 }
@@ -1349,6 +1352,7 @@ function openGenerateModal(cid, stageKey, onDone){
   const footer = `
     <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
     <button class="btn btn-secondary" id="regenBtn" onclick="regenerateMessage('${cid}','${stageKey}')"><i class="ti ti-refresh"></i> Regenerate</button>
+    <button class="btn btn-secondary" onclick="copyGeneratedMessage()"><i class="ti ti-copy"></i> Copy</button>
     <button class="btn btn-primary" onclick="saveGeneratedMessage('${cid}','${stageKey}')"><i class="ti ti-check"></i> Save &amp; advance</button>
   `;
   openModal('Write message — '+st.label, body, footer);
@@ -1377,6 +1381,18 @@ function regenerateMessage(cid, stageKey){
   const out = document.getElementById('genOutput');
   if(out) out.value = 'Generating...';
   generateMessageForModal(cid, stageKey);
+}
+async function copyGeneratedMessage(){
+  const out = document.getElementById('genOutput');
+  if(!out || !out.value || out.value === 'Generating...') return;
+  try {
+    await navigator.clipboard.writeText(out.value);
+  } catch(err){
+    out.focus();
+    out.select();
+    document.execCommand('copy');
+  }
+  toast('Message copied to clipboard', 'success');
 }
 function saveGeneratedMessage(cid, stageKey){
   const c = state.contacts.find(x=>x.id===cid);
