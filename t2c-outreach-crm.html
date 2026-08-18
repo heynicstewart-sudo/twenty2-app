@@ -378,6 +378,7 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 
 const CTA_OPTIONS = ['Change Value Check','Free session','The book','Community Connect event','Other'];
 const TODAY = new Date('2026-08-18T09:00:00');
+const SEARCH_API_URL = 'https://twenty2-app.up.railway.app/api/search-contact';
 
 let state = {
   currentPage: 'dashboard',
@@ -444,7 +445,6 @@ let state = {
       } }
   ],
   settings: {
-    searchApiUrl: '',
     timeoutDays: 10,
     timeoutAction: 'Move to archive',
     services: ['Sprint Zero','Team Reset','Agile Coaching','Change Value Workshop','Scrum Master Training','POPM Certification','Community Connect','Leading SAFe'],
@@ -683,7 +683,6 @@ function renderHowItWorks(){
       <div class="howto-item-head"><div class="howto-num">1</div><h4><i class="ti ti-grid-dots"></i> Grid — find people</h4></div>
       <p>Start here. Each row is a company from your market map, each column a job title you're targeting. Click <strong>Run daily search</strong> and it works through every empty cell in turn, searching live and filling in a name or leaving "No match found".</p>
       <ul>
-        <li>First time only: paste your deployed search server's URL into <strong>Settings &gt; Contact search</strong>, otherwise the button will ask you to set it up</li>
         <li>Click a contact's name to open their LinkedIn profile in a new tab</li>
         <li>The badge on each card shows days since found, colour-coded green / amber / red</li>
         <li>Add extra job title columns any time with the field above the table</li>
@@ -835,12 +834,6 @@ function addGridColumn(){
 function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
 
 async function runDailySearch(){
-  const apiUrl = (state.settings.searchApiUrl || '').trim().replace(/\/+$/,'');
-  if(!apiUrl){
-    toast('Set your Search API URL in Settings > Contact search before running a daily search', 'warn');
-    return;
-  }
-
   const cols = state.gridColumns;
   const emptyCells = [];
   state.companies.forEach(company => cols.forEach(role => { if(!findContact(company, role)) emptyCells.push({company, role}); }));
@@ -859,7 +852,7 @@ async function runDailySearch(){
     const { company, role } = emptyCells[i];
     const cellEl = document.querySelector(`.cell-searching[data-company="${cssEscape(company)}"][data-role="${cssEscape(role)}"]`);
     try {
-      const res = await fetch(`${apiUrl}/api/search-contact?company=${encodeURIComponent(company)}&jobTitle=${encodeURIComponent(role)}`);
+      const res = await fetch(`${SEARCH_API_URL}?company=${encodeURIComponent(company)}&jobTitle=${encodeURIComponent(role)}`);
       if(!res.ok) throw new Error('Search endpoint returned '+res.status);
       const data = await res.json();
       if(data.found && data.name && data.url){
@@ -1639,15 +1632,6 @@ function renderSettings(){
   const s = state.settings;
   return `
   <div class="settings-section card">
-    <div class="section-title"><i class="ti ti-api"></i> Contact search</div>
-    <div class="field">
-      <label>Search API URL</label>
-      <input id="searchApiUrl" placeholder="https://your-app.up.railway.app" value="${esc(s.searchApiUrl||'')}">
-    </div>
-    <p class="muted" style="font-size:12px;">Paste the base URL of your deployed <code>search-server.js</code> here (e.g. your Railway app URL, no trailing slash). "Run daily search" on the Grid page calls <code>&lt;this URL&gt;/api/search-contact</code> to find real LinkedIn contacts via Serper.</p>
-  </div>
-
-  <div class="settings-section card">
     <div class="section-title"><i class="ti ti-brand-linkedin"></i> LinkedIn accounts</div>
     ${s.accounts.map((a,i) => `
       <div class="account-row">
@@ -1763,7 +1747,6 @@ function addMagnet(){
 
 function saveSettings(){
   const s = state.settings;
-  s.searchApiUrl = document.getElementById('searchApiUrl').value.trim().replace(/\/+$/,'');
   s.timeoutDays = parseInt(document.getElementById('timeoutDays').value) || 10;
   s.timeoutAction = document.getElementById('timeoutAction').value;
   s.strategy.messagesBeforeCta = document.getElementById('strMsgs').value;
