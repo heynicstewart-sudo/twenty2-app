@@ -1,0 +1,17 @@
+{
+  "name": "twenty2-search-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Serper-backed LinkedIn contact search endpoint for T2C Outreach",
+  "main": "search-server.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node search-server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
+  }
+}

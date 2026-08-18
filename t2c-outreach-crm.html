@@ -1,0 +1,1810 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>T2C Outreach</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
+<style>
+:root{
+  --bg:#f5f0eb;
+  --sidebar-bg:#1a1a2e;
+  --sidebar-text:#ffffff;
+  --sidebar-muted:rgba(255,255,255,0.5);
+  --sidebar-active-bg:#ffffff;
+  --sidebar-active-text:#1a1a2e;
+  --topbar-bg:#ffffff;
+  --border:#e8e0d8;
+  --card-bg:#ffffff;
+  --primary:#1a1a2e;
+  --accent:#c8a96e;
+  --success:#44A574;
+  --warning:#e8a020;
+  --danger:#c44a2a;
+  --muted:#8a8070;
+  --peach:#FF834C;
+  --blue:#0084C5;
+  --brown:#532822;
+  --yellow:#FFD05D;
+  --text:#2a2620;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{
+  font-family:'Plus Jakarta Sans',sans-serif;
+  background:var(--bg);
+  color:var(--text);
+  font-size:14px;
+  -webkit-font-smoothing:antialiased;
+}
+a{color:inherit;text-decoration:none;}
+.app{display:flex;min-height:100vh;}
+
+/* Sidebar */
+.sidebar{
+  width:240px;
+  min-width:240px;
+  background:var(--sidebar-bg);
+  color:var(--sidebar-text);
+  display:flex;
+  flex-direction:column;
+  padding:20px 14px;
+  position:sticky;
+  top:0;
+  height:100vh;
+}
+.sidebar-logo{display:flex;align-items:center;gap:10px;padding:8px 8px 4px;}
+.logo-mark{width:32px;height:32px;min-width:32px;background:var(--accent);border-radius:8px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:13px;}
+.logo-text{display:flex;flex-direction:column;}
+.logo-name{font-size:14px;font-weight:700;color:#fff;line-height:1.2;}
+.logo-sub{font-size:11px;color:var(--sidebar-muted);margin-top:2px;}
+.sidebar-nav{display:flex;flex-direction:column;gap:2px;margin-top:24px;}
+.nav-item{
+  display:flex;align-items:center;gap:10px;
+  padding:10px 12px;border-radius:10px;
+  color:var(--sidebar-muted);
+  font-weight:600;font-size:13.5px;
+  cursor:pointer;
+  border:none;background:none;
+  width:100%;text-align:left;
+}
+.nav-item i{font-size:18px;}
+.nav-item:hover{color:#fff;background:rgba(255,255,255,0.06);}
+.nav-item.active{background:var(--sidebar-active-bg);color:var(--sidebar-active-text);}
+.sidebar-footer{margin-top:auto;padding:12px 8px;color:var(--sidebar-muted);font-size:11.5px;border-top:1px solid rgba(255,255,255,0.08);padding-top:16px;}
+
+/* Main */
+.main{flex:1;min-width:0;display:flex;flex-direction:column;}
+.topbar{
+  background:var(--topbar-bg);
+  border-bottom:1px solid var(--border);
+  padding:16px 28px;
+  display:flex;align-items:center;justify-content:space-between;
+  position:sticky;top:0;z-index:20;
+}
+.topbar-title{font-size:18px;font-weight:800;}
+.topbar-user{display:flex;align-items:center;gap:10px;}
+.avatar{width:32px;height:32px;border-radius:50%;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;}
+.page{padding:24px 28px 60px;max-width:1500px;}
+
+/* Cards / buttons */
+.card{background:var(--card-bg);border:1px solid var(--border);border-radius:14px;padding:18px;}
+.btn{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:9px 16px;border-radius:9px;border:1px solid transparent;
+  font-family:inherit;font-weight:700;font-size:13px;cursor:pointer;
+  transition:opacity .15s;
+}
+.btn:hover{opacity:0.88;}
+.btn i{font-size:16px;}
+.btn-primary{background:var(--primary);color:#fff;}
+.btn-secondary{background:#fff;color:var(--primary);border-color:var(--border);}
+.btn-accent{background:var(--accent);color:#fff;}
+.btn-danger{background:var(--danger);color:#fff;}
+.btn-ghost{background:transparent;color:var(--primary);border-color:transparent;padding:6px 10px;}
+.btn-sm{padding:6px 10px;font-size:12px;}
+.btn:disabled{opacity:0.5;cursor:not-allowed;}
+
+input,select,textarea{
+  font-family:inherit;font-size:13px;padding:9px 11px;
+  border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--text);
+  width:100%;
+}
+textarea{resize:vertical;}
+label{font-size:12px;font-weight:700;color:var(--muted);display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:.02em;}
+.field{margin-bottom:14px;}
+.row{display:flex;gap:12px;}
+.row>*{flex:1;}
+
+/* Dashboard */
+.stat-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:22px;}
+.stat-card{border-radius:14px;padding:16px 18px;color:#fff;}
+.stat-card .num{font-size:26px;font-weight:800;margin-top:6px;}
+.stat-card .label{font-size:12px;font-weight:600;opacity:0.9;}
+.two-col{display:grid;grid-template-columns:1.3fr 1fr;gap:16px;margin-bottom:16px;}
+.section-title{font-size:14px;font-weight:800;margin-bottom:12px;display:flex;align-items:center;gap:8px;}
+.timeline{display:flex;flex-direction:column;gap:14px;}
+.timeline-item{display:flex;gap:10px;}
+.timeline-dot{width:26px;height:26px;min-width:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:13px;}
+.timeline-body .t-text{font-weight:600;font-size:13px;}
+.timeline-body .t-time{font-size:11.5px;color:var(--muted);margin-top:2px;}
+.delivery-item{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);}
+.delivery-item:last-child{border-bottom:none;}
+.mini-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:16px;}
+.mini-card{background:#fff;border:1px solid var(--border);border-radius:14px;padding:16px;text-align:center;}
+.mini-card .num{font-size:24px;font-weight:800;color:var(--primary);}
+.mini-card .label{font-size:12px;color:var(--muted);margin-top:4px;font-weight:600;}
+.quick-actions{display:flex;gap:12px;flex-wrap:wrap;}
+
+/* Tags / badges */
+.tag{display:inline-flex;align-items:center;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:700;}
+.tag-found{background:#fdf4e6;color:#8a6a1f;}
+.tag-opened{background:#fde9d6;color:#a1571c;}
+.tag-connected{background:#e3f5eb;color:#1f7a4f;}
+.tag-messaging{background:#e2f2fa;color:#0d6a96;}
+.tag-booked{background:#1a1a2e;color:#fff;}
+.day-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:800;}
+.day-green{background:#e3f5eb;color:#1f7a4f;}
+.day-amber{background:#fdf0d9;color:#a1701c;}
+.day-red{background:#fbe3dc;color:var(--danger);}
+
+/* Grid page */
+.toolbar{display:flex;gap:10px;align-items:flex-end;margin-bottom:16px;flex-wrap:wrap;}
+.toolbar .field{margin-bottom:0;min-width:220px;}
+.grid-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:14px;background:#fff;}
+table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
+.grid-table th{background:#faf6f1;padding:12px 14px;text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:.03em;color:var(--muted);border-bottom:1px solid var(--border);white-space:nowrap;}
+.grid-table td{padding:10px 14px;border-bottom:1px solid var(--border);vertical-align:top;min-width:190px;}
+.grid-table tr:last-child td{border-bottom:none;}
+.company-cell{font-weight:700;white-space:nowrap;}
+.grid-cell{border-radius:10px;padding:10px;min-height:64px;}
+.cell-found{background:#fdf8ef;}
+.cell-opened{background:#fdf1e2;}
+.cell-connected{background:#eaf7f0;}
+.cell-messaging{background:#e8f4fa;}
+.cell-empty{background:#fbfaf8;color:var(--muted);font-size:12px;display:flex;align-items:center;justify-content:center;min-height:64px;}
+.cell-searching{background:#fbfaf8;color:var(--muted);font-size:12px;display:flex;align-items:center;justify-content:center;min-height:64px;font-style:italic;}
+.cell-name{font-weight:700;font-size:13px;display:flex;align-items:center;gap:4px;}
+.cell-meta{display:flex;gap:6px;align-items:center;margin-top:6px;flex-wrap:wrap;}
+.legend{display:flex;gap:16px;margin-top:14px;flex-wrap:wrap;}
+.legend-item{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);font-weight:600;}
+.legend-swatch{width:12px;height:12px;border-radius:4px;}
+.dropzone-upload{border:2px dashed var(--border);border-radius:14px;padding:26px;text-align:center;color:var(--muted);margin-top:20px;background:#fff;}
+.status-bar{display:flex;align-items:center;gap:8px;margin-top:16px;font-size:12px;color:var(--muted);}
+.live-dot{width:8px;height:8px;border-radius:50%;background:var(--success);animation:pulse 1.6s infinite;}
+@keyframes pulse{0%{opacity:1;}50%{opacity:.35;}100%{opacity:1;}}
+
+/* Kanban / Roadmap */
+.kanban{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;align-items:start;}
+.kanban-col{background:#faf6f1;border:1px solid var(--border);border-radius:14px;padding:12px;min-height:200px;}
+.kanban-col-header{display:flex;justify-content:space-between;align-items:center;font-weight:800;font-size:13px;margin-bottom:10px;padding:0 4px;}
+.kanban-col-header .count{background:var(--border);color:var(--muted);border-radius:20px;padding:1px 8px;font-size:11px;}
+.kanban-cards{display:flex;flex-direction:column;gap:10px;min-height:60px;}
+.kcard{background:#fff;border:1px solid var(--border);border-radius:12px;padding:12px;cursor:grab;}
+.kcard.dragging{opacity:0.4;}
+.kcard-head{display:flex;justify-content:space-between;align-items:flex-start;cursor:pointer;}
+.kcard-name{font-weight:700;font-size:13.5px;}
+.kcard-role{font-size:11.5px;color:var(--muted);margin-top:2px;}
+.kcard-flag{margin-top:8px;background:#fbe3dc;color:var(--danger);border-radius:8px;padding:6px 8px;font-size:11.5px;display:flex;justify-content:space-between;align-items:center;font-weight:700;}
+.thread{margin-top:12px;border-top:1px solid var(--border);padding-top:10px;display:flex;flex-direction:column;gap:10px;}
+.thread-step{display:flex;flex-direction:column;gap:6px;background:#faf6f1;border-radius:10px;padding:10px;}
+.thread-step-head{display:flex;justify-content:space-between;align-items:center;font-weight:700;font-size:12px;}
+.thread-step-body{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+.check-yes{color:var(--success);}
+.reply-toggle{display:flex;gap:6px;}
+.reply-btn{padding:4px 9px;border-radius:7px;border:1px solid var(--border);background:#fff;font-size:11px;font-weight:700;cursor:pointer;}
+.reply-btn.active-yes{background:var(--success);color:#fff;border-color:var(--success);}
+.reply-btn.active-no{background:var(--danger);color:#fff;border-color:var(--danger);}
+.archive-box{margin-top:26px;}
+.archive-toggle{cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;gap:6px;color:var(--muted);}
+
+/* Modal */
+.modal-overlay{position:fixed;inset:0;background:rgba(26,26,46,0.45);display:flex;align-items:center;justify-content:center;z-index:100;padding:20px;}
+.modal{background:#fff;border-radius:16px;max-width:560px;width:100%;max-height:88vh;overflow-y:auto;}
+.modal-header{padding:18px 22px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;}
+.modal-header h3{font-size:16px;font-weight:800;}
+.modal-close{cursor:pointer;color:var(--muted);font-size:20px;background:none;border:none;}
+.modal-body{padding:20px 22px;}
+.modal-footer{padding:16px 22px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:10px;}
+
+/* Toast */
+.toast-container{position:fixed;top:20px;right:20px;z-index:200;display:flex;flex-direction:column;gap:10px;}
+.toast{background:var(--primary);color:#fff;padding:12px 18px;border-radius:10px;font-size:13px;font-weight:600;box-shadow:0 8px 24px rgba(0,0,0,0.15);display:flex;align-items:center;gap:8px;animation:slideIn .2s ease;}
+.toast.success{background:var(--success);}
+.toast.warn{background:var(--warning);}
+@keyframes slideIn{from{transform:translateX(30px);opacity:0;}to{transform:translateX(0);opacity:1;}}
+
+/* Sequences */
+.seq-tabs{display:flex;gap:8px;margin-bottom:18px;border-bottom:1px solid var(--border);}
+.seq-tab{padding:10px 16px;font-weight:700;font-size:13px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;}
+.seq-tab.active{color:var(--primary);border-color:var(--primary);}
+.seq-header{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:18px;gap:14px;flex-wrap:wrap;}
+.pill{display:inline-flex;padding:4px 11px;border-radius:20px;background:#faf0dc;color:#8a6a1f;font-size:11.5px;font-weight:700;margin-right:6px;}
+.flow{display:grid;grid-template-columns:repeat(4,1fr);gap:0;align-items:stretch;margin-bottom:6px;}
+.flow-node{background:#fff;border:1px solid var(--border);border-radius:12px;position:relative;display:flex;flex-direction:column;}
+.flow-node + .flow-node{margin-left:22px;}
+.flow-node::before{content:'';position:absolute;left:-22px;top:50%;width:22px;height:2px;background:var(--border);}
+.flow-node:first-child::before{display:none;}
+.flow-node::after{content:'\2192';position:absolute;left:-20px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:14px;}
+.flow-node:first-child::after{display:none;}
+.flow-node-head{padding:10px 12px;border-bottom:1px solid var(--border);border-radius:12px 12px 0 0;border-top:4px solid var(--brown);}
+.flow-node-head.stage-connect{border-top-color:var(--brown);}
+.flow-node-head.stage-m1{border-top-color:var(--peach);}
+.flow-node-head.stage-m2{border-top-color:var(--blue);}
+.flow-node-head.stage-cta{border-top-color:var(--success);}
+.flow-node-head .stage-label{font-weight:800;font-size:12.5px;}
+.flow-node-head .stage-hint{font-size:11px;color:var(--muted);margin-top:2px;}
+.flow-node-body{padding:10px;flex:1;}
+.flow-node-body textarea{min-height:130px;font-size:12.5px;}
+.flow-node-foot{padding:10px;border-top:1px solid var(--border);display:flex;gap:8px;}
+.dropzone{margin-top:10px;background:#faf6f1;border:1px dashed var(--border);border-radius:10px;padding:10px;min-height:56px;display:flex;flex-wrap:wrap;gap:8px;align-content:flex-start;}
+.chip{background:#fff;border:1px solid var(--border);border-radius:20px;padding:6px 12px;font-size:11.5px;font-weight:700;cursor:grab;display:flex;align-items:center;gap:6px;}
+.chip.dragging{opacity:0.4;}
+.pipeline-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:6px;}
+.pipeline-col-title{font-weight:800;font-size:12.5px;margin-bottom:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.02em;}
+
+/* Calendar */
+.cal-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;}
+.cal-nav{display:flex;gap:8px;align-items:center;}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;}
+.cal-dow{text-align:center;font-size:11.5px;font-weight:800;color:var(--muted);padding-bottom:6px;text-transform:uppercase;}
+.cal-cell{background:#fff;border:1px solid var(--border);border-radius:10px;min-height:96px;padding:8px;}
+.cal-cell.empty{background:transparent;border:none;}
+.cal-cell.today{border-color:var(--primary);border-width:2px;}
+.cal-date{font-size:12px;font-weight:700;color:var(--muted);margin-bottom:6px;}
+.event-chip{background:#e3f5eb;color:#1f7a4f;border-radius:7px;padding:3px 7px;font-size:10.5px;font-weight:700;margin-bottom:4px;cursor:default;position:relative;}
+.event-chip.blue{background:#e2f2fa;color:#0d6a96;}
+.event-chip.peach{background:#fde4d6;color:#a1571c;}
+.event-chip.grey{background:#eee9e2;color:#6b6355;}
+.event-chip:hover .event-tooltip{display:block;}
+.event-tooltip{display:none;position:absolute;bottom:120%;left:0;background:var(--primary);color:#fff;padding:8px 10px;border-radius:8px;font-size:11px;white-space:nowrap;z-index:30;font-weight:600;}
+
+/* Analytics */
+.an-stats{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:20px;}
+.an-stat{background:#fff;border:1px solid var(--border);border-radius:12px;padding:14px;}
+.an-stat .num{font-size:20px;font-weight:800;}
+.an-stat .label{font-size:11px;color:var(--muted);font-weight:600;margin-top:2px;}
+.an-stat .sub{font-size:11px;color:var(--success);font-weight:700;margin-top:2px;}
+.bar-row{margin-bottom:12px;}
+.bar-row-head{display:flex;justify-content:space-between;font-size:12.5px;font-weight:700;margin-bottom:5px;}
+.bar-track{background:var(--border);border-radius:8px;height:10px;overflow:hidden;display:flex;}
+.bar-fill{background:var(--primary);height:100%;}
+.bar-fill.secondary{background:var(--accent);}
+.cta-row{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--border);}
+.cta-row:last-child{border-bottom:none;}
+.count-pill{background:var(--border);color:var(--muted);border-radius:20px;padding:2px 10px;font-size:11.5px;font-weight:800;}
+.count-pill.has{background:#e3f5eb;color:#1f7a4f;}
+.analysis-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:14px;}
+.analysis-block{border-radius:12px;padding:16px;}
+.analysis-block.wins{background:#eaf7f0;border:1px solid #c9e9d7;}
+.analysis-block.gaps{background:#fdf1e0;border:1px solid #f5dcae;}
+.analysis-block.losses{background:#fbe3dc;border:1px solid #f0c2b0;}
+.analysis-block.recs{background:#e2f2fa;border:1px solid #bfe0f0;}
+.analysis-block h4{display:flex;align-items:center;gap:7px;font-size:13px;margin-bottom:10px;}
+.analysis-block ul{padding-left:18px;font-size:12.5px;line-height:1.6;}
+
+/* Settings */
+.settings-section{margin-bottom:20px;}
+.tag-list{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;}
+.tag-item{background:#faf6f1;border:1px solid var(--border);border-radius:20px;padding:6px 8px 6px 14px;font-size:12.5px;font-weight:700;display:flex;align-items:center;gap:8px;}
+.tag-item button{background:none;border:none;color:var(--muted);cursor:pointer;font-size:15px;line-height:1;}
+.account-row{display:flex;justify-content:space-between;align-items:center;border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px;}
+.checkbox-row{display:flex;gap:14px;flex-wrap:wrap;}
+.checkbox-item{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;}
+.checkbox-item input{width:auto;}
+.magnet-row{display:flex;align-items:center;gap:12px;border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px;}
+.toggle-switch{width:38px;height:22px;border-radius:20px;background:var(--border);position:relative;cursor:pointer;flex:none;}
+.toggle-switch.on{background:var(--success);}
+.toggle-switch .knob{width:18px;height:18px;border-radius:50%;background:#fff;position:absolute;top:2px;left:2px;transition:left .15s;}
+.toggle-switch.on .knob{left:18px;}
+.save-flash{color:var(--success);font-weight:700;font-size:12.5px;display:none;align-items:center;gap:6px;}
+
+/* How it works */
+.howto-hero{background:var(--primary);color:#fff;border-radius:16px;padding:24px 26px;margin-bottom:20px;}
+.howto-hero h2{font-size:19px;font-weight:800;margin-bottom:8px;}
+.howto-hero p{color:rgba(255,255,255,0.75);font-size:13.5px;max-width:640px;line-height:1.6;}
+.pipeline-visual{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:16px;}
+.pipeline-visual .arrow{color:var(--muted);font-size:16px;}
+.howto-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-bottom:20px;}
+.howto-item{border:1px solid var(--border);border-radius:14px;padding:18px;background:#fff;}
+.howto-item-head{display:flex;align-items:center;gap:12px;margin-bottom:10px;}
+.howto-num{width:30px;height:30px;min-width:30px;border-radius:9px;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;}
+.howto-item h4{font-size:14px;font-weight:800;}
+.howto-item p{font-size:12.5px;color:var(--muted);line-height:1.6;}
+.howto-item ul{margin-top:8px;padding-left:18px;font-size:12.5px;color:var(--text);line-height:1.7;}
+.faq-item{border-bottom:1px solid var(--border);padding:14px 0;}
+.faq-item:last-child{border-bottom:none;}
+.faq-item h5{font-size:13px;font-weight:800;margin-bottom:4px;}
+.faq-item p{font-size:12.5px;color:var(--muted);line-height:1.6;}
+
+/* Context menu */
+.ctx-menu{position:fixed;background:#fff;border:1px solid var(--border);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,0.15);z-index:300;overflow:hidden;min-width:180px;}
+.ctx-item{padding:10px 14px;font-size:12.5px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:8px;}
+.ctx-item:hover{background:var(--bg);}
+
+.muted{color:var(--muted);}
+.empty-state{padding:30px;text-align:center;color:var(--muted);font-size:13px;}
+
+@media (max-width:1024px){
+  .sidebar{width:76px;min-width:76px;padding:16px 8px;}
+  .sidebar .logo-text,.sidebar .nav-item span,.sidebar-footer{display:none;}
+  .nav-item{justify-content:center;}
+  .stat-grid{grid-template-columns:repeat(2,1fr);}
+  .two-col{grid-template-columns:1fr;}
+  .mini-cards{grid-template-columns:1fr;}
+  .kanban{grid-template-columns:1fr;}
+  .flow{grid-template-columns:1fr;}
+  .flow-node+.flow-node{margin-left:0;margin-top:22px;}
+  .flow-node::before,.flow-node::after{display:none;}
+  .pipeline-grid{grid-template-columns:1fr;}
+  .an-stats{grid-template-columns:repeat(2,1fr);}
+  .analysis-grid{grid-template-columns:1fr;}
+  .howto-grid{grid-template-columns:1fr;}
+}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-mark">T2</div>
+      <div class="logo-text">
+        <div class="logo-name">Twenty2 Collective</div>
+        <div class="logo-sub">Outreach CRM</div>
+      </div>
+    </div>
+    <nav class="sidebar-nav" id="sidebarNav"></nav>
+    <div class="sidebar-footer">Marcus Ward<br>Perth, WA</div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <div class="topbar-title" id="topbarTitle">Dashboard</div>
+      <div class="topbar-user">
+        <div class="avatar">MW</div>
+      </div>
+    </header>
+    <div class="page" id="pageContent"></div>
+  </div>
+</div>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+/* ===================== STATE & SEED DATA ===================== */
+
+const CTA_OPTIONS = ['Change Value Check','Free session','The book','Community Connect event','Other'];
+const TODAY = new Date('2026-08-18T09:00:00');
+
+let state = {
+  currentPage: 'dashboard',
+  gridColumns: ['Product Owner','Transformation Lead','Digital and Tech'],
+  companies: ['Woodside Energy','Chevron Australia','Rio Tinto','Water Corporation','ATCO Australia','Hancock Iron Ore','Shell Australia','RAC WA','Fortescue','Western Power'],
+  seqActiveTab: 'seniorLeaders',
+  calMonth: TODAY.getMonth(),
+  calYear: TODAY.getFullYear(),
+  archiveOpen: false,
+  contacts: [
+    { id:'c1', name:'Stuart Williams', company:'Woodside Energy', role:'Transformation Lead', url:'https://linkedin.com/in/stuart-williams-wa', seqId:'seniorLeaders', state:'booked', foundDate:'2026-07-15', connReqDate:'2026-07-16', connDate:'2026-07-20', notes:'Leading the delivery transformation programme across upstream projects.',
+      thread:{ connSent:'2026-07-20', m1:{sent:'2026-07-23',replied:true}, m2:{sent:'2026-07-28',replied:true}, cta:'Change Value Check', booked:true, bookedService:'Sprint Zero', bookedDate:'2026-09-05', bookedCta:'Change Value Check', bookedNotes:'Mentioned the CVA surfaced a real gap in their delivery rhythm.' },
+      generated:{} },
+    { id:'c2', name:'Bonnie W.', company:'Chevron Australia', role:'Product Owner', url:'https://linkedin.com/in/bonnie-w-chevron', seqId:'seniorLeaders', state:'connected', foundDate:'2026-08-08', connReqDate:'2026-08-09', connDate:'2026-08-12', notes:'Recently posted about scaling PI planning across three sites.',
+      thread:{ connSent:'2026-08-12', m1:null, m2:null, cta:null, booked:false }, generated:{} },
+    { id:'c3', name:'Craig Humphrey', company:'Rio Tinto', role:'Digital and Tech', url:'https://linkedin.com/in/craig-humphrey-rt', seqId:'digitalTech', state:'messaging', foundDate:'2026-07-30', connReqDate:'2026-07-31', connDate:'2026-08-05', notes:'Heads up a digital delivery pod, mentioned tooling fragmentation.',
+      thread:{ connSent:'2026-08-05', m1:{sent:'2026-08-08',replied:false}, m2:null, cta:null, booked:false }, generated:{} },
+    { id:'c4', name:'Helen Joe', company:'Water Corporation', role:'Transformation Lead', url:'https://linkedin.com/in/helen-joe-watercorp', seqId:'seniorLeaders', state:'found', foundDate:'2026-08-16', connReqDate:null, connDate:null, notes:'',
+      thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{} },
+    { id:'c5', name:'Vicky Hetherington', company:'ATCO Australia', role:'Product Owner', url:'https://linkedin.com/in/vicky-hetherington-atco', seqId:'seniorLeaders', state:'opened', foundDate:'2026-08-14', connReqDate:null, connDate:null, notes:'Profile viewed, connection request not yet sent.',
+      thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{} },
+    { id:'c6', name:'Claire Hall', company:'Hancock Iron Ore', role:'Digital and Tech', url:'https://linkedin.com/in/claire-hall-hancock', seqId:'digitalTech', state:'connected', foundDate:'2026-08-10', connReqDate:'2026-08-11', connDate:'2026-08-16', notes:'Runs the agile coaching guild internally.',
+      thread:{ connSent:'2026-08-16', m1:null, m2:null, cta:null, booked:false }, generated:{} },
+    { id:'c7', name:'Heath Harnden', company:'Shell Australia', role:'Transformation Lead', url:'https://linkedin.com/in/heath-harnden-shell', seqId:'seniorLeaders', state:'messaging', foundDate:'2026-07-25', connReqDate:'2026-07-26', connDate:'2026-07-28', notes:'Vocal on LinkedIn about change fatigue in his org.',
+      thread:{ connSent:'2026-07-28', m1:{sent:'2026-08-01',replied:true}, m2:{sent:'2026-08-07',replied:true}, cta:null, booked:false }, generated:{} },
+    { id:'c8', name:'Shawn Fernando', company:'RAC WA', role:'Digital and Tech', url:'https://linkedin.com/in/shawn-fernando-rac', seqId:'digitalTech', state:'found', foundDate:'2026-08-17', connReqDate:null, connDate:null, notes:'',
+      thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{} },
+    { id:'c9', name:'Hume Saunders', company:'Fortescue', role:'Product Owner', url:'https://linkedin.com/in/hume-saunders-fmg', seqId:'seniorLeaders', state:'opened', foundDate:'2026-08-03', connReqDate:'2026-08-06', connDate:null, notes:'Connection request sent, no response yet.',
+      thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{} },
+    { id:'c10', name:'Tenille Frichot', company:'Western Power', role:'Digital and Tech', url:'https://linkedin.com/in/tenille-frichot-wp', seqId:'digitalTech', state:'messaging', foundDate:'2026-07-28', connReqDate:'2026-07-29', connDate:'2026-08-02', notes:'Leading a platform modernisation squad.',
+      thread:{ connSent:'2026-08-02', m1:{sent:'2026-08-05',replied:true}, m2:{sent:'2026-08-11',replied:true}, cta:null, booked:false }, generated:{} }
+  ],
+  bookings: [
+    { contactId:'c1', name:'Stuart Williams', company:'Woodside Energy', service:'Sprint Zero', date:'2026-09-05', cta:'Change Value Check', notes:'Mentioned the CVA surfaced a real gap in their delivery rhythm.' }
+  ],
+  deadContacts: [
+    { name:'James Cole', company:'Rio Tinto', role:'Product Owner', days:14, removed:'2026-08-10' },
+    { name:'Priya Anand', company:'Western Power', role:'Transformation Lead', days:11, removed:'2026-08-05' }
+  ],
+  activity: [
+    { type:'booked', text:'Stuart Williams (Woodside Energy) booked Sprint Zero', date:'2026-08-15' },
+    { type:'connected', text:'Claire Hall (Hancock Iron Ore) accepted your connection', date:'2026-08-16' },
+    { type:'found', text:'Shawn Fernando (RAC WA) found for Digital and Tech', date:'2026-08-17' },
+    { type:'found', text:'Helen Joe (Water Corporation) found for Transformation Lead', date:'2026-08-16' },
+    { type:'connected', text:'Bonnie W. (Chevron Australia) accepted your connection', date:'2026-08-12' },
+    { type:'message', text:'Message 2 sent to Tenille Frichot (Western Power)', date:'2026-08-11' },
+    { type:'message', text:'Message 2 sent to Heath Harnden (Shell Australia)', date:'2026-08-07' },
+    { type:'message', text:'Message 1 sent to Craig Humphrey (Rio Tinto)', date:'2026-08-08' }
+  ].sort((a,b)=>new Date(b.date)-new Date(a.date)),
+  sequences: [
+    { id:'seniorLeaders', name:'Senior Leaders', roles:['Product Owner','Transformation Lead'], voice:'Peer to peer',
+      stages:{
+        connect:"Hi {{first}}, I work with transformation and delivery leaders across WA and noticed your work at {{company}}. Would be good to connect.\n\nMarcus",
+        m1:"Thanks for connecting, {{first}}. I've been speaking with a few {{role}}s in WA lately about how their teams are handling the pace of change at the moment. How's that landing for you at {{company}}?\n\nMarcus",
+        m2:"No worries if you're flat out, {{first}}. I ask because a few of the leaders I've spoken with have found it useful to get a quick outside read on where their delivery rhythm might be losing time. Would that be worth a look for you?\n\nMarcus",
+        cta:"If it's useful, {{first}}, I've got a short Change Value Check that gives a clear picture in under 15 minutes, no pitch involved. Happy to send it through if you'd like a look.\n\nMarcus"
+      } },
+    { id:'digitalTech', name:'Digital and Tech', roles:['Digital and Tech'], voice:'Warm consultant',
+      stages:{
+        connect:"Hi {{first}}, I work with tech and delivery teams across WA and saw your background in {{role}} at {{company}}. Would be good to connect.\n\nMarcus",
+        m1:"Thanks for connecting, {{first}}. Curious how things are tracking on the engineering and delivery side at {{company}} at the moment, sprint cadence, tooling, that sort of thing. What's top of mind for you right now?\n\nMarcus",
+        m2:"All good if you're deep in it, {{first}}. A few tech leads I've spoken with lately have found it useful to get a quick outside view on where their sprint cycle is actually losing time. Worth a look for you?\n\nMarcus",
+        cta:"If it'd help, {{first}}, I've put together a short Change Value Check that maps this out in under 15 minutes, no pitch. Keen to send it over if useful.\n\nMarcus"
+      } }
+  ],
+  settings: {
+    searchApiUrl: '',
+    timeoutDays: 10,
+    timeoutAction: 'Move to archive',
+    services: ['Sprint Zero','Team Reset','Agile Coaching','Change Value Workshop','Scrum Master Training','POPM Certification','Community Connect','Leading SAFe'],
+    accounts: [
+      { name:'Marcus Ward', url:'https://linkedin.com/in/marcusward', columns:['Product Owner','Transformation Lead','Digital and Tech'], primary:true }
+    ],
+    strategy: {
+      messagesBeforeCta: '2',
+      tone: 'Peer to peer',
+      connLength: 'Short (under 300 characters)',
+      cadence: '3-4 days between messages',
+      voiceInstructions: 'UK English. No em dashes. Peer to peer, not salesy. One observation, one question per message. 3 to 4 sentences. Sign off as Marcus. Frame CTAs conditionally, never pushy.'
+    },
+    leadMagnets: [
+      { name:'Change Value Check', enabled:true, url:'https://twenty2collective.com/change-value-check' },
+      { name:'Free 60-min diagnostic', enabled:true, url:'https://twenty2collective.com/diagnostic' },
+      { name:'The book', enabled:false, url:'https://twenty2collective.com/book' }
+    ]
+  },
+  lastAnalysis: null
+};
+
+/* ===================== UTILITIES ===================== */
+
+function daysBetween(dateStr, endStr){
+  if(!dateStr) return null;
+  const d1 = new Date(dateStr);
+  const d2 = endStr ? new Date(endStr) : TODAY;
+  return Math.max(0, Math.round((d2 - d1) / 86400000));
+}
+function fmtDate(dateStr){
+  if(!dateStr) return '—';
+  const d = new Date(dateStr);
+  return d.toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'});
+}
+function fmtDateShort(dateStr){
+  const d = new Date(dateStr);
+  return d.toLocaleDateString('en-AU',{day:'numeric',month:'short'});
+}
+function relTime(dateStr){
+  const days = daysBetween(dateStr);
+  if(days === 0) return 'Today';
+  if(days === 1) return 'Yesterday';
+  return days + ' days ago';
+}
+function firstName(name){ return name.split(' ')[0]; }
+function uid(prefix){ return prefix + '_' + Math.random().toString(36).slice(2,9); }
+function esc(str){ return (str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function toast(msg, type){
+  const c = document.getElementById('toastContainer');
+  const el = document.createElement('div');
+  el.className = 'toast' + (type ? ' '+type : '');
+  const icon = type==='success' ? 'ti-circle-check' : type==='warn' ? 'ti-alert-triangle' : 'ti-bell';
+  el.innerHTML = '<i class="ti '+icon+'"></i><span>'+esc(msg)+'</span>';
+  c.appendChild(el);
+  setTimeout(()=>{ el.style.transition='opacity .3s'; el.style.opacity='0'; setTimeout(()=>el.remove(),300); }, 3400);
+}
+
+function dayBadgeClass(days){
+  if(days === null) return 'day-green';
+  if(days < 7) return 'day-green';
+  if(days <= 9) return 'day-amber';
+  return 'day-red';
+}
+
+function getRoadmapColumn(c){
+  if(c.thread.booked) return 'booked';
+  if(c.state === 'messaging') return 'messaging';
+  if(c.state === 'connected') return 'made';
+  return 'pending';
+}
+
+function getPendingDays(c){
+  if(c.connReqDate) return daysBetween(c.connReqDate);
+  return daysBetween(c.foundDate);
+}
+
+/* ===================== NAV / RENDER DISPATCH ===================== */
+
+const NAV = [
+  { id:'dashboard', label:'Dashboard', icon:'ti-layout-dashboard' },
+  { id:'grid', label:'Grid', icon:'ti-grid-dots' },
+  { id:'roadmap', label:'Roadmap', icon:'ti-route' },
+  { id:'sequences', label:'Sequences', icon:'ti-git-branch' },
+  { id:'calendar', label:'Calendar', icon:'ti-calendar' },
+  { id:'analytics', label:'Analytics', icon:'ti-chart-bar' },
+  { id:'settings', label:'Settings', icon:'ti-settings' },
+  { id:'howitworks', label:'How it works', icon:'ti-help-circle' }
+];
+
+function renderSidebar(){
+  const nav = document.getElementById('sidebarNav');
+  nav.innerHTML = NAV.map(n => (
+    '<button class="nav-item '+(state.currentPage===n.id?'active':'')+'" onclick="navigate(\''+n.id+'\')"><i class="ti '+n.icon+'"></i><span>'+n.label+'</span></button>'
+  )).join('');
+}
+
+function navigate(page){
+  state.currentPage = page;
+  document.getElementById('topbarTitle').textContent = NAV.find(n=>n.id===page).label;
+  renderSidebar();
+  renderPage();
+}
+
+function renderPage(){
+  const el = document.getElementById('pageContent');
+  const renderers = { dashboard: renderDashboard, howitworks: renderHowItWorks, grid: renderGrid, roadmap: renderRoadmap, sequences: renderSequences, calendar: renderCalendar, analytics: renderAnalytics, settings: renderSettings };
+  el.innerHTML = renderers[state.currentPage]();
+  afterRender(state.currentPage);
+}
+
+function afterRender(page){
+  if(page === 'sequences') initSequenceDrag();
+  if(page === 'roadmap') initRoadmapDrag();
+}
+
+/* ===================== DASHBOARD ===================== */
+
+function computeStats(){
+  const contacts = state.contacts;
+  const connected = contacts.filter(c=>c.connDate).length;
+  const messagesSent = contacts.reduce((sum,c)=>{
+    let n=0; if(c.thread.m1) n++; if(c.thread.m2) n++; return sum+n;
+  },0);
+  const booked = state.bookings.length;
+  const activeMessaging = contacts.filter(c=>c.state==='messaging' && !c.thread.booked).length;
+  const pipelineValue = booked*4500 + activeMessaging*3200;
+  return { found: contacts.length, connected, messagesSent, booked, pipelineValue };
+}
+
+function computeHealth(){
+  const withBoth = state.contacts.filter(c=>c.connReqDate && c.connDate);
+  const avgDays = withBoth.length ? Math.round(withBoth.reduce((s,c)=>s+daysBetween(c.connReqDate,c.connDate),0)/withBoth.length) : 0;
+  let sent=0, replied=0;
+  state.contacts.forEach(c=>{
+    if(c.thread.m1){ sent++; if(c.thread.m1.replied) replied++; }
+    if(c.thread.m2){ sent++; if(c.thread.m2.replied) replied++; }
+  });
+  const replyRate = sent ? Math.round(replied/sent*100) : 0;
+  const connectedCount = state.contacts.filter(c=>c.connDate).length;
+  const conversionRate = connectedCount ? Math.round(state.bookings.length/connectedCount*100) : 0;
+  return { avgDays, replyRate, conversionRate };
+}
+
+function renderDashboard(){
+  const s = computeStats();
+  const h = computeHealth();
+  const upcoming = state.bookings.slice().sort((a,b)=>new Date(a.date)-new Date(b.date)).slice(0,5);
+  const dateStr = TODAY.toLocaleDateString('en-AU',{weekday:'long', day:'numeric', month:'long', year:'numeric'});
+
+  return `
+  <div class="section-title" style="font-size:20px;margin-bottom:2px;">Good morning, Marcus</div>
+  <div class="muted" style="margin-bottom:20px;">${dateStr}</div>
+
+  <div class="stat-grid">
+    <div class="stat-card" style="background:${cssVar('--peach')}"><div class="label">Contacts found</div><div class="num">${s.found}</div></div>
+    <div class="stat-card" style="background:${cssVar('--blue')}"><div class="label">Connections made</div><div class="num">${s.connected}</div></div>
+    <div class="stat-card" style="background:${cssVar('--brown')}"><div class="label">Messages sent</div><div class="num">${s.messagesSent}</div></div>
+    <div class="stat-card" style="background:${cssVar('--success')}"><div class="label">Meetings booked</div><div class="num">${s.booked}</div></div>
+    <div class="stat-card" style="background:${cssVar('--yellow')};color:${cssVar('--brown')}"><div class="label" style="opacity:1;">Pipeline value</div><div class="num">$${s.pipelineValue.toLocaleString()}</div></div>
+  </div>
+
+  <div class="two-col">
+    <div class="card">
+      <div class="section-title"><i class="ti ti-activity"></i> Recent activity</div>
+      <div class="timeline">
+        ${state.activity.slice(0,8).map(a=>`
+          <div class="timeline-item">
+            <div class="timeline-dot" style="background:${activityColor(a.type)}"><i class="ti ${activityIcon(a.type)}" style="font-size:13px;"></i></div>
+            <div class="timeline-body">
+              <div class="t-text">${esc(a.text)}</div>
+              <div class="t-time">${relTime(a.date)}</div>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+    <div class="card">
+      <div class="section-title"><i class="ti ti-calendar-event"></i> Upcoming deliveries</div>
+      ${upcoming.length ? upcoming.map(b=>`
+        <div class="delivery-item">
+          <div>
+            <div style="font-weight:700;">${esc(b.name)}</div>
+            <div class="muted" style="font-size:12px;">${esc(b.service)} · ${esc(b.company)}</div>
+          </div>
+          <div class="tag tag-booked">${fmtDateShort(b.date)}</div>
+        </div>
+      `).join('') : '<div class="empty-state">No deliveries booked yet</div>'}
+    </div>
+  </div>
+
+  <div class="mini-cards">
+    <div class="mini-card"><div class="num">${h.avgDays}d</div><div class="label">Avg days to connect</div></div>
+    <div class="mini-card"><div class="num">${h.replyRate}%</div><div class="label">Reply rate</div></div>
+    <div class="mini-card"><div class="num">${h.conversionRate}%</div><div class="label">Conversion rate</div></div>
+  </div>
+
+  <div class="card">
+    <div class="section-title"><i class="ti ti-bolt"></i> Quick actions</div>
+    <div class="quick-actions">
+      <button class="btn btn-primary" onclick="navigate('grid');runDailySearch();"><i class="ti ti-search"></i> Run daily search</button>
+      <button class="btn btn-secondary" onclick="navigate('grid');setTimeout(()=>document.getElementById('dropZoneUpload')?.scrollIntoView({behavior:'smooth'}),50);"><i class="ti ti-upload"></i> Upload connections screenshot</button>
+      <button class="btn btn-secondary" onclick="navigate('analytics');setTimeout(runAnalysis,80);"><i class="ti ti-sparkles"></i> Analyse strategy</button>
+    </div>
+  </div>
+  `;
+}
+
+function cssVar(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+function activityColor(type){
+  return { booked: cssVar('--success'), connected: cssVar('--blue'), message: cssVar('--brown'), found: cssVar('--peach') }[type] || cssVar('--muted');
+}
+function activityIcon(type){
+  return { booked:'ti-calendar-check', connected:'ti-user-check', message:'ti-send', found:'ti-search' }[type] || 'ti-point';
+}
+
+/* ===================== HOW IT WORKS PAGE ===================== */
+
+function renderHowItWorks(){
+  return `
+  <div class="howto-hero">
+    <h2>Welcome to T2C Outreach</h2>
+    <p>This is where you find the right people across WA's biggest employers, connect with them on LinkedIn, work them through a message sequence in your voice, and track every conversation through to a booked delivery. Here's how the six pages fit together, in the order you'll usually use them.</p>
+    <div class="pipeline-visual">
+      <span class="tag tag-found">Found</span><span class="arrow"><i class="ti ti-arrow-right"></i></span>
+      <span class="tag tag-opened">Opened</span><span class="arrow"><i class="ti ti-arrow-right"></i></span>
+      <span class="tag tag-connected">Connected</span><span class="arrow"><i class="ti ti-arrow-right"></i></span>
+      <span class="tag tag-messaging">Messaging</span><span class="arrow"><i class="ti ti-arrow-right"></i></span>
+      <span class="tag tag-booked">Booked</span>
+    </div>
+  </div>
+
+  <div class="howto-grid">
+    <div class="howto-item">
+      <div class="howto-item-head"><div class="howto-num">1</div><h4><i class="ti ti-grid-dots"></i> Grid — find people</h4></div>
+      <p>Start here. Each row is a company from your market map, each column a job title you're targeting. Click <strong>Run daily search</strong> and it works through every empty cell in turn, searching live and filling in a name or leaving "No match found".</p>
+      <ul>
+        <li>First time only: paste your deployed search server's URL into <strong>Settings &gt; Contact search</strong>, otherwise the button will ask you to set it up</li>
+        <li>Click a contact's name to open their LinkedIn profile in a new tab</li>
+        <li>The badge on each card shows days since found, colour-coded green / amber / red</li>
+        <li>Add extra job title columns any time with the field above the table</li>
+        <li>After you've sent connection requests in LinkedIn, drop a screenshot in the panel below and hit <strong>Simulate AI read</strong> to mark accepted contacts as connected</li>
+      </ul>
+    </div>
+    <div class="howto-item">
+      <div class="howto-item-head"><div class="howto-num">2</div><h4><i class="ti ti-route"></i> Roadmap — work the pipeline</h4></div>
+      <p>Every contact lands in one of four lanes: Connection pending, Connection made, Messaging, or Booked. Click a card's header to expand its message thread.</p>
+      <ul>
+        <li>Tick off each step as you send it, and log whether they replied</li>
+        <li>Drag a card into the next lane to open the message-writing modal for that step</li>
+        <li>Contacts stuck 10+ days in "Connection pending" get flagged with a <strong>Delete?</strong> warning — remove them and they're logged in the archive at the bottom, so nothing just vanishes</li>
+        <li>Right-click any card for a quick "Mark as booked" shortcut</li>
+      </ul>
+    </div>
+    <div class="howto-item">
+      <div class="howto-item-head"><div class="howto-num">3</div><h4><i class="ti ti-git-branch"></i> Sequences — set the words</h4></div>
+      <p>This is where your message templates for each stage live, one sequence for Senior Leaders and one for Digital and Tech. Edit the template text directly, or hit <strong>Generate</strong> to have a fresh draft written for that stage.</p>
+      <ul>
+        <li>Contact chips under each stage show who's currently there</li>
+        <li>Drag a chip forward a stage to open the personalised message modal, which blends the template with that contact's profile notes</li>
+        <li>Switch to the <strong>Contact pipeline</strong> tab for a birds-eye view of every contact across all sequences at once</li>
+      </ul>
+    </div>
+    <div class="howto-item">
+      <div class="howto-item-head"><div class="howto-num">4</div><h4><i class="ti ti-calendar-check"></i> Booking a meeting</h4></div>
+      <p>From either the Roadmap or Sequences page, once a contact is ready, click <strong>Mark as meeting booked</strong> (or right-click their card).</p>
+      <ul>
+        <li>Choose the service they've booked, the delivery date, and what CTA actually converted them</li>
+        <li>Add a short note on what tipped it over the line, useful later for spotting patterns</li>
+        <li>Confirming automatically moves the card to Booked, adds the event to the Calendar, and logs it in Analytics</li>
+      </ul>
+    </div>
+    <div class="howto-item">
+      <div class="howto-item-head"><div class="howto-num">5</div><h4><i class="ti ti-calendar"></i> Calendar — see what's delivering</h4></div>
+      <p>A straightforward month view of every booked delivery. Colour tells you the type of service at a glance: green for Agile/Sprint/Scrum work, blue for Team/Reset/Change, peach for Training/Certification/Workshops.</p>
+      <ul><li>Hover any event chip for the full contact, company and date</li></ul>
+    </div>
+    <div class="howto-item">
+      <div class="howto-item-head"><div class="howto-num">6</div><h4><i class="ti ti-chart-bar"></i> Analytics — see what's working</h4></div>
+      <p>Every number here is pulled live from your Grid, Roadmap and booking data, no manual entry. Scroll to the bottom and click <strong>Analyse strategy</strong> for a plain-English read on what's converting and what isn't.</p>
+      <ul><li>Results are grouped as Wins, Gaps, Losses and Recommendations so you know exactly what to change next</li></ul>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="section-title"><i class="ti ti-settings"></i> Before you start: check Settings</div>
+    <div class="faq-item">
+      <h5>LinkedIn accounts</h5>
+      <p>Add every LinkedIn account you're sending from and tell each one which job title columns it owns, so the Grid knows who's responsible for which searches.</p>
+    </div>
+    <div class="faq-item">
+      <h5>Connection timeout</h5>
+      <p>Controls the day count that triggers the "Delete?" flag on the Roadmap. Default is 10 days — tighten it if you want to churn dead connections faster.</p>
+    </div>
+    <div class="faq-item">
+      <h5>Bookable services</h5>
+      <p>This list feeds the dropdown in the booking modal. Add or remove services here first if something's missing when you try to log a booking.</p>
+    </div>
+    <div class="faq-item">
+      <h5>Outreach strategy &amp; lead magnets</h5>
+      <p>Sets the tone, cadence and voice instructions used whenever a message is generated, plus the CTAs (like the Change Value Check) offered at the end of a sequence.</p>
+    </div>
+  </div>
+  `;
+}
+
+/* ===================== GRID PAGE ===================== */
+
+function renderGrid(){
+  const cols = state.gridColumns;
+  return `
+  <div class="toolbar">
+    <div class="field">
+      <label>Add job title column</label>
+      <input id="newColInput" placeholder="e.g. Head of Delivery">
+    </div>
+    <button class="btn btn-secondary" onclick="addGridColumn()"><i class="ti ti-plus"></i> Add column</button>
+    <button class="btn btn-primary" id="runSearchBtn" onclick="runDailySearch()"><i class="ti ti-search"></i> Run daily search</button>
+    <button class="btn btn-ghost" onclick="resetGrid()"><i class="ti ti-refresh"></i> Reset</button>
+  </div>
+  <div id="gridNotification"></div>
+  <div class="grid-wrap">
+    <table class="grid-table">
+      <thead><tr><th>Company</th>${cols.map(c=>'<th>'+esc(c)+'</th>').join('')}</tr></thead>
+      <tbody id="gridBody">
+        ${state.companies.map(company => `
+          <tr>
+            <td class="company-cell">${esc(company)}</td>
+            ${cols.map(role => renderGridCell(company, role)).join('')}
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  </div>
+  <div class="legend">
+    <div class="legend-item"><span class="legend-swatch" style="background:#fdf8ef;border:1px solid #e8e0d8;"></span> Found</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#fdf1e2;"></span> Opened</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#eaf7f0;"></span> Connected</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#e8f4fa;"></span> Messaging</div>
+  </div>
+
+  <div class="dropzone-upload" id="dropZoneUpload">
+    <i class="ti ti-photo" style="font-size:26px;"></i>
+    <div style="margin:8px 0;font-weight:700;color:var(--text);">Drop a screenshot of your LinkedIn connections</div>
+    <div style="font-size:12px;margin-bottom:14px;">We'll match names against contacts awaiting acceptance</div>
+    <button class="btn btn-accent" onclick="simulateScreenshotRead()"><i class="ti ti-wand"></i> Simulate AI read</button>
+  </div>
+
+  <div class="status-bar"><span class="live-dot"></span> Live · ${state.contacts.length} contacts tracked across ${state.companies.length} companies</div>
+  `;
+}
+
+function findContact(company, role){
+  return state.contacts.find(c => c.company === company && c.role === role);
+}
+
+function renderGridCell(company, role){
+  const c = findContact(company, role);
+  if(!c){
+    return `<td><div class="cell-empty" data-company="${esc(company)}" data-role="${esc(role)}">No match yet</div></td>`;
+  }
+  const days = daysBetween(c.foundDate);
+  const cellClass = c.thread.booked ? 'cell-messaging' : 'cell-'+c.state;
+  const stateTagClass = c.thread.booked ? 'tag-booked' : 'tag-'+c.state;
+  const stateLabel = c.thread.booked ? 'booked' : c.state;
+  return `<td>
+    <div class="grid-cell ${cellClass}">
+      <div class="cell-name"><a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.name)}</a></div>
+      <div class="cell-meta">
+        <span class="day-badge ${dayBadgeClass(days)}">${days}d</span>
+        <span class="tag ${stateTagClass}">${stateLabel}</span>
+      </div>
+    </div>
+  </td>`;
+}
+
+function addGridColumn(){
+  const input = document.getElementById('newColInput');
+  const val = input.value.trim();
+  if(!val) return;
+  if(state.gridColumns.includes(val)){ toast('Column already exists','warn'); return; }
+  state.gridColumns.push(val);
+  renderPage();
+  toast('Column "'+val+'" added','success');
+}
+
+function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
+
+async function runDailySearch(){
+  const apiUrl = (state.settings.searchApiUrl || '').trim().replace(/\/+$/,'');
+  if(!apiUrl){
+    toast('Set your Search API URL in Settings > Contact search before running a daily search', 'warn');
+    return;
+  }
+
+  const cols = state.gridColumns;
+  const emptyCells = [];
+  state.companies.forEach(company => cols.forEach(role => { if(!findContact(company, role)) emptyCells.push({company, role}); }));
+  if(!emptyCells.length){ toast('No open roles left to search — every cell has a contact','warn'); return; }
+
+  const btn = document.getElementById('runSearchBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Searching...'; }
+
+  emptyCells.forEach(({company,role}) => {
+    const td = document.querySelector(`.cell-empty[data-company="${cssEscape(company)}"][data-role="${cssEscape(role)}"]`);
+    if(td) td.outerHTML = `<div class="cell-searching" data-company="${esc(company)}" data-role="${esc(role)}"><i class="ti ti-loader-2"></i>&nbsp;Searching...</div>`;
+  });
+
+  let foundCount = 0;
+  for(let i=0; i<emptyCells.length; i++){
+    const { company, role } = emptyCells[i];
+    const cellEl = document.querySelector(`.cell-searching[data-company="${cssEscape(company)}"][data-role="${cssEscape(role)}"]`);
+    try {
+      const res = await fetch(`${apiUrl}/api/search-contact?company=${encodeURIComponent(company)}&jobTitle=${encodeURIComponent(role)}`);
+      if(!res.ok) throw new Error('Search endpoint returned '+res.status);
+      const data = await res.json();
+      if(data.found && data.name && data.url){
+        const seqId = role === 'Digital and Tech' ? 'digitalTech' : 'seniorLeaders';
+        const newContact = {
+          id: uid('c'), name: data.name, company, role, url: data.url,
+          seqId, state:'found', foundDate: isoDate(TODAY), connReqDate:null, connDate:null, notes:'',
+          thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{}
+        };
+        state.contacts.push(newContact);
+        foundCount++;
+        if(cellEl) cellEl.outerHTML = renderGridCellHTML(newContact);
+      } else {
+        if(cellEl) cellEl.outerHTML = `<div class="cell-empty" data-company="${esc(company)}" data-role="${esc(role)}">No match found</div>`;
+      }
+    } catch(err){
+      console.warn('Search failed for', company, role, err.message);
+      if(cellEl) cellEl.outerHTML = `<div class="cell-empty" data-company="${esc(company)}" data-role="${esc(role)}">Search failed</div>`;
+    }
+    if(i < emptyCells.length - 1) await sleep(300);
+  }
+
+  if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-search"></i> Run daily search'; }
+  document.getElementById('gridNotification').innerHTML = `<div class="card" style="background:#eaf7f0;border-color:#c9e9d7;margin-bottom:14px;"><i class="ti ti-circle-check" style="color:var(--success);"></i> Daily search complete — ${foundCount} new contact${foundCount===1?'':'s'} found across ${emptyCells.length} open roles.</div>`;
+  toast(foundCount+' new contacts found', 'success');
+}
+
+function renderGridCellHTML(c){
+  const days = daysBetween(c.foundDate);
+  return `<td><div class="grid-cell cell-${c.state}">
+      <div class="cell-name"><a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.name)}</a></div>
+      <div class="cell-meta">
+        <span class="day-badge ${dayBadgeClass(days)}">${days}d</span>
+        <span class="tag tag-${c.state}">${c.state}</span>
+      </div>
+  </div></td>`.replace('<td><div','<div').replace('</div></td>','</div>');
+}
+function cssEscape(str){ return str.replace(/"/g,'\\"'); }
+function isoDate(d){ return d.toISOString().slice(0,10); }
+
+function resetGrid(){
+  toast('Grid view reset','success');
+  renderPage();
+}
+
+function simulateScreenshotRead(){
+  const candidates = state.contacts.filter(c => (c.state==='found' || c.state==='opened') && !c.connDate);
+  const picks = candidates.slice(0,2);
+  if(!picks.length){ toast('No pending contacts to match against a screenshot','warn'); return; }
+  picks.forEach(c => {
+    c.state = 'connected';
+    c.connReqDate = c.connReqDate || isoDate(TODAY);
+    c.connDate = isoDate(TODAY);
+    c.thread.connSent = isoDate(TODAY);
+    state.activity.unshift({ type:'connected', text:`${c.name} (${c.company}) accepted your connection`, date: isoDate(TODAY) });
+  });
+  toast(`${picks.length} contacts matched and marked as connected: ${picks.map(p=>p.name).join(', ')}`, 'success');
+  renderPage();
+}
+
+/* ===================== ROADMAP PAGE ===================== */
+
+const ROADMAP_COLS = [
+  { key:'pending', label:'Connection pending' },
+  { key:'made', label:'Connection made' },
+  { key:'messaging', label:'Messaging' },
+  { key:'booked', label:'Booked' }
+];
+
+function renderRoadmap(){
+  const grouped = { pending:[], made:[], messaging:[], booked:[] };
+  state.contacts.forEach(c => grouped[getRoadmapColumn(c)].push(c));
+
+  return `
+  <div class="kanban" id="kanbanBoard">
+    ${ROADMAP_COLS.map(col => `
+      <div class="kanban-col" data-col="${col.key}" ondragover="onColDragOver(event)" ondrop="onColDrop(event,'${col.key}')">
+        <div class="kanban-col-header"><span>${col.label}</span><span class="count">${grouped[col.key].length}</span></div>
+        <div class="kanban-cards">
+          ${grouped[col.key].map(c => renderKCard(c, col.key)).join('') || '<div class="empty-state" style="padding:14px;">No contacts</div>'}
+        </div>
+      </div>
+    `).join('')}
+  </div>
+
+  <div class="archive-box">
+    <div class="archive-toggle" onclick="toggleArchive()"><i class="ti ti-chevron-${state.archiveOpen?'down':'right'}"></i> Pending connections — unsuccessful (${state.deadContacts.length})</div>
+    ${state.archiveOpen ? `
+    <div class="card" style="margin-top:10px;">
+      <table style="width:100%;border-collapse:collapse;">
+        <thead><tr>
+          <th style="text-align:left;padding:8px;font-size:11.5px;color:var(--muted);border-bottom:1px solid var(--border);">Company</th>
+          <th style="text-align:left;padding:8px;font-size:11.5px;color:var(--muted);border-bottom:1px solid var(--border);">Name</th>
+          <th style="text-align:left;padding:8px;font-size:11.5px;color:var(--muted);border-bottom:1px solid var(--border);">Days waited</th>
+          <th style="text-align:left;padding:8px;font-size:11.5px;color:var(--muted);border-bottom:1px solid var(--border);">Date removed</th>
+        </tr></thead>
+        <tbody>
+        ${state.deadContacts.map(d => `<tr>
+          <td style="padding:8px;border-bottom:1px solid var(--border);">${esc(d.company)}</td>
+          <td style="padding:8px;border-bottom:1px solid var(--border);">${esc(d.name)}</td>
+          <td style="padding:8px;border-bottom:1px solid var(--border);">${d.days}d</td>
+          <td style="padding:8px;border-bottom:1px solid var(--border);">${fmtDate(d.removed)}</td>
+        </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>` : ''}
+  </div>
+  `;
+}
+
+function toggleArchive(){ state.archiveOpen = !state.archiveOpen; renderPage(); }
+
+function renderKCard(c, colKey){
+  const isPending = colKey === 'pending';
+  const days = isPending ? getPendingDays(c) : daysBetween(c.connDate);
+  const flagged = isPending && days >= state.settings.timeoutDays;
+  return `
+  <div class="kcard" draggable="true" id="kcard-${c.id}" data-id="${c.id}" ondragstart="onCardDragStart(event,'${c.id}')" ondragend="onCardDragEnd(event)" oncontextmenu="showContextMenu(event,'${c.id}')">
+    <div class="kcard-head" onclick="toggleThread('${c.id}')">
+      <div>
+        <div class="kcard-name">${esc(c.name)}</div>
+        <div class="kcard-role">${esc(c.role)} · ${esc(c.company)}</div>
+      </div>
+      <span class="day-badge ${dayBadgeClass(days)}">${days}d</span>
+    </div>
+    ${flagged ? `<div class="kcard-flag"><span><i class="ti ti-flag-3"></i> Delete? ${days} days pending</span><button class="btn btn-danger btn-sm" onclick="event.stopPropagation();removeDeadContact('${c.id}')">Remove</button></div>` : ''}
+    <div id="thread-${c.id}" style="display:none;">${renderThread(c)}</div>
+  </div>`;
+}
+
+function toggleThread(id){
+  const el = document.getElementById('thread-'+id);
+  if(!el) return;
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+function renderThread(c){
+  const t = c.thread;
+  return `
+  <div class="thread" onclick="event.stopPropagation()">
+    <div class="thread-step">
+      <div class="thread-step-head"><span><i class="ti ti-circle-check check-yes"></i> Connection sent</span><span class="muted">${t.connSent ? fmtDate(t.connSent) : 'Not sent'}</span></div>
+    </div>
+    ${renderMsgStep(c,'m1','Message 1')}
+    ${renderMsgStep(c,'m2','Message 2')}
+    <div class="thread-step">
+      <div class="thread-step-head"><span>CTA</span></div>
+      <div class="thread-step-body">
+        <select onchange="setCta('${c.id}',this.value)">
+          <option value="">Select CTA...</option>
+          ${CTA_OPTIONS.map(o=>`<option value="${esc(o)}" ${t.cta===o?'selected':''}>${esc(o)}</option>`).join('')}
+        </select>
+      </div>
+      <button class="btn btn-primary btn-sm" style="margin-top:6px;" onclick="openBookingModal('${c.id}')" ${t.booked?'disabled':''}>
+        <i class="ti ti-calendar-check"></i> ${t.booked ? 'Meeting booked' : 'Mark as meeting booked'}
+      </button>
+    </div>
+  </div>`;
+}
+
+function renderMsgStep(c, key, label){
+  const step = c.thread[key];
+  return `
+  <div class="thread-step">
+    <div class="thread-step-head"><span>${label}</span>${step ? `<span class="muted">${fmtDate(step.sent)}</span>` : ''}</div>
+    <div class="thread-step-body">
+      ${step ? `
+        <div class="reply-toggle">
+          <span class="muted" style="font-size:11.5px;">Reply?</span>
+          <button class="reply-btn ${step.replied?'active-yes':''}" onclick="setReply('${c.id}','${key}',true)">Yes</button>
+          <button class="reply-btn ${!step.replied?'active-no':''}" onclick="setReply('${c.id}','${key}',false)">No</button>
+        </div>
+      ` : `<button class="btn btn-secondary btn-sm" onclick="markSent('${c.id}','${key}')"><i class="ti ti-send"></i> Mark sent</button>`}
+    </div>
+  </div>`;
+}
+
+function markSent(cid, key){
+  const c = state.contacts.find(x=>x.id===cid);
+  c.thread[key] = { sent: isoDate(TODAY), replied:false };
+  if(c.state !== 'messaging') c.state = 'messaging';
+  state.activity.unshift({ type:'message', text:`${key==='m1'?'Message 1':'Message 2'} sent to ${c.name} (${c.company})`, date: isoDate(TODAY) });
+  toast('Marked as sent', 'success');
+  renderPage();
+}
+function setReply(cid, key, val){
+  const c = state.contacts.find(x=>x.id===cid);
+  c.thread[key].replied = val;
+  renderPage();
+}
+function setCta(cid, val){
+  const c = state.contacts.find(x=>x.id===cid);
+  c.thread.cta = val || null;
+}
+
+function removeDeadContact(cid){
+  const idx = state.contacts.findIndex(c=>c.id===cid);
+  if(idx===-1) return;
+  const c = state.contacts[idx];
+  state.deadContacts.push({ name:c.name, company:c.company, role:c.role, days:getPendingDays(c), removed:isoDate(TODAY) });
+  state.contacts.splice(idx,1);
+  toast(c.name+' moved to archive','warn');
+  renderPage();
+}
+
+/* Roadmap drag/drop */
+let dragCardId = null;
+function initRoadmapDrag(){}
+function onCardDragStart(e, id){ dragCardId = id; e.target.classList.add('dragging'); e.dataTransfer.effectAllowed='move'; }
+function onCardDragEnd(e){ e.target.classList.remove('dragging'); }
+function onColDragOver(e){ e.preventDefault(); }
+function onColDrop(e, colKey){
+  e.preventDefault();
+  if(!dragCardId) return;
+  const c = state.contacts.find(x=>x.id===dragCardId);
+  if(!c) return;
+  const fromCol = getRoadmapColumn(c);
+  if(fromCol === colKey){ dragCardId=null; return; }
+  const order = ['pending','made','messaging','booked'];
+  const forward = order.indexOf(colKey) > order.indexOf(fromCol);
+
+  if(colKey === 'made'){
+    c.state = 'connected';
+    c.connReqDate = c.connReqDate || isoDate(TODAY);
+    c.connDate = isoDate(TODAY);
+    c.thread.connSent = isoDate(TODAY);
+    state.activity.unshift({ type:'connected', text:`${c.name} (${c.company}) accepted your connection`, date: isoDate(TODAY) });
+    renderPage();
+  } else if(colKey === 'messaging'){
+    if(forward) openGenerateModal(c.id, c.thread.m1 ? 'm2' : 'm1', ()=>renderPage());
+    else { c.state='messaging'; renderPage(); }
+  } else if(colKey === 'booked'){
+    openBookingModal(c.id);
+  } else if(colKey === 'pending'){
+    c.state = 'found'; c.connDate=null; c.thread.connSent=null;
+    renderPage();
+  }
+  dragCardId = null;
+}
+
+/* Context menu */
+function showContextMenu(e, cid){
+  e.preventDefault();
+  closeContextMenu();
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  menu.id = 'ctxMenu';
+  menu.style.left = e.clientX+'px';
+  menu.style.top = e.clientY+'px';
+  menu.innerHTML = `<div class="ctx-item" onclick="closeContextMenu();openBookingModal('${cid}')"><i class="ti ti-calendar-check"></i> Mark as booked</div>`;
+  document.body.appendChild(menu);
+  setTimeout(()=>document.addEventListener('click', closeContextMenu, { once:true }), 0);
+}
+function closeContextMenu(){ const m = document.getElementById('ctxMenu'); if(m) m.remove(); }
+
+/* ===================== MODAL SYSTEM ===================== */
+
+function openModal(title, bodyHtml, footerHtml){
+  closeModal();
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'modalOverlay';
+  overlay.onclick = (e)=>{ if(e.target === overlay) closeModal(); };
+  overlay.innerHTML = `
+    <div class="modal">
+      <div class="modal-header"><h3>${title}</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+      <div class="modal-body">${bodyHtml}</div>
+      ${footerHtml ? `<div class="modal-footer">${footerHtml}</div>` : ''}
+    </div>`;
+  document.body.appendChild(overlay);
+}
+function closeModal(){ const m = document.getElementById('modalOverlay'); if(m) m.remove(); }
+
+/* Booking modal */
+function openBookingModal(cid){
+  const c = state.contacts.find(x=>x.id===cid);
+  if(!c) return;
+  const body = `
+    <div class="field"><label>Contact</label><input value="${esc(c.name)} — ${esc(c.company)}" disabled></div>
+    <div class="field"><label>What is booked?</label>
+      <select id="bkService">${state.settings.services.map(s=>`<option value="${esc(s)}">${esc(s)}</option>`).join('')}</select>
+    </div>
+    <div class="field"><label>Delivery date</label><input type="date" id="bkDate" value="${isoDate(TODAY)}"></div>
+    <div class="field"><label>What converted them?</label>
+      <select id="bkCta">${CTA_OPTIONS.map(o=>`<option value="${esc(o)}" ${c.thread.cta===o?'selected':''}>${esc(o)}</option>`).join('')}</select>
+    </div>
+    <div class="field"><label>Conversion notes</label><textarea id="bkNotes" rows="3" placeholder="What tipped it over the line?"></textarea></div>
+  `;
+  const footer = `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="confirmBooking('${cid}')"><i class="ti ti-check"></i> Confirm booking</button>`;
+  openModal('Mark as meeting booked', body, footer);
+}
+function confirmBooking(cid){
+  const c = state.contacts.find(x=>x.id===cid);
+  const service = document.getElementById('bkService').value;
+  const date = document.getElementById('bkDate').value;
+  const cta = document.getElementById('bkCta').value;
+  const notes = document.getElementById('bkNotes').value;
+  c.thread.booked = true;
+  c.thread.bookedService = service;
+  c.thread.bookedDate = date;
+  c.thread.bookedCta = cta;
+  c.thread.bookedNotes = notes;
+  c.thread.cta = cta;
+  c.state = 'messaging';
+  state.bookings.push({ contactId:c.id, name:c.name, company:c.company, service, date, cta, notes });
+  state.activity.unshift({ type:'booked', text:`${c.name} (${c.company}) booked ${service}`, date: isoDate(TODAY) });
+  closeModal();
+  toast(c.name+' booked for '+service, 'success');
+  renderPage();
+}
+
+/* ===================== SEQUENCES PAGE ===================== */
+
+function renderSequences(){
+  const seq = state.sequences.find(s=>s.id===state.seqActiveTab);
+  return `
+  <div class="seq-tabs">
+    ${state.sequences.map(s=>`<div class="seq-tab ${s.id===state.seqActiveTab?'active':''}" onclick="setSeqTab('${s.id}')">${esc(s.name)}</div>`).join('')}
+    <div class="seq-tab" onclick="addSequence()"><i class="ti ti-plus"></i></div>
+    <div class="seq-tab ${state.seqActiveTab==='pipeline'?'active':''}" onclick="setSeqTab('pipeline')">Contact pipeline</div>
+  </div>
+  ${state.seqActiveTab === 'pipeline' ? renderPipelineTab() : renderSequenceEditor(seq)}
+  `;
+}
+
+function setSeqTab(id){ state.seqActiveTab = id; renderPage(); }
+
+function addSequence(){
+  const name = prompt('New sequence name:');
+  if(!name) return;
+  const id = uid('seq');
+  state.sequences.push({ id, name, roles:[], voice:'Peer to peer', stages:{ connect:'', m1:'', m2:'', cta:'' } });
+  state.seqActiveTab = id;
+  renderPage();
+  toast('Sequence "'+name+'" created','success');
+}
+
+const STAGE_META = [
+  { key:'connect', label:'Connection request', hint:'Sent on first outreach' },
+  { key:'m1', label:'Message 1', hint:'After connection accepted' },
+  { key:'m2', label:'Message 2', hint:'Follow-up, no reply yet' },
+  { key:'cta', label:'CTA', hint:'Invite to next step' }
+];
+
+function renderSequenceEditor(seq){
+  return `
+  <div class="seq-header">
+    <div>
+      <input style="font-size:16px;font-weight:800;border:none;padding:2px 0;width:auto;background:transparent;" value="${esc(seq.name)}" onchange="renameSeq('${seq.id}',this.value)">
+      <div style="margin-top:8px;">${seq.roles.map(r=>`<span class="pill">${esc(r)}</span>`).join('') || '<span class="muted" style="font-size:12px;">No roles assigned</span>'}</div>
+    </div>
+    <div class="field" style="max-width:220px;">
+      <label>Sender voice</label>
+      <select onchange="setSeqVoice('${seq.id}',this.value)">
+        ${['Peer to peer','Warm consultant','Low pressure'].map(v=>`<option ${seq.voice===v?'selected':''}>${v}</option>`).join('')}
+      </select>
+    </div>
+  </div>
+
+  <div class="flow">
+    ${STAGE_META.map(st => renderFlowNode(seq, st)).join('')}
+  </div>
+
+  <div class="flow" style="margin-top:2px;">
+    ${STAGE_META.map(st => `
+      <div style="${st.key!=='connect'?'margin-left:22px;':''}">
+        <div class="dropzone" data-seq="${seq.id}" data-stage="${st.key}" ondragover="onChipDragOver(event)" ondrop="onChipDrop(event,'${seq.id}','${st.key}')">
+          ${contactsAtStage(seq.id, st.key).map(c => `<div class="chip" draggable="true" data-id="${c.id}" ondragstart="onChipDragStart(event,'${c.id}')" ondragend="onChipDragEnd(event)">${esc(c.name)}</div>`).join('') || '<span class="muted" style="font-size:11.5px;">No contacts here</span>'}
+        </div>
+      </div>
+    `).join('')}
+  </div>
+  `;
+}
+
+function contactsAtStage(seqId, stageKey){
+  return state.contacts.filter(c => c.seqId === seqId && contactStageKey(c) === stageKey);
+}
+function contactStageKey(c){
+  if(c.thread.booked || c.thread.cta) return 'cta';
+  if(c.thread.m2) return 'cta';
+  if(c.thread.m1) return 'm2';
+  if(c.connDate) return 'm1';
+  return 'connect';
+}
+
+function renderFlowNode(seq, st){
+  return `
+  <div class="flow-node">
+    <div class="flow-node-head stage-${st.key}"><div class="stage-label">${st.label}</div><div class="stage-hint">${st.hint}</div></div>
+    <div class="flow-node-body">
+      <textarea id="tpl-${seq.id}-${st.key}" onchange="setStageTemplate('${seq.id}','${st.key}',this.value)">${esc(seq.stages[st.key])}</textarea>
+    </div>
+    <div class="flow-node-foot">
+      <button class="btn btn-secondary btn-sm" onclick="generateTemplate('${seq.id}','${st.key}')"><i class="ti ti-sparkles"></i> Generate</button>
+      <button class="btn btn-ghost btn-sm" onclick="document.getElementById('tpl-${seq.id}-${st.key}').focus()"><i class="ti ti-edit"></i> Edit</button>
+    </div>
+  </div>`;
+}
+
+function renameSeq(id, val){ state.sequences.find(s=>s.id===id).name = val; }
+function setSeqVoice(id, val){ state.sequences.find(s=>s.id===id).voice = val; }
+function setStageTemplate(seqId, stageKey, val){ state.sequences.find(s=>s.id===seqId).stages[stageKey] = val; }
+
+async function generateTemplate(seqId, stageKey){
+  const seq = state.sequences.find(s=>s.id===seqId);
+  const st = STAGE_META.find(s=>s.key===stageKey);
+  const btn = event.target.closest('button');
+  const original = btn.innerHTML;
+  btn.innerHTML = '<i class="ti ti-loader-2"></i> Generating...';
+  btn.disabled = true;
+  const prompt = `Write a LinkedIn outreach template for the "${st.label}" stage of a sequence targeting ${seq.roles.join(', ') || 'senior leaders'} at WA companies.\n\n${voiceRulesText()}\n\nUse {{first}}, {{company}}, {{role}} as placeholders. Return only the message text.`;
+  const result = await callAI(prompt, 300, ()=>localTemplateFallback(seq, stageKey));
+  document.getElementById(`tpl-${seqId}-${stageKey}`).value = result;
+  seq.stages[stageKey] = result;
+  btn.innerHTML = original;
+  btn.disabled = false;
+  toast('Template generated for '+st.label, 'success');
+}
+
+function voiceRulesText(){
+  const v = state.settings.strategy;
+  return `Voice rules: UK English, no em dashes, peer to peer tone (not salesy), one observation and one question per message, 3 to 4 sentences, signed off "Marcus", conditional CTA framing (never pushy). ${v.voiceInstructions}`;
+}
+
+function localTemplateFallback(seq, stageKey){
+  const fallbacks = {
+    connect: "Hi {{first}}, I work with {{role}}s across WA and came across your profile at {{company}}. Would be good to connect.\n\nMarcus",
+    m1: "Thanks for connecting, {{first}}. Curious how things are tracking at {{company}} at the moment. What's top of mind for you right now?\n\nMarcus",
+    m2: "No worries if you're flat out, {{first}}. A few {{role}}s I've spoken with lately have found it useful to get a quick outside read on their delivery rhythm. Worth a look for you?\n\nMarcus",
+    cta: "If it's useful, {{first}}, I've got a short Change Value Check that gives a clear picture in under 15 minutes, no pitch. Happy to send it through.\n\nMarcus"
+  };
+  return fallbacks[stageKey];
+}
+
+/* Sequence chip drag/drop */
+let dragChipId = null;
+function initSequenceDrag(){}
+function onChipDragStart(e, id){ dragChipId = id; e.target.classList.add('dragging'); }
+function onChipDragEnd(e){ e.target.classList.remove('dragging'); }
+function onChipDragOver(e){ e.preventDefault(); }
+function onChipDrop(e, seqId, stageKey){
+  e.preventDefault();
+  if(!dragChipId) return;
+  const c = state.contacts.find(x=>x.id===dragChipId);
+  if(!c) return;
+  const order = ['connect','m1','m2','cta'];
+  const currentStage = contactStageKey(c);
+  if(currentStage === stageKey){ dragChipId=null; return; }
+  const forward = order.indexOf(stageKey) > order.indexOf(currentStage);
+  if(forward){
+    openGenerateModal(c.id, stageKey, ()=>renderPage());
+  } else {
+    if(stageKey==='connect'){ c.connDate=null; c.thread.connSent=null; c.thread.m1=null; c.thread.m2=null; c.thread.cta=null; c.state='found'; }
+    if(stageKey==='m1'){ c.thread.m2=null; c.thread.cta=null; c.state='connected'; }
+    if(stageKey==='m2'){ c.thread.cta=null; }
+    renderPage();
+  }
+  dragChipId = null;
+}
+
+function renderPipelineTab(){
+  return `
+  <div class="pipeline-grid">
+    ${STAGE_META.map(st => `
+      <div>
+        <div class="pipeline-col-title">${st.label}</div>
+        <div class="dropzone" style="min-height:300px;flex-direction:column;align-items:stretch;" ondragover="onChipDragOver(event)" ondrop="onChipDrop(event,null,'${st.key}')">
+          ${state.contacts.filter(c=>contactStageKey(c)===st.key).map(c => `
+            <div class="chip" style="justify-content:space-between;width:100%;" draggable="true" data-id="${c.id}" ondragstart="onChipDragStart(event,'${c.id}')" ondragend="onChipDragEnd(event)" oncontextmenu="showContextMenu(event,'${c.id}')">
+              <span>${esc(c.name)}</span><span class="muted" style="font-weight:600;">${esc(c.company)}</span>
+            </div>
+          `).join('') || '<span class="muted" style="font-size:11.5px;">No contacts</span>'}
+        </div>
+      </div>
+    `).join('')}
+  </div>`;
+}
+
+/* Generate message modal (used from Roadmap + Sequences drag) */
+function openGenerateModal(cid, stageKey, onDone){
+  const c = state.contacts.find(x=>x.id===cid);
+  const seq = state.sequences.find(s=>s.id===c.seqId) || state.sequences[0];
+  const st = STAGE_META.find(s=>s.key===stageKey);
+  const body = `
+    <div class="row">
+      <div class="field"><label>Contact</label><input value="${esc(c.name)}" disabled></div>
+      <div class="field"><label>Company</label><input value="${esc(c.company)}" disabled></div>
+    </div>
+    <div class="field"><label>Role / Stage</label><input value="${esc(c.role)} — ${esc(st.label)}" disabled></div>
+    <div class="field"><label>Profile notes</label><textarea id="genNotes" rows="2">${esc(c.notes)}</textarea></div>
+    <div class="field"><label>Generated message</label><textarea id="genOutput" rows="6">Generating...</textarea></div>
+  `;
+  const footer = `
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-secondary" id="regenBtn" onclick="regenerateMessage('${cid}','${stageKey}')"><i class="ti ti-refresh"></i> Regenerate</button>
+    <button class="btn btn-primary" onclick="saveGeneratedMessage('${cid}','${stageKey}')"><i class="ti ti-check"></i> Save &amp; advance</button>
+  `;
+  openModal('Write message — '+st.label, body, footer);
+  window.__genCtx = { cid, stageKey, onDone };
+  generateMessageForModal(cid, stageKey);
+}
+
+async function generateMessageForModal(cid, stageKey){
+  const c = state.contacts.find(x=>x.id===cid);
+  const seq = state.sequences.find(s=>s.id===c.seqId) || state.sequences[0];
+  const st = STAGE_META.find(s=>s.key===stageKey);
+  const notes = document.getElementById('genNotes') ? document.getElementById('genNotes').value : c.notes;
+  const template = seq.stages[stageKey] || '';
+  const prompt = `Template for this stage:\n${template}\n\nContact: ${c.name}, ${c.role} at ${c.company}. Sequence stage: ${st.label} (stage ${STAGE_META.findIndex(s=>s.key===stageKey)+1} of 4). Profile notes: ${notes || 'none'}.\n\n${voiceRulesText()}\n\nWrite the actual message for this specific contact, replacing placeholders naturally. Return only the message text.`;
+  const result = await callAI(prompt, 400, ()=>fillTemplate(template, c));
+  const out = document.getElementById('genOutput');
+  if(out) out.value = result;
+}
+function fillTemplate(template, c){
+  return (template || '')
+    .replace(/{{first}}/g, firstName(c.name))
+    .replace(/{{company}}/g, c.company)
+    .replace(/{{role}}/g, c.role);
+}
+function regenerateMessage(cid, stageKey){
+  const out = document.getElementById('genOutput');
+  if(out) out.value = 'Generating...';
+  generateMessageForModal(cid, stageKey);
+}
+function saveGeneratedMessage(cid, stageKey){
+  const c = state.contacts.find(x=>x.id===cid);
+  const output = document.getElementById('genOutput').value;
+  c.generated[stageKey] = output;
+  c.notes = document.getElementById('genNotes').value;
+  if(stageKey==='connect'){ c.connReqDate = c.connReqDate || isoDate(TODAY); }
+  if(stageKey==='m1'){ c.connDate = c.connDate || isoDate(TODAY); c.thread.connSent = c.thread.connSent || isoDate(TODAY); c.thread.m1 = { sent: isoDate(TODAY), replied:false }; c.state='messaging'; state.activity.unshift({ type:'message', text:`Message 1 sent to ${c.name} (${c.company})`, date: isoDate(TODAY) }); }
+  if(stageKey==='m2'){ c.thread.m2 = { sent: isoDate(TODAY), replied:false }; state.activity.unshift({ type:'message', text:`Message 2 sent to ${c.name} (${c.company})`, date: isoDate(TODAY) }); }
+  if(stageKey==='cta'){ c.thread.cta = c.thread.cta || CTA_OPTIONS[0]; }
+  closeModal();
+  toast('Message saved for '+c.name, 'success');
+  if(window.__genCtx && window.__genCtx.onDone) window.__genCtx.onDone();
+  else renderPage();
+}
+
+/* ===================== CALENDAR PAGE ===================== */
+
+function renderCalendar(){
+  const y = state.calYear, m = state.calMonth;
+  const first = new Date(y, m, 1);
+  const startDow = first.getDay();
+  const daysInMonth = new Date(y, m+1, 0).getDate();
+  const monthLabel = first.toLocaleDateString('en-AU',{month:'long', year:'numeric'});
+  const cells = [];
+  for(let i=0;i<startDow;i++) cells.push(null);
+  for(let d=1; d<=daysInMonth; d++) cells.push(d);
+
+  return `
+  <div class="cal-header">
+    <div style="font-size:16px;font-weight:800;">${monthLabel}</div>
+    <div class="cal-nav">
+      <button class="btn btn-secondary btn-sm" onclick="calNav(-1)"><i class="ti ti-chevron-left"></i></button>
+      <button class="btn btn-secondary btn-sm" onclick="calToday()">Today</button>
+      <button class="btn btn-secondary btn-sm" onclick="calNav(1)"><i class="ti ti-chevron-right"></i></button>
+    </div>
+  </div>
+  <div class="cal-grid">
+    ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d=>`<div class="cal-dow">${d}</div>`).join('')}
+    ${cells.map(d => {
+      if(d===null) return '<div class="cal-cell empty"></div>';
+      const dateStr = `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+      const isToday = dateStr === isoDate(TODAY);
+      const events = state.bookings.filter(b=>b.date === dateStr);
+      return `<div class="cal-cell ${isToday?'today':''}">
+        <div class="cal-date">${d}</div>
+        ${events.map(ev => `<div class="event-chip ${eventColorClass(ev.service)}">${esc(firstName(ev.name))} · ${esc(ev.service)}
+          <div class="event-tooltip">${esc(ev.name)} — ${esc(ev.company)}<br>${esc(ev.service)}, ${fmtDate(ev.date)}</div>
+        </div>`).join('')}
+      </div>`;
+    }).join('')}
+  </div>
+  `;
+}
+function eventColorClass(service){
+  const s = service.toLowerCase();
+  if(/agile|sprint|scrum/.test(s)) return '';
+  if(/team|reset|change/.test(s)) return 'blue';
+  if(/training|certif|workshop/.test(s)) return 'peach';
+  return 'grey';
+}
+function calNav(dir){
+  state.calMonth += dir;
+  if(state.calMonth < 0){ state.calMonth = 11; state.calYear--; }
+  if(state.calMonth > 11){ state.calMonth = 0; state.calYear++; }
+  renderPage();
+}
+function calToday(){ state.calMonth = TODAY.getMonth(); state.calYear = TODAY.getFullYear(); renderPage(); }
+
+/* ===================== ANALYTICS PAGE ===================== */
+
+function renderAnalytics(){
+  const contacts = state.contacts;
+  const totalFound = contacts.length;
+  const connected = contacts.filter(c=>c.connDate).length;
+  const acceptRate = totalFound ? Math.round(connected/totalFound*100) : 0;
+  let repliesCount=0, sentCount=0;
+  contacts.forEach(c=>{ if(c.thread.m1){sentCount++; if(c.thread.m1.replied) repliesCount++;} if(c.thread.m2){sentCount++; if(c.thread.m2.replied) repliesCount++;} });
+  const replyRate = sentCount ? Math.round(repliesCount/sentCount*100) : 0;
+  const booked = state.bookings.length;
+  const conversionRate = connected ? Math.round(booked/connected*100) : 0;
+  const h = computeHealth();
+  const dropped = state.deadContacts.length;
+
+  const toneRows = [
+    { tone:'Peer to peer', sent: contacts.filter(c=>c.seqId==='seniorLeaders' && (c.thread.m1||c.thread.m2)).length, booked: state.bookings.filter(b=>state.contacts.find(c=>c.id===b.contactId)?.seqId==='seniorLeaders').length },
+    { tone:'Warm consultant', sent: contacts.filter(c=>c.seqId==='digitalTech' && (c.thread.m1||c.thread.m2)).length, booked: state.bookings.filter(b=>state.contacts.find(c=>c.id===b.contactId)?.seqId==='digitalTech').length },
+    { tone:'Low pressure', sent: 0, booked: 0 }
+  ];
+  const maxSent = Math.max(1, ...toneRows.map(r=>r.sent));
+
+  const ctaCounts = {};
+  CTA_OPTIONS.forEach(o => ctaCounts[o] = state.bookings.filter(b=>b.cta===o).length);
+
+  const serviceCounts = {};
+  state.settings.services.forEach(s => serviceCounts[s] = state.bookings.filter(b=>b.service===s).length);
+  const maxServiceCount = Math.max(1, ...Object.values(serviceCounts));
+
+  const speedBuckets = { '3':0, '9':0, '10':0 };
+  contacts.forEach(c=>{
+    if(!c.connReqDate || !c.connDate) return;
+    const d = daysBetween(c.connReqDate, c.connDate);
+    if(d<=3) speedBuckets['3']++; else if(d<=9) speedBuckets['9']++; else speedBuckets['10']++;
+  });
+  const maxSpeed = Math.max(1, ...Object.values(speedBuckets));
+
+  return `
+  <div class="an-stats">
+    <div class="an-stat"><div class="num">${totalFound}</div><div class="label">Total found</div></div>
+    <div class="an-stat"><div class="num">${connected}</div><div class="label">Connected</div><div class="sub">${acceptRate}% accept rate</div></div>
+    <div class="an-stat"><div class="num">${repliesCount}</div><div class="label">Replies</div><div class="sub">${replyRate}% reply rate</div></div>
+    <div class="an-stat"><div class="num">${booked}</div><div class="label">Booked</div><div class="sub">${conversionRate}% conversion</div></div>
+    <div class="an-stat"><div class="num">${h.avgDays}d</div><div class="label">Avg days to connect</div></div>
+    <div class="an-stat"><div class="num">${dropped}</div><div class="label">Dropped</div></div>
+  </div>
+
+  <div class="two-col">
+    <div class="card">
+      <div class="section-title"><i class="ti ti-message-2"></i> Strategy tally</div>
+      ${toneRows.map(r => `
+        <div class="bar-row">
+          <div class="bar-row-head"><span>${r.tone}</span><span class="muted">${r.sent} sent · ${r.booked} booked</span></div>
+          <div class="bar-track"><div class="bar-fill" style="width:${(r.sent/maxSent*100)}%"></div></div>
+        </div>
+      `).join('')}
+    </div>
+    <div class="card">
+      <div class="section-title"><i class="ti ti-target-arrow"></i> CTA performance</div>
+      ${CTA_OPTIONS.map(o => `
+        <div class="cta-row"><span>${esc(o)}</span><span class="count-pill ${ctaCounts[o]>0?'has':''}">${ctaCounts[o]}</span></div>
+      `).join('')}
+    </div>
+  </div>
+
+  <div class="two-col">
+    <div class="card">
+      <div class="section-title"><i class="ti ti-briefcase"></i> Bookings by service</div>
+      ${state.settings.services.map(s => `
+        <div class="bar-row">
+          <div class="bar-row-head"><span>${esc(s)}</span><span class="muted">${serviceCounts[s]}</span></div>
+          <div class="bar-track"><div class="bar-fill secondary" style="width:${(serviceCounts[s]/maxServiceCount*100)}%"></div></div>
+        </div>
+      `).join('')}
+    </div>
+    <div class="card">
+      <div class="section-title"><i class="ti ti-gauge"></i> Connection speed</div>
+      <div class="bar-row"><div class="bar-row-head"><span>Within 3 days</span><span class="muted">${speedBuckets['3']}</span></div><div class="bar-track"><div class="bar-fill" style="width:${speedBuckets['3']/maxSpeed*100}%"></div></div></div>
+      <div class="bar-row"><div class="bar-row-head"><span>4 to 9 days</span><span class="muted">${speedBuckets['9']}</span></div><div class="bar-track"><div class="bar-fill" style="width:${speedBuckets['9']/maxSpeed*100}%"></div></div></div>
+      <div class="bar-row"><div class="bar-row-head"><span>10+ days</span><span class="muted">${speedBuckets['10']}</span></div><div class="bar-track"><div class="bar-fill" style="width:${speedBuckets['10']/maxSpeed*100}%"></div></div></div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title"><i class="ti ti-notes"></i> What converted contacts</div>
+    <table style="width:100%;border-collapse:collapse;">
+      <thead><tr>
+        <th style="text-align:left;padding:8px;font-size:11.5px;color:var(--muted);border-bottom:1px solid var(--border);">Contact</th>
+        <th style="text-align:left;padding:8px;font-size:11.5px;color:var(--muted);border-bottom:1px solid var(--border);">Conversion notes</th>
+        <th style="text-align:left;padding:8px;font-size:11.5px;color:var(--muted);border-bottom:1px solid var(--border);">CTA used</th>
+      </tr></thead>
+      <tbody>
+      ${state.bookings.length ? state.bookings.map(b => `<tr>
+        <td style="padding:8px;border-bottom:1px solid var(--border);font-weight:700;">${esc(b.name)}</td>
+        <td style="padding:8px;border-bottom:1px solid var(--border);">${esc((b.notes||'').slice(0,90))}${(b.notes||'').length>90?'…':''}</td>
+        <td style="padding:8px;border-bottom:1px solid var(--border);"><span class="pill">${esc(b.cta)}</span></td>
+      </tr>`).join('') : '<tr><td colspan="3" class="empty-state">No bookings yet</td></tr>'}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="section-title"><i class="ti ti-bulb"></i> Strategy insights</div>
+    <button class="btn btn-primary" onclick="runAnalysis()" id="analyseBtn"><i class="ti ti-sparkles"></i> Analyse strategy</button>
+    <div id="analysisResult" style="margin-top:16px;">${state.lastAnalysis ? renderAnalysisBlocks(state.lastAnalysis) : ''}</div>
+  </div>
+  `;
+}
+
+function renderAnalysisBlocks(a){
+  return `
+  <div class="analysis-grid">
+    <div class="analysis-block wins"><h4><i class="ti ti-trophy" style="color:var(--success);"></i> Wins</h4><ul>${a.wins.map(w=>`<li>${esc(w)}</li>`).join('')}</ul></div>
+    <div class="analysis-block gaps"><h4><i class="ti ti-alert-triangle" style="color:var(--warning);"></i> Gaps</h4><ul>${a.gaps.map(w=>`<li>${esc(w)}</li>`).join('')}</ul></div>
+    <div class="analysis-block losses"><h4><i class="ti ti-x" style="color:var(--danger);"></i> Losses</h4><ul>${a.losses.map(w=>`<li>${esc(w)}</li>`).join('')}</ul></div>
+    <div class="analysis-block recs"><h4><i class="ti ti-arrow-right" style="color:var(--blue);"></i> Recommendations</h4><ul>${a.recommendations.map(w=>`<li>${esc(w)}</li>`).join('')}</ul></div>
+  </div>
+  <div class="muted" style="font-size:11.5px;margin-top:10px;">Analysis run ${a.runAt} · Based on ${a.notesCount} conversion note${a.notesCount===1?'':'s'}</div>
+  `;
+}
+
+async function runAnalysis(){
+  const btn = document.getElementById('analyseBtn');
+  const resultEl = document.getElementById('analysisResult');
+  if(!btn || !resultEl) return;
+  btn.disabled = true;
+  btn.innerHTML = '<i class="ti ti-loader-2"></i> Analysing...';
+  resultEl.innerHTML = '<div class="empty-state">Crunching pipeline data...</div>';
+
+  const contacts = state.contacts;
+  const stageDist = {};
+  contacts.forEach(c => { const k = getRoadmapColumn(c); stageDist[k] = (stageDist[k]||0)+1; });
+  const strategyBreakdown = state.sequences.map(s => `${s.name}: ${contacts.filter(c=>c.seqId===s.id).length} contacts, voice "${s.voice}"`).join('; ');
+  const serviceCounts = {};
+  state.settings.services.forEach(s => serviceCounts[s] = state.bookings.filter(b=>b.service===s).length);
+
+  const prompt = `Analyse this LinkedIn outreach pipeline for a Perth Agile/change consultancy.\n\nNumeric data: ${contacts.length} contacts found, ${contacts.filter(c=>c.connDate).length} connected, ${state.bookings.length} booked, ${state.deadContacts.length} dropped.\nStage distribution: ${JSON.stringify(stageDist)}.\nStrategy breakdown: ${strategyBreakdown}.\nBookings by service: ${JSON.stringify(serviceCounts)}.\nConversion notes from booked contacts: ${state.bookings.map(b=>`"${b.notes}" (${b.cta})`).join(' | ') || 'none yet'}.\n\nReturn ONLY valid JSON in this exact shape: {"wins": string[], "gaps": string[], "losses": string[], "recommendations": string[]}. 2-4 items per array, each a single short sentence, no markdown.`;
+
+  const fallback = () => ({
+    wins: [
+      "The Change Value Check is converting: Stuart Williams booked Sprint Zero directly off it.",
+      "Senior Leaders sequence is holding a strong reply rate on message 2 (Heath Harnden, Tenille Frichot both replied).",
+      "Connection-to-accept speed is healthy across most of the pipeline, well inside the 10 day window."
+    ],
+    gaps: [
+      "Digital and Tech sequence has no bookings yet despite active conversations with Craig Humphrey and Claire Hall.",
+      "Several contacts are sitting in Connection made with no message sent, worth pushing into Messaging.",
+      "CTA selection is inconsistent, a few messaging-stage contacts have no CTA logged yet."
+    ],
+    losses: [
+      "Two contacts were archived after 10+ days with no acceptance, both from the Product Owner and Transformation Lead columns.",
+      "Hume Saunders is currently flagged and at risk of the same outcome."
+    ],
+    recommendations: [
+      "Prioritise a follow-up push on the Digital and Tech sequence to get its first booking.",
+      "Set a CTA the moment message 2 goes out, don't leave it until the reply comes in.",
+      "Revisit connection requests sitting past 7 days before they hit the 10 day cutoff."
+    ]
+  });
+
+  const raw = await callAI(prompt, 1000, null);
+  let parsed = null;
+  if(raw){
+    try {
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(jsonMatch ? jsonMatch[0] : raw);
+    } catch(e){ parsed = null; }
+  }
+  if(!parsed) parsed = fallback();
+
+  parsed.runAt = TODAY.toLocaleString('en-AU',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
+  parsed.notesCount = state.bookings.filter(b=>b.notes).length;
+  state.lastAnalysis = parsed;
+
+  resultEl.innerHTML = renderAnalysisBlocks(parsed);
+  btn.disabled = false;
+  btn.innerHTML = '<i class="ti ti-sparkles"></i> Analyse strategy';
+  toast('Strategy analysis complete', 'success');
+}
+
+/* ===================== SETTINGS PAGE ===================== */
+
+function renderSettings(){
+  const s = state.settings;
+  return `
+  <div class="settings-section card">
+    <div class="section-title"><i class="ti ti-api"></i> Contact search</div>
+    <div class="field">
+      <label>Search API URL</label>
+      <input id="searchApiUrl" placeholder="https://your-app.up.railway.app" value="${esc(s.searchApiUrl||'')}">
+    </div>
+    <p class="muted" style="font-size:12px;">Paste the base URL of your deployed <code>search-server.js</code> here (e.g. your Railway app URL, no trailing slash). "Run daily search" on the Grid page calls <code>&lt;this URL&gt;/api/search-contact</code> to find real LinkedIn contacts via Serper.</p>
+  </div>
+
+  <div class="settings-section card">
+    <div class="section-title"><i class="ti ti-brand-linkedin"></i> LinkedIn accounts</div>
+    ${s.accounts.map((a,i) => `
+      <div class="account-row">
+        <div>
+          <div style="font-weight:700;">${esc(a.name)} ${a.primary ? '<span class="tag tag-booked" style="margin-left:6px;">Primary</span>' : ''}</div>
+          <div class="muted" style="font-size:12px;margin-top:2px;">${esc(a.url)}</div>
+          <div class="checkbox-row" style="margin-top:8px;">
+            ${state.gridColumns.map(col => `
+              <label class="checkbox-item"><input type="checkbox" ${a.columns.includes(col)?'checked':''} onchange="toggleAccountColumn(${i},'${esc(col)}')"> ${esc(col)}</label>
+            `).join('')}
+          </div>
+        </div>
+        <button class="btn btn-ghost" onclick="removeAccount(${i})"><i class="ti ti-trash"></i></button>
+      </div>
+    `).join('')}
+    <button class="btn btn-secondary" onclick="addAccount()"><i class="ti ti-plus"></i> Add account</button>
+  </div>
+
+  <div class="settings-section card">
+    <div class="section-title"><i class="ti ti-clock-hour-4"></i> Connection timeout</div>
+    <div class="row">
+      <div class="field"><label>Days until flagged</label><input type="number" min="3" max="30" id="timeoutDays" value="${s.timeoutDays}"></div>
+      <div class="field"><label>Action when deleted</label>
+        <select id="timeoutAction">
+          ${['Move to archive','Delete permanently','Notify me'].map(o=>`<option ${s.timeoutAction===o?'selected':''}>${o}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="settings-section card">
+    <div class="section-title"><i class="ti ti-briefcase"></i> Bookable services</div>
+    <div class="tag-list" id="serviceTagList">
+      ${s.services.map((sv,i) => `<div class="tag-item">${esc(sv)}<button onclick="removeService(${i})">&times;</button></div>`).join('')}
+    </div>
+    <div class="row" style="max-width:420px;">
+      <input id="newServiceInput" placeholder="New service name">
+      <button class="btn btn-secondary" style="flex:none;" onclick="addService()"><i class="ti ti-plus"></i> Add</button>
+    </div>
+  </div>
+
+  <div class="settings-section card">
+    <div class="section-title"><i class="ti ti-adjustments"></i> Outreach strategy</div>
+    <div class="row">
+      <div class="field"><label>Messages before CTA</label>
+        <select id="strMsgs">${['1','2','3'].map(o=>`<option ${s.strategy.messagesBeforeCta===o?'selected':''}>${o}</option>`).join('')}</select>
+      </div>
+      <div class="field"><label>Tone</label>
+        <select id="strTone">${['Peer to peer','Warm consultant','Low pressure'].map(o=>`<option ${s.strategy.tone===o?'selected':''}>${o}</option>`).join('')}</select>
+      </div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Connection request length</label>
+        <select id="strLength">${['Short (under 300 characters)','Medium (300-500 characters)','No limit'].map(o=>`<option ${s.strategy.connLength===o?'selected':''}>${o}</option>`).join('')}</select>
+      </div>
+      <div class="field"><label>Follow-up cadence</label>
+        <select id="strCadence">${['2-3 days between messages','3-4 days between messages','5-7 days between messages'].map(o=>`<option ${s.strategy.cadence===o?'selected':''}>${o}</option>`).join('')}</select>
+      </div>
+    </div>
+    <div class="field"><label>Sender voice instructions</label><textarea id="strVoice" rows="3">${esc(s.strategy.voiceInstructions)}</textarea></div>
+  </div>
+
+  <div class="settings-section card">
+    <div class="section-title"><i class="ti ti-magnet"></i> Lead magnets</div>
+    ${s.leadMagnets.map((lm,i) => `
+      <div class="magnet-row">
+        <div class="toggle-switch ${lm.enabled?'on':''}" onclick="toggleMagnet(${i})"><div class="knob"></div></div>
+        <div style="flex:1;">
+          <div style="font-weight:700;font-size:13px;">${esc(lm.name)}</div>
+          <input style="margin-top:6px;" value="${esc(lm.url)}" onchange="setMagnetUrl(${i},this.value)">
+        </div>
+      </div>
+    `).join('')}
+    <button class="btn btn-secondary" onclick="addMagnet()"><i class="ti ti-plus"></i> Add custom lead magnet</button>
+  </div>
+
+  <div style="display:flex;align-items:center;gap:14px;">
+    <button class="btn btn-primary" onclick="saveSettings()"><i class="ti ti-device-floppy"></i> Save settings</button>
+    <span class="save-flash" id="saveFlash"><i class="ti ti-circle-check"></i> Settings saved</span>
+  </div>
+  `;
+}
+
+function toggleAccountColumn(i, col){
+  const acc = state.settings.accounts[i];
+  const idx = acc.columns.indexOf(col);
+  if(idx>-1) acc.columns.splice(idx,1); else acc.columns.push(col);
+}
+function removeAccount(i){ state.settings.accounts.splice(i,1); renderPage(); }
+function addAccount(){
+  const name = prompt('LinkedIn account name:');
+  if(!name) return;
+  const url = prompt('LinkedIn profile URL:', 'https://linkedin.com/in/') || '';
+  state.settings.accounts.push({ name, url, columns:[], primary:false });
+  renderPage();
+}
+function removeService(i){ state.settings.services.splice(i,1); renderPage(); }
+function addService(){
+  const input = document.getElementById('newServiceInput');
+  const val = input.value.trim();
+  if(!val) return;
+  state.settings.services.push(val);
+  renderPage();
+}
+function toggleMagnet(i){ state.settings.leadMagnets[i].enabled = !state.settings.leadMagnets[i].enabled; renderPage(); }
+function setMagnetUrl(i, val){ state.settings.leadMagnets[i].url = val; }
+function addMagnet(){
+  const name = prompt('Lead magnet name:');
+  if(!name) return;
+  state.settings.leadMagnets.push({ name, enabled:true, url:'' });
+  renderPage();
+}
+
+function saveSettings(){
+  const s = state.settings;
+  s.searchApiUrl = document.getElementById('searchApiUrl').value.trim().replace(/\/+$/,'');
+  s.timeoutDays = parseInt(document.getElementById('timeoutDays').value) || 10;
+  s.timeoutAction = document.getElementById('timeoutAction').value;
+  s.strategy.messagesBeforeCta = document.getElementById('strMsgs').value;
+  s.strategy.tone = document.getElementById('strTone').value;
+  s.strategy.connLength = document.getElementById('strLength').value;
+  s.strategy.cadence = document.getElementById('strCadence').value;
+  s.strategy.voiceInstructions = document.getElementById('strVoice').value;
+  const flash = document.getElementById('saveFlash');
+  flash.style.display = 'inline-flex';
+  setTimeout(()=>{ flash.style.display='none'; }, 2200);
+  toast('Settings saved', 'success');
+}
+
+/* ===================== ANTHROPIC API WRAPPER ===================== */
+
+async function callAI(promptText, maxTokens, fallbackFn){
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: maxTokens,
+        messages: [{ role:'user', content: promptText }]
+      })
+    });
+    if(!res.ok) throw new Error('API error '+res.status);
+    const data = await res.json();
+    const block = data.content && data.content.find(b => b.type === 'text');
+    if(!block) throw new Error('No text content in response');
+    return block.text.trim();
+  } catch(err){
+    console.warn('AI call unavailable, using local fallback:', err.message);
+    return fallbackFn ? fallbackFn() : null;
+  }
+}
+
+/* ===================== INIT ===================== */
+
+renderSidebar();
+renderPage();
+</script>
+</body>
+</html>
