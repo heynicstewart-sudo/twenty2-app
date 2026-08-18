@@ -172,6 +172,12 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .legend-item{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);font-weight:600;}
 .legend-swatch{width:12px;height:12px;border-radius:4px;}
 .dropzone-upload{border:2px dashed var(--border);border-radius:14px;padding:26px;text-align:center;color:var(--muted);margin-top:20px;background:#fff;}
+.shot-box{border:1px dashed var(--border);border-radius:10px;padding:10px;background:#faf6f1;}
+.shot-hint{font-size:11.5px;color:var(--muted);margin-bottom:8px;line-height:1.5;}
+.shot-upload-btn{cursor:pointer;display:inline-flex;}
+.shot-files{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
+.shot-file-chip{background:#fff;border:1px solid var(--border);border-radius:20px;padding:3px 6px 3px 10px;font-size:11px;font-weight:600;display:inline-flex;align-items:center;gap:6px;}
+.shot-file-chip button{background:none;border:none;color:var(--muted);cursor:pointer;font-size:13px;line-height:1;}
 .status-bar{display:flex;align-items:center;gap:8px;margin-top:16px;font-size:12px;color:var(--muted);}
 .live-dot{width:8px;height:8px;border-radius:50%;background:var(--success);animation:pulse 1.6s infinite;}
 @keyframes pulse{0%{opacity:1;}50%{opacity:.35;}100%{opacity:1;}}
@@ -1001,6 +1007,7 @@ function renderThread(c){
     <div class="thread-step">
       <div class="thread-step-head"><span>CTA</span></div>
       <div class="thread-step-body">
+        ${(!t.cta && !t.booked) ? `<button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();openGenerateModal('${c.id}','cta', ()=>renderPage())"><i class="ti ti-copy"></i> Write &amp; copy message</button>` : ''}
         <select onchange="setCta('${c.id}',this.value)">
           <option value="">Select CTA...</option>
           ${CTA_OPTIONS.map(o=>`<option value="${esc(o)}" ${t.cta===o?'selected':''}>${esc(o)}</option>`).join('')}
@@ -1267,7 +1274,7 @@ async function generateTemplate(seqId, stageKey){
   const original = btn.innerHTML;
   btn.innerHTML = '<i class="ti ti-loader-2"></i> Generating...';
   btn.disabled = true;
-  const prompt = `Write a LinkedIn outreach template for the "${st.label}" stage of a sequence targeting ${seq.roles.join(', ') || 'senior leaders'} at WA companies.\n\n${voiceRulesText()}\n\nUse {{first}}, {{company}}, {{role}} as placeholders. Return only the message text.`;
+  const prompt = `Write a LinkedIn outreach template for the "${st.label}" stage of a sequence targeting ${seq.roles.join(', ') || 'senior leaders'} at WA companies.\n\n${ctaStrategyNote(stageKey)}\n\n${voiceRulesText()}\n\nUse {{first}}, {{company}}, {{role}} as placeholders. Return only the message text.`;
   const result = await callAI(prompt, 300, ()=>localTemplateFallback(seq, stageKey));
   document.getElementById(`tpl-${seqId}-${stageKey}`).value = result;
   seq.stages[stageKey] = result;
@@ -1278,7 +1285,39 @@ async function generateTemplate(seqId, stageKey){
 
 function voiceRulesText(){
   const v = state.settings.strategy;
-  return `Voice rules: UK English, no em dashes, peer to peer tone (not salesy), one observation and one question per message, 3 to 4 sentences, signed off "Marcus", conditional CTA framing (never pushy). ${v.voiceInstructions}`;
+  return `Voice rules: UK English, no em dashes, ${v.tone.toLowerCase()} tone, one observation and one question per message, 3 to 4 sentences, signed off "Marcus", conditional CTA framing (never pushy). Connection requests should be ${v.connLength.toLowerCase()}. Follow-up cadence is ${v.cadence.toLowerCase()}. ${v.voiceInstructions}`;
+}
+
+function messageNumberForStage(stageKey){
+  return { m1:1, m2:2, cta:3 }[stageKey] || 0;
+}
+
+function ctaStrategyNote(stageKey){
+  const n = parseInt(state.settings.strategy.messagesBeforeCta) || 2;
+  const num = messageNumberForStage(stageKey);
+  if(stageKey === 'cta'){
+    return `Strategy: this is the CTA ask (message ${num} in the sequence). Per the outreach strategy the CTA should land by message ${n}, so make the ask directly here${num > n ? ", it's already overdue so don't hold back" : ''}.`;
+  }
+  if(!num) return '';
+  if(num >= n){
+    return `Strategy: the outreach strategy says the CTA should be introduced by message ${n}. This is message ${num}, so it's fine to start gently pointing toward the CTA if the moment fits, without being pushy about it.`;
+  }
+  return `Strategy: the outreach strategy says the CTA shouldn't appear until message ${n}. This is message ${num}, so keep this purely relationship-building, no CTA mention yet.`;
+}
+
+function ctaNudgeLine(){
+  const magnet = state.settings.leadMagnets.find(m=>m.enabled);
+  return magnet ? `By the way, if it's useful I've got a short ${magnet.name} that might be worth a look.` : '';
+}
+
+function appendCtaNudge(text, stageKey){
+  if(!text || !stageKey || stageKey === 'cta' || stageKey === 'connect') return text;
+  const n = parseInt(state.settings.strategy.messagesBeforeCta) || 2;
+  if(messageNumberForStage(stageKey) < n) return text;
+  const nudge = ctaNudgeLine();
+  if(!nudge) return text;
+  if(/\n\nMarcus\s*$/.test(text)) return text.replace(/\n\nMarcus\s*$/, `\n\n${nudge}\n\nMarcus`);
+  return text + `\n\n${nudge}`;
 }
 
 function localTemplateFallback(seq, stageKey){
@@ -1288,7 +1327,7 @@ function localTemplateFallback(seq, stageKey){
     m2: "No worries if you're flat out, {{first}}. A few {{role}}s I've spoken with lately have found it useful to get a quick outside read on their delivery rhythm. Worth a look for you?\n\nMarcus",
     cta: "If it's useful, {{first}}, I've got a short Change Value Check that gives a clear picture in under 15 minutes, no pitch. Happy to send it through.\n\nMarcus"
   };
-  return fallbacks[stageKey];
+  return appendCtaNudge(fallbacks[stageKey], stageKey);
 }
 
 /* Sequence chip drag/drop */
@@ -1347,6 +1386,14 @@ function openGenerateModal(cid, stageKey, onDone){
     </div>
     <div class="field"><label>Role / Stage</label><input value="${esc(c.role)} — ${esc(st.label)}" disabled></div>
     <div class="field"><label>Profile notes</label><textarea id="genNotes" rows="2">${esc(c.notes)}</textarea></div>
+    <div class="field">
+      <label>Their profile</label>
+      ${screenshotBoxHtml('profile', "Send screenshot/s of their profile — bio, posts, work history — and I'll use it to write a sharper message.")}
+    </div>
+    <div class="field">
+      <label>Conversation history</label>
+      ${screenshotBoxHtml('convo', "Got a reply already? Send a screenshot of your conversation history and I'll generate a reply.")}
+    </div>
     <div class="field"><label>Generated message</label><textarea id="genOutput" rows="6">Generating...</textarea></div>
   `;
   const footer = `
@@ -1355,9 +1402,56 @@ function openGenerateModal(cid, stageKey, onDone){
     <button class="btn btn-secondary" onclick="copyGeneratedMessage()"><i class="ti ti-copy"></i> Copy</button>
     <button class="btn btn-primary" onclick="saveGeneratedMessage('${cid}','${stageKey}')"><i class="ti ti-check"></i> Save &amp; advance</button>
   `;
+  window.__genCtx = { cid, stageKey, onDone, profileImages: [], convoImages: [] };
   openModal('Write message — '+st.label, body, footer);
-  window.__genCtx = { cid, stageKey, onDone };
   generateMessageForModal(cid, stageKey);
+}
+
+function screenshotBoxHtml(kind, hint){
+  return `
+    <div class="shot-box" id="shotbox-${kind}">
+      <div class="shot-hint"><i class="ti ti-camera"></i> ${hint}</div>
+      <label class="btn btn-secondary btn-sm shot-upload-btn">
+        <i class="ti ti-upload"></i> Upload screenshot(s)
+        <input type="file" accept="image/*" multiple style="display:none;" onchange="handleScreenshotUpload(event,'${kind}')">
+      </label>
+      <div class="shot-files" id="shotfiles-${kind}"></div>
+    </div>`;
+}
+
+function handleScreenshotUpload(event, kind){
+  const files = Array.from(event.target.files || []);
+  if(!files.length || !window.__genCtx) return;
+  const arrKey = kind === 'profile' ? 'profileImages' : 'convoImages';
+  let pending = files.length;
+  files.forEach(file => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const match = String(reader.result).match(/^data:([^;]+);base64,(.*)$/);
+      if(match){
+        window.__genCtx[arrKey].push({ name: file.name, mediaType: match[1], base64: match[2] });
+      }
+      pending--;
+      if(pending === 0){
+        renderShotFiles(kind);
+        toast(files.length+' screenshot'+(files.length===1?'':'s')+' attached', 'success');
+      }
+    };
+    reader.readAsDataURL(file);
+  });
+  event.target.value = '';
+}
+function renderShotFiles(kind){
+  const arrKey = kind === 'profile' ? 'profileImages' : 'convoImages';
+  const list = (window.__genCtx && window.__genCtx[arrKey]) || [];
+  const el = document.getElementById('shotfiles-'+kind);
+  if(!el) return;
+  el.innerHTML = list.map((f,i) => `<span class="shot-file-chip">${esc(f.name)}<button onclick="removeScreenshot('${kind}',${i})">&times;</button></span>`).join('');
+}
+function removeScreenshot(kind, idx){
+  const arrKey = kind === 'profile' ? 'profileImages' : 'convoImages';
+  window.__genCtx[arrKey].splice(idx,1);
+  renderShotFiles(kind);
 }
 
 async function generateMessageForModal(cid, stageKey){
@@ -1366,16 +1460,23 @@ async function generateMessageForModal(cid, stageKey){
   const st = STAGE_META.find(s=>s.key===stageKey);
   const notes = document.getElementById('genNotes') ? document.getElementById('genNotes').value : c.notes;
   const template = seq.stages[stageKey] || '';
-  const prompt = `Template for this stage:\n${template}\n\nContact: ${c.name}, ${c.role} at ${c.company}. Sequence stage: ${st.label} (stage ${STAGE_META.findIndex(s=>s.key===stageKey)+1} of 4). Profile notes: ${notes || 'none'}.\n\n${voiceRulesText()}\n\nWrite the actual message for this specific contact, replacing placeholders naturally. Return only the message text.`;
-  const result = await callAI(prompt, 400, ()=>fillTemplate(template, c));
+  const profileImages = (window.__genCtx && window.__genCtx.profileImages) || [];
+  const convoImages = (window.__genCtx && window.__genCtx.convoImages) || [];
+  const images = [...profileImages, ...convoImages].map(f => ({ mediaType: f.mediaType, base64: f.base64 }));
+  let imageNote = '';
+  if(profileImages.length) imageNote += ` You've been given ${profileImages.length} screenshot(s) of the contact's LinkedIn profile — read their bio, posts and work history and weave in anything relevant.`;
+  if(convoImages.length) imageNote += ` You've also been given ${convoImages.length} screenshot(s) of the conversation so far — read what they actually said and write a reply that responds to it naturally, rather than restating the template.`;
+  const prompt = `Template for this stage:\n${template}\n\nContact: ${c.name}, ${c.role} at ${c.company}. Sequence stage: ${st.label} (message ${messageNumberForStage(stageKey) || 'n/a'} in the sequence). Profile notes: ${notes || 'none'}.\n\n${ctaStrategyNote(stageKey)}\n\n${voiceRulesText()}${imageNote}\n\nWrite the actual message for this specific contact, replacing placeholders naturally. Return only the message text.`;
+  const result = await callAI(prompt, 400, ()=>fillTemplate(template, c, stageKey), images);
   const out = document.getElementById('genOutput');
   if(out) out.value = result;
 }
-function fillTemplate(template, c){
-  return (template || '')
+function fillTemplate(template, c, stageKey){
+  const filled = (template || '')
     .replace(/{{first}}/g, firstName(c.name))
     .replace(/{{company}}/g, c.company)
     .replace(/{{role}}/g, c.role);
+  return appendCtaNudge(filled, stageKey);
 }
 function regenerateMessage(cid, stageKey){
   const out = document.getElementById('genOutput');
@@ -1778,15 +1879,20 @@ function saveSettings(){
 
 /* ===================== ANTHROPIC API WRAPPER ===================== */
 
-async function callAI(promptText, maxTokens, fallbackFn){
+async function callAI(promptText, maxTokens, fallbackFn, images){
   try {
+    const content = (images || []).map(img => ({
+      type: 'image',
+      source: { type: 'base64', media_type: img.mediaType, data: img.base64 }
+    }));
+    content.push({ type: 'text', text: promptText });
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
         max_tokens: maxTokens,
-        messages: [{ role:'user', content: promptText }]
+        messages: [{ role:'user', content }]
       })
     });
     if(!res.ok) throw new Error('API error '+res.status);
