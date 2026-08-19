@@ -1228,6 +1228,43 @@ async function syncAllContactsToAirtable(){
   toast(`Synced ${syncedCount} of ${state.contacts.length} contacts to Airtable`, syncedCount === state.contacts.length ? 'success' : 'warn');
 }
 
+const JOURNEY_STAGE_TO_STATE = { 'Identified':'found', 'Connected':'connected', 'Messaging':'messaging', 'Booked':'booked' };
+
+async function hydrateContactsFromAirtable(){
+  try {
+    const res = await fetch('/api/airtable/contact');
+    const records = await res.json();
+    if(!res.ok) throw new Error((records && records.error) || ('Request failed with status '+res.status));
+    if(!Array.isArray(records) || !records.length) return;
+
+    state.contacts = records.map(r => {
+      const f = r.fields || {};
+      const role = f['Job Title'] || '';
+      return {
+        id: r.id || uid('c'),
+        name: f['Full Name'] || '',
+        company: f['Company'] || '',
+        role: role,
+        url: f['LinkedIn URL'] || '',
+        seqId: role === 'Digital and Tech' ? 'digitalTech' : 'seniorLeaders',
+        state: JOURNEY_STAGE_TO_STATE[f['Journey Stage']] || 'found',
+        foundDate: isoDate(TODAY),
+        connReqDate: null,
+        connDate: null,
+        notes: f['Notes'] || '',
+        thread: { connSent:null, m1:null, m2:null, cta:null, booked:false },
+        generated: {},
+        touchPoints: []
+      };
+    });
+
+    renderPage();
+    toast('Contacts loaded from Airtable', 'success');
+  } catch(err){
+    console.warn('Could not load contacts from Airtable:', err.message);
+  }
+}
+
 function csvField(val){
   const str = String(val ?? '');
   if(/[",\r\n]/.test(str)) return '"' + str.replace(/"/g,'""') + '"';
@@ -2645,6 +2682,10 @@ loadPersistedState();
 state = makeReactive(rawState, persistState);
 renderSidebar();
 renderPage();
+
+if(state.contacts.length === 0){
+  hydrateContactsFromAirtable();
+}
 </script>
 </body>
 </html>

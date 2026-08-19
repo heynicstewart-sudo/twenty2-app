@@ -116,6 +116,19 @@ app.use(express.json());
 
 // ===================== AIRTABLE ROUTES =====================
 
+// Fetch all contacts from Airtable
+app.get('/api/airtable/contact', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  try {
+    const data = await airtableRequest('GET', 'Contacts');
+    res.json(data.records || []);
+  } catch (err) {
+    console.error('Airtable contact list error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Create or update a contact in Airtable
 app.post('/api/airtable/contact', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
