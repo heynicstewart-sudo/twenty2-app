@@ -206,6 +206,20 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .reply-btn.active-no{background:var(--danger);color:#fff;border-color:var(--danger);}
 .archive-box{margin-top:26px;}
 .archive-toggle{cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;gap:6px;color:var(--muted);}
+.tp-badge{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:20px;font-size:10.5px;font-weight:800;background:#f0e9dc;color:var(--accent);}
+.tp-badge i{font-size:11px;}
+.tp-timeline{display:flex;flex-direction:column;gap:6px;}
+.tp-item{background:#fff;border:1px solid var(--border);border-radius:8px;padding:7px 9px;}
+.tp-item-head{display:flex;justify-content:space-between;align-items:center;font-size:11.5px;}
+.tp-type{font-weight:700;}
+.tp-notes{font-size:11.5px;color:var(--muted);margin-top:3px;}
+.tp-form{display:flex;gap:6px;flex-wrap:wrap;align-items:center;}
+.tp-form input[type="date"]{width:auto;flex:none;font-size:11.5px;padding:6px 8px;}
+.tp-form select{width:auto;flex:none;font-size:11.5px;padding:6px 8px;}
+.tp-form input:not([type="date"]){flex:1;min-width:100px;font-size:11.5px;padding:6px 8px;}
+.rec-product{background:#eaf7f0;border:1px solid #c9e9d7;border-radius:8px;padding:8px 10px;margin-bottom:6px;}
+.rec-product:last-child{margin-bottom:0;}
+.rec-product-name{font-weight:700;font-size:12px;color:#1f7a4f;}
 
 /* Modal */
 .modal-overlay{position:fixed;inset:0;background:rgba(26,26,46,0.45);display:flex;align-items:center;justify-content:center;z-index:100;padding:20px;}
@@ -387,7 +401,7 @@ const CTA_OPTIONS = ['Change Value Check','Free session','The book','Community C
 const TODAY = new Date('2026-08-18T09:00:00');
 const SEARCH_API_URL = 'https://twenty2-app-production.up.railway.app/api/search-contact';
 
-let state = {
+let rawState = {
   currentPage: 'dashboard',
   gridColumns: ['Product Owner','Transformation Lead','Digital and Tech'],
   companies: ['Woodside Energy','Chevron Australia','Rio Tinto','Water Corporation','ATCO Australia','Hancock Iron Ore','Shell Australia','RAC WA','Fortescue','Western Power'],
@@ -398,25 +412,31 @@ let state = {
   contacts: [
     { id:'c1', name:'Stuart Williams', company:'Woodside Energy', role:'Transformation Lead', url:'https://linkedin.com/in/stuart-williams-wa', seqId:'seniorLeaders', state:'booked', foundDate:'2026-07-15', connReqDate:'2026-07-16', connDate:'2026-07-20', notes:'Leading the delivery transformation programme across upstream projects.',
       thread:{ connSent:'2026-07-20', m1:{sent:'2026-07-23',replied:true}, m2:{sent:'2026-07-28',replied:true}, cta:'Change Value Check', booked:true, bookedService:'Workshop', bookedDate:'2026-09-05', bookedCta:'Change Value Check', bookedNotes:'Mentioned the CVA surfaced a real gap in their delivery rhythm.' },
-      generated:{} },
+      generated:{},
+      touchPoints:[
+        { id:'tp1', date:'2026-07-20', type:'LinkedIn message', notes:'Connection request accepted.' },
+        { id:'tp2', date:'2026-07-30', type:'Call', notes:'15 min intro call, discussed delivery rhythm across upstream projects.' },
+        { id:'tp3', date:'2026-08-15', type:'Meeting', notes:'Walked through the Change Value Check results together.' }
+      ] },
     { id:'c2', name:'Bonnie W.', company:'Chevron Australia', role:'Product Owner', url:'https://linkedin.com/in/bonnie-w-chevron', seqId:'seniorLeaders', state:'connected', foundDate:'2026-08-08', connReqDate:'2026-08-09', connDate:'2026-08-12', notes:'Recently posted about scaling PI planning across three sites.',
-      thread:{ connSent:'2026-08-12', m1:null, m2:null, cta:null, booked:false }, generated:{} },
+      thread:{ connSent:'2026-08-12', m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[] },
     { id:'c3', name:'Craig Humphrey', company:'Rio Tinto', role:'Digital and Tech', url:'https://linkedin.com/in/craig-humphrey-rt', seqId:'digitalTech', state:'messaging', foundDate:'2026-07-30', connReqDate:'2026-07-31', connDate:'2026-08-05', notes:'Heads up a digital delivery pod, mentioned tooling fragmentation.',
-      thread:{ connSent:'2026-08-05', m1:{sent:'2026-08-08',replied:false}, m2:null, cta:null, booked:false }, generated:{} },
+      thread:{ connSent:'2026-08-05', m1:{sent:'2026-08-08',replied:false}, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[] },
     { id:'c4', name:'Helen Joe', company:'Water Corporation', role:'Transformation Lead', url:'https://linkedin.com/in/helen-joe-watercorp', seqId:'seniorLeaders', state:'found', foundDate:'2026-08-16', connReqDate:null, connDate:null, notes:'',
-      thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{} },
+      thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[] },
     { id:'c5', name:'Vicky Hetherington', company:'ATCO Australia', role:'Product Owner', url:'https://linkedin.com/in/vicky-hetherington-atco', seqId:'seniorLeaders', state:'opened', foundDate:'2026-08-14', connReqDate:null, connDate:null, notes:'Profile viewed, connection request not yet sent.',
-      thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{} },
+      thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[] },
     { id:'c6', name:'Claire Hall', company:'Hancock Iron Ore', role:'Digital and Tech', url:'https://linkedin.com/in/claire-hall-hancock', seqId:'digitalTech', state:'connected', foundDate:'2026-08-10', connReqDate:'2026-08-11', connDate:'2026-08-16', notes:'Runs the agile coaching guild internally.',
-      thread:{ connSent:'2026-08-16', m1:null, m2:null, cta:null, booked:false }, generated:{} },
+      thread:{ connSent:'2026-08-16', m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[] },
     { id:'c7', name:'Heath Harnden', company:'Shell Australia', role:'Transformation Lead', url:'https://linkedin.com/in/heath-harnden-shell', seqId:'seniorLeaders', state:'messaging', foundDate:'2026-07-25', connReqDate:'2026-07-26', connDate:'2026-07-28', notes:'Vocal on LinkedIn about change fatigue in his org.',
-      thread:{ connSent:'2026-07-28', m1:{sent:'2026-08-01',replied:true}, m2:{sent:'2026-08-07',replied:true}, cta:null, booked:false }, generated:{} },
+      thread:{ connSent:'2026-07-28', m1:{sent:'2026-08-01',replied:true}, m2:{sent:'2026-08-07',replied:true}, cta:null, booked:false }, generated:{},
+      touchPoints:[ { id:'tp4', date:'2026-08-01', type:'LinkedIn message', notes:'Replied same day, keen to keep talking.' } ] },
     { id:'c8', name:'Shawn Fernando', company:'RAC WA', role:'Digital and Tech', url:'https://linkedin.com/in/shawn-fernando-rac', seqId:'digitalTech', state:'found', foundDate:'2026-08-17', connReqDate:null, connDate:null, notes:'',
-      thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{} },
+      thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[] },
     { id:'c9', name:'Hume Saunders', company:'Fortescue', role:'Product Owner', url:'https://linkedin.com/in/hume-saunders-fmg', seqId:'seniorLeaders', state:'opened', foundDate:'2026-08-03', connReqDate:'2026-08-06', connDate:null, notes:'Connection request sent, no response yet.',
-      thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{} },
+      thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[] },
     { id:'c10', name:'Tenille Frichot', company:'Western Power', role:'Digital and Tech', url:'https://linkedin.com/in/tenille-frichot-wp', seqId:'digitalTech', state:'messaging', foundDate:'2026-07-28', connReqDate:'2026-07-29', connDate:'2026-08-02', notes:'Leading a platform modernisation squad.',
-      thread:{ connSent:'2026-08-02', m1:{sent:'2026-08-05',replied:true}, m2:{sent:'2026-08-11',replied:true}, cta:null, booked:false }, generated:{} }
+      thread:{ connSent:'2026-08-02', m1:{sent:'2026-08-05',replied:true}, m2:{sent:'2026-08-11',replied:true}, cta:null, booked:false }, generated:{}, touchPoints:[] }
   ],
   bookings: [
     { contactId:'c1', name:'Stuart Williams', company:'Woodside Energy', service:'Workshop', date:'2026-09-05', cta:'Change Value Check', notes:'Mentioned the CVA surfaced a real gap in their delivery rhythm.' }
@@ -469,46 +489,78 @@ let state = {
       { name:'Change Value Check', enabled:true, url:'https://twenty2collective.com/change-value-check' },
       { name:'Free 60-min diagnostic', enabled:true, url:'https://twenty2collective.com/diagnostic' },
       { name:'The book', enabled:false, url:'https://twenty2collective.com/book' }
+    ],
+    integrations: {
+      makeWebhookUrl: '',
+      clayApiKey: ''
+    },
+    products: [
+      { id:'prod1', name:'Change Value Check', targetRoles:['Transformation Lead','Product Owner'], targetIndustries:['Energy','Mining'], minTouchPoints:1, messageAngle:'A quick diagnostic that shows leaders exactly where their delivery rhythm is losing time, before asking for anything bigger.' },
+      { id:'prod2', name:'Sprint Zero', targetRoles:['Digital and Tech'], targetIndustries:['Mining','Utilities'], minTouchPoints:2, messageAngle:'Hands-on kickoff to get a new delivery team aligned on ways of working before sprint one starts.' },
+      { id:'prod3', name:'Leading SAFe', targetRoles:['Transformation Lead'], targetIndustries:['Energy'], minTouchPoints:3, messageAngle:'Certification pathway for leaders who are ready to scale agile ways of working across business units.' }
     ]
   },
   lastAnalysis: null
 };
 
 /* ===================== PERSISTENCE (localStorage) ===================== */
+/* `state` is a deep reactive proxy over `rawState` — setting or deleting any
+   property anywhere in the tree (state.contacts[0].thread.cta = 'x', array
+   push/splice, etc.) saves the whole app to localStorage immediately, so
+   nothing needs to remember to call a save function by hand. */
 
-const STORAGE_KEY = 't2c_grid_state';
+const STORAGE_KEY = 't2c_state';
 
-function saveStateToStorage(){
+function persistState(){
   try {
-    const snapshot = {
-      contacts: state.contacts,
-      gridColumns: state.gridColumns,
-      companies: state.companies,
-      bookings: state.bookings,
-      deadContacts: state.deadContacts,
-      activity: state.activity,
-      settings: state.settings,
-      sequences: state.sequences,
-      lastAnalysis: state.lastAnalysis
-    };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(rawState));
   } catch(err){
     console.warn('Could not save state to localStorage:', err.message);
   }
 }
 
-function loadStateFromStorage(){
+function loadPersistedState(){
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if(!raw) return false;
+    const defaultSettings = rawState.settings;
     const saved = JSON.parse(raw);
-    Object.assign(state, saved);
+    Object.assign(rawState, saved);
+    if(saved.settings){
+      rawState.settings = Object.assign({}, defaultSettings, saved.settings, {
+        integrations: Object.assign({}, defaultSettings.integrations, saved.settings.integrations),
+        products: saved.settings.products || defaultSettings.products
+      });
+    }
+    (rawState.contacts || []).forEach(c => { if(!c.touchPoints) c.touchPoints = []; });
     return true;
   } catch(err){
     console.warn('Could not restore saved state from localStorage:', err.message);
     return false;
   }
 }
+
+function makeReactive(target, onChange){
+  if(target === null || typeof target !== 'object') return target;
+  return new Proxy(target, {
+    get(obj, prop, receiver){
+      const value = Reflect.get(obj, prop, receiver);
+      return (value !== null && typeof value === 'object') ? makeReactive(value, onChange) : value;
+    },
+    set(obj, prop, value, receiver){
+      const result = Reflect.set(obj, prop, value, receiver);
+      onChange();
+      return result;
+    },
+    deleteProperty(obj, prop){
+      const result = Reflect.deleteProperty(obj, prop);
+      onChange();
+      return result;
+    }
+  });
+}
+
+let state;
 
 /* ===================== UTILITIES ===================== */
 
@@ -598,7 +650,6 @@ function renderPage(){
   const renderers = { dashboard: renderDashboard, howitworks: renderHowItWorks, grid: renderGrid, roadmap: renderRoadmap, sequences: renderSequences, calendar: renderCalendar, analytics: renderAnalytics, settings: renderSettings };
   el.innerHTML = renderers[state.currentPage]();
   afterRender(state.currentPage);
-  saveStateToStorage();
 }
 
 function afterRender(page){
@@ -814,10 +865,6 @@ function renderGrid(){
     <button class="btn btn-secondary" onclick="addGridColumn()"><i class="ti ti-plus"></i> Add column</button>
     <button class="btn btn-primary" id="runSearchBtn" onclick="runDailySearch()"><i class="ti ti-search"></i> Run daily search</button>
     <button class="btn btn-ghost" onclick="resetGrid()"><i class="ti ti-refresh"></i> Reset</button>
-    <div class="field">
-      <label>Export job title</label>
-      <select id="exportJobTitleSelect">${cols.map(c=>'<option value="'+esc(c)+'">'+esc(c)+'</option>').join('')}</select>
-    </div>
     <button class="btn btn-secondary" onclick="exportContactsCsv()"><i class="ti ti-file-download"></i> Export contacts</button>
   </div>
   <div id="gridNotification"></div>
@@ -930,12 +977,12 @@ async function runDailySearch(){
         const newContact = {
           id: uid('c'), name: data.name, company, role, url: data.url,
           seqId, state:'found', foundDate: isoDate(TODAY), connReqDate:null, connDate:null, notes:'',
-          thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{}
+          thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[]
         };
         state.contacts.push(newContact);
         foundCount++;
         if(cellEl) cellEl.outerHTML = renderGridCellHTML(newContact);
-        saveStateToStorage();
+        notifyWebhook(newContact);
       } else {
         if(cellEl) cellEl.outerHTML = `<div class="cell-empty" data-company="${esc(company)}" data-role="${esc(role)}" title="Couldn't find a verified LinkedIn profile — try an alternative search method">No confident match — try again</div>`;
       }
@@ -988,20 +1035,52 @@ function companyDomain(company){
   return slug ? slug + '.com.au' : '';
 }
 
+const COMPANY_INDUSTRIES = {
+  'Woodside Energy': 'Energy',
+  'Chevron Australia': 'Energy',
+  'Shell Australia': 'Energy',
+  'ATCO Australia': 'Energy',
+  'Rio Tinto': 'Mining',
+  'Hancock Iron Ore': 'Mining',
+  'Fortescue': 'Mining',
+  'Water Corporation': 'Utilities',
+  'Western Power': 'Utilities',
+  'RAC WA': 'Services'
+};
+
+function companyIndustry(company){
+  return COMPANY_INDUSTRIES[company] || 'Other';
+}
+
+function notifyWebhook(contact){
+  const url = ((state.settings.integrations && state.settings.integrations.makeWebhookUrl) || '').trim();
+  if(!url) return;
+  const payload = {
+    name: contact.name,
+    company: contact.company,
+    domain: companyDomain(contact.company),
+    linkedin_url: contact.url,
+    state: contact.state,
+    touch_point_count: (contact.touchPoints || []).length
+  };
+  fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }).catch(err => console.warn('Webhook POST failed:', err.message));
+}
+
 function csvField(val){
   const str = String(val ?? '');
   if(/[",\r\n]/.test(str)) return '"' + str.replace(/"/g,'""') + '"';
   return str;
 }
 
-const EXPORTABLE_STATES = ['found','opened','connected','messaging'];
+const EXPORTABLE_STATES = ['found','opened','connected','messaging','booked'];
 
 function exportContactsCsv(){
-  const jobTitle = document.getElementById('exportJobTitleSelect').value;
-  const rows = state.contacts.filter(c =>
-    c.role === jobTitle && EXPORTABLE_STATES.includes(c.state) && c.url && c.url.trim()
-  );
-  if(!rows.length){ toast('No exportable contacts for "'+jobTitle+'" yet', 'warn'); return; }
+  const rows = state.contacts.filter(c => EXPORTABLE_STATES.includes(c.state) && c.url && c.url.trim());
+  if(!rows.length){ toast('No found contacts to export yet', 'warn'); return; }
 
   const header = ['Name','Company','Domain','LinkedIn URL'];
   const lines = [header.map(csvField).join(',')];
@@ -1010,7 +1089,7 @@ function exportContactsCsv(){
   });
   const csvContent = lines.join('\r\n');
 
-  const filename = `T2C_contacts_${jobTitle.replace(/\s+/g,'_')}_${isoDate(TODAY)}.csv`;
+  const filename = `T2C_contacts_${isoDate(TODAY)}.csv`;
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -1132,6 +1211,7 @@ function markContactsConnected(contacts){
     c.connDate = isoDate(TODAY);
     c.thread.connSent = isoDate(TODAY);
     state.activity.unshift({ type:'connected', text:`${c.name} (${c.company}) accepted your connection`, date: isoDate(TODAY) });
+    notifyWebhook(c);
   });
 }
 
@@ -1198,7 +1278,10 @@ function renderKCard(c, colKey){
         <div class="kcard-name">${esc(c.name)}</div>
         <div class="kcard-role">${esc(c.role)} · ${esc(c.company)}</div>
       </div>
-      <span class="day-badge ${dayBadgeClass(days)}">${days}d</span>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
+        <span class="day-badge ${dayBadgeClass(days)}">${days}d</span>
+        <span class="tp-badge" title="Touch points logged"><i class="ti ti-target-arrow"></i> ${(c.touchPoints||[]).length}</span>
+      </div>
     </div>
     ${flagged ? `<div class="kcard-flag"><span><i class="ti ti-flag-3"></i> Delete? ${days} days pending</span><button class="btn btn-danger btn-sm" onclick="event.stopPropagation();removeDeadContact('${c.id}')">Remove</button></div>` : ''}
     <div id="thread-${c.id}" style="display:none;">${renderThread(c)}</div>
@@ -1233,6 +1316,8 @@ function renderThread(c){
         <i class="ti ti-calendar-check"></i> ${t.booked ? 'Meeting booked' : 'Mark as meeting booked'}
       </button>
     </div>
+    ${renderTouchPoints(c)}
+    ${renderRecommendedProducts(c)}
   </div>`;
 }
 
@@ -1256,11 +1341,75 @@ function renderMsgStep(c, key, label){
   </div>`;
 }
 
+const TOUCH_POINT_TYPES = ['LinkedIn message','Email','Call','Meeting','Event','Proposal'];
+
+function renderTouchPoints(c){
+  const points = (c.touchPoints || []).slice().sort((a,b)=>new Date(b.date)-new Date(a.date));
+  return `
+  <div class="thread-step">
+    <div class="thread-step-head"><span>Touch points</span><span class="muted">${points.length} logged</span></div>
+    ${points.length ? `<div class="tp-timeline">
+      ${points.map(tp => `
+        <div class="tp-item">
+          <div class="tp-item-head"><span class="tp-type">${esc(tp.type)}</span><span class="muted">${fmtDate(tp.date)}</span></div>
+          ${tp.notes ? `<div class="tp-notes">${esc(tp.notes)}</div>` : ''}
+        </div>
+      `).join('')}
+    </div>` : ''}
+    <div class="tp-form">
+      <input type="date" id="tpDate-${c.id}" value="${isoDate(TODAY)}">
+      <select id="tpType-${c.id}">${TOUCH_POINT_TYPES.map(t=>`<option>${t}</option>`).join('')}</select>
+      <input id="tpNotes-${c.id}" placeholder="Notes">
+      <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();addTouchPoint('${c.id}')"><i class="ti ti-plus"></i> Log touch point</button>
+    </div>
+  </div>`;
+}
+
+function addTouchPoint(cid){
+  const c = state.contacts.find(x=>x.id===cid);
+  const date = document.getElementById('tpDate-'+cid).value || isoDate(TODAY);
+  const type = document.getElementById('tpType-'+cid).value;
+  const notes = document.getElementById('tpNotes-'+cid).value.trim();
+  if(!c.touchPoints) c.touchPoints = [];
+  c.touchPoints.push({ id: uid('tp'), date, type, notes });
+  notifyWebhook(c);
+  toast('Touch point logged', 'success');
+  renderPage();
+}
+
+function recommendedProducts(c){
+  const industry = companyIndustry(c.company);
+  const touchCount = (c.touchPoints || []).length;
+  return (state.settings.products || []).filter(p => {
+    const roles = p.targetRoles || [];
+    const industries = p.targetIndustries || [];
+    const roleMatch = !roles.length || roles.some(r => r.trim().toLowerCase() === c.role.toLowerCase());
+    const industryMatch = !industries.length || industries.some(i => i.trim().toLowerCase() === industry.toLowerCase());
+    const touchMatch = touchCount >= (parseInt(p.minTouchPoints) || 0);
+    return roleMatch && industryMatch && touchMatch;
+  });
+}
+
+function renderRecommendedProducts(c){
+  const matches = recommendedProducts(c);
+  return `
+  <div class="thread-step">
+    <div class="thread-step-head"><span>Recommended products</span></div>
+    ${matches.length ? matches.map(p => `
+      <div class="rec-product">
+        <div class="rec-product-name">${esc(p.name)}</div>
+        ${p.messageAngle ? `<div class="muted" style="font-size:11.5px;margin-top:2px;">${esc(p.messageAngle)}</div>` : ''}
+      </div>
+    `).join('') : '<span class="muted" style="font-size:11.5px;">No matching products yet</span>'}
+  </div>`;
+}
+
 function markSent(cid, key){
   const c = state.contacts.find(x=>x.id===cid);
   c.thread[key] = { sent: isoDate(TODAY), replied:false };
   if(c.state !== 'messaging') c.state = 'messaging';
   state.activity.unshift({ type:'message', text:`${key==='m1'?'Message 1':'Message 2'} sent to ${c.name} (${c.company})`, date: isoDate(TODAY) });
+  notifyWebhook(c);
   toast('Marked as sent', 'success');
   renderPage();
 }
@@ -1272,7 +1421,6 @@ function setReply(cid, key, val){
 function setCta(cid, val){
   const c = state.contacts.find(x=>x.id===cid);
   c.thread.cta = val || null;
-  saveStateToStorage();
 }
 
 function removeDeadContact(cid){
@@ -1307,6 +1455,7 @@ function onColDrop(e, colKey){
     c.connDate = isoDate(TODAY);
     c.thread.connSent = isoDate(TODAY);
     state.activity.unshift({ type:'connected', text:`${c.name} (${c.company}) accepted your connection`, date: isoDate(TODAY) });
+    notifyWebhook(c);
     renderPage();
   } else if(colKey === 'messaging'){
     if(forward) openGenerateModal(c.id, c.thread.m1 ? 'm2' : 'm1', ()=>renderPage());
@@ -1386,6 +1535,7 @@ function confirmBooking(cid){
   c.state = 'messaging';
   state.bookings.push({ contactId:c.id, name:c.name, company:c.company, service, date, cta, notes });
   state.activity.unshift({ type:'booked', text:`${c.name} (${c.company}) booked ${service}`, date: isoDate(TODAY) });
+  notifyWebhook(c);
   closeModal();
   toast(c.name+' booked for '+service, 'success');
   renderPage();
@@ -1480,9 +1630,9 @@ function renderFlowNode(seq, st){
   </div>`;
 }
 
-function renameSeq(id, val){ state.sequences.find(s=>s.id===id).name = val; saveStateToStorage(); }
-function setSeqVoice(id, val){ state.sequences.find(s=>s.id===id).voice = val; saveStateToStorage(); }
-function setStageTemplate(seqId, stageKey, val){ state.sequences.find(s=>s.id===seqId).stages[stageKey] = val; saveStateToStorage(); }
+function renameSeq(id, val){ state.sequences.find(s=>s.id===id).name = val; }
+function setSeqVoice(id, val){ state.sequences.find(s=>s.id===id).voice = val; }
+function setStageTemplate(seqId, stageKey, val){ state.sequences.find(s=>s.id===seqId).stages[stageKey] = val; }
 
 async function generateTemplate(seqId, stageKey){
   const seq = state.sequences.find(s=>s.id===seqId);
@@ -1742,6 +1892,7 @@ function saveGeneratedMessage(cid, stageKey){
   if(stageKey==='m1'){ c.connDate = c.connDate || isoDate(TODAY); c.thread.connSent = c.thread.connSent || isoDate(TODAY); c.thread.m1 = { sent: isoDate(TODAY), replied:false }; c.state='messaging'; state.activity.unshift({ type:'message', text:`Message 1 sent to ${c.name} (${c.company})`, date: isoDate(TODAY) }); }
   if(stageKey==='m2'){ c.thread.m2 = { sent: isoDate(TODAY), replied:false }; state.activity.unshift({ type:'message', text:`Message 2 sent to ${c.name} (${c.company})`, date: isoDate(TODAY) }); }
   if(stageKey==='cta'){ c.thread.cta = c.thread.cta || CTA_OPTIONS[0]; }
+  notifyWebhook(c);
   closeModal();
   toast('Message saved for '+c.name, 'success');
   if(window.__genCtx && window.__genCtx.onDone) window.__genCtx.onDone();
@@ -2063,6 +2214,39 @@ function renderSettings(){
     <button class="btn btn-secondary" onclick="addMagnet()"><i class="ti ti-plus"></i> Add custom lead magnet</button>
   </div>
 
+  <div class="settings-section card">
+    <div class="section-title"><i class="ti ti-plug-connected"></i> Integrations</div>
+    <div class="field">
+      <label>Make webhook URL</label>
+      <input id="makeWebhookUrl" placeholder="https://hook.us1.make.com/..." value="${esc((s.integrations && s.integrations.makeWebhookUrl) || '')}">
+    </div>
+    <p class="muted" style="font-size:12px;margin-bottom:14px;">When a contact is found or updated, T2C Outreach POSTs name, company, domain, LinkedIn URL, state and touch point count to this URL.</p>
+    <div class="field">
+      <label>Clay API key</label>
+      <input id="clayApiKey" type="password" placeholder="clay_..." value="${esc((s.integrations && s.integrations.clayApiKey) || '')}">
+    </div>
+    <p class="muted" style="font-size:12px;">Stored locally, reserved for future Clay enrichment calls.</p>
+  </div>
+
+  <div class="settings-section card">
+    <div class="section-title"><i class="ti ti-package"></i> Products</div>
+    ${(s.products||[]).map((p,i) => `
+      <div class="account-row" style="flex-direction:column;align-items:stretch;gap:10px;">
+        <div class="row">
+          <div class="field"><label>Name</label><input value="${esc(p.name)}" onchange="setProductField(${i},'name',this.value)"></div>
+          <div class="field"><label>Minimum touch points</label><input type="number" min="0" value="${p.minTouchPoints}" onchange="setProductField(${i},'minTouchPoints',this.value)"></div>
+        </div>
+        <div class="row">
+          <div class="field"><label>Target roles (comma separated)</label><input value="${esc((p.targetRoles||[]).join(', '))}" onchange="setProductListField(${i},'targetRoles',this.value)"></div>
+          <div class="field"><label>Target industries (comma separated)</label><input value="${esc((p.targetIndustries||[]).join(', '))}" onchange="setProductListField(${i},'targetIndustries',this.value)"></div>
+        </div>
+        <div class="field"><label>Message angle</label><textarea rows="2" onchange="setProductField(${i},'messageAngle',this.value)">${esc(p.messageAngle)}</textarea></div>
+        <button class="btn btn-ghost btn-sm" style="align-self:flex-end;" onclick="removeProduct(${i})"><i class="ti ti-trash"></i> Remove</button>
+      </div>
+    `).join('')}
+    <button class="btn btn-secondary" onclick="addProduct()"><i class="ti ti-plus"></i> Add product</button>
+  </div>
+
   <div style="display:flex;align-items:center;gap:14px;">
     <button class="btn btn-primary" onclick="saveSettings()"><i class="ti ti-device-floppy"></i> Save settings</button>
     <span class="save-flash" id="saveFlash"><i class="ti ti-circle-check"></i> Settings saved</span>
@@ -2074,7 +2258,6 @@ function toggleAccountColumn(i, col){
   const acc = state.settings.accounts[i];
   const idx = acc.columns.indexOf(col);
   if(idx>-1) acc.columns.splice(idx,1); else acc.columns.push(col);
-  saveStateToStorage();
 }
 function removeAccount(i){ state.settings.accounts.splice(i,1); renderPage(); }
 function addAccount(){
@@ -2093,13 +2276,27 @@ function addService(){
   renderPage();
 }
 function toggleMagnet(i){ state.settings.leadMagnets[i].enabled = !state.settings.leadMagnets[i].enabled; renderPage(); }
-function setMagnetUrl(i, val){ state.settings.leadMagnets[i].url = val; saveStateToStorage(); }
+function setMagnetUrl(i, val){ state.settings.leadMagnets[i].url = val; }
 function addMagnet(){
   const name = prompt('Lead magnet name:');
   if(!name) return;
   state.settings.leadMagnets.push({ name, enabled:true, url:'' });
   renderPage();
 }
+
+function setProductField(i, field, val){
+  state.settings.products[i][field] = field === 'minTouchPoints' ? (parseInt(val) || 0) : val;
+}
+function setProductListField(i, field, val){
+  state.settings.products[i][field] = val.split(',').map(v=>v.trim()).filter(Boolean);
+}
+function addProduct(){
+  const name = prompt('Product name:');
+  if(!name) return;
+  state.settings.products.push({ id: uid('prod'), name, targetRoles:[], targetIndustries:[], minTouchPoints:0, messageAngle:'' });
+  renderPage();
+}
+function removeProduct(i){ state.settings.products.splice(i,1); renderPage(); }
 
 function saveSettings(){
   const s = state.settings;
@@ -2110,6 +2307,8 @@ function saveSettings(){
   s.strategy.connLength = document.getElementById('strLength').value;
   s.strategy.cadence = document.getElementById('strCadence').value;
   s.strategy.voiceInstructions = document.getElementById('strVoice').value;
+  s.integrations.makeWebhookUrl = document.getElementById('makeWebhookUrl').value.trim();
+  s.integrations.clayApiKey = document.getElementById('clayApiKey').value.trim();
   const flash = document.getElementById('saveFlash');
   flash.style.display = 'inline-flex';
   setTimeout(()=>{ flash.style.display='none'; }, 2200);
@@ -2147,7 +2346,8 @@ async function callAI(promptText, maxTokens, fallbackFn, images){
 
 /* ===================== INIT ===================== */
 
-loadStateFromStorage();
+loadPersistedState();
+state = makeReactive(rawState, persistState);
 renderSidebar();
 renderPage();
 </script>
