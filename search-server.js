@@ -159,7 +159,7 @@ app.post('/api/airtable/contact', async (req, res) => {
 app.post('/api/airtable/touchpoint', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
-  const { contactName, company, date, type, notes, outcome } = req.body;
+  const { contactName, company, date, type, notes, outcome, communicationMethod, aiBrief } = req.body;
   if (!contactName || !type) return res.status(400).json({ error: 'contactName and type are required' });
 
   try {
@@ -178,6 +178,8 @@ app.post('/api/airtable/touchpoint', async (req, res) => {
       'Outcome': outcome || 'No reply',
       'Direction': 'Outbound'
     };
+    if (communicationMethod) fields['Communication Method'] = communicationMethod;
+    if (aiBrief) fields['AI Brief'] = aiBrief;
 
     // Link to contact record if found
     if (contactRecord) {

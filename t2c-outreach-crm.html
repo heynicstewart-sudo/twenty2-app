@@ -784,8 +784,23 @@ function renderTodaysActions(){
   </div>`;
 }
 
+function recommendedMethodForAction(a){
+  const map = {
+    'Send first message': 'LinkedIn message',
+    'Follow up': 'Email or Call',
+    'Reply back': 'LinkedIn message',
+    'Post-delivery check-in': 'Email',
+    'Re-engage': 'Content share'
+  };
+  return map[a.type] || 'LinkedIn message';
+}
+
 function renderTodaysActionItem(a){
   const c = a.contact;
+  const method = recommendedMethodForAction(a);
+  window.__todaysActions = window.__todaysActions || {};
+  window.__todaysActions[c.id] = a;
+  const cachedBrief = window.__contactBriefs && window.__contactBriefs[c.id];
   return `
   <div class="todo-item">
     <div class="todo-item-main">
@@ -796,14 +811,19 @@ function renderTodaysActionItem(a){
       <div style="text-align:right;">
         <span class="pill">${esc(a.type)}</span>
         <div class="muted" style="font-size:11px;margin-top:4px;">${a.daysSinceTouch===null?'—':a.daysSinceTouch+'d since last touch'}</div>
+        <div class="muted" style="font-size:11px;margin-top:2px;">Recommended: ${esc(method)}</div>
       </div>
     </div>
     <div class="todo-item-actions">
       <button class="btn btn-secondary btn-sm" onclick="openGenerateModal('${c.id}','${a.stage}', ()=>renderPage())"><i class="ti ti-copy"></i> Draft message</button>
       <button class="btn btn-ghost btn-sm" onclick="toggleQuickTouchPoint('${c.id}')"><i class="ti ti-target-arrow"></i> Log touch point</button>
+      <button class="btn btn-accent btn-sm" id="briefBtn-${c.id}" onclick="generateContactBrief('${c.id}')"><i class="ti ti-sparkles"></i> Generate brief</button>
     </div>
     <div id="quicktp-${c.id}" style="display:none;margin-top:10px;">
       ${touchPointFormHtml(c.id)}
+    </div>
+    <div id="brief-${c.id}" style="${cachedBrief ? 'display:block;' : 'display:none;'}margin-top:10px;">
+      ${cachedBrief ? renderBriefPanelHtml(c.id, cachedBrief.result, cachedBrief.isMessage) : ''}
     </div>
   </div>`;
 }
@@ -812,6 +832,112 @@ function toggleQuickTouchPoint(cid){
   const el = document.getElementById('quicktp-'+cid);
   if(!el) return;
   el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+async function generateContactBrief(cid){
+  const c = state.contacts.find(x => x.id === cid);
+  const action = (window.__todaysActions || {})[cid];
+  if(!c || !action) return;
+
+  const method = recommendedMethodForAction(action);
+  const panel = document.getElementById('brief-' + cid);
+  const btn = document.getElementById('briefBtn-' + cid);
+  if(!panel) return;
+  const original = btn ? btn.innerHTML : '';
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Generating...'; }
+  panel.style.display = 'block';
+  panel.innerHTML = '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Generating brief...</div>';
+
+  const touchHistory = (c.touchPoints || []).slice().sort((x,y)=>new Date(x.date)-new Date(y.date))
+    .map(tp => `${tp.date} — ${tp.type}${tp.communicationMethod ? ' ('+tp.communicationMethod+')' : ''}: ${tp.notes || 'no notes'}${(tp.painPoints && tp.painPoints.length) ? ' [pain points: '+tp.painPoints.join(', ')+']' : ''}`)
+    .join('\n') || 'No touch points logged yet.';
+
+  const isMessage = method === 'LinkedIn message' || method === 'Email';
+
+  const prompt = `Contact: ${c.name}, ${c.role} at ${c.company}.
+Journey stage: ${c.state}.
+Pain points on file: ${(c.painPoints && c.painPoints.length) ? c.painPoints.join(', ') : 'none logged'}.
+Today's recommended action: ${action.type}.
+Recommended communication method: ${method}.
+
+Full touch point history:
+${touchHistory}
+
+${isMessage
+  ? `Write a ready-to-send ${method === 'LinkedIn message' ? 'LinkedIn message' : 'email'} for this contact given the above. ${voiceRulesText()} Return only the message text.`
+  : `Write a short prep brief for a ${method.toLowerCase()} with this contact. Return 3-4 bullet points covering what to cover, what to reference from the history above, and what to avoid. Return only the bullet points, one per line, each starting with "- ".`}`;
+
+  const result = await callAI(prompt, 400, () => localBriefFallback(c, action, method, isMessage));
+
+  window.__contactBriefs = window.__contactBriefs || {};
+  window.__contactBriefs[cid] = { result, isMessage, method };
+  panel.innerHTML = renderBriefPanelHtml(cid, result, isMessage);
+  if(btn){ btn.disabled = false; btn.innerHTML = original; }
+
+  const date = isoDate(TODAY);
+  const tpType = TOUCH_POINT_TYPES.includes(method) ? method : 'LinkedIn message';
+  if(!c.touchPoints) c.touchPoints = [];
+  c.touchPoints.push({ id: uid('tp'), date, type: tpType, communicationMethod: method, notes: 'AI-generated brief', painPoints: [], aiBrief: result });
+
+  fetch('/api/airtable/touchpoint', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contactName: c.name,
+      company: c.company,
+      date,
+      type: tpType,
+      notes: 'AI-generated brief',
+      outcome: 'No reply',
+      communicationMethod: method,
+      aiBrief: result
+    })
+  }).catch(err => console.warn('Airtable brief sync failed:', err.message));
+
+  toast('Brief generated', 'success');
+}
+
+function localBriefFallback(c, action, method, isMessage){
+  const painPoint = (c.painPoints && c.painPoints[0]) || null;
+  if(isMessage){
+    const opener = painPoint
+      ? `Last time we touched on ${painPoint.toLowerCase()}, keen to hear how that is tracking.`
+      : `Keen to hear how things are tracking on your end.`;
+    return `Hi ${firstName(c.name)}, following up given where things are with ${c.company}. ${opener}\n\nMarcus`;
+  }
+  return [
+    `- Cover: where things stand since the last touch point and next steps for ${c.company}.`,
+    `- Reference: ${painPoint ? painPoint.toLowerCase() : 'their current priorities'}, which came up in an earlier conversation.`,
+    `- Avoid: being pushy about next steps if they have not engaged much yet.`,
+    `- Aim: leave with a clear next step or date to follow up.`
+  ].join('\n');
+}
+
+function renderBriefPanelHtml(cid, text, isMessage){
+  return `
+    <div class="intel-draft">
+      <div class="intel-draft-head">
+        <div class="intel-draft-name">${isMessage ? 'Drafted message' : 'Call brief'}</div>
+        <button class="btn btn-secondary btn-sm" onclick="copyContactBrief('${cid}')"><i class="ti ti-copy"></i> Copy</button>
+      </div>
+      <div class="intel-draft-text">${esc(text)}</div>
+    </div>`;
+}
+
+async function copyContactBrief(cid){
+  const entry = window.__contactBriefs && window.__contactBriefs[cid];
+  if(!entry || !entry.result) return;
+  try {
+    await navigator.clipboard.writeText(entry.result);
+  } catch(err){
+    const ta = document.createElement('textarea');
+    ta.value = entry.result;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+  }
+  toast('Brief copied to clipboard', 'success');
 }
 
 function renderDashboard(){
@@ -1668,12 +1794,14 @@ function renderMsgStep(c, key, label){
 
 const TOUCH_POINT_TYPES = ['LinkedIn message','Email','Call','Meeting','Event','Proposal'];
 const PAIN_POINTS = ['Delivery challenges','Change fatigue','Tooling fragmentation','Capability gaps','Agile adoption','Governance','Certification','Digital transformation','Stakeholder alignment'];
+const COMMUNICATION_METHODS = ['LinkedIn message','Email','Call','Meeting','Event invite','Content share'];
 
 function touchPointFormHtml(cid){
   return `
     <div class="tp-form">
       <input type="date" id="tpDate-${cid}" value="${isoDate(TODAY)}">
-      <select id="tpType-${cid}">${TOUCH_POINT_TYPES.map(t=>`<option>${t}</option>`).join('')}</select>
+      <select id="tpType-${cid}" title="Type">${TOUCH_POINT_TYPES.map(t=>`<option>${t}</option>`).join('')}</select>
+      <select id="tpMethod-${cid}" title="Communication method">${COMMUNICATION_METHODS.map(m=>`<option>${m}</option>`).join('')}</select>
       <input id="tpNotes-${cid}" placeholder="Notes">
     </div>
     <div class="tp-painpoints" id="tpPainPoints-${cid}">
@@ -1705,12 +1833,14 @@ function addTouchPoint(cid) {
   const c = state.contacts.find(x => x.id === cid);
   const date = document.getElementById('tpDate-' + cid).value || isoDate(TODAY);
   const type = document.getElementById('tpType-' + cid).value;
+  const methodEl = document.getElementById('tpMethod-' + cid);
+  const communicationMethod = methodEl ? methodEl.value : '';
   const notes = document.getElementById('tpNotes-' + cid).value.trim();
   const painPointsEl = document.getElementById('tpPainPoints-' + cid);
   const selectedPainPoints = painPointsEl ? Array.from(painPointsEl.querySelectorAll('input:checked')).map(el => el.value) : [];
 
   if (!c.touchPoints) c.touchPoints = [];
-  c.touchPoints.push({ id: uid('tp'), date, type, notes, painPoints: selectedPainPoints });
+  c.touchPoints.push({ id: uid('tp'), date, type, communicationMethod, notes, painPoints: selectedPainPoints });
 
   if (selectedPainPoints.length) {
     if (!c.painPoints) c.painPoints = [];
@@ -1727,7 +1857,8 @@ function addTouchPoint(cid) {
       date,
       type,
       notes,
-      outcome: 'No reply'
+      outcome: 'No reply',
+      communicationMethod
     })
   }).catch(err => console.warn('Airtable touch point sync failed:', err.message));
 
