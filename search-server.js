@@ -195,6 +195,37 @@ app.post('/api/airtable/company', async (req, res) => {
   }
 });
 
+// Update a company's LinkedIn URL and slug in Airtable
+app.patch('/api/airtable/company/linkedin', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const { companyName, linkedinUrl, linkedinSlug } = req.body;
+  if (!companyName) return res.status(400).json({ error: 'companyName is required' });
+
+  try {
+    const searchRes = await fetch(
+      `${AIRTABLE_URL}/Companies?filterByFormula=${encodeURIComponent(`{Company Name}="${companyName}"`)}`,
+      { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
+    );
+    const searchData = await searchRes.json();
+    const record = searchData.records && searchData.records[0];
+    if (!record) return res.json({ success: false, message: 'Company not found in Airtable' });
+
+    const fields = {};
+    if (linkedinUrl) fields['Company LinkedIn URL'] = linkedinUrl;
+    if (linkedinSlug) fields['LinkedIn Company ID'] = linkedinSlug;
+
+    await airtableRequest('PATCH', 'Companies', {
+      records: [{ id: record.id, fields }]
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Airtable company LinkedIn update error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Log a touch point in Airtable
 app.post('/api/airtable/touchpoint', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });

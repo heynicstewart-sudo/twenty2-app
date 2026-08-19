@@ -1547,6 +1547,26 @@ async function syncAllContactsToAirtable(){
     if(i < state.companies.length - 1) await sleep(250);
   }
 
+  const linkedCompanyNames = Object.keys(state.companyLinkedIn).filter(name => {
+    const entry = state.companyLinkedIn[name];
+    return entry && entry.linkedinUrl && entry.linkedinSlug;
+  });
+  for(let i=0; i<linkedCompanyNames.length; i++){
+    const companyName = linkedCompanyNames[i];
+    const entry = state.companyLinkedIn[companyName];
+    btn.innerHTML = `<i class="ti ti-loader-2"></i> Syncing LinkedIn ${i+1}/${linkedCompanyNames.length}...`;
+    try {
+      await fetch('/api/airtable/company/linkedin', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companyName, linkedinUrl: entry.linkedinUrl, linkedinSlug: entry.linkedinSlug })
+      });
+    } catch(err){
+      console.warn('Airtable company LinkedIn sync failed for', companyName, err.message);
+    }
+    if(i < linkedCompanyNames.length - 1) await sleep(250);
+  }
+
   btn.disabled = false;
   btn.innerHTML = original;
   const allSynced = syncedCount === state.contacts.length && companySyncedCount === state.companies.length;
