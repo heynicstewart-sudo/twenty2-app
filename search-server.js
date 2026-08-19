@@ -379,6 +379,39 @@ app.get('/api/search-company-linkedin', async (req, res) => {
   }
 });
 
+// Fetches a LinkedIn company page's HTML via Serper's scrape endpoint and
+// extracts the numeric org ID embedded in it (urn:li:fsd_company:XXXXX).
+app.get('/api/enrich/linkedin-org-id', async (req, res) => {
+  const slug = (req.query.slug || '').trim();
+  if (!slug) return res.status(400).json({ found: false, error: 'slug query param is required' });
+  if (!process.env.SERPER_API_KEY) return res.status(500).json({ found: false, error: 'SERPER_API_KEY is not configured' });
+
+  const pageUrl = `https://www.linkedin.com/company/${slug}/`;
+
+  try {
+    const scrapeRes = await fetch('https://scrape.serper.dev', {
+      method: 'POST',
+      headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: pageUrl })
+    });
+    if (!scrapeRes.ok) throw new Error(`Serper scrape error: ${scrapeRes.status}`);
+
+    const data = await scrapeRes.json();
+    // Response field names aren't fully confirmed - check every plausible
+    // place the raw/rendered page content could live.
+    const haystack = [data.text, data.html, data.markdown, JSON.stringify(data)]
+      .filter(Boolean).join('\n');
+
+    const match = haystack.match(/urn:li:fsd_company:(\d+)/);
+    if (!match) return res.json({ found: false });
+
+    return res.json({ found: true, orgId: `urn:li:organization:${match[1]}` });
+  } catch (err) {
+    console.error('LinkedIn org ID lookup error for', slug, '-', err.message);
+    return res.status(500).json({ found: false, error: 'lookup_failed' });
+  }
+});
+
 // ===================== INTELLIGENCE =====================
 // Pulls the full contact + touch point picture from Airtable, hands it to
 // Claude, and asks for four sections of outreach intelligence back as JSON.

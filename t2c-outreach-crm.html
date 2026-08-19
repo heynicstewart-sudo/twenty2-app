@@ -1128,6 +1128,7 @@ function renderGrid(){
     <button class="btn btn-secondary" onclick="exportContactsCsv()"><i class="ti ti-file-download"></i> Export contacts</button>
     <button class="btn btn-secondary" id="syncAirtableBtn" onclick="syncAllContactsToAirtable()"><i class="ti ti-cloud-upload"></i> Sync to Airtable</button>
     <button class="btn btn-secondary" id="findCompanyLinkedInBtn" onclick="findCompanyLinkedInPages()"><i class="ti ti-brand-linkedin"></i> Find LinkedIn pages</button>
+    <button class="btn btn-secondary" id="orgIdBtn" onclick="fetchLinkedInOrgIds()"><i class="ti ti-id"></i> Get LinkedIn org IDs</button>
   </div>
   <div id="gridNotification"></div>
   <div class="grid-wrap">
@@ -1261,6 +1262,41 @@ async function findCompanyLinkedInPages(){
 
   renderPage();
   toast(`Found LinkedIn pages for ${foundCount} of ${searchedCount} companies searched`, foundCount ? 'success' : 'warn');
+}
+
+async function fetchLinkedInOrgIds(){
+  const btn = document.getElementById('orgIdBtn');
+  const companies = Object.keys(state.companyLinkedIn).filter(name => state.companyLinkedIn[name] && state.companyLinkedIn[name].linkedinSlug);
+  if(!companies.length){ toast('No companies with a LinkedIn slug on file yet - run "Find LinkedIn pages" first', 'warn'); return; }
+
+  const original = btn.innerHTML;
+  btn.disabled = true;
+
+  let foundCount = 0;
+  for(let i=0; i<companies.length; i++){
+    const companyName = companies[i];
+    const slug = state.companyLinkedIn[companyName].linkedinSlug;
+    btn.innerHTML = `<i class="ti ti-loader-2"></i> Looking up ${i+1}/${companies.length}...`;
+    try {
+      const res = await fetch(`/api/enrich/linkedin-org-id?slug=${encodeURIComponent(slug)}`);
+      const data = await res.json();
+      if(data.found && data.orgId){
+        await fetch('/api/airtable/company/linkedin', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ companyName, linkedinSlug: data.orgId })
+        });
+        foundCount++;
+      }
+    } catch(err){
+      console.warn('LinkedIn org ID lookup failed for', companyName, err.message);
+    }
+    if(i < companies.length - 1) await sleep(500);
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = original;
+  toast(`Found LinkedIn org IDs for ${foundCount} of ${companies.length} companies`, foundCount ? 'success' : 'warn');
 }
 
 function parseCsv(text){
