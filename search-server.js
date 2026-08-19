@@ -5,6 +5,7 @@ const path = require('path');
 
 const app = express();
 app.use(cors());
+app.use(express.json());
 
 const SERPER_URL = 'https://google.serper.dev/search';
 
@@ -88,6 +89,139 @@ app.get('/api/search-contact', async (req, res) => {
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 't2c-outreach-crm.html'));
 });
+
+// ===================== AIRTABLE CONFIG =====================
+const AIRTABLE_BASE_ID = 'appKe5oopNpheq32n';
+const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
+const AIRTABLE_URL = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}`;
+
+async function airtableRequest(method, table, body) {
+  const res = await fetch(`${AIRTABLE_URL}/${encodeURIComponent(table)}`, {
+    method,
+    headers: {
+      'Authorization': `Bearer ${AIRTABLE_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Airtable error ${res.status}: ${err}`);
+  }
+  return res.json();
+}
+
+// ===================== MIDDLEWARE =====================
+app.use(express.json());
+
+// ===================== AIRTABLE ROUTES =====================
+
+// Create or update a contact in Airtable
+app.post('/api/airtable/contact', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const { name, company, role, linkedinUrl, state: contactState, icpRoleCategory, notes } = req.body;
+  if (!name || !company) return res.status(400).json({ error: 'name and company are required' });
+
+  try {
+    const data = await airtableRequest('POST', 'Contacts', {
+      records: [{
+        fields: {
+          'Full Name': name,
+          'Job Title': role || '',
+          'Company': company,
+          'LinkedIn URL': linkedinUrl || '',
+          'ICP Role Category': icpRoleCategory || role || '',
+          'Journey Stage': mapStateToStage(contactState),
+          'Notes': notes || ''
+        }
+      }]
+    });
+    res.json({ success: true, recordId: data.records[0].id });
+  } catch (err) {
+    console.error('Airtable contact create error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Log a touch point in Airtable
+app.post('/api/airtable/touchpoint', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const { contactName, company, date, type, notes, outcome } = req.body;
+  if (!contactName || !type) return res.status(400).json({ error: 'contactName and type are required' });
+
+  try {
+    // First find the contact record in Airtable
+    const searchRes = await fetch(
+      `${AIRTABLE_URL}/Contacts?filterByFormula=${encodeURIComponent(`{Full Name}="${contactName}"`)}`,
+      { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
+    );
+    const searchData = await searchRes.json();
+    const contactRecord = searchData.records && searchData.records[0];
+
+    const fields = {
+      'Date': date || new Date().toISOString().slice(0, 10),
+      'Type': type,
+      'Notes': notes || '',
+      'Outcome': outcome || 'No reply',
+      'Direction': 'Outbound'
+    };
+
+    // Link to contact record if found
+    if (contactRecord) {
+      fields['Contact'] = [contactRecord.id];
+    }
+
+    const data = await airtableRequest('POST', 'Touch Points', { records: [{ fields }] });
+    res.json({ success: true, recordId: data.records[0].id });
+  } catch (err) {
+    console.error('Airtable touch point error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update a contact's journey stage
+app.patch('/api/airtable/contact/stage', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const { contactName, company, state: contactState } = req.body;
+  if (!contactName) return res.status(400).json({ error: 'contactName is required' });
+
+  try {
+    const searchRes = await fetch(
+      `${AIRTABLE_URL}/Contacts?filterByFormula=${encodeURIComponent(`{Full Name}="${contactName}"`)}`,
+      { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
+    );
+    const searchData = await searchRes.json();
+    const record = searchData.records && searchData.records[0];
+    if (!record) return res.json({ success: false, message: 'Contact not found in Airtable' });
+
+    await airtableRequest('PATCH', 'Contacts', {
+      records: [{
+        id: record.id,
+        fields: { 'Journey Stage': mapStateToStage(contactState) }
+      }]
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Airtable stage update error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Map app state to Airtable Journey Stage values
+function mapStateToStage(state) {
+  const map = {
+    'found': 'Identified',
+    'opened': 'Identified',
+    'connected': 'Connected',
+    'messaging': 'Messaging',
+    'booked': 'Booked'
+  };
+  return map[state] || 'Identified';
+}
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Search server listening on port ${PORT}`));

@@ -1052,22 +1052,55 @@ function companyIndustry(company){
   return COMPANY_INDUSTRIES[company] || 'Other';
 }
 
-function notifyWebhook(contact){
+function notifyWebhook(contact) {
+  // Post to Make.com webhook if configured
   const url = ((state.settings.integrations && state.settings.integrations.makeWebhookUrl) || '').trim();
-  if(!url) return;
-  const payload = {
-    name: contact.name,
-    company: contact.company,
-    domain: companyDomain(contact.company),
-    linkedin_url: contact.url,
-    state: contact.state,
-    touch_point_count: (contact.touchPoints || []).length
-  };
-  fetch(url, {
+  if (url) {
+    const payload = {
+      name: contact.name,
+      company: contact.company,
+      domain: companyDomain(contact.company),
+      linkedin_url: contact.url,
+      state: contact.state,
+      touch_point_count: (contact.touchPoints || []).length
+    };
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    }).catch(err => console.warn('Webhook POST failed:', err.message));
+  }
+
+  // Sync to Airtable via server proxy
+  syncContactToAirtable(contact);
+}
+
+function syncContactToAirtable(contact) {
+  fetch('/api/airtable/contact', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  }).catch(err => console.warn('Webhook POST failed:', err.message));
+    body: JSON.stringify({
+      name: contact.name,
+      company: contact.company,
+      role: contact.role,
+      linkedinUrl: contact.url,
+      state: contact.state,
+      icpRoleCategory: contact.role,
+      notes: contact.notes || ''
+    })
+  }).catch(err => console.warn('Airtable contact sync failed:', err.message));
+}
+
+function syncStageToAirtable(contact) {
+  fetch('/api/airtable/contact/stage', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contactName: contact.name,
+      company: contact.company,
+      state: contact.state
+    })
+  }).catch(err => console.warn('Airtable stage sync failed:', err.message));
 }
 
 function csvField(val){
@@ -1365,13 +1398,28 @@ function renderTouchPoints(c){
   </div>`;
 }
 
-function addTouchPoint(cid){
-  const c = state.contacts.find(x=>x.id===cid);
-  const date = document.getElementById('tpDate-'+cid).value || isoDate(TODAY);
-  const type = document.getElementById('tpType-'+cid).value;
-  const notes = document.getElementById('tpNotes-'+cid).value.trim();
-  if(!c.touchPoints) c.touchPoints = [];
+function addTouchPoint(cid) {
+  const c = state.contacts.find(x => x.id === cid);
+  const date = document.getElementById('tpDate-' + cid).value || isoDate(TODAY);
+  const type = document.getElementById('tpType-' + cid).value;
+  const notes = document.getElementById('tpNotes-' + cid).value.trim();
+  if (!c.touchPoints) c.touchPoints = [];
   c.touchPoints.push({ id: uid('tp'), date, type, notes });
+
+  // Sync touch point to Airtable
+  fetch('/api/airtable/touchpoint', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contactName: c.name,
+      company: c.company,
+      date,
+      type,
+      notes,
+      outcome: 'No reply'
+    })
+  }).catch(err => console.warn('Airtable touch point sync failed:', err.message));
+
   notifyWebhook(c);
   toast('Touch point logged', 'success');
   renderPage();
