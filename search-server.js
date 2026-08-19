@@ -149,6 +149,7 @@ app.post('/api/airtable/contact', async (req, res) => {
 
     const fields = {
       'Full Name': name,
+      'Company': company,
       'Job Title': role || '',
       'LinkedIn URL': linkedinUrl || '',
       'Journey Stage': mapStateToStage(contactState),
