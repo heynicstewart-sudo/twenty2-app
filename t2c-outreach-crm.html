@@ -217,6 +217,12 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .tp-form input[type="date"]{width:auto;flex:none;font-size:11.5px;padding:6px 8px;}
 .tp-form select{width:auto;flex:none;font-size:11.5px;padding:6px 8px;}
 .tp-form input:not([type="date"]){flex:1;min-width:100px;font-size:11.5px;padding:6px 8px;}
+.tp-painpoints{display:flex;flex-wrap:wrap;gap:6px 14px;margin:10px 0;padding:10px;background:#fff;border:1px solid var(--border);border-radius:8px;}
+.todo-item{border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:10px;background:#fff;}
+.todo-item:last-child{margin-bottom:0;}
+.todo-item-main{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;}
+.todo-item-name{font-weight:700;font-size:14px;}
+.todo-item-actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;}
 .rec-product{background:#eaf7f0;border:1px solid #c9e9d7;border-radius:8px;padding:8px 10px;margin-bottom:6px;}
 .rec-product:last-child{margin-bottom:0;}
 .rec-product-name{font-weight:700;font-size:12px;color:#1f7a4f;}
@@ -691,6 +697,123 @@ function computeHealth(){
   return { avgDays, replyRate, conversionRate };
 }
 
+function lastTouchPointDate(c){
+  const points = c.touchPoints || [];
+  if(!points.length) return null;
+  return points.reduce((latest, tp) => (!latest || new Date(tp.date) > new Date(latest)) ? tp.date : latest, null);
+}
+
+/*
+Today's actions rules, checked in priority order (first match wins, one action per contact):
+- Booked, delivery >30 days ago, no touch point since delivery -> "Post-delivery check-in"
+- Booked but not yet due for the above, no touch point in 21 days -> "Re-engage"
+- Connected, no message sent yet, connected >2 days ago -> "Send first message"
+- Messaging, last message got a reply but the next stage hasn't been sent in >3 days -> "Reply back"
+- Messaging, last message sent has no reply after >5 days -> "Follow up"
+- Connected/messaging, no touch point in 21 days -> "Re-engage"
+*/
+function getContactAction(c){
+  if(c.state === 'found' || c.state === 'opened') return null;
+
+  const lastTouch = lastTouchPointDate(c);
+  const daysSince = (dateStr) => dateStr ? daysBetween(dateStr) : null;
+
+  if(c.thread.booked){
+    if(c.thread.bookedDate){
+      const daysSinceDelivery = daysSince(c.thread.bookedDate);
+      const touchSinceDelivery = lastTouch && new Date(lastTouch) >= new Date(c.thread.bookedDate);
+      if(daysSinceDelivery !== null && daysSinceDelivery > 30 && !touchSinceDelivery){
+        return { type:'Post-delivery check-in', stage:'cta', daysSinceTouch: lastTouch ? daysSince(lastTouch) : daysSinceDelivery };
+      }
+    }
+    const days = daysSince(lastTouch || c.thread.bookedDate || c.connDate || c.foundDate);
+    if(days !== null && days > 21){
+      return { type:'Re-engage', stage:'cta', daysSinceTouch: days };
+    }
+    return null;
+  }
+
+  if(c.state === 'connected' && !c.thread.m1){
+    const days = daysSince(c.connDate);
+    if(days !== null && days > 2){
+      return { type:'Send first message', stage:'m1', daysSinceTouch: lastTouch ? daysSince(lastTouch) : days };
+    }
+  }
+
+  if(c.state === 'messaging'){
+    if(c.thread.m2 && c.thread.m2.replied && !c.thread.cta){
+      const days = daysSince(c.thread.m2.sent);
+      if(days !== null && days > 3) return { type:'Reply back', stage:'cta', daysSinceTouch: days };
+    } else if(c.thread.m1 && c.thread.m1.replied && !c.thread.m2){
+      const days = daysSince(c.thread.m1.sent);
+      if(days !== null && days > 3) return { type:'Reply back', stage:'m2', daysSinceTouch: days };
+    }
+
+    const lastStep = c.thread.m2 || c.thread.m1;
+    if(lastStep && !lastStep.replied){
+      const days = daysSince(lastTouch || lastStep.sent);
+      if(days !== null && days > 5){
+        const nextStage = c.thread.m2 ? 'cta' : 'm2';
+        return { type:'Follow up', stage: nextStage, daysSinceTouch: days };
+      }
+    }
+  }
+
+  const days = daysSince(lastTouch || c.connDate || c.foundDate);
+  if(days !== null && days > 21){
+    const nextStage = c.thread.m2 ? 'cta' : (c.thread.m1 ? 'm2' : 'm1');
+    return { type:'Re-engage', stage: nextStage, daysSinceTouch: days };
+  }
+
+  return null;
+}
+
+function computeTodaysActions(){
+  return state.contacts
+    .map(c => { const action = getContactAction(c); return action ? { contact:c, ...action } : null; })
+    .filter(Boolean)
+    .sort((a,b) => (b.daysSinceTouch||0) - (a.daysSinceTouch||0));
+}
+
+function renderTodaysActions(){
+  const actions = computeTodaysActions();
+  return `
+  <div class="card" style="margin-bottom:22px;">
+    <div class="section-title"><i class="ti ti-list-check"></i> Today's actions ${actions.length ? `<span class="count-pill has" style="margin-left:6px;">${actions.length}</span>` : ''}</div>
+    ${actions.length ? actions.map(a => renderTodaysActionItem(a)).join('') : '<div class="empty-state">Nothing needs attention today — nice work.</div>'}
+  </div>`;
+}
+
+function renderTodaysActionItem(a){
+  const c = a.contact;
+  return `
+  <div class="todo-item">
+    <div class="todo-item-main">
+      <div>
+        <div class="todo-item-name">${esc(c.name)}</div>
+        <div class="muted" style="font-size:12px;">${esc(c.role)} · ${esc(c.company)}</div>
+      </div>
+      <div style="text-align:right;">
+        <span class="pill">${esc(a.type)}</span>
+        <div class="muted" style="font-size:11px;margin-top:4px;">${a.daysSinceTouch===null?'—':a.daysSinceTouch+'d since last touch'}</div>
+      </div>
+    </div>
+    <div class="todo-item-actions">
+      <button class="btn btn-secondary btn-sm" onclick="openGenerateModal('${c.id}','${a.stage}', ()=>renderPage())"><i class="ti ti-copy"></i> Draft message</button>
+      <button class="btn btn-ghost btn-sm" onclick="toggleQuickTouchPoint('${c.id}')"><i class="ti ti-target-arrow"></i> Log touch point</button>
+    </div>
+    <div id="quicktp-${c.id}" style="display:none;margin-top:10px;">
+      ${touchPointFormHtml(c.id)}
+    </div>
+  </div>`;
+}
+
+function toggleQuickTouchPoint(cid){
+  const el = document.getElementById('quicktp-'+cid);
+  if(!el) return;
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
 function renderDashboard(){
   const s = computeStats();
   const h = computeHealth();
@@ -700,6 +823,8 @@ function renderDashboard(){
   return `
   <div class="section-title" style="font-size:20px;margin-bottom:2px;">Good morning, Marcus</div>
   <div class="muted" style="margin-bottom:20px;">${dateStr}</div>
+
+  ${renderTodaysActions()}
 
   <div class="stat-grid">
     <div class="stat-card" style="background:${cssVar('--peach')}"><div class="label">Contacts found</div><div class="num">${s.found}</div></div>
@@ -1098,6 +1223,11 @@ function renderGridCellHTML(c){
 }
 function cssEscape(str){ return str.replace(/"/g,'\\"'); }
 function isoDate(d){ return d.toISOString().slice(0,10); }
+function addDays(dateStr, days){
+  const d = new Date(dateStr + 'T00:00:00');
+  d.setDate(d.getDate() + days);
+  return isoDate(d);
+}
 
 function resetGrid(){
   toast('Grid view reset','success');
@@ -1537,6 +1667,21 @@ function renderMsgStep(c, key, label){
 }
 
 const TOUCH_POINT_TYPES = ['LinkedIn message','Email','Call','Meeting','Event','Proposal'];
+const PAIN_POINTS = ['Delivery challenges','Change fatigue','Tooling fragmentation','Capability gaps','Agile adoption','Governance','Certification','Digital transformation','Stakeholder alignment'];
+
+function touchPointFormHtml(cid){
+  return `
+    <div class="tp-form">
+      <input type="date" id="tpDate-${cid}" value="${isoDate(TODAY)}">
+      <select id="tpType-${cid}">${TOUCH_POINT_TYPES.map(t=>`<option>${t}</option>`).join('')}</select>
+      <input id="tpNotes-${cid}" placeholder="Notes">
+    </div>
+    <div class="tp-painpoints" id="tpPainPoints-${cid}">
+      ${PAIN_POINTS.map(p => `<label class="checkbox-item"><input type="checkbox" value="${esc(p)}"> ${esc(p)}</label>`).join('')}
+    </div>
+    <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();addTouchPoint('${cid}')"><i class="ti ti-plus"></i> Log touch point</button>
+  `;
+}
 
 function renderTouchPoints(c){
   const points = (c.touchPoints || []).slice().sort((a,b)=>new Date(b.date)-new Date(a.date));
@@ -1548,15 +1693,11 @@ function renderTouchPoints(c){
         <div class="tp-item">
           <div class="tp-item-head"><span class="tp-type">${esc(tp.type)}</span><span class="muted">${fmtDate(tp.date)}</span></div>
           ${tp.notes ? `<div class="tp-notes">${esc(tp.notes)}</div>` : ''}
+          ${(tp.painPoints && tp.painPoints.length) ? `<div class="tp-notes">${tp.painPoints.map(p=>esc(p)).join(', ')}</div>` : ''}
         </div>
       `).join('')}
     </div>` : ''}
-    <div class="tp-form">
-      <input type="date" id="tpDate-${c.id}" value="${isoDate(TODAY)}">
-      <select id="tpType-${c.id}">${TOUCH_POINT_TYPES.map(t=>`<option>${t}</option>`).join('')}</select>
-      <input id="tpNotes-${c.id}" placeholder="Notes">
-      <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();addTouchPoint('${c.id}')"><i class="ti ti-plus"></i> Log touch point</button>
-    </div>
+    ${touchPointFormHtml(c.id)}
   </div>`;
 }
 
@@ -1565,8 +1706,16 @@ function addTouchPoint(cid) {
   const date = document.getElementById('tpDate-' + cid).value || isoDate(TODAY);
   const type = document.getElementById('tpType-' + cid).value;
   const notes = document.getElementById('tpNotes-' + cid).value.trim();
+  const painPointsEl = document.getElementById('tpPainPoints-' + cid);
+  const selectedPainPoints = painPointsEl ? Array.from(painPointsEl.querySelectorAll('input:checked')).map(el => el.value) : [];
+
   if (!c.touchPoints) c.touchPoints = [];
-  c.touchPoints.push({ id: uid('tp'), date, type, notes });
+  c.touchPoints.push({ id: uid('tp'), date, type, notes, painPoints: selectedPainPoints });
+
+  if (selectedPainPoints.length) {
+    if (!c.painPoints) c.painPoints = [];
+    selectedPainPoints.forEach(p => { if (!c.painPoints.includes(p)) c.painPoints.push(p); });
+  }
 
   // Sync touch point to Airtable
   fetch('/api/airtable/touchpoint', {
@@ -1581,6 +1730,19 @@ function addTouchPoint(cid) {
       outcome: 'No reply'
     })
   }).catch(err => console.warn('Airtable touch point sync failed:', err.message));
+
+  // Default next-touch cadence: 7 days on from this touch point
+  const nextTouchDate = addDays(date, 7);
+  fetch('/api/airtable/contact/stage', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contactName: c.name,
+      company: c.company,
+      nextTouchDate,
+      painPoints: selectedPainPoints
+    })
+  }).catch(err => console.warn('Airtable next-touch sync failed:', err.message));
 
   notifyWebhook(c);
   toast('Touch point logged', 'success');

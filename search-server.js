@@ -196,7 +196,7 @@ app.post('/api/airtable/touchpoint', async (req, res) => {
 app.patch('/api/airtable/contact/stage', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
-  const { contactName, company, state: contactState } = req.body;
+  const { contactName, company, state: contactState, nextTouchDate, painPoints } = req.body;
   if (!contactName) return res.status(400).json({ error: 'contactName is required' });
 
   try {
@@ -208,10 +208,15 @@ app.patch('/api/airtable/contact/stage', async (req, res) => {
     const record = searchData.records && searchData.records[0];
     if (!record) return res.json({ success: false, message: 'Contact not found in Airtable' });
 
+    const fields = {};
+    if (contactState) fields['Journey Stage'] = mapStateToStage(contactState);
+    if (nextTouchDate) fields['Next Touch Date'] = nextTouchDate;
+    if (painPoints && painPoints.length) fields['Pain Points'] = painPoints;
+
     await airtableRequest('PATCH', 'Contacts', {
       records: [{
         id: record.id,
-        fields: { 'Journey Stage': mapStateToStage(contactState) }
+        fields
       }]
     });
 
