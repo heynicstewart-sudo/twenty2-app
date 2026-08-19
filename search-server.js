@@ -137,6 +137,16 @@ app.post('/api/airtable/contact', async (req, res) => {
   if (!name || !company) return res.status(400).json({ error: 'name and company are required' });
 
   try {
+    const searchRes = await fetch(
+      `${AIRTABLE_URL}/Contacts?filterByFormula=${encodeURIComponent(`{Full Name}="${name}"`)}`,
+      { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
+    );
+    const searchData = await searchRes.json();
+    const existing = searchData.records && searchData.records[0];
+    if (existing) {
+      return res.json({ success: true, skipped: true, recordId: existing.id });
+    }
+
     const fields = {
       'Full Name': name,
       'Job Title': role || '',
@@ -149,9 +159,37 @@ app.post('/api/airtable/contact', async (req, res) => {
     const data = await airtableRequest('POST', 'Contacts', {
       records: [{ fields }]
     });
-    res.json({ success: true, recordId: data.records[0].id });
+    res.json({ success: true, skipped: false, recordId: data.records[0].id });
   } catch (err) {
     console.error('Airtable contact create error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Create a company in Airtable, skipping if one with that name already exists
+app.post('/api/airtable/company', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const { name } = req.body;
+  if (!name) return res.status(400).json({ error: 'name is required' });
+
+  try {
+    const searchRes = await fetch(
+      `${AIRTABLE_URL}/Companies?filterByFormula=${encodeURIComponent(`{Company Name}="${name}"`)}`,
+      { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
+    );
+    const searchData = await searchRes.json();
+    const existing = searchData.records && searchData.records[0];
+    if (existing) {
+      return res.json({ success: true, skipped: true, recordId: existing.id });
+    }
+
+    const data = await airtableRequest('POST', 'Companies', {
+      records: [{ fields: { 'Company Name': name } }]
+    });
+    res.json({ success: true, skipped: false, recordId: data.records[0].id });
+  } catch (err) {
+    console.error('Airtable company create error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -244,8 +282,7 @@ function mapStateToStage(state) {
 
 // ===================== COMPANY LINKEDIN =====================
 // Finds a company's LinkedIn company page via Serper and writes it onto the
-// Airtable Companies table. Best guess at the primary field name ("Name") -
-// adjust if the Companies table uses something else.
+// Airtable Companies table (primary field "Company Name").
 
 app.get('/api/search-company-linkedin', async (req, res) => {
   const company = (req.query.company || '').trim();
@@ -277,7 +314,7 @@ app.get('/api/search-company-linkedin', async (req, res) => {
     if (AIRTABLE_API_KEY) {
       try {
         const searchRes = await fetch(
-          `${AIRTABLE_URL}/Companies?filterByFormula=${encodeURIComponent(`{Name}="${company}"`)}`,
+          `${AIRTABLE_URL}/Companies?filterByFormula=${encodeURIComponent(`{Company Name}="${company}"`)}`,
           { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
         );
         const searchData = await searchRes.json();
@@ -288,7 +325,7 @@ app.get('/api/search-company-linkedin', async (req, res) => {
           });
         } else {
           await airtableRequest('POST', 'Companies', {
-            records: [{ fields: { 'Name': company, 'Company LinkedIn URL': linkedinUrl } }]
+            records: [{ fields: { 'Company Name': company, 'Company LinkedIn URL': linkedinUrl } }]
           });
         }
       } catch (airtableErr) {

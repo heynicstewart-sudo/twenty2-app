@@ -1507,7 +1507,7 @@ async function syncAllContactsToAirtable(){
   let syncedCount = 0;
   for(let i=0; i<state.contacts.length; i++){
     const contact = state.contacts[i];
-    btn.innerHTML = `<i class="ti ti-loader-2"></i> Syncing ${i+1}/${state.contacts.length}...`;
+    btn.innerHTML = `<i class="ti ti-loader-2"></i> Syncing contact ${i+1}/${state.contacts.length}...`;
     try {
       const res = await fetch('/api/airtable/contact', {
         method: 'POST',
@@ -1530,9 +1530,27 @@ async function syncAllContactsToAirtable(){
     if(i < state.contacts.length - 1) await sleep(250);
   }
 
+  let companySyncedCount = 0;
+  for(let i=0; i<state.companies.length; i++){
+    const company = state.companies[i];
+    btn.innerHTML = `<i class="ti ti-loader-2"></i> Syncing company ${i+1}/${state.companies.length}...`;
+    try {
+      const res = await fetch('/api/airtable/company', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: company })
+      });
+      if(res.ok) companySyncedCount++;
+    } catch(err){
+      console.warn('Airtable company sync failed for', company, err.message);
+    }
+    if(i < state.companies.length - 1) await sleep(250);
+  }
+
   btn.disabled = false;
   btn.innerHTML = original;
-  toast(`Synced ${syncedCount} of ${state.contacts.length} contacts to Airtable`, syncedCount === state.contacts.length ? 'success' : 'warn');
+  const allSynced = syncedCount === state.contacts.length && companySyncedCount === state.companies.length;
+  toast(`${syncedCount} contacts and ${companySyncedCount} companies synced to Airtable`, allSynced ? 'success' : 'warn');
 }
 
 const JOURNEY_STAGE_TO_STATE = { 'Identified':'found', 'Connected':'connected', 'Messaging':'messaging', 'Booked':'booked' };
