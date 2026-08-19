@@ -397,7 +397,7 @@ let state = {
   archiveOpen: false,
   contacts: [
     { id:'c1', name:'Stuart Williams', company:'Woodside Energy', role:'Transformation Lead', url:'https://linkedin.com/in/stuart-williams-wa', seqId:'seniorLeaders', state:'booked', foundDate:'2026-07-15', connReqDate:'2026-07-16', connDate:'2026-07-20', notes:'Leading the delivery transformation programme across upstream projects.',
-      thread:{ connSent:'2026-07-20', m1:{sent:'2026-07-23',replied:true}, m2:{sent:'2026-07-28',replied:true}, cta:'Change Value Check', booked:true, bookedService:'Sprint Zero', bookedDate:'2026-09-05', bookedCta:'Change Value Check', bookedNotes:'Mentioned the CVA surfaced a real gap in their delivery rhythm.' },
+      thread:{ connSent:'2026-07-20', m1:{sent:'2026-07-23',replied:true}, m2:{sent:'2026-07-28',replied:true}, cta:'Change Value Check', booked:true, bookedService:'Workshop', bookedDate:'2026-09-05', bookedCta:'Change Value Check', bookedNotes:'Mentioned the CVA surfaced a real gap in their delivery rhythm.' },
       generated:{} },
     { id:'c2', name:'Bonnie W.', company:'Chevron Australia', role:'Product Owner', url:'https://linkedin.com/in/bonnie-w-chevron', seqId:'seniorLeaders', state:'connected', foundDate:'2026-08-08', connReqDate:'2026-08-09', connDate:'2026-08-12', notes:'Recently posted about scaling PI planning across three sites.',
       thread:{ connSent:'2026-08-12', m1:null, m2:null, cta:null, booked:false }, generated:{} },
@@ -419,14 +419,14 @@ let state = {
       thread:{ connSent:'2026-08-02', m1:{sent:'2026-08-05',replied:true}, m2:{sent:'2026-08-11',replied:true}, cta:null, booked:false }, generated:{} }
   ],
   bookings: [
-    { contactId:'c1', name:'Stuart Williams', company:'Woodside Energy', service:'Sprint Zero', date:'2026-09-05', cta:'Change Value Check', notes:'Mentioned the CVA surfaced a real gap in their delivery rhythm.' }
+    { contactId:'c1', name:'Stuart Williams', company:'Woodside Energy', service:'Workshop', date:'2026-09-05', cta:'Change Value Check', notes:'Mentioned the CVA surfaced a real gap in their delivery rhythm.' }
   ],
   deadContacts: [
     { name:'James Cole', company:'Rio Tinto', role:'Product Owner', days:14, removed:'2026-08-10' },
     { name:'Priya Anand', company:'Western Power', role:'Transformation Lead', days:11, removed:'2026-08-05' }
   ],
   activity: [
-    { type:'booked', text:'Stuart Williams (Woodside Energy) booked Sprint Zero', date:'2026-08-15' },
+    { type:'booked', text:'Stuart Williams (Woodside Energy) booked a Workshop', date:'2026-08-15' },
     { type:'connected', text:'Claire Hall (Hancock Iron Ore) accepted your connection', date:'2026-08-16' },
     { type:'found', text:'Shawn Fernando (RAC WA) found for Digital and Tech', date:'2026-08-17' },
     { type:'found', text:'Helen Joe (Water Corporation) found for Transformation Lead', date:'2026-08-16' },
@@ -454,7 +454,7 @@ let state = {
   settings: {
     timeoutDays: 10,
     timeoutAction: 'Move to archive',
-    services: ['Sprint Zero','Team Reset','Agile Coaching','Change Value Workshop','Scrum Master Training','POPM Certification','Community Connect','Leading SAFe'],
+    services: ['Meeting','Discovery call','Workshop','Training'],
     accounts: [
       { name:'Marcus Ward', url:'https://linkedin.com/in/marcusward', columns:['Product Owner','Transformation Lead','Digital and Tech'], primary:true }
     ],
@@ -1842,7 +1842,7 @@ async function runAnalysis(){
 
   const fallback = () => ({
     wins: [
-      "The Change Value Check is converting: Stuart Williams booked Sprint Zero directly off it.",
+      "The Change Value Check is converting: Stuart Williams booked a Workshop directly off it.",
       "Senior Leaders sequence is holding a strong reply rate on message 2 (Heath Harnden, Tenille Frichot both replied).",
       "Connection-to-accept speed is healthy across most of the pipeline, well inside the 10 day window."
     ],
