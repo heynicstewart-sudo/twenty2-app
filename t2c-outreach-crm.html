@@ -1745,10 +1745,98 @@ function toggleThread(id){
   el.style.display = el.style.display === 'none' ? 'block' : 'none';
 }
 
+function renderEnrichmentSection(c){
+  const cached = window.__enrichmentProfiles && window.__enrichmentProfiles[c.id];
+  return `
+  <div class="thread-step">
+    <div class="thread-step-head"><span>Enrichment</span></div>
+    <button class="btn btn-secondary btn-sm" id="enrichBtn-${c.id}" onclick="event.stopPropagation();enrichContact('${c.id}')"><i class="ti ti-search"></i> Enrich</button>
+    <div id="enrichPanel-${c.id}" style="${cached ? 'display:block;' : 'display:none;'}margin-top:10px;">
+      ${cached ? renderEnrichmentPanelHtml(c.id, cached) : ''}
+    </div>
+  </div>`;
+}
+
+async function enrichContact(cid){
+  const c = state.contacts.find(x => x.id === cid);
+  if(!c) return;
+  const btn = document.getElementById('enrichBtn-' + cid);
+  const panel = document.getElementById('enrichPanel-' + cid);
+  if(!panel) return;
+  const original = btn ? btn.innerHTML : '';
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Enriching...'; }
+  panel.style.display = 'block';
+  panel.innerHTML = '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Researching...</div>';
+
+  try {
+    const res = await fetch('/api/enrich/contact', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ linkedinUrl: c.url, name: c.name, company: c.company })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+
+    window.__enrichmentProfiles = window.__enrichmentProfiles || {};
+    window.__enrichmentProfiles[cid] = data.profile;
+    panel.innerHTML = renderEnrichmentPanelHtml(cid, data.profile);
+    toast('Enrichment complete', 'success');
+  } catch(err){
+    console.warn('Enrichment failed:', err.message);
+    panel.innerHTML = `<div class="muted" style="font-size:12.5px;">Could not enrich this contact: ${esc(err.message)}</div>`;
+    toast('Could not enrich contact: ' + err.message, 'warn');
+  } finally {
+    if(btn){ btn.disabled = false; btn.innerHTML = original; }
+  }
+}
+
+const ENRICHMENT_FIELDS = [
+  ['currentTitle','Current title'],
+  ['company','Company'],
+  ['bio','Bio'],
+  ['recentActivity','Recent activity'],
+  ['likelyPainPoints','Likely pain points'],
+  ['bestOutreachAngle','Best outreach angle']
+];
+
+function renderEnrichmentPanelHtml(cid, profile){
+  return `
+    <div class="intel-draft">
+      <div class="intel-draft-head">
+        <div class="intel-draft-name">Enrichment profile</div>
+        <button class="btn btn-secondary btn-sm" onclick="copyEnrichmentProfile('${cid}')"><i class="ti ti-copy"></i> Copy</button>
+      </div>
+      ${ENRICHMENT_FIELDS.map(([key,label]) => `
+        <div style="margin-top:8px;">
+          <div style="font-weight:700;font-size:11.5px;">${esc(label)}</div>
+          <div class="intel-draft-text" style="margin-top:2px;">${esc(profile[key] || '—')}</div>
+        </div>
+      `).join('')}
+    </div>`;
+}
+
+async function copyEnrichmentProfile(cid){
+  const profile = window.__enrichmentProfiles && window.__enrichmentProfiles[cid];
+  if(!profile) return;
+  const text = ENRICHMENT_FIELDS.map(([key,label]) => `${label}: ${profile[key] || '—'}`).join('\n');
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch(err){
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+  }
+  toast('Enrichment profile copied to clipboard', 'success');
+}
+
 function renderThread(c){
   const t = c.thread;
   return `
   <div class="thread" onclick="event.stopPropagation()">
+    ${renderEnrichmentSection(c)}
     <div class="thread-step">
       <div class="thread-step-head"><span><i class="ti ti-circle-check check-yes"></i> Connection sent</span><span class="muted">${t.connSent ? fmtDate(t.connSent) : 'Not sent'}</span></div>
     </div>

@@ -346,5 +346,133 @@ If there isn't enough data for a section, return an empty array for it rather th
   }
 });
 
+// ===================== ENRICHMENT =====================
+// Looks up a contact's current LinkedIn bio/title plus any recent public
+// mentions via two Serper searches, then asks Claude to synthesise a
+// research profile. Stored back onto the Airtable Contact record.
+
+function extractLinkedInSlug(url) {
+  const match = (url || '').match(/\/in\/([^/?#]+)/i);
+  return match ? match[1] : null;
+}
+
+app.post('/api/enrich/contact', async (req, res) => {
+  if (!process.env.SERPER_API_KEY) return res.status(500).json({ error: 'SERPER_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const { linkedinUrl, name, company } = req.body;
+  if (!linkedinUrl || !name) return res.status(400).json({ error: 'linkedinUrl and name are required' });
+
+  const slug = extractLinkedInSlug(linkedinUrl);
+  if (!slug) return res.status(400).json({ error: 'Could not parse a LinkedIn slug from that URL' });
+
+  try {
+    const [profileSearch, newsSearch] = await Promise.all([
+      fetch(SERPER_URL, {
+        method: 'POST',
+        headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ q: `site:linkedin.com/in/${slug}` })
+      }).then(r => r.json()),
+      fetch(SERPER_URL, {
+        method: 'POST',
+        headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ q: `${name} ${company || ''}`.trim() })
+      }).then(r => r.json())
+    ]);
+
+    const profileResults = (profileSearch.organic || []).slice(0, 5)
+      .map(r => `${r.title || ''}\n${r.snippet || ''}`).join('\n\n');
+    const newsResults = (newsSearch.organic || []).slice(0, 5)
+      .map(r => `${r.title || ''}\n${r.snippet || ''}\n${r.link || ''}`).join('\n\n');
+
+    const prompt = `You are researching a LinkedIn contact for a Perth-based Agile and change consultancy (Twenty2 Collective) ahead of outreach.
+
+Contact: ${name}${company ? ' at ' + company : ''}.
+LinkedIn: ${linkedinUrl}
+
+Search results for their LinkedIn profile (site:linkedin.com/in/${slug}):
+${profileResults || 'No results found.'}
+
+Search results for "${name} ${company || ''}" (news, interviews, speaking events):
+${newsResults || 'No results found.'}
+
+Based only on the above, return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{
+  "currentTitle": string,
+  "company": string,
+  "bio": string,
+  "recentActivity": string,
+  "likelyPainPoints": string,
+  "bestOutreachAngle": string
+}
+
+If the search results do not give enough to fill a field confidently, say so plainly in that field (e.g. "Not enough public information found") rather than inventing detail.`;
+
+    const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 1000,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+
+    if (!aiRes.ok) {
+      const errText = await aiRes.text();
+      throw new Error(`Claude API error ${aiRes.status}: ${errText}`);
+    }
+
+    const aiData = await aiRes.json();
+    const block = (aiData.content || []).find(b => b.type === 'text');
+    if (!block) throw new Error('No text content in Claude response');
+
+    let profile;
+    try {
+      const jsonMatch = block.text.match(/\{[\s\S]*\}/);
+      profile = JSON.parse(jsonMatch ? jsonMatch[0] : block.text);
+    } catch (parseErr) {
+      throw new Error('Could not parse Claude response as JSON');
+    }
+
+    const formattedText = [
+      `Current title: ${profile.currentTitle || '—'}`,
+      `Company: ${profile.company || '—'}`,
+      `Bio: ${profile.bio || '—'}`,
+      `Recent activity: ${profile.recentActivity || '—'}`,
+      `Likely pain points: ${profile.likelyPainPoints || '—'}`,
+      `Best outreach angle: ${profile.bestOutreachAngle || '—'}`
+    ].join('\n\n');
+
+    // Store back onto the Airtable Contact record. Non-fatal if this fails -
+    // the enrichment itself already succeeded and should still reach the client.
+    try {
+      const searchRes = await fetch(
+        `${AIRTABLE_URL}/Contacts?filterByFormula=${encodeURIComponent(`{Full Name}="${name}"`)}`,
+        { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
+      );
+      const searchData = await searchRes.json();
+      const record = searchData.records && searchData.records[0];
+      if (record) {
+        await airtableRequest('PATCH', 'Contacts', {
+          records: [{ id: record.id, fields: { 'Enrichment Profile': formattedText } }]
+        });
+      }
+    } catch (airtableErr) {
+      console.warn('Could not store enrichment profile to Airtable:', airtableErr.message);
+    }
+
+    res.json({ success: true, profile, formattedText });
+  } catch (err) {
+    console.error('Enrichment error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Search server listening on port ${PORT}`));
