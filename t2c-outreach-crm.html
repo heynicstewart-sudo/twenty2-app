@@ -872,6 +872,7 @@ function renderGrid(){
     <button class="btn btn-primary" id="runSearchBtn" onclick="runDailySearch()"><i class="ti ti-search"></i> Run daily search</button>
     <button class="btn btn-ghost" onclick="resetGrid()"><i class="ti ti-refresh"></i> Reset</button>
     <button class="btn btn-secondary" onclick="exportContactsCsv()"><i class="ti ti-file-download"></i> Export contacts</button>
+    <button class="btn btn-secondary" id="syncAirtableBtn" onclick="syncAllContactsToAirtable()"><i class="ti ti-cloud-upload"></i> Sync to Airtable</button>
   </div>
   <div id="gridNotification"></div>
   <div class="grid-wrap">
@@ -1107,6 +1108,43 @@ function syncStageToAirtable(contact) {
       state: contact.state
     })
   }).catch(err => console.warn('Airtable stage sync failed:', err.message));
+}
+
+async function syncAllContactsToAirtable(){
+  if(!state.contacts.length){ toast('No contacts to sync yet', 'warn'); return; }
+
+  const btn = document.getElementById('syncAirtableBtn');
+  const original = btn.innerHTML;
+  btn.disabled = true;
+
+  let syncedCount = 0;
+  for(let i=0; i<state.contacts.length; i++){
+    const contact = state.contacts[i];
+    btn.innerHTML = `<i class="ti ti-loader-2"></i> Syncing ${i+1}/${state.contacts.length}...`;
+    try {
+      const res = await fetch('/api/airtable/contact', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: contact.name,
+          company: contact.company,
+          role: contact.role,
+          linkedinUrl: contact.url,
+          state: contact.state,
+          icpRoleCategory: contact.role,
+          notes: contact.notes || ''
+        })
+      });
+      if(res.ok) syncedCount++;
+    } catch(err){
+      console.warn('Airtable sync failed for', contact.name, err.message);
+    }
+    if(i < state.contacts.length - 1) await sleep(250);
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = original;
+  toast(`Synced ${syncedCount} of ${state.contacts.length} contacts to Airtable`, syncedCount === state.contacts.length ? 'success' : 'warn');
 }
 
 function csvField(val){
