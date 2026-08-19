@@ -474,6 +474,42 @@ let state = {
   lastAnalysis: null
 };
 
+/* ===================== PERSISTENCE (localStorage) ===================== */
+
+const STORAGE_KEY = 't2c_grid_state';
+
+function saveStateToStorage(){
+  try {
+    const snapshot = {
+      contacts: state.contacts,
+      gridColumns: state.gridColumns,
+      companies: state.companies,
+      bookings: state.bookings,
+      deadContacts: state.deadContacts,
+      activity: state.activity,
+      settings: state.settings,
+      sequences: state.sequences,
+      lastAnalysis: state.lastAnalysis
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+  } catch(err){
+    console.warn('Could not save state to localStorage:', err.message);
+  }
+}
+
+function loadStateFromStorage(){
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if(!raw) return false;
+    const saved = JSON.parse(raw);
+    Object.assign(state, saved);
+    return true;
+  } catch(err){
+    console.warn('Could not restore saved state from localStorage:', err.message);
+    return false;
+  }
+}
+
 /* ===================== UTILITIES ===================== */
 
 function daysBetween(dateStr, endStr){
@@ -562,6 +598,7 @@ function renderPage(){
   const renderers = { dashboard: renderDashboard, howitworks: renderHowItWorks, grid: renderGrid, roadmap: renderRoadmap, sequences: renderSequences, calendar: renderCalendar, analytics: renderAnalytics, settings: renderSettings };
   el.innerHTML = renderers[state.currentPage]();
   afterRender(state.currentPage);
+  saveStateToStorage();
 }
 
 function afterRender(page){
@@ -777,6 +814,11 @@ function renderGrid(){
     <button class="btn btn-secondary" onclick="addGridColumn()"><i class="ti ti-plus"></i> Add column</button>
     <button class="btn btn-primary" id="runSearchBtn" onclick="runDailySearch()"><i class="ti ti-search"></i> Run daily search</button>
     <button class="btn btn-ghost" onclick="resetGrid()"><i class="ti ti-refresh"></i> Reset</button>
+    <div class="field">
+      <label>Export job title</label>
+      <select id="exportJobTitleSelect">${cols.map(c=>'<option value="'+esc(c)+'">'+esc(c)+'</option>').join('')}</select>
+    </div>
+    <button class="btn btn-secondary" onclick="exportContactsCsv()"><i class="ti ti-file-download"></i> Export contacts</button>
   </div>
   <div id="gridNotification"></div>
   <div class="grid-wrap">
@@ -893,6 +935,7 @@ async function runDailySearch(){
         state.contacts.push(newContact);
         foundCount++;
         if(cellEl) cellEl.outerHTML = renderGridCellHTML(newContact);
+        saveStateToStorage();
       } else {
         if(cellEl) cellEl.outerHTML = `<div class="cell-empty" data-company="${esc(company)}" data-role="${esc(role)}" title="Couldn't find a verified LinkedIn profile — try an alternative search method">No confident match — try again</div>`;
       }
@@ -924,6 +967,61 @@ function isoDate(d){ return d.toISOString().slice(0,10); }
 function resetGrid(){
   toast('Grid view reset','success');
   renderPage();
+}
+
+const COMPANY_DOMAINS = {
+  'Woodside Energy': 'woodside.com',
+  'Chevron Australia': 'chevron.com',
+  'Rio Tinto': 'riotinto.com',
+  'Water Corporation': 'watercorporation.com.au',
+  'ATCO Australia': 'atco.com',
+  'Hancock Iron Ore': 'hancockprospecting.com.au',
+  'Shell Australia': 'shell.com.au',
+  'RAC WA': 'rac.com.au',
+  'Fortescue': 'fortescue.com',
+  'Western Power': 'westernpower.com.au'
+};
+
+function companyDomain(company){
+  if(COMPANY_DOMAINS[company]) return COMPANY_DOMAINS[company];
+  const slug = company.toLowerCase().replace(/[^a-z0-9]+/g,'');
+  return slug ? slug + '.com.au' : '';
+}
+
+function csvField(val){
+  const str = String(val ?? '');
+  if(/[",\r\n]/.test(str)) return '"' + str.replace(/"/g,'""') + '"';
+  return str;
+}
+
+const EXPORTABLE_STATES = ['found','opened','connected','messaging'];
+
+function exportContactsCsv(){
+  const jobTitle = document.getElementById('exportJobTitleSelect').value;
+  const rows = state.contacts.filter(c =>
+    c.role === jobTitle && EXPORTABLE_STATES.includes(c.state) && c.url && c.url.trim()
+  );
+  if(!rows.length){ toast('No exportable contacts for "'+jobTitle+'" yet', 'warn'); return; }
+
+  const header = ['Name','Company','Domain','LinkedIn URL'];
+  const lines = [header.map(csvField).join(',')];
+  rows.forEach(c => {
+    lines.push([c.name, c.company, companyDomain(c.company), c.url].map(csvField).join(','));
+  });
+  const csvContent = lines.join('\r\n');
+
+  const filename = `T2C_contacts_${jobTitle.replace(/\s+/g,'_')}_${isoDate(TODAY)}.csv`;
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+
+  toast(rows.length+' contact'+(rows.length===1?'':'s')+' exported to '+filename, 'success');
 }
 
 function onConnectionsDragOver(e){
@@ -1174,6 +1272,7 @@ function setReply(cid, key, val){
 function setCta(cid, val){
   const c = state.contacts.find(x=>x.id===cid);
   c.thread.cta = val || null;
+  saveStateToStorage();
 }
 
 function removeDeadContact(cid){
@@ -1381,9 +1480,9 @@ function renderFlowNode(seq, st){
   </div>`;
 }
 
-function renameSeq(id, val){ state.sequences.find(s=>s.id===id).name = val; }
-function setSeqVoice(id, val){ state.sequences.find(s=>s.id===id).voice = val; }
-function setStageTemplate(seqId, stageKey, val){ state.sequences.find(s=>s.id===seqId).stages[stageKey] = val; }
+function renameSeq(id, val){ state.sequences.find(s=>s.id===id).name = val; saveStateToStorage(); }
+function setSeqVoice(id, val){ state.sequences.find(s=>s.id===id).voice = val; saveStateToStorage(); }
+function setStageTemplate(seqId, stageKey, val){ state.sequences.find(s=>s.id===seqId).stages[stageKey] = val; saveStateToStorage(); }
 
 async function generateTemplate(seqId, stageKey){
   const seq = state.sequences.find(s=>s.id===seqId);
@@ -1975,6 +2074,7 @@ function toggleAccountColumn(i, col){
   const acc = state.settings.accounts[i];
   const idx = acc.columns.indexOf(col);
   if(idx>-1) acc.columns.splice(idx,1); else acc.columns.push(col);
+  saveStateToStorage();
 }
 function removeAccount(i){ state.settings.accounts.splice(i,1); renderPage(); }
 function addAccount(){
@@ -1993,7 +2093,7 @@ function addService(){
   renderPage();
 }
 function toggleMagnet(i){ state.settings.leadMagnets[i].enabled = !state.settings.leadMagnets[i].enabled; renderPage(); }
-function setMagnetUrl(i, val){ state.settings.leadMagnets[i].url = val; }
+function setMagnetUrl(i, val){ state.settings.leadMagnets[i].url = val; saveStateToStorage(); }
 function addMagnet(){
   const name = prompt('Lead magnet name:');
   if(!name) return;
@@ -2047,6 +2147,7 @@ async function callAI(promptText, maxTokens, fallbackFn, images){
 
 /* ===================== INIT ===================== */
 
+loadStateFromStorage();
 renderSidebar();
 renderPage();
 </script>
