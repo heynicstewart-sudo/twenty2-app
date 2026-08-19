@@ -1208,6 +1208,12 @@ function addGridCompany(){
   state.companies.push(val);
   renderPage();
   toast('"'+val+'" added to the grid','success');
+
+  fetch('/api/airtable/company', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: val })
+  }).catch(err => console.warn('Airtable company sync failed:', err.message));
 }
 
 function companyLinkedInUrl(company){
