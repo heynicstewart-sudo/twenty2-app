@@ -322,11 +322,11 @@ app.get('/api/search-company-linkedin', async (req, res) => {
         const record = searchData.records && searchData.records[0];
         if (record) {
           await airtableRequest('PATCH', 'Companies', {
-            records: [{ id: record.id, fields: { 'Company LinkedIn URL': linkedinUrl } }]
+            records: [{ id: record.id, fields: { 'Company LinkedIn URL': linkedinUrl, 'LinkedIn Company ID': slug } }]
           });
         } else {
           await airtableRequest('POST', 'Companies', {
-            records: [{ fields: { 'Company Name': company, 'Company LinkedIn URL': linkedinUrl } }]
+            records: [{ fields: { 'Company Name': company, 'Company LinkedIn URL': linkedinUrl, 'LinkedIn Company ID': slug } }]
           });
         }
       } catch (airtableErr) {
