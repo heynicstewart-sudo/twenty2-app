@@ -864,6 +864,8 @@ function renderGrid(){
       <input id="newCompanyInput" placeholder="e.g. BHP">
     </div>
     <button class="btn btn-secondary" onclick="addGridCompany()"><i class="ti ti-plus"></i> Add company</button>
+    <button type="button" class="btn btn-secondary" onclick="document.getElementById('csvImportInput').click()"><i class="ti ti-file-upload"></i> Import companies from CSV</button>
+    <input type="file" id="csvImportInput" accept=".csv" style="display:none;" onchange="handleCsvImport(event)">
     <div class="field">
       <label>Add job title column</label>
       <input id="newColInput" placeholder="e.g. Head of Delivery">
@@ -953,6 +955,85 @@ function addGridCompany(){
   state.companies.push(val);
   renderPage();
   toast('"'+val+'" added to the grid','success');
+}
+
+function parseCsv(text){
+  const rows = [];
+  let row = [];
+  let field = '';
+  let inQuotes = false;
+  for(let i=0; i<text.length; i++){
+    const ch = text[i];
+    if(inQuotes){
+      if(ch === '"'){
+        if(text[i+1] === '"'){ field += '"'; i++; }
+        else inQuotes = false;
+      } else {
+        field += ch;
+      }
+      continue;
+    }
+    if(ch === '"'){ inQuotes = true; }
+    else if(ch === ','){ row.push(field); field = ''; }
+    else if(ch === '\n'){ row.push(field); rows.push(row); row = []; field = ''; }
+    else if(ch === '\r'){ /* skip, \n handles the line break */ }
+    else { field += ch; }
+  }
+  if(field !== '' || row.length){ row.push(field); rows.push(row); }
+  return rows.filter(r => r.some(f => f.trim() !== ''));
+}
+
+function handleCsvImport(event){
+  const file = event.target.files && event.target.files[0];
+  event.target.value = '';
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const rows = parseCsv(String(reader.result));
+    if(rows.length < 1){ toast('That CSV looks empty', 'warn'); return; }
+    openCsvColumnModal(rows);
+  };
+  reader.onerror = () => toast('Could not read that file', 'warn');
+  reader.readAsText(file);
+}
+
+function openCsvColumnModal(rows){
+  const headers = rows[0];
+  const dataRows = rows.slice(1);
+  window.__csvImportRows = dataRows;
+  const body = `
+    <div class="field">
+      <label>Which column contains the company names?</label>
+      <select id="csvCompanyColumn">
+        ${headers.map((h,i) => `<option value="${i}">${esc(h.trim() || 'Column '+(i+1))}</option>`).join('')}
+      </select>
+    </div>
+    <p class="muted" style="font-size:12px;">${dataRows.length} row${dataRows.length===1?'':'s'} found in this file.</p>
+  `;
+  const footer = `
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="confirmCsvImport()"><i class="ti ti-check"></i> Import companies</button>
+  `;
+  openModal('Import companies from CSV', body, footer);
+}
+
+function confirmCsvImport(){
+  const colIdx = parseInt(document.getElementById('csvCompanyColumn').value);
+  const rows = window.__csvImportRows || [];
+  const seen = new Set(state.companies.map(c => c.toLowerCase()));
+  let addedCount = 0;
+  rows.forEach(r => {
+    const val = (r[colIdx] || '').trim();
+    if(!val) return;
+    const key = val.toLowerCase();
+    if(seen.has(key)) return;
+    seen.add(key);
+    state.companies.push(val);
+    addedCount++;
+  });
+  closeModal();
+  if(addedCount) renderPage();
+  toast(addedCount + ' compan' + (addedCount===1?'y':'ies') + ' added from CSV', addedCount ? 'success' : 'warn');
 }
 
 function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
