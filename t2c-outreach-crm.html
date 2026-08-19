@@ -2446,11 +2446,26 @@ function renderSettings(){
     <button class="btn btn-secondary" onclick="addProduct()"><i class="ti ti-plus"></i> Add product</button>
   </div>
 
-  <div style="display:flex;align-items:center;gap:14px;">
+  <div style="display:flex;align-items:center;gap:14px;margin-bottom:20px;">
     <button class="btn btn-primary" onclick="saveSettings()"><i class="ti ti-device-floppy"></i> Save settings</button>
     <span class="save-flash" id="saveFlash"><i class="ti ti-circle-check"></i> Settings saved</span>
   </div>
+
+  <div class="settings-section card" style="border-color:#f0c2b0;">
+    <div class="section-title"><i class="ti ti-alert-triangle" style="color:var(--danger);"></i> Danger zone</div>
+    <p class="muted" style="font-size:12px;margin-bottom:14px;">Permanently clears all contacts, bookings, dead contacts and activity from this browser, then reloads the app. This cannot be undone.</p>
+    <button class="btn btn-danger" onclick="resetAllData()"><i class="ti ti-trash"></i> Reset all data</button>
+  </div>
   `;
+}
+
+function resetAllData(){
+  if(!confirm('This will permanently delete all contacts, bookings, dead contacts and activity from this browser. This cannot be undone. Continue?')) return;
+  state.contacts = [];
+  state.bookings = [];
+  state.deadContacts = [];
+  state.activity = [];
+  location.reload();
 }
 
 function toggleAccountColumn(i, col){
