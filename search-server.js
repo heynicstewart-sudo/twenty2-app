@@ -223,5 +223,110 @@ function mapStateToStage(state) {
   return map[state] || 'Identified';
 }
 
+// ===================== INTELLIGENCE =====================
+// Pulls the full contact + touch point picture from Airtable, hands it to
+// Claude, and asks for four sections of outreach intelligence back as JSON.
+
+app.post('/api/intelligence', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  try {
+    const [contactsData, touchPointsData] = await Promise.all([
+      airtableRequest('GET', 'Contacts'),
+      airtableRequest('GET', 'Touch Points')
+    ]);
+
+    const contacts = (contactsData.records || []).map(r => ({
+      name: r.fields['Full Name'] || '',
+      company: r.fields['Company'] || '',
+      role: r.fields['Job Title'] || '',
+      icpRoleCategory: r.fields['ICP Role Category'] || '',
+      journeyStage: r.fields['Journey Stage'] || '',
+      linkedinUrl: r.fields['LinkedIn URL'] || '',
+      notes: r.fields['Notes'] || ''
+    }));
+
+    const touchPoints = (touchPointsData.records || []).map(r => ({
+      contact: (r.fields['Contact'] || [])[0] || null,
+      date: r.fields['Date'] || '',
+      type: r.fields['Type'] || '',
+      outcome: r.fields['Outcome'] || '',
+      direction: r.fields['Direction'] || '',
+      notes: r.fields['Notes'] || ''
+    }));
+
+    const prompt = `You are the outreach intelligence layer for T2C Outreach, a LinkedIn outreach CRM for Twenty2 Collective, a Perth-based Agile and change consultancy.
+
+Here is the full current dataset synced from Airtable.
+
+CONTACTS (${contacts.length}):
+${JSON.stringify(contacts, null, 2)}
+
+TOUCH POINTS (${touchPoints.length}):
+${JSON.stringify(touchPoints, null, 2)}
+
+Analyse this data and return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{
+  "campaignSuggestions": string[],
+  "coldContacts": string[],
+  "relationshipHealth": string[],
+  "messageDrafts": [{ "contactName": string, "draft": string }]
+}
+
+Guidance for each section:
+- campaignSuggestions: 3-5 concrete outreach campaign or angle ideas based on real patterns in the data (shared roles, industries, company clusters, recurring themes in notes).
+- coldContacts: contacts with no recent touch points or who have gone quiet after early engagement, each as one sentence naming the contact and why they're worth a nudge.
+- relationshipHealth: a short read on which relationships are warm and which are at risk, each as one sentence naming the contact and the reasoning.
+- messageDrafts: 2-4 ready-to-send message drafts for specific contacts who look due for a follow-up. UK English, no em dashes, peer to peer tone, one observation and one question, 3-4 sentences, signed off "Marcus".
+
+If there isn't enough data for a section, return an empty array for it rather than inventing contacts that aren't in the dataset.`;
+
+    const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 2000,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+
+    if (!aiRes.ok) {
+      const errText = await aiRes.text();
+      throw new Error(`Claude API error ${aiRes.status}: ${errText}`);
+    }
+
+    const aiData = await aiRes.json();
+    const block = (aiData.content || []).find(b => b.type === 'text');
+    if (!block) throw new Error('No text content in Claude response');
+
+    let parsed;
+    try {
+      const jsonMatch = block.text.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(jsonMatch ? jsonMatch[0] : block.text);
+    } catch (parseErr) {
+      throw new Error('Could not parse Claude response as JSON');
+    }
+
+    res.json({
+      campaignSuggestions: parsed.campaignSuggestions || [],
+      coldContacts: parsed.coldContacts || [],
+      relationshipHealth: parsed.relationshipHealth || [],
+      messageDrafts: parsed.messageDrafts || [],
+      contactCount: contacts.length,
+      touchPointCount: touchPoints.length,
+      generatedAt: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Intelligence error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Search server listening on port ${PORT}`));

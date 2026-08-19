@@ -220,6 +220,11 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .rec-product{background:#eaf7f0;border:1px solid #c9e9d7;border-radius:8px;padding:8px 10px;margin-bottom:6px;}
 .rec-product:last-child{margin-bottom:0;}
 .rec-product-name{font-weight:700;font-size:12px;color:#1f7a4f;}
+.intel-draft{background:#e2f2fa;border:1px solid #bfe0f0;border-radius:10px;padding:12px 14px;margin-bottom:12px;}
+.intel-draft:last-child{margin-bottom:0;}
+.intel-draft-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;}
+.intel-draft-name{font-weight:700;font-size:13px;color:#0d6a96;}
+.intel-draft-text{font-size:12.5px;white-space:pre-wrap;margin-top:8px;color:var(--text);line-height:1.5;}
 
 /* Modal */
 .modal-overlay{position:fixed;inset:0;background:rgba(26,26,46,0.45);display:flex;align-items:center;justify-content:center;z-index:100;padding:20px;}
@@ -627,6 +632,7 @@ const NAV = [
   { id:'sequences', label:'Sequences', icon:'ti-git-branch' },
   { id:'calendar', label:'Calendar', icon:'ti-calendar' },
   { id:'analytics', label:'Analytics', icon:'ti-chart-bar' },
+  { id:'intelligence', label:'Intelligence', icon:'ti-brain' },
   { id:'settings', label:'Settings', icon:'ti-settings' },
   { id:'howitworks', label:'How it works', icon:'ti-help-circle' }
 ];
@@ -647,7 +653,7 @@ function navigate(page){
 
 function renderPage(){
   const el = document.getElementById('pageContent');
-  const renderers = { dashboard: renderDashboard, howitworks: renderHowItWorks, grid: renderGrid, roadmap: renderRoadmap, sequences: renderSequences, calendar: renderCalendar, analytics: renderAnalytics, settings: renderSettings };
+  const renderers = { dashboard: renderDashboard, howitworks: renderHowItWorks, grid: renderGrid, roadmap: renderRoadmap, sequences: renderSequences, calendar: renderCalendar, analytics: renderAnalytics, intelligence: renderIntelligence, settings: renderSettings };
   el.innerHTML = renderers[state.currentPage]();
   afterRender(state.currentPage);
 }
@@ -2178,6 +2184,113 @@ async function runAnalysis(){
   btn.disabled = false;
   btn.innerHTML = '<i class="ti ti-sparkles"></i> Analyse strategy';
   toast('Strategy analysis complete', 'success');
+}
+
+/* ===================== INTELLIGENCE PAGE ===================== */
+
+function renderIntelligence(){
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title"><i class="ti ti-brain"></i> Intelligence</div>
+    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Pulls every contact and touch point synced to Airtable and asks Claude for campaign ideas, contacts going cold, relationship health, and ready-to-send drafts.</p>
+    <button class="btn btn-primary" id="runIntelBtn" onclick="runIntelligence()"><i class="ti ti-sparkles"></i> Run intelligence</button>
+    <div id="intelMeta" class="muted" style="font-size:11.5px;margin-top:10px;"></div>
+  </div>
+
+  <div class="analysis-grid">
+    <div class="analysis-block recs">
+      <h4><i class="ti ti-bulb"></i> Campaign suggestions</h4>
+      <ul id="intelCampaigns"><li class="muted">Run intelligence to see suggestions</li></ul>
+    </div>
+    <div class="analysis-block gaps">
+      <h4><i class="ti ti-snowflake"></i> Cold contacts</h4>
+      <ul id="intelColdContacts"><li class="muted">Run intelligence to see cold contacts</li></ul>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:14px;margin-bottom:16px;background:#eaf7f0;border-color:#c9e9d7;">
+    <div class="section-title"><i class="ti ti-heart-rate-monitor"></i> Relationship health</div>
+    <ul id="intelRelationshipHealth" style="padding-left:18px;font-size:12.5px;line-height:1.6;"><li class="muted">Run intelligence to see relationship health</li></ul>
+  </div>
+
+  <div class="card">
+    <div class="section-title"><i class="ti ti-mail"></i> Message drafts</div>
+    <div id="intelMessageDrafts"><span class="muted" style="font-size:12.5px;">Run intelligence to see drafts</span></div>
+  </div>
+  `;
+}
+
+async function runIntelligence(){
+  const btn = document.getElementById('runIntelBtn');
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<i class="ti ti-loader-2"></i> Running...';
+  document.getElementById('intelMeta').textContent = '';
+
+  try {
+    const res = await fetch('/api/intelligence', { method: 'POST' });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+
+    renderIntelList('intelCampaigns', data.campaignSuggestions, 'No campaign suggestions came back.');
+    renderIntelList('intelColdContacts', data.coldContacts, 'No cold contacts flagged.');
+    renderIntelList('intelRelationshipHealth', data.relationshipHealth, 'No relationship health notes came back.');
+    renderIntelDrafts(data.messageDrafts);
+
+    const generatedAt = data.generatedAt ? new Date(data.generatedAt).toLocaleString('en-AU') : '';
+    document.getElementById('intelMeta').textContent = `Based on ${data.contactCount ?? '—'} contacts and ${data.touchPointCount ?? '—'} touch points from Airtable${generatedAt ? ' · '+generatedAt : ''}`;
+    toast('Intelligence updated', 'success');
+  } catch(err){
+    console.warn('Intelligence request failed:', err.message);
+    document.getElementById('intelMeta').textContent = 'Could not run intelligence: ' + err.message;
+    toast('Could not run intelligence: ' + err.message, 'warn');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = original;
+  }
+}
+
+function renderIntelList(elId, items, emptyMsg){
+  const el = document.getElementById(elId);
+  if(!el) return;
+  const list = Array.isArray(items) ? items : [];
+  el.innerHTML = list.length ? list.map(i=>`<li>${esc(i)}</li>`).join('') : `<li class="muted">${esc(emptyMsg)}</li>`;
+}
+
+function renderIntelDrafts(drafts){
+  const el = document.getElementById('intelMessageDrafts');
+  if(!el) return;
+  const list = Array.isArray(drafts) ? drafts : [];
+  window.__intelDrafts = list;
+  if(!list.length){
+    el.innerHTML = '<span class="muted" style="font-size:12.5px;">No drafts came back.</span>';
+    return;
+  }
+  el.innerHTML = list.map((d,i) => `
+    <div class="intel-draft">
+      <div class="intel-draft-head">
+        <div class="intel-draft-name">${esc(d.contactName || 'Unknown contact')}</div>
+        <button class="btn btn-secondary btn-sm" onclick="copyIntelDraft(${i})"><i class="ti ti-copy"></i> Copy</button>
+      </div>
+      <div class="intel-draft-text">${esc(d.draft || '')}</div>
+    </div>
+  `).join('');
+}
+
+async function copyIntelDraft(idx){
+  const draft = (window.__intelDrafts || [])[idx];
+  if(!draft || !draft.draft) return;
+  try {
+    await navigator.clipboard.writeText(draft.draft);
+  } catch(err){
+    const ta = document.createElement('textarea');
+    ta.value = draft.draft;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+  }
+  toast('Draft copied to clipboard', 'success');
 }
 
 /* ===================== SETTINGS PAGE ===================== */
