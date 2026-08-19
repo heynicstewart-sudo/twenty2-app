@@ -416,6 +416,7 @@ let rawState = {
   currentPage: 'dashboard',
   gridColumns: ['Product Owner','Transformation Lead','Digital and Tech'],
   companies: ['Woodside Energy','Chevron Australia','Rio Tinto','Water Corporation','ATCO Australia','Hancock Iron Ore','Shell Australia','RAC WA','Fortescue','Western Power'],
+  companyLinkedIn: {},
   seqActiveTab: 'seniorLeaders',
   calMonth: TODAY.getMonth(),
   calYear: TODAY.getFullYear(),
@@ -1126,6 +1127,7 @@ function renderGrid(){
     <button class="btn btn-ghost" onclick="resetGrid()"><i class="ti ti-refresh"></i> Reset</button>
     <button class="btn btn-secondary" onclick="exportContactsCsv()"><i class="ti ti-file-download"></i> Export contacts</button>
     <button class="btn btn-secondary" id="syncAirtableBtn" onclick="syncAllContactsToAirtable()"><i class="ti ti-cloud-upload"></i> Sync to Airtable</button>
+    <button class="btn btn-secondary" id="findCompanyLinkedInBtn" onclick="findCompanyLinkedInPages()"><i class="ti ti-brand-linkedin"></i> Find LinkedIn pages</button>
   </div>
   <div id="gridNotification"></div>
   <div class="grid-wrap">
@@ -1134,7 +1136,7 @@ function renderGrid(){
       <tbody id="gridBody">
         ${state.companies.map(company => `
           <tr>
-            <td class="company-cell">${esc(company)}</td>
+            <td class="company-cell">${esc(company)}${renderCompanyLinkedInIcon(company)}</td>
             ${cols.map(role => renderGridCell(company, role)).join('')}
           </tr>
         `).join('')}
@@ -1206,6 +1208,53 @@ function addGridCompany(){
   state.companies.push(val);
   renderPage();
   toast('"'+val+'" added to the grid','success');
+}
+
+function companyLinkedInUrl(company){
+  return (state.companyLinkedIn[company] && state.companyLinkedIn[company].linkedinUrl) || '';
+}
+
+function renderCompanyLinkedInIcon(company){
+  const url = companyLinkedInUrl(company);
+  if(!url) return '';
+  return ` <a href="${esc(url)}" target="_blank" rel="noopener" title="Open ${esc(company)} on LinkedIn" style="margin-left:4px;color:var(--blue);"><i class="ti ti-brand-linkedin"></i></a>`;
+}
+
+async function findCompanyLinkedInPages(){
+  const btn = document.getElementById('findCompanyLinkedInBtn');
+  const original = btn.innerHTML;
+  btn.disabled = true;
+
+  let foundCount = 0;
+  let searchedCount = 0;
+  for(let i=0; i<state.companies.length; i++){
+    const company = state.companies[i];
+    if(state.companyLinkedIn[company] && state.companyLinkedIn[company].linkedinUrl) continue;
+    searchedCount++;
+    btn.innerHTML = `<i class="ti ti-loader-2"></i> Searching ${i+1}/${state.companies.length}...`;
+    try {
+      const res = await fetch(`/api/search-company-linkedin?company=${encodeURIComponent(company)}`);
+      const data = await res.json();
+      if(data.found && data.linkedinUrl){
+        state.companyLinkedIn[company] = { linkedinUrl: data.linkedinUrl, linkedinSlug: data.slug || null };
+        foundCount++;
+      }
+    } catch(err){
+      console.warn('Company LinkedIn search failed for', company, err.message);
+    }
+    if(i < state.companies.length - 1) await sleep(300);
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = original;
+
+  if(searchedCount === 0){
+    toast('Every company already has a LinkedIn page on file', 'warn');
+    return;
+  }
+
+  renderPage();
+  toast(`Found LinkedIn pages for ${foundCount} of ${searchedCount} companies searched`, foundCount ? 'success' : 'warn');
 }
 
 function parseCsv(text){
@@ -1430,7 +1479,8 @@ function syncContactToAirtable(contact) {
       linkedinUrl: contact.url,
       state: contact.state,
       icpRoleCategory: contact.role,
-      notes: contact.notes || ''
+      notes: contact.notes || '',
+      companyLinkedinUrl: companyLinkedInUrl(contact.company)
     })
   }).catch(err => console.warn('Airtable contact sync failed:', err.message));
 }
@@ -1469,7 +1519,8 @@ async function syncAllContactsToAirtable(){
           linkedinUrl: contact.url,
           state: contact.state,
           icpRoleCategory: contact.role,
-          notes: contact.notes || ''
+          notes: contact.notes || '',
+          companyLinkedinUrl: companyLinkedInUrl(contact.company)
         })
       });
       if(res.ok) syncedCount++;

@@ -133,20 +133,21 @@ app.get('/api/airtable/contact', async (req, res) => {
 app.post('/api/airtable/contact', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
-  const { name, company, role, linkedinUrl, state: contactState, icpRoleCategory, notes } = req.body;
+  const { name, company, role, linkedinUrl, state: contactState, icpRoleCategory, notes, companyLinkedinUrl } = req.body;
   if (!name || !company) return res.status(400).json({ error: 'name and company are required' });
 
   try {
+    const fields = {
+      'Full Name': name,
+      'Job Title': role || '',
+      'LinkedIn URL': linkedinUrl || '',
+      'Journey Stage': mapStateToStage(contactState),
+      'Notes': notes || ''
+    };
+    if (companyLinkedinUrl) fields['Company LinkedIn URL'] = companyLinkedinUrl;
+
     const data = await airtableRequest('POST', 'Contacts', {
-      records: [{
-        fields: {
-          'Full Name': name,
-          'Job Title': role || '',
-          'LinkedIn URL': linkedinUrl || '',
-          'Journey Stage': mapStateToStage(contactState),
-          'Notes': notes || ''
-        }
-      }]
+      records: [{ fields }]
     });
     res.json({ success: true, recordId: data.records[0].id });
   } catch (err) {
@@ -240,6 +241,67 @@ function mapStateToStage(state) {
   };
   return map[state] || 'Identified';
 }
+
+// ===================== COMPANY LINKEDIN =====================
+// Finds a company's LinkedIn company page via Serper and writes it onto the
+// Airtable Companies table. Best guess at the primary field name ("Name") -
+// adjust if the Companies table uses something else.
+
+app.get('/api/search-company-linkedin', async (req, res) => {
+  const company = (req.query.company || '').trim();
+  if (!company) return res.status(400).json({ found: false, error: 'company query param is required' });
+  if (!process.env.SERPER_API_KEY) return res.status(500).json({ found: false, error: 'SERPER_API_KEY is not configured' });
+
+  const query = `${company} site:linkedin.com/company/`;
+
+  try {
+    const serperRes = await fetch(SERPER_URL, {
+      method: 'POST',
+      headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ q: query })
+    });
+    if (!serperRes.ok) throw new Error(`Serper API error: ${serperRes.status}`);
+
+    const data = await serperRes.json();
+    const results = data.organic || [];
+    const match = results.find(r => r.link && /linkedin\.com\/company\/[^/?#]+/i.test(r.link));
+    if (!match) return res.json({ found: false });
+
+    const slugMatch = match.link.match(/linkedin\.com\/company\/([^/?#]+)/i);
+    const slug = slugMatch ? slugMatch[1] : null;
+    if (!slug) return res.json({ found: false });
+
+    const linkedinUrl = `https://linkedin.com/company/${slug}`;
+
+    // Best-effort write to the Airtable Companies table - doesn't block the response.
+    if (AIRTABLE_API_KEY) {
+      try {
+        const searchRes = await fetch(
+          `${AIRTABLE_URL}/Companies?filterByFormula=${encodeURIComponent(`{Name}="${company}"`)}`,
+          { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
+        );
+        const searchData = await searchRes.json();
+        const record = searchData.records && searchData.records[0];
+        if (record) {
+          await airtableRequest('PATCH', 'Companies', {
+            records: [{ id: record.id, fields: { 'Company LinkedIn URL': linkedinUrl } }]
+          });
+        } else {
+          await airtableRequest('POST', 'Companies', {
+            records: [{ fields: { 'Name': company, 'Company LinkedIn URL': linkedinUrl } }]
+          });
+        }
+      } catch (airtableErr) {
+        console.warn('Could not write company LinkedIn URL to Airtable:', airtableErr.message);
+      }
+    }
+
+    return res.json({ found: true, linkedinUrl, slug });
+  } catch (err) {
+    console.error('Company LinkedIn search error for', company, '-', err.message);
+    return res.status(500).json({ found: false, error: 'search_failed' });
+  }
+});
 
 // ===================== INTELLIGENCE =====================
 // Pulls the full contact + touch point picture from Airtable, hands it to
