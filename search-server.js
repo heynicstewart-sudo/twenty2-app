@@ -149,13 +149,20 @@ app.post('/api/airtable/contact', async (req, res) => {
 
     const fields = {
       'Full Name': name,
-      'Company': company,
       'Job Title': role || '',
       'LinkedIn URL': linkedinUrl || '',
       'Journey Stage': mapStateToStage(contactState),
       'Notes': notes || ''
     };
     if (companyLinkedinUrl) fields['Company LinkedIn URL'] = companyLinkedinUrl;
+
+    const companySearchRes = await fetch(
+      `${AIRTABLE_URL}/Companies?filterByFormula=${encodeURIComponent(`{Company Name}="${company}"`)}`,
+      { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
+    );
+    const companySearchData = await companySearchRes.json();
+    const companyRecord = companySearchData.records && companySearchData.records[0];
+    if (companyRecord) fields['Company'] = [companyRecord.id];
 
     const data = await airtableRequest('POST', 'Contacts', {
       records: [{ fields }]
