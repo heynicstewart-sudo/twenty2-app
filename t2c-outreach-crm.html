@@ -2070,6 +2070,7 @@ function renderMsgStep(c, key, label){
 const TOUCH_POINT_TYPES = ['LinkedIn message','Email','Call','Meeting','Event','Proposal'];
 const PAIN_POINTS = ['Delivery challenges','Change fatigue','Tooling fragmentation','Capability gaps','Agile adoption','Governance','Certification','Digital transformation','Stakeholder alignment'];
 const COMMUNICATION_METHODS = ['LinkedIn message','Email','Call','Meeting','Event invite','Content share'];
+const TOUCH_POINT_OUTCOMES = ['No reply','Replied','Meeting Booked','Not interested'];
 
 function touchPointFormHtml(cid){
   return `
@@ -2077,6 +2078,7 @@ function touchPointFormHtml(cid){
       <input type="date" id="tpDate-${cid}" value="${isoDate(TODAY)}">
       <select id="tpType-${cid}" title="Type">${TOUCH_POINT_TYPES.map(t=>`<option>${t}</option>`).join('')}</select>
       <select id="tpMethod-${cid}" title="Communication method">${COMMUNICATION_METHODS.map(m=>`<option>${m}</option>`).join('')}</select>
+      <select id="tpOutcome-${cid}" title="Outcome">${TOUCH_POINT_OUTCOMES.map(o=>`<option>${o}</option>`).join('')}</select>
       <input id="tpNotes-${cid}" placeholder="Notes">
     </div>
     <div class="tp-painpoints" id="tpPainPoints-${cid}">
@@ -2110,19 +2112,21 @@ function addTouchPoint(cid) {
   const type = document.getElementById('tpType-' + cid).value;
   const methodEl = document.getElementById('tpMethod-' + cid);
   const communicationMethod = methodEl ? methodEl.value : '';
+  const outcomeEl = document.getElementById('tpOutcome-' + cid);
+  const outcome = outcomeEl ? outcomeEl.value : 'No reply';
   const notes = document.getElementById('tpNotes-' + cid).value.trim();
   const painPointsEl = document.getElementById('tpPainPoints-' + cid);
   const selectedPainPoints = painPointsEl ? Array.from(painPointsEl.querySelectorAll('input:checked')).map(el => el.value) : [];
 
   if (!c.touchPoints) c.touchPoints = [];
-  c.touchPoints.push({ id: uid('tp'), date, type, communicationMethod, notes, painPoints: selectedPainPoints });
+  c.touchPoints.push({ id: uid('tp'), date, type, communicationMethod, outcome, notes, painPoints: selectedPainPoints });
 
   if (selectedPainPoints.length) {
     if (!c.painPoints) c.painPoints = [];
     selectedPainPoints.forEach(p => { if (!c.painPoints.includes(p)) c.painPoints.push(p); });
   }
 
-  // Sync touch point to Airtable
+  // Sync touch point to Airtable (outcome "Replied" gets flagged on the record server-side)
   fetch('/api/airtable/touchpoint', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -2132,10 +2136,14 @@ function addTouchPoint(cid) {
       date,
       type,
       notes,
-      outcome: 'No reply',
+      outcome,
       communicationMethod
     })
   }).catch(err => console.warn('Airtable touch point sync failed:', err.message));
+
+  if (outcome === 'Meeting Booked') {
+    trackConversion(c, date, communicationMethod);
+  }
 
   // Default next-touch cadence: 7 days on from this touch point
   const nextTouchDate = addDays(date, 7);
@@ -2153,6 +2161,28 @@ function addTouchPoint(cid) {
   notifyWebhook(c);
   toast('Touch point logged', 'success');
   renderPage();
+}
+
+function trackConversion(c, bookedDate, communicationMethod){
+  const touchPoints = (c.touchPoints || []).slice().sort((a,b)=>new Date(a.date)-new Date(b.date));
+  const firstTouchDate = touchPoints.length ? touchPoints[0].date : bookedDate;
+  const campaign = activeCampaignForContact(c);
+
+  fetch('/api/track/conversion', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contactName: c.name,
+      company: c.company,
+      icpRole: c.role,
+      industry: companyIndustry(c.company),
+      campaign: campaign ? campaign.name : '',
+      product: campaign ? (campaign.product || '') : '',
+      touchPointCount: touchPoints.length,
+      daysToConvert: daysBetween(firstTouchDate, bookedDate),
+      communicationMethod
+    })
+  }).catch(err => console.warn('Conversion tracking sync failed:', err.message));
 }
 
 function recommendedProducts(c){
@@ -3355,6 +3385,31 @@ function renderIntelligence(){
     <div id="intelMeta" class="muted" style="font-size:11.5px;margin-top:10px;"></div>
   </div>
 
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title"><i class="ti ti-target-arrow"></i> What's working</div>
+    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Calculated live from every logged conversion in Airtable - which ICP roles, products and methods actually turn into booked meetings.</p>
+    <button class="btn btn-primary" id="runInsightsBtn" onclick="runTrackInsights()"><i class="ti ti-chart-bar"></i> Run insights</button>
+    <div id="insightsMeta" class="muted" style="font-size:11.5px;margin-top:10px;"></div>
+    <div class="analysis-grid" style="margin-top:14px;">
+      <div class="analysis-block wins">
+        <h4><i class="ti ti-trophy"></i> Top converting ICP roles</h4>
+        <ul id="insightsIcpRoles"><li class="muted">Run insights to see top roles</li></ul>
+      </div>
+      <div class="analysis-block wins">
+        <h4><i class="ti ti-package"></i> Best performing products</h4>
+        <ul id="insightsProducts"><li class="muted">Run insights to see best products</li></ul>
+      </div>
+      <div class="analysis-block recs">
+        <h4><i class="ti ti-route"></i> Avg touch points to conversion</h4>
+        <ul id="insightsAvgTouches"><li class="muted">Run insights to see the average</li></ul>
+      </div>
+      <div class="analysis-block recs">
+        <h4><i class="ti ti-message-circle"></i> Best communication methods</h4>
+        <ul id="insightsMethods"><li class="muted">Run insights to see best methods</li></ul>
+      </div>
+    </div>
+  </div>
+
   <div class="analysis-grid">
     <div class="analysis-block recs">
       <h4><i class="ti ti-bulb"></i> Campaign suggestions</h4>
@@ -3434,6 +3489,37 @@ function renderIntelList(elId, items, emptyMsg){
   if(!el) return;
   const list = Array.isArray(items) ? items : [];
   el.innerHTML = list.length ? list.map(i=>`<li>${esc(i)}</li>`).join('') : `<li class="muted">${esc(emptyMsg)}</li>`;
+}
+
+async function runTrackInsights(){
+  const btn = document.getElementById('runInsightsBtn');
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<i class="ti ti-loader-2"></i> Running...';
+  document.getElementById('insightsMeta').textContent = '';
+
+  try {
+    const res = await fetch('/api/track/insights');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+
+    renderIntelList('insightsIcpRoles', data.topIcpRoles, 'No conversions logged yet.');
+    renderIntelList('insightsProducts', data.topProducts, 'No conversions logged yet.');
+    renderIntelList('insightsMethods', data.topMethods, 'No conversions logged yet.');
+    renderIntelList('insightsAvgTouches',
+      data.avgTouchPoints != null ? [`${data.avgTouchPoints} touch points on average across ${data.conversionCount} conversion${data.conversionCount===1?'':'s'}`] : [],
+      'No conversions logged yet.');
+
+    document.getElementById('insightsMeta').textContent = `Based on ${data.conversionCount ?? '—'} logged conversions from Airtable`;
+    toast('Insights updated', 'success');
+  } catch(err){
+    console.warn('Track insights request failed:', err.message);
+    document.getElementById('insightsMeta').textContent = 'Could not run insights: ' + err.message;
+    toast('Could not run insights: ' + err.message, 'warn');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = original;
+  }
 }
 
 function renderIntelDrafts(drafts){

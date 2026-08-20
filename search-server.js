@@ -322,7 +322,8 @@ app.post('/api/airtable/touchpoint', async (req, res) => {
       'Type': type,
       'Notes': notes || '',
       'Outcome': outcome || 'No reply',
-      'Direction': 'Outbound'
+      'Direction': 'Outbound',
+      'Replied': outcome === 'Replied'
     };
     if (communicationMethod) fields['Communication Method'] = communicationMethod;
     if (aiBrief) fields['AI Brief'] = aiBrief;
@@ -521,6 +522,116 @@ function learningDataContext(learningData) {
   return learningData.map(l => `- [${l.type}, ${l.date}, ${l.recordCount} records]: ${l.analysis}`).join('\n');
 }
 
+// ===================== CONVERSION TRACKING =====================
+// Every "Meeting Booked" touch point outcome writes a Conversion record
+// here from the client. The Conversions table (field names given exactly
+// by spec: Contact Name, Company, ICP Role, Industry, Campaign, Product,
+// Touch Point Count, Days to Convert, Communication Method, Date) is the
+// ground truth the intelligence engine and the "What's working" panel both
+// learn from.
+
+app.post('/api/track/conversion', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const { contactName, company, icpRole, industry, campaign, product, touchPointCount, daysToConvert, communicationMethod } = req.body;
+  if (!contactName) return res.status(400).json({ error: 'contactName is required' });
+
+  try {
+    const data = await airtableRequest('POST', 'Conversions', {
+      records: [{
+        fields: {
+          'Contact Name': contactName,
+          'Company': company || '',
+          'ICP Role': icpRole || '',
+          'Industry': industry || '',
+          'Campaign': campaign || '',
+          'Product': product || '',
+          'Touch Point Count': touchPointCount || 0,
+          'Days to Convert': daysToConvert || 0,
+          'Communication Method': communicationMethod || '',
+          'Date': new Date().toISOString().slice(0, 10)
+        }
+      }]
+    });
+    res.json({ success: true, recordId: data.records[0].id });
+  } catch (err) {
+    console.error('Conversion tracking error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+async function fetchConversions() {
+  try {
+    const data = await airtableRequest('GET', 'Conversions');
+    return (data.records || []).map(r => ({
+      contactName: r.fields['Contact Name'] || '',
+      company: r.fields['Company'] || '',
+      icpRole: r.fields['ICP Role'] || '',
+      industry: r.fields['Industry'] || '',
+      campaign: r.fields['Campaign'] || '',
+      product: r.fields['Product'] || '',
+      touchPointCount: r.fields['Touch Point Count'] || 0,
+      daysToConvert: r.fields['Days to Convert'] || 0,
+      communicationMethod: r.fields['Communication Method'] || '',
+      date: r.fields['Date'] || ''
+    }));
+  } catch (err) {
+    console.warn('Could not fetch Conversions (table may not exist yet):', err.message);
+    return [];
+  }
+}
+
+function rankCounts(items, keyFn) {
+  const counts = {};
+  items.forEach(item => {
+    const key = keyFn(item);
+    if (!key) return;
+    counts[key] = (counts[key] || 0) + 1;
+  });
+  return Object.entries(counts).sort((a, b) => b[1] - a[1]);
+}
+
+function conversionsContext(conversions) {
+  if (!conversions.length) return 'No conversions logged yet.';
+  return conversions.map(c => `- ${c.contactName} (${c.icpRole || 'role unknown'} at ${c.company || 'unknown company'}, ${c.industry || 'unknown industry'}) converted via ${c.communicationMethod || 'unknown method'} on campaign "${c.campaign || 'none'}" for product "${c.product || 'unknown'}" after ${c.touchPointCount || 0} touch points and ${c.daysToConvert || 0} days.`).join('\n');
+}
+
+app.get('/api/track/insights', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  try {
+    const conversions = await fetchConversions();
+
+    const topIcpRoles = rankCounts(conversions, c => c.icpRole)
+      .slice(0, 5)
+      .map(([role, count]) => `${role} — ${count} conversion${count === 1 ? '' : 's'}`);
+
+    const topProducts = rankCounts(conversions, c => c.product)
+      .slice(0, 5)
+      .map(([product, count]) => `${product} — ${count} conversion${count === 1 ? '' : 's'}`);
+
+    const topMethods = rankCounts(conversions, c => c.communicationMethod)
+      .slice(0, 5)
+      .map(([method, count]) => `${method} — ${count} conversion${count === 1 ? '' : 's'}`);
+
+    const touchCounts = conversions.map(c => c.touchPointCount).filter(n => typeof n === 'number' && n > 0);
+    const avgTouchPoints = touchCounts.length
+      ? Math.round((touchCounts.reduce((s, n) => s + n, 0) / touchCounts.length) * 10) / 10
+      : null;
+
+    res.json({
+      topIcpRoles,
+      topProducts,
+      topMethods,
+      avgTouchPoints,
+      conversionCount: conversions.length
+    });
+  } catch (err) {
+    console.error('Track insights error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ===================== INTELLIGENCE =====================
 // Pulls the full contact + touch point picture from Airtable, hands it to
 // Claude, and asks for four sections of outreach intelligence back as JSON.
@@ -530,10 +641,11 @@ app.post('/api/intelligence', async (req, res) => {
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
 
   try {
-    const [contactsData, touchPointsData, learningData] = await Promise.all([
+    const [contactsData, touchPointsData, learningData, conversions] = await Promise.all([
       airtableRequest('GET', 'Contacts'),
       airtableRequest('GET', 'Touch Points'),
-      fetchLearningData()
+      fetchLearningData(),
+      fetchConversions()
     ]);
 
     const contacts = (contactsData.records || []).map(r => ({
@@ -568,6 +680,9 @@ ${JSON.stringify(touchPoints, null, 2)}
 LEARNING DATA from past customer and deal analysis (${learningData.length} analyses on file - use this to sharpen your suggestions, it reflects real historical ICP and sales patterns):
 ${learningDataContext(learningData)}
 
+CONVERSIONS - actual meetings booked, logged with what led to them (${conversions.length} on file - this is ground truth for what's actually working, weight it heavily):
+${conversionsContext(conversions)}
+
 Analyse this data and return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 {
   "campaignSuggestions": string[],
@@ -577,7 +692,7 @@ Analyse this data and return ONLY valid JSON, no markdown, no commentary, in exa
 }
 
 Guidance for each section:
-- campaignSuggestions: 3-5 concrete outreach campaign or angle ideas based on real patterns in the data (shared roles, industries, company clusters, recurring themes in notes) and, where relevant, the learning data above (ICP profiles and product-to-ICP fit that have historically converted).
+- campaignSuggestions: 3-5 concrete outreach campaign or angle ideas based on real patterns in the data (shared roles, industries, company clusters, recurring themes in notes) and, where relevant, the learning data and conversion patterns above (ICP profiles, products and communication methods that have actually converted).
 - coldContacts: contacts with no recent touch points or who have gone quiet after early engagement, each as one sentence naming the contact and why they're worth a nudge.
 - relationshipHealth: a short read on which relationships are warm and which are at risk, each as one sentence naming the contact and the reasoning.
 - messageDrafts: 2-4 ready-to-send message drafts for specific contacts who look due for a follow-up. UK English, no em dashes, peer to peer tone, one observation and one question, 3-4 sentences, signed off "Marcus".
