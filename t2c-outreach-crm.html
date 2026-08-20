@@ -341,6 +341,13 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .analysis-block.recs{background:#e2f2fa;border:1px solid #bfe0f0;}
 .analysis-block h4{display:flex;align-items:center;gap:7px;font-size:13px;margin-bottom:10px;}
 .analysis-block ul{padding-left:18px;font-size:12.5px;line-height:1.6;}
+.learning-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;}
+.learning-panel{border-radius:12px;padding:16px;background:#f7f7fa;border:1px solid #e3e3ea;}
+.learning-panel h4{display:flex;align-items:center;gap:7px;font-size:13px;margin-bottom:6px;}
+.learning-result{margin-top:14px;font-size:12.5px;line-height:1.6;}
+.learning-result h5{font-size:11px;text-transform:uppercase;letter-spacing:.03em;color:var(--muted);margin:10px 0 4px;}
+.learning-result ul{padding-left:18px;}
+.learning-meta{font-size:11px;margin-top:10px;}
 
 /* Settings */
 .settings-section{margin-bottom:20px;}
@@ -398,6 +405,7 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
   .pipeline-grid{grid-template-columns:1fr;}
   .an-stats{grid-template-columns:repeat(2,1fr);}
   .analysis-grid{grid-template-columns:1fr;}
+  .learning-grid{grid-template-columns:1fr;}
   .howto-grid{grid-template-columns:1fr;}
   .campaign-metrics{grid-template-columns:repeat(3,1fr);row-gap:12px;}
 }
@@ -3367,6 +3375,27 @@ function renderIntelligence(){
     <div class="section-title"><i class="ti ti-mail"></i> Message drafts</div>
     <div id="intelMessageDrafts"><span class="muted" style="font-size:12.5px;">Run intelligence to see drafts</span></div>
   </div>
+
+  <div class="card" style="margin-top:16px;">
+    <div class="section-title"><i class="ti ti-school"></i> Learning Data</div>
+    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Upload historical customer and deal data so Claude learns real ICP and sales patterns. Every upload is saved to Airtable and sharpens future intelligence runs and campaign suggestions.</p>
+    <div class="learning-grid">
+      <div class="learning-panel">
+        <h4><i class="ti ti-users"></i> Past Customers</h4>
+        <p class="muted" style="font-size:12px;margin-bottom:12px;">CSV of won customers - roles, industries, deal size, whatever columns you track.</p>
+        <input type="file" id="learnCustomersInput" accept=".csv" style="display:none;" onchange="handleLearningUpload(event,'customers')">
+        <button class="btn btn-secondary btn-sm" id="learnCustomersBtn" onclick="document.getElementById('learnCustomersInput').click()"><i class="ti ti-upload"></i> Upload CSV</button>
+        <div id="learnCustomersResult" class="learning-result"></div>
+      </div>
+      <div class="learning-panel">
+        <h4><i class="ti ti-file-invoice"></i> Past Contracts/Deals</h4>
+        <p class="muted" style="font-size:12px;margin-bottom:12px;">CSV of past contracts or deals - product, industry, close date, touch point count.</p>
+        <input type="file" id="learnDealsInput" accept=".csv" style="display:none;" onchange="handleLearningUpload(event,'deals')">
+        <button class="btn btn-secondary btn-sm" id="learnDealsBtn" onclick="document.getElementById('learnDealsInput').click()"><i class="ti ti-upload"></i> Upload CSV</button>
+        <div id="learnDealsResult" class="learning-result"></div>
+      </div>
+    </div>
+  </div>
   `;
 }
 
@@ -3441,6 +3470,90 @@ async function copyIntelDraft(idx){
     document.body.removeChild(ta);
   }
   toast('Draft copied to clipboard', 'success');
+}
+
+/* ---- Learning Data uploads ---- */
+
+const LEARNING_CONFIG = {
+  customers: { endpoint: '/api/learn/customers', btnId: 'learnCustomersBtn', resultId: 'learnCustomersResult', label: 'Customer' },
+  deals: { endpoint: '/api/learn/deals', btnId: 'learnDealsBtn', resultId: 'learnDealsResult', label: 'Deal' }
+};
+
+function csvRowsToObjects(rows){
+  if(rows.length < 2) return [];
+  const headers = rows[0].map(h => h.trim());
+  return rows.slice(1).map(row => {
+    const obj = {};
+    headers.forEach((h,i) => { obj[h || `col${i+1}`] = (row[i] || '').trim(); });
+    return obj;
+  });
+}
+
+function handleLearningUpload(event, kind){
+  const file = event.target.files && event.target.files[0];
+  event.target.value = '';
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const rows = parseCsv(String(reader.result));
+    const records = csvRowsToObjects(rows);
+    if(!records.length){ toast('That CSV looks empty', 'warn'); return; }
+    runLearningAnalysis(kind, records);
+  };
+  reader.onerror = () => toast('Could not read that file', 'warn');
+  reader.readAsText(file);
+}
+
+async function runLearningAnalysis(kind, records){
+  const cfg = LEARNING_CONFIG[kind];
+  const btn = document.getElementById(cfg.btnId);
+  const resultEl = document.getElementById(cfg.resultId);
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<i class="ti ti-loader-2"></i> Analysing...';
+  resultEl.innerHTML = '';
+
+  try {
+    const res = await fetch(cfg.endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ records })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+    renderLearningResult(kind, data, records.length);
+    toast(`${cfg.label} analysis complete`, 'success');
+  } catch(err){
+    resultEl.innerHTML = `<p class="muted" style="font-size:12px;color:#b3413a;">Could not analyse that file: ${esc(err.message)}</p>`;
+    toast('Learning upload failed: ' + err.message, 'warn');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = original;
+  }
+}
+
+function learningListSection(title, items){
+  if(!Array.isArray(items) || !items.length) return '';
+  return `<h5>${esc(title)}</h5><ul>${items.map(i=>`<li>${esc(i)}</li>`).join('')}</ul>`;
+}
+
+function renderLearningResult(kind, data, recordCount){
+  const cfg = LEARNING_CONFIG[kind];
+  const el = document.getElementById(cfg.resultId);
+  if(!el) return;
+  let html = data.summary ? `<p style="font-size:12.5px;">${esc(data.summary)}</p>` : '';
+  if(kind === 'customers'){
+    html += learningListSection('Top ICP profiles', data.icpProfiles);
+    html += learningListSection('Deal characteristics', data.dealCharacteristics);
+    html += learningListSection('Patterns', data.patterns);
+  } else {
+    html += learningListSection('Product-ICP fit', data.productIcpMatches);
+    html += learningListSection('Touch points before close', data.touchPointsBeforeClose);
+    html += learningListSection('Best industries', data.bestIndustries);
+    html += learningListSection('Seasonal patterns', data.seasonalPatterns);
+  }
+  html += `<div class="learning-meta muted">Based on ${recordCount} uploaded rows &middot; saved to Airtable Learning Data</div>`;
+  el.innerHTML = html;
 }
 
 /* ===================== SETTINGS PAGE ===================== */

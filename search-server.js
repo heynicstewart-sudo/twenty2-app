@@ -480,6 +480,47 @@ app.get('/api/enrich/linkedin-org-id', async (req, res) => {
   }
 });
 
+// ===================== LEARNING DATA =====================
+// Historical customer/deal CSVs get mined by Claude for ICP and sales
+// patterns, and the resulting analysis is stored in the Airtable Learning
+// Data table (fields: Type, Analysis, Record Count, Date - unconfirmed,
+// guessed to match existing table-field-naming conventions). Every future
+// analysis, including /api/intelligence, pulls this table back in as
+// context so it compounds with each upload instead of starting fresh.
+
+async function fetchLearningData() {
+  try {
+    const data = await airtableRequest('GET', 'Learning Data');
+    return (data.records || []).map(r => ({
+      type: r.fields['Type'] || '',
+      analysis: r.fields['Analysis'] || '',
+      recordCount: r.fields['Record Count'] || 0,
+      date: r.fields['Date'] || ''
+    }));
+  } catch (err) {
+    console.warn('Could not fetch Learning Data (table may not exist yet):', err.message);
+    return [];
+  }
+}
+
+async function storeLearningData(type, analysis, recordCount) {
+  await airtableRequest('POST', 'Learning Data', {
+    records: [{
+      fields: {
+        'Type': type,
+        'Analysis': JSON.stringify(analysis),
+        'Record Count': recordCount,
+        'Date': new Date().toISOString().slice(0, 10)
+      }
+    }]
+  });
+}
+
+function learningDataContext(learningData) {
+  if (!learningData.length) return 'No prior learning data on file yet.';
+  return learningData.map(l => `- [${l.type}, ${l.date}, ${l.recordCount} records]: ${l.analysis}`).join('\n');
+}
+
 // ===================== INTELLIGENCE =====================
 // Pulls the full contact + touch point picture from Airtable, hands it to
 // Claude, and asks for four sections of outreach intelligence back as JSON.
@@ -489,9 +530,10 @@ app.post('/api/intelligence', async (req, res) => {
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
 
   try {
-    const [contactsData, touchPointsData] = await Promise.all([
+    const [contactsData, touchPointsData, learningData] = await Promise.all([
       airtableRequest('GET', 'Contacts'),
-      airtableRequest('GET', 'Touch Points')
+      airtableRequest('GET', 'Touch Points'),
+      fetchLearningData()
     ]);
 
     const contacts = (contactsData.records || []).map(r => ({
@@ -523,6 +565,9 @@ ${JSON.stringify(contacts, null, 2)}
 TOUCH POINTS (${touchPoints.length}):
 ${JSON.stringify(touchPoints, null, 2)}
 
+LEARNING DATA from past customer and deal analysis (${learningData.length} analyses on file - use this to sharpen your suggestions, it reflects real historical ICP and sales patterns):
+${learningDataContext(learningData)}
+
 Analyse this data and return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 {
   "campaignSuggestions": string[],
@@ -532,7 +577,7 @@ Analyse this data and return ONLY valid JSON, no markdown, no commentary, in exa
 }
 
 Guidance for each section:
-- campaignSuggestions: 3-5 concrete outreach campaign or angle ideas based on real patterns in the data (shared roles, industries, company clusters, recurring themes in notes).
+- campaignSuggestions: 3-5 concrete outreach campaign or angle ideas based on real patterns in the data (shared roles, industries, company clusters, recurring themes in notes) and, where relevant, the learning data above (ICP profiles and product-to-ICP fit that have historically converted).
 - coldContacts: contacts with no recent touch points or who have gone quiet after early engagement, each as one sentence naming the contact and why they're worth a nudge.
 - relationshipHealth: a short read on which relationships are warm and which are at risk, each as one sentence naming the contact and the reasoning.
 - messageDrafts: 2-4 ready-to-send message drafts for specific contacts who look due for a follow-up. UK English, no em dashes, peer to peer tone, one observation and one question, 3-4 sentences, signed off "Marcus".
@@ -581,6 +626,177 @@ If there isn't enough data for a section, return an empty array for it rather th
     });
   } catch (err) {
     console.error('Intelligence error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Analyse a CSV of past customers for ICP and deal patterns
+app.post('/api/learn/customers', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  const { records } = req.body;
+  if (!Array.isArray(records) || !records.length) {
+    return res.status(400).json({ error: 'records is required and must be a non-empty array' });
+  }
+
+  try {
+    const learningData = await fetchLearningData();
+
+    const prompt = `You are the ICP analysis layer for T2C Outreach, a LinkedIn outreach CRM for Twenty2 Collective, a Perth-based Agile and change consultancy.
+
+Marcus has uploaded a CSV of past customers (won deals), parsed into rows:
+${JSON.stringify(records, null, 2)}
+
+Prior learning data already on file (build on this, don't just repeat it):
+${learningDataContext(learningData)}
+
+Analyse the past customer data and return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{
+  "icpProfiles": string[],
+  "dealCharacteristics": string[],
+  "patterns": string[],
+  "summary": string
+}
+
+Guidance:
+- icpProfiles: the top performing ICP profiles - which roles and industries buy most - ranked by how strongly they show up in the data.
+- dealCharacteristics: average deal characteristics across won customers (size, product mix, timeline, whatever the columns support).
+- patterns: common patterns across won customers that predict success, drawn from the actual rows.
+- summary: 2-3 sentences summarising what this data tells Marcus about who to target next.
+
+Ground every point in the actual data provided. If a column is missing or a pattern isn't supported by the data, don't invent it.`;
+
+    const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'claude-opus-4-6',
+        max_tokens: 1500,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+
+    if (!aiRes.ok) {
+      const errText = await aiRes.text();
+      throw new Error(`Claude API error ${aiRes.status}: ${errText}`);
+    }
+
+    const aiData = await aiRes.json();
+    const block = (aiData.content || []).find(b => b.type === 'text');
+    if (!block) throw new Error('No text content in Claude response');
+
+    let parsed;
+    try {
+      const jsonMatch = block.text.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(jsonMatch ? jsonMatch[0] : block.text);
+    } catch (parseErr) {
+      throw new Error('Could not parse Claude response as JSON');
+    }
+
+    const analysis = {
+      icpProfiles: parsed.icpProfiles || [],
+      dealCharacteristics: parsed.dealCharacteristics || [],
+      patterns: parsed.patterns || [],
+      summary: parsed.summary || ''
+    };
+
+    await storeLearningData('Customer Analysis', analysis, records.length);
+
+    res.json(analysis);
+  } catch (err) {
+    console.error('Learn customers error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Analyse a CSV of past contracts/deals for product-ICP fit and sales cycle patterns
+app.post('/api/learn/deals', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  const { records } = req.body;
+  if (!Array.isArray(records) || !records.length) {
+    return res.status(400).json({ error: 'records is required and must be a non-empty array' });
+  }
+
+  try {
+    const learningData = await fetchLearningData();
+
+    const prompt = `You are the deal analysis layer for T2C Outreach, a LinkedIn outreach CRM for Twenty2 Collective, a Perth-based Agile and change consultancy.
+
+Marcus has uploaded a CSV of past contracts/deals, parsed into rows:
+${JSON.stringify(records, null, 2)}
+
+Prior learning data already on file (build on this, don't just repeat it):
+${learningDataContext(learningData)}
+
+Analyse the past deal data and return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{
+  "productIcpMatches": string[],
+  "touchPointsBeforeClose": string[],
+  "bestIndustries": string[],
+  "seasonalPatterns": string[],
+  "summary": string
+}
+
+Guidance:
+- productIcpMatches: which products/services sell to which ICPs, drawn from the actual rows.
+- touchPointsBeforeClose: average number of touch points before close, broken down by product where the data supports it.
+- bestIndustries: best performing industries by close rate or deal value.
+- seasonalPatterns: any seasonal or timing patterns in when deals close.
+- summary: 2-3 sentences summarising the key sales pattern Marcus should act on.
+
+Ground every point in the actual data provided. If a column is missing or a pattern isn't supported by the data, don't invent it.`;
+
+    const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'claude-opus-4-6',
+        max_tokens: 1500,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+
+    if (!aiRes.ok) {
+      const errText = await aiRes.text();
+      throw new Error(`Claude API error ${aiRes.status}: ${errText}`);
+    }
+
+    const aiData = await aiRes.json();
+    const block = (aiData.content || []).find(b => b.type === 'text');
+    if (!block) throw new Error('No text content in Claude response');
+
+    let parsed;
+    try {
+      const jsonMatch = block.text.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(jsonMatch ? jsonMatch[0] : block.text);
+    } catch (parseErr) {
+      throw new Error('Could not parse Claude response as JSON');
+    }
+
+    const analysis = {
+      productIcpMatches: parsed.productIcpMatches || [],
+      touchPointsBeforeClose: parsed.touchPointsBeforeClose || [],
+      bestIndustries: parsed.bestIndustries || [],
+      seasonalPatterns: parsed.seasonalPatterns || [],
+      summary: parsed.summary || ''
+    };
+
+    await storeLearningData('Deal Analysis', analysis, records.length);
+
+    res.json(analysis);
+  } catch (err) {
+    console.error('Learn deals error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
