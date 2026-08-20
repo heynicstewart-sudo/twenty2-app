@@ -239,7 +239,6 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .campaign-status{display:inline-flex;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:800;white-space:nowrap;}
 .campaign-status-draft{background:var(--border);color:var(--muted);}
 .campaign-status-active{background:#e3f5eb;color:#1f7a4f;}
-.campaign-status-paused{background:#fdf0d9;color:#a1701c;}
 .campaign-status-complete{background:#e2f2fa;color:#0d6a96;}
 .campaign-metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:10px;padding-top:12px;border-top:1px solid var(--border);}
 .campaign-metric-num{font-size:16px;font-weight:800;color:var(--primary);text-align:center;}
@@ -248,6 +247,15 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .campaign-chat-msg{max-width:88%;padding:9px 13px;border-radius:12px;font-size:12.5px;line-height:1.5;}
 .campaign-chat-msg.assistant{background:#faf6f1;align-self:flex-start;border-bottom-left-radius:3px;}
 .campaign-chat-msg.user{background:var(--primary);color:#fff;align-self:flex-end;border-bottom-right-radius:3px;}
+.campaign-chat-progress{margin-bottom:14px;}
+.campaign-chat-progress-bar{background:var(--border);border-radius:8px;height:6px;overflow:hidden;}
+.campaign-chat-progress-fill{background:var(--accent);height:100%;transition:width .3s;}
+.campaign-chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;}
+.campaign-chat-input-row{display:flex;gap:8px;margin-top:14px;}
+.campaign-chat-input-row input{flex:1;}
+.campaign-preview-card{background:#faf6f1;border:1px solid var(--border);border-radius:12px;padding:16px;margin-top:6px;align-self:stretch;max-width:100%;}
+.campaign-sequence-preview{display:flex;flex-direction:column;gap:6px;margin-top:10px;}
+.campaign-seq-chip{background:#faf6f1;border:1px solid var(--border);border-radius:8px;padding:8px 10px;font-size:11.5px;line-height:1.5;}
 
 /* Modal */
 .modal-overlay{position:fixed;inset:0;background:rgba(26,26,46,0.45);display:flex;align-items:center;justify-content:center;z-index:100;padding:20px;}
@@ -734,7 +742,7 @@ Today's actions rules, checked in priority order (first match wins, one action p
 - Connected/messaging, no touch point in 21 days -> "Re-engage"
 */
 function activeCampaignForContact(c){
-  return state.campaigns.find(camp => camp.status === 'Active' && (camp.contactIds||[]).includes(c.id)) || null;
+  return state.campaigns.find(camp => camp.status === 'Live' && (camp.contactIds||[]).includes(c.id)) || null;
 }
 
 function getContactAction(c){
@@ -2670,31 +2678,30 @@ function saveGeneratedMessage(cid, stageKey){
 
 /* ===================== CAMPAIGNS PAGE ===================== */
 
-const CAMPAIGN_QUESTIONS = [
-  { key:'goal', label:'What is the goal of this campaign?', placeholder:'e.g. sell Product Owner training', type:'text' },
-  { key:'product', label:'Which product or service are you promoting?', placeholder:'e.g. POPM Certification', type:'text' },
-  { key:'audienceDescription', label:'Which contacts do you want to target?', placeholder:'e.g. Scrum Masters in mining with 3+ touch points', type:'textarea' },
-  { key:'hasExistingStrategy', label:'Do you have an existing strategy or sales script?', type:'yesno' },
-  { key:'successMetric', label:'What does success look like?', type:'select', options:['Bookings','Replies','Meetings'] },
-  { key:'timeline', label:"What's your timeline?", placeholder:'e.g. 4 weeks, by end of September', type:'text' }
-];
-
 const CAMPAIGN_STAGE_META = [['message1','Message 1'],['followUp1','Follow up 1'],['followUp2','Follow up 2']];
+const CAMPAIGN_OPENING_MESSAGE = 'Tell me about the campaign you want to run. You can be as detailed or as brief as you like.';
 
 function renderCampaigns(){
-  if(window.__activeCampaignDetail){
-    const campaign = state.campaigns.find(c => c.id === window.__activeCampaignDetail);
-    if(campaign) return renderCampaignDetail(campaign);
-    window.__activeCampaignDetail = null;
-  }
+  const activeTab = window.__campaignTab || 'new';
   return `
-  <div class="card" style="margin-bottom:16px;">
-    <div class="section-title"><i class="ti ti-rocket"></i> Campaigns</div>
-    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Goal-driven outreach pushes with their own target segment, AI-generated sequence and strategy, and their own metrics.</p>
-    <button class="btn btn-primary" onclick="openCampaignWizard()"><i class="ti ti-sparkles"></i> New Campaign</button>
+  <div class="seq-tabs">
+    <div class="seq-tab ${activeTab==='new'?'active':''}" onclick="setCampaignTab('new')">New Campaign</div>
+    <div class="seq-tab ${activeTab==='draft'?'active':''}" onclick="setCampaignTab('draft')">Draft</div>
+    <div class="seq-tab ${activeTab==='live'?'active':''}" onclick="setCampaignTab('live')">Live</div>
+    <div class="seq-tab ${activeTab==='past'?'active':''}" onclick="setCampaignTab('past')">Past</div>
   </div>
-  ${state.campaigns.length ? renderCampaignList() : '<div class="card"><div class="empty-state">No campaigns yet. Click "New Campaign" to build one.</div></div>'}
+  ${activeTab==='new' ? renderCampaignChatTab() : ''}
+  ${activeTab==='draft' ? renderCampaignStatusTab('Draft') : ''}
+  ${activeTab==='live' ? renderCampaignStatusTab('Live') : ''}
+  ${activeTab==='past' ? renderCampaignStatusTab('Past') : ''}
   `;
+}
+
+function setCampaignTab(tab){
+  window.__campaignTab = tab;
+  if(tab === 'new' && !window.__campaignChat) initCampaignChat();
+  renderPage();
+  if(tab === 'new') scrollCampaignChatToBottom();
 }
 
 function campaignMetrics(campaign){
@@ -2711,297 +2718,353 @@ function campaignMetrics(campaign){
   return { contactCount, touchPoints, replies, bookings, conversionRate };
 }
 
-function renderCampaignList(){
+function weeklyTouchPointCount(campaign){
+  const contacts = state.contacts.filter(c => (campaign.contactIds||[]).includes(c.id));
+  let count = 0;
+  contacts.forEach(c => {
+    (c.touchPoints||[]).forEach(tp => { if(daysBetween(tp.date) <= 7) count++; });
+  });
+  return count;
+}
+
+/* ---- New Campaign tab: free-form chat ---- */
+
+function initCampaignChat(){
+  window.__campaignChat = {
+    messages: [{ role:'assistant', content: CAMPAIGN_OPENING_MESSAGE }],
+    chips: [],
+    ready: false,
+    progressPercent: 0,
+    previewCampaign: null,
+    editingCampaignId: null
+  };
+}
+
+function renderCampaignChatTab(){
+  if(!window.__campaignChat) initCampaignChat();
+  const chat = window.__campaignChat;
   return `
-  <div class="campaign-list">
-    ${state.campaigns.map(campaign => {
-      const m = campaignMetrics(campaign);
-      return `
-      <div class="campaign-card" onclick="openCampaignDetail('${campaign.id}')">
-        <div class="campaign-card-head">
-          <div>
-            <div class="campaign-card-name">${esc(campaign.name)}</div>
-            <div class="muted" style="font-size:12px;margin-top:2px;">${esc(campaign.goal)}</div>
-          </div>
-          <span class="campaign-status campaign-status-${campaign.status.toLowerCase()}">${esc(campaign.status)}</span>
-        </div>
-        ${campaign.targetSegmentSummary ? `<div class="muted" style="font-size:12px;margin-top:8px;">${esc(campaign.targetSegmentSummary)}</div>` : ''}
-        <div class="campaign-metrics">
-          <div><div class="campaign-metric-num">${m.contactCount}</div><div class="campaign-metric-label">Contacts</div></div>
-          <div><div class="campaign-metric-num">${m.touchPoints}</div><div class="campaign-metric-label">Touch points</div></div>
-          <div><div class="campaign-metric-num">${m.replies}</div><div class="campaign-metric-label">Replies</div></div>
-          <div><div class="campaign-metric-num">${m.bookings}</div><div class="campaign-metric-label">Bookings</div></div>
-          <div><div class="campaign-metric-num">${m.conversionRate}%</div><div class="campaign-metric-label">Conversion</div></div>
-        </div>
-      </div>`;
-    }).join('')}
+  <div class="card">
+    <div class="campaign-chat-progress">
+      <div class="campaign-chat-progress-bar"><div class="campaign-chat-progress-fill" style="width:${chat.progressPercent}%;"></div></div>
+      <div class="muted" style="font-size:11px;margin-top:4px;">${chat.progressPercent}% gathered</div>
+    </div>
+    <div class="campaign-chat" id="campaignChatScroll">
+      ${chat.messages.map(m => `<div class="campaign-chat-msg ${m.role==='assistant'?'assistant':'user'}">${esc(m.content)}</div>`).join('')}
+      ${chat.previewCampaign ? renderCampaignPreviewCard(chat.previewCampaign) : ''}
+    </div>
+    ${!chat.previewCampaign ? `
+      ${chat.chips.length ? `<div class="campaign-chips">${chat.chips.map(c=>`<span class="pill" style="cursor:pointer;" onclick="sendCampaignChatChip(${JSON.stringify(c).replace(/"/g,'&quot;')})">${esc(c)}</span>`).join('')}</div>` : ''}
+      <div class="campaign-chat-input-row">
+        <input id="campaignChatInput" placeholder="Type your reply..." onkeydown="if(event.key==='Enter') sendCampaignChatMessage()">
+        <button class="btn btn-primary" id="campaignChatSendBtn" onclick="sendCampaignChatMessage()"><i class="ti ti-send"></i> Send</button>
+      </div>
+    ` : ''}
+  </div>
+  `;
+}
+
+function scrollCampaignChatToBottom(){
+  const el = document.getElementById('campaignChatScroll');
+  if(el) el.scrollTop = el.scrollHeight;
+}
+
+function sendCampaignChatChip(text){
+  const input = document.getElementById('campaignChatInput');
+  if(input) input.value = text;
+  sendCampaignChatMessage();
+}
+
+async function sendCampaignChatMessage(){
+  const input = document.getElementById('campaignChatInput');
+  const text = input ? input.value.trim() : '';
+  if(!text) return;
+  const chat = window.__campaignChat;
+  chat.messages.push({ role:'user', content:text });
+  chat.chips = [];
+  renderPage();
+  scrollCampaignChatToBottom();
+
+  chat.messages.push({ role:'assistant', content:'...', pending:true });
+  renderPage();
+  scrollCampaignChatToBottom();
+  const sendBtn = document.getElementById('campaignChatSendBtn');
+  if(sendBtn) sendBtn.disabled = true;
+
+  try {
+    const res = await fetch('/api/campaign/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversationHistory: chat.messages.filter(m=>!m.pending).map(m=>({role:m.role, content:m.content})) })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+
+    chat.messages.pop();
+    chat.messages.push({ role:'assistant', content: data.message });
+    chat.chips = data.chips || [];
+    chat.ready = !!data.ready;
+    chat.progressPercent = typeof data.progressPercent === 'number' ? data.progressPercent : chat.progressPercent;
+
+    renderPage();
+    scrollCampaignChatToBottom();
+
+    if(chat.ready) buildCampaignFromChat();
+  } catch(err){
+    chat.messages.pop();
+    chat.messages.push({ role:'assistant', content: "Sorry, I couldn't process that - " + err.message });
+    renderPage();
+    scrollCampaignChatToBottom();
+    toast('Campaign chat error: ' + err.message, 'warn');
+  }
+}
+
+async function buildCampaignFromChat(){
+  const chat = window.__campaignChat;
+  chat.progressPercent = 100;
+  renderPage();
+  scrollCampaignChatToBottom();
+
+  try {
+    const res = await fetch('/api/campaign/build', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversationHistory: chat.messages.filter(m=>!m.pending).map(m=>({role:m.role, content:m.content})) })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+    chat.previewCampaign = data;
+    renderPage();
+    scrollCampaignChatToBottom();
+  } catch(err){
+    toast('Could not build campaign preview: ' + err.message, 'warn');
+  }
+}
+
+function renderCampaignPreviewCard(preview){
+  return `
+  <div class="campaign-preview-card">
+    <div class="campaign-card-name">${esc(preview.campaignName)}</div>
+    <p class="muted" style="font-size:12px;margin-top:6px;">${esc(preview.targetSegmentSummary||'')}</p>
+    <p style="font-size:11.5px;font-weight:700;margin-top:10px;">${(preview.matchedContactNames||[]).length} matched contact${(preview.matchedContactNames||[]).length===1?'':'s'}</p>
+    <div class="flow" style="margin-top:10px;">
+      ${CAMPAIGN_STAGE_META.map(([key,label]) => {
+        const stage = (preview.sequence||{})[key] || {};
+        return `<div class="flow-node"><div class="flow-node-head stage-connect"><div class="stage-label">${label}</div><div class="stage-hint">${esc(stage.timing||'')}</div></div><div class="flow-node-body"><textarea readonly>${esc(stage.content||'')}</textarea></div></div>`;
+      }).join('')}
+    </div>
+    <div style="margin-top:12px;"><div style="font-weight:700;font-size:12px;">Strategy</div><p style="font-size:12px;margin-top:4px;">${esc(preview.strategyBrief||'')}</p></div>
+    <div style="margin-top:12px;"><div style="font-weight:700;font-size:12px;">Estimated conversions</div><p style="font-size:12px;margin-top:4px;">${esc(preview.estimatedConversions||'')}</p></div>
+    <div style="margin-top:14px;display:flex;gap:10px;">
+      <button class="btn btn-primary" onclick="saveCampaignToDraft()"><i class="ti ti-device-floppy"></i> Save to Draft</button>
+      <button class="btn btn-secondary" onclick="startOverCampaignChat()"><i class="ti ti-refresh"></i> Start Over</button>
+    </div>
   </div>`;
 }
 
-function openCampaignDetail(campaignId){
-  window.__activeCampaignDetail = campaignId;
-  renderPage();
-}
-function closeCampaignDetail(){
-  window.__activeCampaignDetail = null;
+function saveCampaignToDraft(){
+  const chat = window.__campaignChat;
+  const preview = chat.previewCampaign;
+  if(!preview) return;
+  const matchedNames = preview.matchedContactNames || [];
+  const contactIds = state.contacts
+    .filter(c => matchedNames.some(n => n.trim().toLowerCase() === c.name.trim().toLowerCase()))
+    .map(c => c.id);
+
+  let campaign = chat.editingCampaignId ? state.campaigns.find(c => c.id === chat.editingCampaignId) : null;
+  if(!campaign){
+    campaign = { id: uid('camp'), createdAt: isoDate(TODAY) };
+    state.campaigns.push(campaign);
+  }
+  Object.assign(campaign, {
+    name: preview.campaignName || 'Untitled campaign',
+    goal: preview.goal || '',
+    targetSegmentSummary: preview.targetSegmentSummary || '',
+    contactIds,
+    sequence: preview.sequence || {},
+    strategyBrief: preview.strategyBrief || '',
+    estimatedConversions: preview.estimatedConversions || '',
+    conversationHistory: chat.messages.filter(m=>!m.pending),
+    status: 'Draft'
+  });
+
+  syncCampaignToAirtable(campaign);
+  toast(`Campaign "${campaign.name}" saved to Draft with ${contactIds.length} matched contact${contactIds.length===1?'':'s'}`, 'success');
+  window.__campaignChat = null;
+  window.__campaignTab = 'draft';
   renderPage();
 }
 
-function renderCampaignDetail(campaign){
-  const m = campaignMetrics(campaign);
-  const contacts = state.contacts.filter(c => (campaign.contactIds||[]).includes(c.id));
+function startOverCampaignChat(){
+  window.__campaignChat = null;
+  initCampaignChat();
+  renderPage();
+}
 
+function editCampaign(campaignId){
+  const campaign = state.campaigns.find(c => c.id === campaignId);
+  if(!campaign) return;
+  window.__campaignChat = {
+    messages: (campaign.conversationHistory && campaign.conversationHistory.length) ? campaign.conversationHistory.slice() : [{ role:'assistant', content: CAMPAIGN_OPENING_MESSAGE }],
+    chips: [],
+    ready: false,
+    progressPercent: 0,
+    previewCampaign: null,
+    editingCampaignId: campaignId
+  };
+  window.__campaignTab = 'new';
+  renderPage();
+  scrollCampaignChatToBottom();
+}
+
+/* ---- Draft / Live / Past tabs ---- */
+
+function renderCampaignStatusTab(status){
+  const campaigns = state.campaigns.filter(c => c.status === status);
+  if(!campaigns.length){
+    return `<div class="card"><div class="empty-state">No ${status.toLowerCase()} campaigns yet.</div></div>`;
+  }
+  if(status === 'Draft') return `<div class="campaign-list">${campaigns.map(renderDraftCampaignCard).join('')}</div>`;
+  if(status === 'Live') return `<div class="campaign-list">${campaigns.map(renderLiveCampaignCard).join('')}</div>`;
+  return `<div class="campaign-list">${campaigns.map(renderPastCampaignCard).join('')}</div>`;
+}
+
+function renderDraftCampaignCard(campaign){
+  const contactCount = (campaign.contactIds||[]).length;
   return `
-  <button class="btn btn-ghost" style="margin-bottom:14px;" onclick="closeCampaignDetail()"><i class="ti ti-arrow-left"></i> Back to campaigns</button>
-
-  <div class="card" style="margin-bottom:16px;">
+  <div class="campaign-card" style="cursor:default;">
     <div class="campaign-card-head">
       <div>
-        <div class="section-title" style="margin-bottom:2px;">${esc(campaign.name)}</div>
-        <div class="muted" style="font-size:12.5px;">${esc(campaign.goal)}</div>
+        <div class="campaign-card-name">${esc(campaign.name)}</div>
+        <div class="muted" style="font-size:12px;margin-top:2px;">${esc(campaign.goal||'')}</div>
       </div>
-      <span class="campaign-status campaign-status-${campaign.status.toLowerCase()}">${esc(campaign.status)}</span>
+      <span class="campaign-status campaign-status-draft">Draft</span>
+    </div>
+    <p class="muted" style="font-size:12px;margin-top:8px;">${contactCount} target contact${contactCount===1?'':'s'} &middot; Created ${fmtDate(campaign.createdAt)}</p>
+    <div class="campaign-sequence-preview">
+      ${CAMPAIGN_STAGE_META.map(([key,label]) => {
+        const content = ((campaign.sequence||{})[key]||{}).content || '';
+        return `<div class="campaign-seq-chip"><strong>${label}:</strong> ${esc(content.slice(0,60))}${content.length>60?'…':''}</div>`;
+      }).join('')}
+    </div>
+    <div class="todo-item-actions">
+      <button class="btn btn-secondary btn-sm" onclick="editCampaign('${campaign.id}')"><i class="ti ti-edit"></i> Edit</button>
+      <button class="btn btn-primary btn-sm" onclick="publishCampaign('${campaign.id}')"><i class="ti ti-rocket"></i> Publish</button>
+    </div>
+  </div>`;
+}
+
+function renderLiveCampaignCard(campaign){
+  const m = campaignMetrics(campaign);
+  const weeklyTouches = weeklyTouchPointCount(campaign);
+  return `
+  <div class="campaign-card" style="cursor:default;">
+    <div class="campaign-card-head">
+      <div>
+        <div class="campaign-card-name">${esc(campaign.name)}</div>
+        <div class="muted" style="font-size:12px;margin-top:2px;">${esc(campaign.goal||'')}</div>
+      </div>
+      <span class="campaign-status campaign-status-active">Live</span>
     </div>
     <div class="campaign-metrics">
+      <div><div class="campaign-metric-num">${m.contactCount}</div><div class="campaign-metric-label">Contacts</div></div>
+      <div><div class="campaign-metric-num">${weeklyTouches}</div><div class="campaign-metric-label">Touches/wk</div></div>
+      <div><div class="campaign-metric-num">${m.replies}</div><div class="campaign-metric-label">Replies</div></div>
+      <div><div class="campaign-metric-num">${m.bookings}</div><div class="campaign-metric-label">Bookings</div></div>
+      <div><div class="campaign-metric-num">${m.conversionRate}%</div><div class="campaign-metric-label">Conversion</div></div>
+    </div>
+    <div class="todo-item-actions">
+      <button class="btn btn-secondary btn-sm" onclick="pauseCampaign('${campaign.id}')"><i class="ti ti-player-pause"></i> Pause</button>
+      <button class="btn btn-secondary btn-sm" onclick="openCampaignContactsModal('${campaign.id}')"><i class="ti ti-users"></i> View contacts</button>
+      <button class="btn btn-secondary btn-sm" onclick="openCampaignPerformanceModal('${campaign.id}')"><i class="ti ti-chart-bar"></i> Performance</button>
+      <button class="btn btn-ghost btn-sm" onclick="completeCampaign('${campaign.id}')" title="Mark complete"><i class="ti ti-flag-check"></i></button>
+    </div>
+  </div>`;
+}
+
+function renderPastCampaignCard(campaign){
+  const m = campaignMetrics(campaign);
+  const duration = campaign.liveDate ? (daysBetween(campaign.liveDate, campaign.endedDate||isoDate(TODAY)) + 'd') : '—';
+  return `
+  <div class="campaign-card" style="cursor:default;">
+    <div class="campaign-card-head">
+      <div>
+        <div class="campaign-card-name">${esc(campaign.name)}</div>
+        <div class="muted" style="font-size:12px;margin-top:2px;">${esc(campaign.goal||'')}</div>
+      </div>
+      <span class="campaign-status campaign-status-complete">Past</span>
+    </div>
+    <div class="campaign-metrics">
+      <div><div class="campaign-metric-num">${m.contactCount}</div><div class="campaign-metric-label">Reached</div></div>
+      <div><div class="campaign-metric-num">${m.touchPoints}</div><div class="campaign-metric-label">Touch points</div></div>
+      <div><div class="campaign-metric-num">${m.replies}</div><div class="campaign-metric-label">Replies</div></div>
+      <div><div class="campaign-metric-num">${m.bookings}</div><div class="campaign-metric-label">Bookings</div></div>
+      <div><div class="campaign-metric-num">${m.conversionRate}%</div><div class="campaign-metric-label">Conversion</div></div>
+    </div>
+    <p class="muted" style="font-size:11.5px;margin-top:10px;">Duration: ${duration}</p>
+  </div>`;
+}
+
+function openCampaignContactsModal(campaignId){
+  const campaign = state.campaigns.find(c => c.id === campaignId);
+  if(!campaign) return;
+  const contacts = state.contacts.filter(c => (campaign.contactIds||[]).includes(c.id));
+  const body = contacts.length ? contacts.map(c => `
+    <div class="delivery-item">
+      <div><div style="font-weight:700;">${esc(c.name)}</div><div class="muted" style="font-size:12px;">${esc(c.role)} &middot; ${esc(c.company)}</div></div>
+      <span class="tag tag-${c.state}">${esc(c.state)}</span>
+    </div>
+  `).join('') : '<div class="empty-state">No contacts in this campaign.</div>';
+  openModal(`${esc(campaign.name)} — Contacts`, body, `<button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
+}
+
+function openCampaignPerformanceModal(campaignId){
+  const campaign = state.campaigns.find(c => c.id === campaignId);
+  if(!campaign) return;
+  const m = campaignMetrics(campaign);
+  const body = `
+    <div class="campaign-metrics" style="border-top:none;padding-top:0;">
       <div><div class="campaign-metric-num">${m.contactCount}</div><div class="campaign-metric-label">Contacts</div></div>
       <div><div class="campaign-metric-num">${m.touchPoints}</div><div class="campaign-metric-label">Touch points</div></div>
       <div><div class="campaign-metric-num">${m.replies}</div><div class="campaign-metric-label">Replies</div></div>
       <div><div class="campaign-metric-num">${m.bookings}</div><div class="campaign-metric-label">Bookings</div></div>
       <div><div class="campaign-metric-num">${m.conversionRate}%</div><div class="campaign-metric-label">Conversion</div></div>
     </div>
-    <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;">
-      ${['Draft','Active','Paused','Complete'].map(s => `<button class="btn ${campaign.status===s?'btn-primary':'btn-secondary'} btn-sm" onclick="setCampaignStatus('${campaign.id}','${s}')">${s}</button>`).join('')}
-    </div>
-  </div>
-
-  <div class="card" style="margin-bottom:16px;">
-    <div class="section-title"><i class="ti ti-target"></i> Target segment</div>
-    <p style="font-size:12.5px;line-height:1.6;">${esc(campaign.targetSegmentSummary || campaign.audienceDescription || '')}</p>
-    <p class="muted" style="font-size:11.5px;margin-top:8px;">Success metric: ${esc(campaign.successMetric||'—')} · Timeline: ${esc(campaign.timeline||'—')} · Started ${fmtDate(campaign.startDate)}</p>
-  </div>
-
-  <div class="card" style="margin-bottom:16px;">
-    <div class="section-title"><i class="ti ti-notes"></i> Strategy brief</div>
-    <p style="font-size:12.5px;white-space:pre-wrap;line-height:1.6;">${esc(campaign.strategyBrief||'')}</p>
-  </div>
-
-  <div class="card" style="margin-bottom:16px;">
-    <div class="section-title"><i class="ti ti-git-branch"></i> Sequence</div>
-    <div class="flow">
-      ${CAMPAIGN_STAGE_META.map(([key,label]) => {
-        const stage = campaign.sequence[key] || {};
-        return `
-        <div class="flow-node">
-          <div class="flow-node-head stage-connect"><div class="stage-label">${esc(label)}</div><div class="stage-hint">${esc(stage.timing||'')}</div></div>
-          <div class="flow-node-body"><textarea onchange="setCampaignStageContent('${campaign.id}','${key}',this.value)">${esc(stage.content||'')}</textarea></div>
-        </div>`;
-      }).join('')}
-    </div>
-  </div>
-
-  <div class="card">
-    <div class="section-title"><i class="ti ti-users"></i> Contacts in this campaign (${contacts.length})</div>
-    ${contacts.length ? contacts.map(c => `
-      <div class="delivery-item">
-        <div>
-          <div style="font-weight:700;">${esc(c.name)}</div>
-          <div class="muted" style="font-size:12px;">${esc(c.role)} · ${esc(c.company)}</div>
-        </div>
-        <span class="tag tag-${c.state}">${esc(c.state)}</span>
-      </div>
-    `).join('') : '<div class="empty-state">No contacts matched this segment yet.</div>'}
-  </div>
+    <p class="muted" style="font-size:12px;margin-top:14px;">Estimated conversions at build time: ${esc(campaign.estimatedConversions||'—')}</p>
   `;
+  openModal(`${esc(campaign.name)} — Performance`, body, `<button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
 }
 
-function setCampaignStageContent(campaignId, stageKey, val){
+function publishCampaign(campaignId){
   const campaign = state.campaigns.find(c => c.id === campaignId);
   if(!campaign) return;
-  if(!campaign.sequence[stageKey]) campaign.sequence[stageKey] = {};
-  campaign.sequence[stageKey].content = val;
-}
-
-function setCampaignStatus(campaignId, status){
-  const campaign = state.campaigns.find(c => c.id === campaignId);
-  if(!campaign) return;
-  campaign.status = status;
+  campaign.status = 'Live';
+  campaign.liveDate = isoDate(TODAY);
   syncCampaignStatusToAirtable(campaign);
-  toast(`Campaign marked ${status}`, 'success');
+  toast(`Campaign "${campaign.name}" is live — ${(campaign.contactIds||[]).length} contacts activated in Today's actions`, 'success');
+  window.__campaignTab = 'live';
   renderPage();
 }
 
-/* Campaign setup wizard */
-
-function openCampaignWizard(){
-  window.__campaignSetup = { step: 0, answers: {} };
-  renderCampaignWizardStep();
-}
-
-function formatCampaignAnswer(q, val){
-  if(q.type === 'yesno') return val ? 'Yes' : 'No';
-  return val || '';
-}
-
-function renderCampaignAnswerInput(q, answers){
-  const existingVal = answers[q.key];
-  if(q.type === 'text'){
-    return `<input id="campaignAnswerInput" placeholder="${esc(q.placeholder||'')}" value="${esc(existingVal||'')}">`;
-  }
-  if(q.type === 'textarea'){
-    const roleChips = state.gridColumns.map(role => `<span class="pill" style="cursor:pointer;" onclick="appendToCampaignTextarea('${esc(role)}')">${esc(role)}</span>`).join('');
-    return `
-      <textarea id="campaignAnswerInput" rows="3" placeholder="${esc(q.placeholder||'')}">${esc(existingVal||'')}</textarea>
-      <div class="muted" style="font-size:11px;margin-top:6px;">Quick add a role: ${roleChips}</div>
-    `;
-  }
-  if(q.type === 'yesno'){
-    const isYes = existingVal === true;
-    const isNo = existingVal === false;
-    return `
-      <div style="display:flex;gap:8px;margin-bottom:10px;">
-        <button type="button" class="btn ${isYes?'btn-primary':'btn-secondary'} btn-sm" onclick="setCampaignHasStrategy(true)">Yes</button>
-        <button type="button" class="btn ${isNo?'btn-primary':'btn-secondary'} btn-sm" onclick="setCampaignHasStrategy(false)">No</button>
-      </div>
-      <div id="campaignStrategyTextWrap" style="${isYes?'':'display:none;'}">
-        <textarea id="campaignStrategyText" rows="4" placeholder="Paste your strategy or script...">${esc(answers.existingStrategyText||'')}</textarea>
-      </div>
-    `;
-  }
-  if(q.type === 'select'){
-    return `<select id="campaignAnswerInput">${q.options.map(o=>`<option ${existingVal===o?'selected':''}>${esc(o)}</option>`).join('')}</select>`;
-  }
-  return '';
-}
-
-function renderCampaignWizardStep(){
-  const setup = window.__campaignSetup;
-  const q = CAMPAIGN_QUESTIONS[setup.step];
-  const isLast = setup.step === CAMPAIGN_QUESTIONS.length - 1;
-
-  const history = CAMPAIGN_QUESTIONS.slice(0, setup.step).map(prevQ => `
-    <div class="campaign-chat-msg assistant">${esc(prevQ.label)}</div>
-    <div class="campaign-chat-msg user">${esc(formatCampaignAnswer(prevQ, setup.answers[prevQ.key]))}</div>
-  `).join('');
-
-  const body = `
-    <div class="campaign-chat" id="campaignChatScroll">
-      ${history}
-      <div class="campaign-chat-msg assistant">${esc(q.label)}</div>
-      <div id="campaignAnswerField">${renderCampaignAnswerInput(q, setup.answers)}</div>
-    </div>
-  `;
-  const footer = `
-    ${setup.step > 0 ? `<button class="btn btn-secondary" onclick="campaignWizardBack()">Back</button>` : ''}
-    <button class="btn btn-primary" onclick="campaignWizardNext()">${isLast ? 'Build campaign' : 'Next'}</button>
-  `;
-  openModal('New Campaign', body, footer);
-  const scrollEl = document.getElementById('campaignChatScroll');
-  if(scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight;
-}
-
-function appendToCampaignTextarea(text){
-  const el = document.getElementById('campaignAnswerInput');
-  if(!el) return;
-  el.value = el.value ? el.value.trim() + ', ' + text : text;
-}
-
-function setCampaignHasStrategy(val){
-  window.__campaignSetup.answers.hasExistingStrategy = val;
-  renderCampaignWizardStep();
-}
-
-function campaignWizardBack(){
-  window.__campaignSetup.step = Math.max(0, window.__campaignSetup.step - 1);
-  renderCampaignWizardStep();
-}
-
-function campaignWizardNext(){
-  const setup = window.__campaignSetup;
-  const q = CAMPAIGN_QUESTIONS[setup.step];
-
-  if(q.type === 'yesno'){
-    if(setup.answers.hasExistingStrategy === undefined){ toast('Please choose yes or no', 'warn'); return; }
-    if(setup.answers.hasExistingStrategy){
-      const textEl = document.getElementById('campaignStrategyText');
-      setup.answers.existingStrategyText = textEl ? textEl.value.trim() : '';
-    }
-  } else {
-    const input = document.getElementById('campaignAnswerInput');
-    const val = input ? input.value.trim() : '';
-    if(!val && q.key === 'goal'){ toast('Please answer before continuing', 'warn'); return; }
-    if(!val && q.key === 'audienceDescription'){ toast('Please answer before continuing', 'warn'); return; }
-    setup.answers[q.key] = val;
-  }
-
-  if(setup.step === CAMPAIGN_QUESTIONS.length - 1){
-    buildCampaignFromSetup();
-    return;
-  }
-  setup.step++;
-  renderCampaignWizardStep();
-}
-
-async function buildCampaignFromSetup(){
-  const setup = window.__campaignSetup;
-  const body = `<div class="muted" style="font-size:12.5px;text-align:center;padding:26px 0;"><i class="ti ti-loader-2"></i> Building your campaign — matching contacts and drafting the sequence...</div>`;
-  openModal('New Campaign', body, '');
-
-  try {
-    const res = await fetch('/api/campaign/build', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        goal: setup.answers.goal,
-        product: setup.answers.product || '',
-        audienceDescription: setup.answers.audienceDescription,
-        hasExistingStrategy: !!setup.answers.hasExistingStrategy,
-        existingStrategyText: setup.answers.existingStrategyText || '',
-        successMetric: setup.answers.successMetric,
-        timeline: setup.answers.timeline || ''
-      })
-    });
-    const data = await res.json();
-    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
-
-    saveBuiltCampaign(setup.answers, data);
-  } catch(err){
-    console.warn('Campaign build failed:', err.message);
-    closeModal();
-    toast('Could not build campaign: ' + err.message, 'warn');
-  }
-}
-
-function saveBuiltCampaign(answers, data){
-  const matchedNames = data.matchedContactNames || [];
-  const contactIds = state.contacts
-    .filter(c => matchedNames.some(n => n.trim().toLowerCase() === c.name.trim().toLowerCase()))
-    .map(c => c.id);
-
-  const campaign = {
-    id: uid('camp'),
-    name: data.campaignName || 'Untitled campaign',
-    goal: answers.goal,
-    product: answers.product || '',
-    audienceDescription: answers.audienceDescription,
-    targetSegmentSummary: data.targetSegmentSummary || '',
-    contactIds,
-    sequence: data.sequence || {},
-    strategyBrief: data.strategyBrief || '',
-    hasExistingStrategy: !!answers.hasExistingStrategy,
-    existingStrategyText: answers.existingStrategyText || '',
-    successMetric: answers.successMetric,
-    timeline: answers.timeline || '',
-    startDate: isoDate(TODAY),
-    status: 'Draft',
-    createdAt: isoDate(TODAY)
-  };
-
-  state.campaigns.push(campaign);
-  syncCampaignToAirtable(campaign);
-  closeModal();
-  toast(`Campaign "${campaign.name}" created with ${contactIds.length} matched contact${contactIds.length===1?'':'s'}`, 'success');
+function pauseCampaign(campaignId){
+  const campaign = state.campaigns.find(c => c.id === campaignId);
+  if(!campaign) return;
+  campaign.status = 'Draft';
+  syncCampaignStatusToAirtable(campaign);
+  toast(`Campaign "${campaign.name}" paused and moved back to Draft`, 'success');
+  window.__campaignTab = 'draft';
   renderPage();
-  openCampaignDetail(campaign.id);
+}
+
+function completeCampaign(campaignId){
+  const campaign = state.campaigns.find(c => c.id === campaignId);
+  if(!campaign) return;
+  campaign.status = 'Past';
+  campaign.endedDate = isoDate(TODAY);
+  syncCampaignStatusToAirtable(campaign);
+  toast(`Campaign "${campaign.name}" marked complete`, 'success');
+  window.__campaignTab = 'past';
+  renderPage();
 }
 
 function formatSequenceForAirtable(sequence){
@@ -3020,24 +3083,24 @@ function syncCampaignToAirtable(campaign){
     body: JSON.stringify({
       name: campaign.name,
       goal: campaign.goal,
-      product: campaign.product,
-      targetIcp: campaign.audienceDescription,
+      product: campaign.product || '',
+      targetIcp: campaign.targetSegmentSummary,
       contactIds: contactNames,
       sequenceTemplates: formatSequenceForAirtable(campaign.sequence),
       strategyNotes: campaign.strategyBrief,
-      successMetric: campaign.successMetric,
-      startDate: campaign.startDate,
+      successMetric: campaign.successMetric || '',
+      startDate: campaign.createdAt,
       status: campaign.status
     })
   }).catch(err => console.warn('Airtable campaign sync failed:', err.message));
 }
 
 function syncCampaignStatusToAirtable(campaign){
-  fetch('/api/airtable/campaign/status', {
+  fetch('/api/campaign/status', {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: campaign.name, status: campaign.status })
-  }).catch(err => console.warn('Airtable campaign status sync failed:', err.message));
+  }).catch(err => console.warn('Campaign status sync failed:', err.message));
 }
 
 /* ===================== CALENDAR PAGE ===================== */

@@ -275,7 +275,7 @@ app.post('/api/airtable/campaign', async (req, res) => {
 });
 
 // Update a campaign's status in Airtable
-app.patch('/api/airtable/campaign/status', async (req, res) => {
+app.patch('/api/campaign/status', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
   const { name, status } = req.body;
@@ -296,7 +296,7 @@ app.patch('/api/airtable/campaign/status', async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error('Airtable campaign status update error:', err.message);
+    console.error('Campaign status update error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -713,45 +713,164 @@ If the search results do not give enough to fill a field confidently, say so pla
   }
 });
 
-// ===================== CAMPAIGN BUILD =====================
-// Takes the campaign setup wizard answers, pulls the full contact list from
-// Airtable, and asks Claude to pick matching contacts and draft a 3-stage
-// sequence plus a strategy brief, all in one call.
+// ===================== CAMPAIGN CHAT + BUILD =====================
+// Free-form campaign setup. /chat carries the conversation forward one turn
+// at a time, grounded in real Airtable data, until Claude has enough to
+// build the campaign. /build then does the heavier work of matching
+// contacts and drafting the sequence from the full conversation.
+
+async function fetchCampaignContext() {
+  const [contactsData, touchPointsData] = await Promise.all([
+    airtableRequest('GET', 'Contacts'),
+    airtableRequest('GET', 'Touch Points')
+  ]);
+
+  const contacts = (contactsData.records || []).map(r => ({
+    name: r.fields['Full Name'] || '',
+    company: Array.isArray(r.fields['Company']) ? '' : (r.fields['Company'] || ''),
+    role: r.fields['Job Title'] || '',
+    journeyStage: r.fields['Journey Stage'] || '',
+    notes: r.fields['Notes'] || ''
+  })).filter(c => c.name);
+
+  const touchPoints = (touchPointsData.records || []).map(r => ({
+    type: r.fields['Type'] || '',
+    outcome: r.fields['Outcome'] || '',
+    painPoints: r.fields['Pain Points'] || []
+  }));
+
+  const bookedCount = contacts.filter(c => c.journeyStage === 'Booked').length;
+  const conversionRate = contacts.length ? Math.round((bookedCount / contacts.length) * 100) : 0;
+
+  return { contacts, touchPoints, bookedCount, conversionRate };
+}
+
+app.post('/api/campaign/chat', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  const { conversationHistory } = req.body;
+  if (!Array.isArray(conversationHistory) || !conversationHistory.length) {
+    return res.status(400).json({ error: 'conversationHistory is required' });
+  }
+
+  try {
+    const { contacts, touchPoints, conversionRate } = await fetchCampaignContext();
+
+    const roles = [...new Set(contacts.map(c => c.role).filter(Boolean))];
+    const companies = [...new Set(contacts.map(c => c.company).filter(Boolean))];
+    const painPointCounts = {};
+    touchPoints.forEach(tp => {
+      const points = Array.isArray(tp.painPoints) ? tp.painPoints : [tp.painPoints];
+      points.filter(Boolean).forEach(p => { painPointCounts[p] = (painPointCounts[p] || 0) + 1; });
+    });
+
+    const dataContext = `Real data available to ground this conversation (use it, don't invent beyond it):
+- ${contacts.length} contacts total in Airtable.
+- Roles present: ${roles.join(', ') || 'none recorded'}.
+- Companies present: ${companies.join(', ') || 'none recorded'}.
+- Pain points logged across touch points: ${Object.entries(painPointCounts).map(([p,n]) => `${p} (${n})`).join(', ') || 'none recorded'}.
+- Overall historical conversion rate (booked / total contacts): ${conversionRate}%.`;
+
+    const requiredFields = `A complete campaign needs: a clear goal, the product/service being promoted, a description of who to target, whether there's an existing strategy/script to build from (and what it is if so), a success metric (bookings, replies, or meetings), and a rough timeline.`;
+
+    const conversationText = conversationHistory.map(m => `${m.role === 'assistant' ? 'You' : 'Marcus'}: ${m.content}`).join('\n');
+
+    const prompt = `You are the campaign-setup assistant inside T2C Outreach, a LinkedIn outreach CRM for Twenty2 Collective, a Perth-based Agile and change consultancy. You're having a free-form conversation with Marcus to gather what's needed to build an outreach campaign.
+
+${requiredFields}
+
+${dataContext}
+
+Conversation so far:
+${conversationText}
+
+Read Marcus's latest message and the conversation so far. Work out what you already know and what's still genuinely missing. Never ask about something already covered, even if he only mentioned it in passing. Ask about at most one or two missing things at a time, in a natural conversational tone, UK English, no em dashes.
+
+If you now have enough to build the campaign (goal, product, audience, strategy yes/no, success metric and timeline all reasonably covered, even briefly), respond with exactly: "I have everything I need to build this campaign." and nothing else.
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{
+  "message": string,
+  "chips": string[],
+  "ready": boolean,
+  "progressPercent": number
+}
+
+- message: your next reply to Marcus (or the exact "I have everything I need to build this campaign." line if ready).
+- chips: 0-4 short suggested quick replies grounded in the real data above (actual role names, actual companies, actual pain points) relevant to whatever you just asked. Empty array if ready or if nothing sensible to suggest.
+- ready: true only once goal, product, audience, strategy yes/no, success metric and timeline have all been reasonably covered.
+- progressPercent: your best estimate (0-100) of how much of the required info has been gathered so far.`;
+
+    const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 600,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+
+    if (!aiRes.ok) {
+      const errText = await aiRes.text();
+      throw new Error(`Claude API error ${aiRes.status}: ${errText}`);
+    }
+
+    const aiData = await aiRes.json();
+    const block = (aiData.content || []).find(b => b.type === 'text');
+    if (!block) throw new Error('No text content in Claude response');
+
+    let parsed;
+    try {
+      const jsonMatch = block.text.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(jsonMatch ? jsonMatch[0] : block.text);
+    } catch (parseErr) {
+      throw new Error('Could not parse Claude response as JSON');
+    }
+
+    res.json({
+      message: parsed.message || 'Could you tell me a bit more about this campaign?',
+      chips: parsed.chips || [],
+      ready: !!parsed.ready,
+      progressPercent: typeof parsed.progressPercent === 'number' ? Math.max(0, Math.min(100, parsed.progressPercent)) : 0
+    });
+  } catch (err) {
+    console.error('Campaign chat error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 app.post('/api/campaign/build', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
 
-  const { goal, product, audienceDescription, hasExistingStrategy, existingStrategyText, successMetric, timeline } = req.body;
-  if (!goal || !audienceDescription) return res.status(400).json({ error: 'goal and audienceDescription are required' });
+  const { conversationHistory } = req.body;
+  if (!Array.isArray(conversationHistory) || !conversationHistory.length) {
+    return res.status(400).json({ error: 'conversationHistory is required' });
+  }
 
   try {
-    const contactsData = await airtableRequest('GET', 'Contacts');
-    const contacts = (contactsData.records || []).map(r => ({
-      name: r.fields['Full Name'] || '',
-      company: Array.isArray(r.fields['Company']) ? '' : (r.fields['Company'] || ''),
-      role: r.fields['Job Title'] || '',
-      journeyStage: r.fields['Journey Stage'] || '',
-      notes: r.fields['Notes'] || ''
-    })).filter(c => c.name);
+    const { contacts, bookedCount, conversionRate } = await fetchCampaignContext();
+    const conversationText = conversationHistory.map(m => `${m.role === 'assistant' ? 'Assistant' : 'Marcus'}: ${m.content}`).join('\n');
 
-    const prompt = `You are building an outreach campaign for T2C Outreach, a LinkedIn outreach CRM for Twenty2 Collective, a Perth-based Agile and change consultancy.
+    const prompt = `You are building an outreach campaign for T2C Outreach, a LinkedIn outreach CRM for Twenty2 Collective, a Perth-based Agile and change consultancy, based on this setup conversation with Marcus:
 
-Campaign setup answers from the user:
-- Goal: ${goal}
-- Product/service being promoted: ${product || 'not specified'}
-- Target audience description: ${audienceDescription}
-- Existing strategy provided: ${hasExistingStrategy ? 'yes' : 'no'}
-${hasExistingStrategy && existingStrategyText ? `- Existing strategy/script to build from:\n${existingStrategyText}` : ''}
-- Success metric: ${successMetric || 'not specified'}
-- Timeline: ${timeline || 'not specified'}
+${conversationText}
 
-Here is the full contact list synced from Airtable to match against the target audience description:
+Here is the full contact list synced from Airtable to match against the target audience described above:
 ${JSON.stringify(contacts, null, 2)}
+
+Historical data: ${bookedCount} of ${contacts.length} contacts overall have converted to a booking (${conversionRate}% historical conversion rate). Use this as the basis for an honest estimate, don't invent a different number.
 
 Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 {
   "campaignName": string,
+  "goal": string,
   "targetSegmentSummary": string,
   "matchedContactNames": string[],
   "sequence": {
@@ -759,13 +878,16 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
     "followUp1": { "content": string, "timing": string },
     "followUp2": { "content": string, "timing": string }
   },
-  "strategyBrief": string
+  "strategyBrief": string,
+  "estimatedConversions": string
 }
 
 Guidance:
-- matchedContactNames: full names of contacts from the list above whose role, company or notes plausibly match the target audience description. Only include contacts that actually appear in the list above. Return an empty array if nothing matches rather than inventing names.
-- sequence: three outreach stages. If an existing strategy/script was provided, adapt it rather than starting from scratch. Otherwise write fresh copy. UK English, no em dashes, peer to peer tone, one observation and one question per message, 3-4 sentences, signed off "Marcus". "timing" is when to send relative to the previous step, e.g. "Day 0", "3 days after message 1", "7 days after follow-up 1".
-- strategyBrief: 3-5 sentences summarising the angle, why it should work for this audience, and what to watch for.`;
+- goal: one short sentence summarising the campaign's goal, drawn from the conversation.
+- matchedContactNames: full names of contacts from the list above whose role, company or notes plausibly match the audience described in the conversation. Only include contacts that actually appear in the list above. Return an empty array if nothing matches rather than inventing names.
+- sequence: three outreach stages. If an existing strategy/script was mentioned in the conversation, adapt it rather than starting from scratch. Otherwise write fresh copy. UK English, no em dashes, peer to peer tone, one observation and one question per message, 3-4 sentences, signed off "Marcus". "timing" is when to send relative to the previous step, e.g. "Day 0", "3 days after message 1", "7 days after follow-up 1".
+- strategyBrief: 3-5 sentences summarising the angle and why it should work for this audience.
+- estimatedConversions: one or two sentences estimating likely bookings, grounded in the historical conversion rate above and the number of matched contacts. Be honest if the sample is too small to be confident.`;
 
     const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -800,10 +922,12 @@ Guidance:
 
     res.json({
       campaignName: campaign.campaignName || 'Untitled campaign',
+      goal: campaign.goal || '',
       targetSegmentSummary: campaign.targetSegmentSummary || '',
       matchedContactNames: campaign.matchedContactNames || [],
       sequence: campaign.sequence || {},
       strategyBrief: campaign.strategyBrief || '',
+      estimatedConversions: campaign.estimatedConversions || '',
       contactPoolSize: contacts.length
     });
   } catch (err) {
