@@ -596,41 +596,142 @@ function conversionsContext(conversions) {
   return conversions.map(c => `- ${c.contactName} (${c.icpRole || 'role unknown'} at ${c.company || 'unknown company'}, ${c.industry || 'unknown industry'}) converted via ${c.communicationMethod || 'unknown method'} on campaign "${c.campaign || 'none'}" for product "${c.product || 'unknown'}" after ${c.touchPointCount || 0} touch points and ${c.daysToConvert || 0} days.`).join('\n');
 }
 
+// "What's working" - ranked, real numbers from the Conversions table. Shared
+// between GET /api/track/insights (its own refresh button) and POST
+// /api/intelligence (folded into the one big dashboard payload).
+function computeWhatsWorking(conversions) {
+  const topIcpRoles = rankCounts(conversions, c => c.icpRole)
+    .slice(0, 5)
+    .map(([role, count]) => `${role} — ${count} conversion${count === 1 ? '' : 's'}`);
+
+  const topProducts = rankCounts(conversions, c => c.product)
+    .slice(0, 5)
+    .map(([product, count]) => `${product} — ${count} conversion${count === 1 ? '' : 's'}`);
+
+  const topMethods = rankCounts(conversions, c => c.communicationMethod)
+    .slice(0, 5)
+    .map(([method, count]) => `${method} — ${count} conversion${count === 1 ? '' : 's'}`);
+
+  const topIndustries = rankCounts(conversions, c => c.industry)
+    .slice(0, 5)
+    .map(([industry, count]) => `${industry} — ${count} conversion${count === 1 ? '' : 's'}`);
+
+  const touchCounts = conversions.map(c => c.touchPointCount).filter(n => typeof n === 'number' && n > 0);
+  const avgTouchPoints = touchCounts.length
+    ? Math.round((touchCounts.reduce((s, n) => s + n, 0) / touchCounts.length) * 10) / 10
+    : null;
+
+  return { topIcpRoles, topProducts, topMethods, topIndustries, avgTouchPoints, conversionCount: conversions.length };
+}
+
 app.get('/api/track/insights', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
   try {
     const conversions = await fetchConversions();
-
-    const topIcpRoles = rankCounts(conversions, c => c.icpRole)
-      .slice(0, 5)
-      .map(([role, count]) => `${role} — ${count} conversion${count === 1 ? '' : 's'}`);
-
-    const topProducts = rankCounts(conversions, c => c.product)
-      .slice(0, 5)
-      .map(([product, count]) => `${product} — ${count} conversion${count === 1 ? '' : 's'}`);
-
-    const topMethods = rankCounts(conversions, c => c.communicationMethod)
-      .slice(0, 5)
-      .map(([method, count]) => `${method} — ${count} conversion${count === 1 ? '' : 's'}`);
-
-    const touchCounts = conversions.map(c => c.touchPointCount).filter(n => typeof n === 'number' && n > 0);
-    const avgTouchPoints = touchCounts.length
-      ? Math.round((touchCounts.reduce((s, n) => s + n, 0) / touchCounts.length) * 10) / 10
-      : null;
-
-    res.json({
-      topIcpRoles,
-      topProducts,
-      topMethods,
-      avgTouchPoints,
-      conversionCount: conversions.length
-    });
+    res.json(computeWhatsWorking(conversions));
   } catch (err) {
     console.error('Track insights error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
+
+// ===================== ENGINE HEALTH =====================
+// Raw database stats - no Claude involved, just counts. Shared between
+// GET /api/intelligence/health (its own refresh button) and POST
+// /api/intelligence (folded into the one big dashboard payload).
+
+async function fetchCampaigns() {
+  try {
+    const data = await airtableRequest('GET', 'Campaigns');
+    return (data.records || []).map(r => ({
+      name: r.fields['Name'] || '',
+      status: r.fields['Status'] || '',
+      product: r.fields['Product'] || '',
+      contactNamesRaw: r.fields['Contact IDs'] || '',
+      startDate: r.fields['Start Date'] || ''
+    }));
+  } catch (err) {
+    console.warn('Could not fetch Campaigns:', err.message);
+    return [];
+  }
+}
+
+function computeEngineHealth(contacts, touchPoints, campaigns) {
+  const totalContacts = contacts.length;
+
+  const stageCounts = {};
+  contacts.forEach(c => {
+    const stage = c.journeyStage || 'Unknown';
+    stageCounts[stage] = (stageCounts[stage] || 0) + 1;
+  });
+  const contactsByStage = Object.entries(stageCounts).map(([stage, count]) => ({ stage, count }));
+
+  const oneWeekAgo = new Date();
+  oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+  const touchPointsThisWeek = touchPoints.filter(tp => tp.date && new Date(tp.date) >= oneWeekAgo).length;
+
+  const activeCampaigns = campaigns.filter(c => c.status === 'Live').length;
+
+  const bookedCount = contacts.filter(c => c.journeyStage === 'Booked').length;
+  const overallConversionRate = totalContacts ? Math.round((bookedCount / totalContacts) * 100) : 0;
+
+  return { totalContacts, contactsByStage, touchPointsThisWeek, activeCampaigns, overallConversionRate };
+}
+
+app.get('/api/intelligence/health', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  try {
+    const [contactsData, touchPointsData, campaigns] = await Promise.all([
+      airtableRequest('GET', 'Contacts'),
+      airtableRequest('GET', 'Touch Points'),
+      fetchCampaigns()
+    ]);
+
+    const contacts = (contactsData.records || []).map(r => ({
+      journeyStage: r.fields['Journey Stage'] || ''
+    }));
+    const touchPoints = (touchPointsData.records || []).map(r => ({
+      date: r.fields['Date'] || ''
+    }));
+
+    res.json(computeEngineHealth(contacts, touchPoints, campaigns));
+  } catch (err) {
+    console.error('Intelligence health error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===================== CAMPAIGN PERFORMANCE =====================
+// Ranks every Live campaign by real conversion rate, cross-referencing
+// Campaigns (who was targeted), Touch Points (what was actually sent and
+// who replied) and Conversions (what booked, matched by Campaign name).
+
+function computeCampaignPerformance(campaigns, contacts, touchPoints, conversions) {
+  const nameToId = {};
+  contacts.forEach(c => { if (c.name) nameToId[c.name] = c.id; });
+
+  return campaigns
+    .filter(camp => camp.status === 'Live')
+    .map(camp => {
+      const targetNames = (camp.contactNamesRaw || '').split(',').map(s => s.trim()).filter(Boolean);
+      const targetRecordIds = targetNames.map(n => nameToId[n]).filter(Boolean);
+
+      const campaignTouchPoints = touchPoints.filter(tp =>
+        tp.contact && targetRecordIds.includes(tp.contact) &&
+        (!camp.startDate || !tp.date || tp.date >= camp.startDate)
+      );
+      const touchPointsSent = campaignTouchPoints.length;
+      const replies = campaignTouchPoints.filter(tp => tp.replied || tp.outcome === 'Replied').length;
+      const bookings = conversions.filter(cv => cv.campaign === camp.name).length;
+      const contactsTargeted = targetNames.length;
+      const conversionRate = contactsTargeted ? Math.round((bookings / contactsTargeted) * 100) : 0;
+
+      return { campaignName: camp.name, contactsTargeted, touchPointsSent, replies, bookings, conversionRate };
+    })
+    .sort((a, b) => b.conversionRate - a.conversionRate || b.bookings - a.bookings);
+}
 
 // ===================== INTELLIGENCE =====================
 // Pulls the full contact + touch point picture from Airtable, hands it to
@@ -641,14 +742,18 @@ app.post('/api/intelligence', async (req, res) => {
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
 
   try {
-    const [contactsData, touchPointsData, learningData, conversions] = await Promise.all([
+    const [contactsData, touchPointsData, learningData, conversions, campaigns] = await Promise.all([
       airtableRequest('GET', 'Contacts'),
       airtableRequest('GET', 'Touch Points'),
       fetchLearningData(),
-      fetchConversions()
+      fetchConversions(),
+      fetchCampaigns()
     ]);
+    // Note: there is no "Signals" table or concept anywhere in this app's
+    // schema yet, so there is nothing to fetch for it - not fabricating one.
 
     const contacts = (contactsData.records || []).map(r => ({
+      id: r.id,
       name: r.fields['Full Name'] || '',
       company: r.fields['Company'] || '',
       role: r.fields['Job Title'] || '',
@@ -663,9 +768,14 @@ app.post('/api/intelligence', async (req, res) => {
       date: r.fields['Date'] || '',
       type: r.fields['Type'] || '',
       outcome: r.fields['Outcome'] || '',
+      replied: !!r.fields['Replied'],
       direction: r.fields['Direction'] || '',
       notes: r.fields['Notes'] || ''
     }));
+
+    const whatsWorking = computeWhatsWorking(conversions);
+    const engineHealth = computeEngineHealth(contacts, touchPoints, campaigns);
+    const campaignPerformance = computeCampaignPerformance(campaigns, contacts, touchPoints, conversions);
 
     const prompt = `You are the outreach intelligence layer for T2C Outreach, a LinkedIn outreach CRM for Twenty2 Collective, a Perth-based Agile and change consultancy.
 
@@ -677,18 +787,28 @@ ${JSON.stringify(contacts, null, 2)}
 TOUCH POINTS (${touchPoints.length}):
 ${JSON.stringify(touchPoints, null, 2)}
 
+CAMPAIGNS (${campaigns.length}):
+${JSON.stringify(campaigns, null, 2)}
+
 LEARNING DATA from past customer and deal analysis (${learningData.length} analyses on file - use this to sharpen your suggestions, it reflects real historical ICP and sales patterns):
 ${learningDataContext(learningData)}
 
 CONVERSIONS - actual meetings booked, logged with what led to them (${conversions.length} on file - this is ground truth for what's actually working, weight it heavily):
 ${conversionsContext(conversions)}
 
+CAMPAIGN PERFORMANCE (already calculated, ranked best to worst by conversion rate):
+${campaignPerformance.length ? campaignPerformance.map(c => `- ${c.campaignName}: ${c.contactsTargeted} contacts targeted, ${c.touchPointsSent} touch points sent, ${c.replies} replies, ${c.bookings} bookings, ${c.conversionRate}% conversion rate`).join('\n') : 'No live campaigns to report on.'}
+
+ENGINE HEALTH (already calculated): ${engineHealth.totalContacts} total contacts, ${engineHealth.touchPointsThisWeek} touch points logged this week, ${engineHealth.activeCampaigns} active campaigns, ${engineHealth.overallConversionRate}% overall conversion rate. Contacts by journey stage: ${engineHealth.contactsByStage.map(s => `${s.stage}: ${s.count}`).join(', ') || 'none'}.
+
 Analyse this data and return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 {
   "campaignSuggestions": string[],
   "coldContacts": string[],
   "relationshipHealth": string[],
-  "messageDrafts": [{ "contactName": string, "draft": string }]
+  "messageDrafts": [{ "contactName": string, "draft": string }],
+  "learningInsights": string[],
+  "optimisationSuggestions": string[]
 }
 
 Guidance for each section:
@@ -696,8 +816,10 @@ Guidance for each section:
 - coldContacts: contacts with no recent touch points or who have gone quiet after early engagement, each as one sentence naming the contact and why they're worth a nudge.
 - relationshipHealth: a short read on which relationships are warm and which are at risk, each as one sentence naming the contact and the reasoning.
 - messageDrafts: 2-4 ready-to-send message drafts for specific contacts who look due for a follow-up. UK English, no em dashes, peer to peer tone, one observation and one question, 3-4 sentences, signed off "Marcus".
+- learningInsights: 3-5 specific, numbers-backed observations pulled directly from the data above, in the style of "You haven't contacted 34 Transformation leads in 21+ days" or "Mining sector contacts convert after 3 touch points vs 6 for government". Every number must be real, counted from the data given, never estimated or invented.
+- optimisationSuggestions: 3-5 specific, actionable improvements - which contacts to prioritise this week, which campaign needs attention (use the campaign performance data above), which ICP segment is underperforming, what message angle to try next. Each one grounded in something specific from the data, not generic sales advice.
 
-If there isn't enough data for a section, return an empty array for it rather than inventing contacts that aren't in the dataset.`;
+If there isn't enough data for a section, return an empty array for it rather than inventing contacts, numbers or campaigns that aren't in the dataset.`;
 
     const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -708,7 +830,7 @@ If there isn't enough data for a section, return an empty array for it rather th
       },
       body: JSON.stringify({
         model: 'claude-opus-4-6',
-        max_tokens: 2000,
+        max_tokens: 2800,
         messages: [{ role: 'user', content: prompt }]
       })
     });
@@ -735,6 +857,11 @@ If there isn't enough data for a section, return an empty array for it rather th
       coldContacts: parsed.coldContacts || [],
       relationshipHealth: parsed.relationshipHealth || [],
       messageDrafts: parsed.messageDrafts || [],
+      learningInsights: parsed.learningInsights || [],
+      optimisationSuggestions: parsed.optimisationSuggestions || [],
+      whatsWorking,
+      engineHealth,
+      campaignPerformance,
       contactCount: contacts.length,
       touchPointCount: touchPoints.length,
       generatedAt: new Date().toISOString()

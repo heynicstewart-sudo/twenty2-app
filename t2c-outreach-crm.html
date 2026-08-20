@@ -136,6 +136,13 @@ label{font-size:12px;font-weight:700;color:var(--muted);display:block;margin-bot
 .mini-card{background:#fff;border:1px solid var(--border);border-radius:14px;padding:16px;text-align:center;}
 .mini-card .num{font-size:24px;font-weight:800;color:var(--primary);}
 .mini-card .label{font-size:12px;color:var(--muted);margin-top:4px;font-weight:600;}
+.health-stat-grid{grid-template-columns:repeat(4,1fr);}
+.perf-table-wrap{overflow-x:auto;}
+.perf-table{width:100%;border-collapse:collapse;font-size:12.5px;}
+.perf-table th{text-align:left;padding:8px 10px;font-size:11px;text-transform:uppercase;letter-spacing:.03em;color:var(--muted);border-bottom:1px solid var(--border);white-space:nowrap;}
+.perf-table td{padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap;}
+.perf-table tr:last-child td{border-bottom:none;}
+.perf-table td.perf-name{white-space:normal;font-weight:700;}
 .quick-actions{display:flex;gap:12px;flex-wrap:wrap;}
 
 /* Tags / badges */
@@ -406,6 +413,7 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
   .an-stats{grid-template-columns:repeat(2,1fr);}
   .analysis-grid{grid-template-columns:1fr;}
   .learning-grid{grid-template-columns:1fr;}
+  .health-stat-grid{grid-template-columns:repeat(2,1fr);}
   .howto-grid{grid-template-columns:1fr;}
   .campaign-metrics{grid-template-columns:repeat(3,1fr);row-gap:12px;}
 }
@@ -3380,14 +3388,14 @@ function renderIntelligence(){
   return `
   <div class="card" style="margin-bottom:16px;">
     <div class="section-title"><i class="ti ti-brain"></i> Intelligence</div>
-    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Pulls every contact and touch point synced to Airtable and asks Claude for campaign ideas, contacts going cold, relationship health, and ready-to-send drafts.</p>
+    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Pulls every contact, touch point, campaign, conversion and learning record synced to Airtable and asks Claude for campaign ideas, contacts going cold, relationship health, ready-to-send drafts, and specific data-backed insights and optimisation suggestions.</p>
     <button class="btn btn-primary" id="runIntelBtn" onclick="runIntelligence()"><i class="ti ti-sparkles"></i> Run intelligence</button>
     <div id="intelMeta" class="muted" style="font-size:11.5px;margin-top:10px;"></div>
   </div>
 
   <div class="card" style="margin-bottom:16px;">
     <div class="section-title"><i class="ti ti-target-arrow"></i> What's working</div>
-    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Calculated live from every logged conversion in Airtable - which ICP roles, products and methods actually turn into booked meetings.</p>
+    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Calculated live from every logged conversion in Airtable - which ICP roles, products, industries and methods actually turn into booked meetings.</p>
     <button class="btn btn-primary" id="runInsightsBtn" onclick="runTrackInsights()"><i class="ti ti-chart-bar"></i> Run insights</button>
     <div id="insightsMeta" class="muted" style="font-size:11.5px;margin-top:10px;"></div>
     <div class="analysis-grid" style="margin-top:14px;">
@@ -3399,6 +3407,10 @@ function renderIntelligence(){
         <h4><i class="ti ti-package"></i> Best performing products</h4>
         <ul id="insightsProducts"><li class="muted">Run insights to see best products</li></ul>
       </div>
+      <div class="analysis-block wins">
+        <h4><i class="ti ti-building-factory-2"></i> Best performing industries</h4>
+        <ul id="insightsIndustries"><li class="muted">Run insights to see top industries</li></ul>
+      </div>
       <div class="analysis-block recs">
         <h4><i class="ti ti-route"></i> Avg touch points to conversion</h4>
         <ul id="insightsAvgTouches"><li class="muted">Run insights to see the average</li></ul>
@@ -3407,6 +3419,31 @@ function renderIntelligence(){
         <h4><i class="ti ti-message-circle"></i> Best communication methods</h4>
         <ul id="insightsMethods"><li class="muted">Run insights to see best methods</li></ul>
       </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title"><i class="ti ti-activity-heartbeat"></i> Engine health</div>
+    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Raw database stats straight from Airtable - no AI, just counts.</p>
+    <button class="btn btn-primary" id="runHealthBtn" onclick="runEngineHealth()"><i class="ti ti-refresh"></i> Refresh health</button>
+    <div id="healthMeta" class="muted" style="font-size:11.5px;margin-top:10px;"></div>
+    <div class="mini-cards health-stat-grid" id="healthStats" style="margin-top:14px;margin-bottom:0;">
+      <div class="mini-card"><div class="num" id="healthTotalContacts">—</div><div class="label">Total contacts</div></div>
+      <div class="mini-card"><div class="num" id="healthTouchPointsWeek">—</div><div class="label">Touch points this week</div></div>
+      <div class="mini-card"><div class="num" id="healthActiveCampaigns">—</div><div class="label">Active campaigns</div></div>
+      <div class="mini-card"><div class="num" id="healthConversionRate">—</div><div class="label">Overall conversion rate</div></div>
+    </div>
+    <div style="margin-top:14px;">
+      <div style="font-weight:700;font-size:12px;margin-bottom:6px;">Contacts by journey stage</div>
+      <ul id="healthByStage" style="padding-left:18px;font-size:12.5px;line-height:1.6;"><li class="muted">Refresh health to see the breakdown</li></ul>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title"><i class="ti ti-chart-line"></i> Campaign performance</div>
+    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Every live campaign ranked best to worst by real conversion rate. Populated by Run intelligence above.</p>
+    <div class="perf-table-wrap" id="campaignPerformanceWrap">
+      <span class="muted" style="font-size:12.5px;">Run intelligence to see campaign performance</span>
     </div>
   </div>
 
@@ -3426,9 +3463,21 @@ function renderIntelligence(){
     <ul id="intelRelationshipHealth" style="padding-left:18px;font-size:12.5px;line-height:1.6;"><li class="muted">Run intelligence to see relationship health</li></ul>
   </div>
 
-  <div class="card">
+  <div class="card" style="margin-bottom:16px;">
     <div class="section-title"><i class="ti ti-mail"></i> Message drafts</div>
     <div id="intelMessageDrafts"><span class="muted" style="font-size:12.5px;">Run intelligence to see drafts</span></div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px;background:#fdf1e0;border-color:#f5dcae;">
+    <div class="section-title"><i class="ti ti-bulb-filled"></i> Learning insights</div>
+    <p class="muted" style="font-size:12.5px;margin-bottom:10px;">Specific, numbers-backed observations Claude found in the data.</p>
+    <ul id="intelLearningInsights" style="padding-left:18px;font-size:12.5px;line-height:1.6;"><li class="muted">Run intelligence to see learning insights</li></ul>
+  </div>
+
+  <div class="card" style="margin-bottom:16px;background:#e2f2fa;border-color:#bfe0f0;">
+    <div class="section-title"><i class="ti ti-adjustments"></i> Optimisation suggestions</div>
+    <p class="muted" style="font-size:12.5px;margin-bottom:10px;">What to do next - who to prioritise, which campaign needs attention, what to try.</p>
+    <ul id="intelOptimisation" style="padding-left:18px;font-size:12.5px;line-height:1.6;"><li class="muted">Run intelligence to see optimisation suggestions</li></ul>
   </div>
 
   <div class="card" style="margin-top:16px;">
@@ -3470,6 +3519,9 @@ async function runIntelligence(){
     renderIntelList('intelColdContacts', data.coldContacts, 'No cold contacts flagged.');
     renderIntelList('intelRelationshipHealth', data.relationshipHealth, 'No relationship health notes came back.');
     renderIntelDrafts(data.messageDrafts);
+    renderIntelList('intelLearningInsights', data.learningInsights, 'No learning insights came back.');
+    renderIntelList('intelOptimisation', data.optimisationSuggestions, 'No optimisation suggestions came back.');
+    renderCampaignPerformance(data.campaignPerformance);
 
     const generatedAt = data.generatedAt ? new Date(data.generatedAt).toLocaleString('en-AU') : '';
     document.getElementById('intelMeta').textContent = `Based on ${data.contactCount ?? '—'} contacts and ${data.touchPointCount ?? '—'} touch points from Airtable${generatedAt ? ' · '+generatedAt : ''}`;
@@ -3491,6 +3543,32 @@ function renderIntelList(elId, items, emptyMsg){
   el.innerHTML = list.length ? list.map(i=>`<li>${esc(i)}</li>`).join('') : `<li class="muted">${esc(emptyMsg)}</li>`;
 }
 
+function renderCampaignPerformance(rows){
+  const el = document.getElementById('campaignPerformanceWrap');
+  if(!el) return;
+  const list = Array.isArray(rows) ? rows : [];
+  if(!list.length){
+    el.innerHTML = '<span class="muted" style="font-size:12.5px;">No live campaigns to rank yet.</span>';
+    return;
+  }
+  el.innerHTML = `
+  <table class="perf-table">
+    <thead><tr><th>Campaign</th><th>Contacts</th><th>Touch points</th><th>Replies</th><th>Bookings</th><th>Conv. rate</th></tr></thead>
+    <tbody>
+      ${list.map(r => `
+        <tr>
+          <td class="perf-name">${esc(r.campaignName || 'Untitled')}</td>
+          <td>${r.contactsTargeted ?? 0}</td>
+          <td>${r.touchPointsSent ?? 0}</td>
+          <td>${r.replies ?? 0}</td>
+          <td>${r.bookings ?? 0}</td>
+          <td>${r.conversionRate ?? 0}%</td>
+        </tr>
+      `).join('')}
+    </tbody>
+  </table>`;
+}
+
 async function runTrackInsights(){
   const btn = document.getElementById('runInsightsBtn');
   const original = btn.innerHTML;
@@ -3505,6 +3583,7 @@ async function runTrackInsights(){
 
     renderIntelList('insightsIcpRoles', data.topIcpRoles, 'No conversions logged yet.');
     renderIntelList('insightsProducts', data.topProducts, 'No conversions logged yet.');
+    renderIntelList('insightsIndustries', data.topIndustries, 'No conversions logged yet.');
     renderIntelList('insightsMethods', data.topMethods, 'No conversions logged yet.');
     renderIntelList('insightsAvgTouches',
       data.avgTouchPoints != null ? [`${data.avgTouchPoints} touch points on average across ${data.conversionCount} conversion${data.conversionCount===1?'':'s'}`] : [],
@@ -3516,6 +3595,40 @@ async function runTrackInsights(){
     console.warn('Track insights request failed:', err.message);
     document.getElementById('insightsMeta').textContent = 'Could not run insights: ' + err.message;
     toast('Could not run insights: ' + err.message, 'warn');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = original;
+  }
+}
+
+async function runEngineHealth(){
+  const btn = document.getElementById('runHealthBtn');
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<i class="ti ti-loader-2"></i> Refreshing...';
+  document.getElementById('healthMeta').textContent = '';
+
+  try {
+    const res = await fetch('/api/intelligence/health');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+
+    document.getElementById('healthTotalContacts').textContent = data.totalContacts ?? '—';
+    document.getElementById('healthTouchPointsWeek').textContent = data.touchPointsThisWeek ?? '—';
+    document.getElementById('healthActiveCampaigns').textContent = data.activeCampaigns ?? '—';
+    document.getElementById('healthConversionRate').textContent = (data.overallConversionRate ?? '—') + '%';
+
+    const stages = Array.isArray(data.contactsByStage) ? data.contactsByStage : [];
+    renderIntelList('healthByStage',
+      stages.map(s => `${s.stage}: ${s.count}`),
+      'No contacts on file yet.');
+
+    document.getElementById('healthMeta').textContent = `Live from Airtable · ${new Date().toLocaleString('en-AU')}`;
+    toast('Engine health refreshed', 'success');
+  } catch(err){
+    console.warn('Engine health request failed:', err.message);
+    document.getElementById('healthMeta').textContent = 'Could not refresh health: ' + err.message;
+    toast('Could not refresh health: ' + err.message, 'warn');
   } finally {
     btn.disabled = false;
     btn.innerHTML = original;
