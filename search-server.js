@@ -547,7 +547,7 @@ If there isn't enough data for a section, return an empty array for it rather th
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
+        model: 'claude-opus-4-6',
         max_tokens: 2000,
         messages: [{ role: 'user', content: prompt }]
       })
@@ -656,7 +656,7 @@ If the search results do not give enough to fill a field confidently, say so pla
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
+        model: 'claude-haiku-4-5-20251001',
         max_tokens: 1000,
         messages: [{ role: 'user', content: prompt }]
       })
@@ -810,7 +810,7 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
+        model: 'claude-opus-4-6',
         max_tokens: 600,
         messages: [{ role: 'user', content: prompt }]
       })
@@ -897,7 +897,7 @@ Guidance:
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
+        model: 'claude-opus-4-6',
         max_tokens: 2000,
         messages: [{ role: 'user', content: prompt }]
       })

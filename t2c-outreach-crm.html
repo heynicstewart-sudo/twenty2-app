@@ -3654,7 +3654,7 @@ async function callAI(promptText, maxTokens, fallbackFn, images){
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
+        model: 'claude-opus-4-6',
         max_tokens: maxTokens,
         messages: [{ role:'user', content }]
       })
