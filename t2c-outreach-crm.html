@@ -143,6 +143,14 @@ label{font-size:12px;font-weight:700;color:var(--muted);display:block;margin-bot
 .perf-table td{padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap;}
 .perf-table tr:last-child td{border-bottom:none;}
 .perf-table td.perf-name{white-space:normal;font-weight:700;}
+.home-actions{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px;}
+.home-action-card{background:#fff;border:1px solid var(--border);border-radius:14px;padding:18px;cursor:pointer;transition:border-color .15s,box-shadow .15s;}
+.home-action-card:hover{border-color:var(--accent);box-shadow:0 2px 10px rgba(0,0,0,.06);}
+.home-action-icon{width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:17px;margin-bottom:12px;}
+.home-action-title{font-weight:800;font-size:14px;margin-bottom:4px;}
+.home-action-desc{font-size:12px;color:var(--muted);}
+.home-grid-row{cursor:pointer;}
+.home-grid-row:hover{background:#faf6f1;}
 .quick-actions{display:flex;gap:12px;flex-wrap:wrap;}
 
 /* Tags / badges */
@@ -414,6 +422,7 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
   .analysis-grid{grid-template-columns:1fr;}
   .learning-grid{grid-template-columns:1fr;}
   .health-stat-grid{grid-template-columns:repeat(2,1fr);}
+  .home-actions{grid-template-columns:repeat(2,1fr);}
   .howto-grid{grid-template-columns:1fr;}
   .campaign-metrics{grid-template-columns:repeat(3,1fr);row-gap:12px;}
 }
@@ -436,7 +445,7 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 
   <div class="main">
     <header class="topbar">
-      <div class="topbar-title" id="topbarTitle">Dashboard</div>
+      <div class="topbar-title" id="topbarTitle">Home</div>
       <div class="topbar-user">
         <div class="avatar">MW</div>
       </div>
@@ -455,17 +464,26 @@ const TODAY = new Date('2026-08-18T09:00:00');
 const SEARCH_API_URL = 'https://twenty2-app-production.up.railway.app/api/search-contact';
 
 let rawState = {
-  currentPage: 'dashboard',
-  gridColumns: ['Product Owner','Transformation Lead','Digital and Tech'],
-  companies: ['Woodside Energy','Chevron Australia','Rio Tinto','Water Corporation','ATCO Australia','Hancock Iron Ore','Shell Australia','RAC WA','Fortescue','Western Power'],
-  companyLinkedIn: {},
+  currentPage: 'home',
+  currentGridId: 'grid_wa_market_map',
+  grids: [
+    {
+      id: 'grid_wa_market_map',
+      name: 'WA Market Map',
+      columns: ['Product Owner','Transformation Lead','Digital and Tech'],
+      companies: ['Woodside Energy','Chevron Australia','Rio Tinto','Water Corporation','ATCO Australia','Hancock Iron Ore','Shell Australia','RAC WA','Fortescue','Western Power'],
+      companyLinkedIn: {},
+      createdAt: '2026-07-01',
+      updatedAt: '2026-07-01'
+    }
+  ],
   campaigns: [],
   seqActiveTab: 'seniorLeaders',
   calMonth: TODAY.getMonth(),
   calYear: TODAY.getFullYear(),
   archiveOpen: false,
   contacts: [
-    { id:'c1', name:'Stuart Williams', company:'Woodside Energy', role:'Transformation Lead', url:'https://linkedin.com/in/stuart-williams-wa', seqId:'seniorLeaders', state:'booked', foundDate:'2026-07-15', connReqDate:'2026-07-16', connDate:'2026-07-20', notes:'Leading the delivery transformation programme across upstream projects.',
+    { id:'c1', gridId:'grid_wa_market_map', name:'Stuart Williams', company:'Woodside Energy', role:'Transformation Lead', url:'https://linkedin.com/in/stuart-williams-wa', seqId:'seniorLeaders', state:'booked', foundDate:'2026-07-15', connReqDate:'2026-07-16', connDate:'2026-07-20', notes:'Leading the delivery transformation programme across upstream projects.',
       thread:{ connSent:'2026-07-20', m1:{sent:'2026-07-23',replied:true}, m2:{sent:'2026-07-28',replied:true}, cta:'Change Value Check', booked:true, bookedService:'Workshop', bookedDate:'2026-09-05', bookedCta:'Change Value Check', bookedNotes:'Mentioned the CVA surfaced a real gap in their delivery rhythm.' },
       generated:{},
       touchPoints:[
@@ -473,24 +491,24 @@ let rawState = {
         { id:'tp2', date:'2026-07-30', type:'Call', notes:'15 min intro call, discussed delivery rhythm across upstream projects.' },
         { id:'tp3', date:'2026-08-15', type:'Meeting', notes:'Walked through the Change Value Check results together.' }
       ] },
-    { id:'c2', name:'Bonnie W.', company:'Chevron Australia', role:'Product Owner', url:'https://linkedin.com/in/bonnie-w-chevron', seqId:'seniorLeaders', state:'connected', foundDate:'2026-08-08', connReqDate:'2026-08-09', connDate:'2026-08-12', notes:'Recently posted about scaling PI planning across three sites.',
+    { id:'c2', gridId:'grid_wa_market_map', name:'Bonnie W.', company:'Chevron Australia', role:'Product Owner', url:'https://linkedin.com/in/bonnie-w-chevron', seqId:'seniorLeaders', state:'connected', foundDate:'2026-08-08', connReqDate:'2026-08-09', connDate:'2026-08-12', notes:'Recently posted about scaling PI planning across three sites.',
       thread:{ connSent:'2026-08-12', m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[] },
-    { id:'c3', name:'Craig Humphrey', company:'Rio Tinto', role:'Digital and Tech', url:'https://linkedin.com/in/craig-humphrey-rt', seqId:'digitalTech', state:'messaging', foundDate:'2026-07-30', connReqDate:'2026-07-31', connDate:'2026-08-05', notes:'Heads up a digital delivery pod, mentioned tooling fragmentation.',
+    { id:'c3', gridId:'grid_wa_market_map', name:'Craig Humphrey', company:'Rio Tinto', role:'Digital and Tech', url:'https://linkedin.com/in/craig-humphrey-rt', seqId:'digitalTech', state:'messaging', foundDate:'2026-07-30', connReqDate:'2026-07-31', connDate:'2026-08-05', notes:'Heads up a digital delivery pod, mentioned tooling fragmentation.',
       thread:{ connSent:'2026-08-05', m1:{sent:'2026-08-08',replied:false}, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[] },
-    { id:'c4', name:'Helen Joe', company:'Water Corporation', role:'Transformation Lead', url:'https://linkedin.com/in/helen-joe-watercorp', seqId:'seniorLeaders', state:'found', foundDate:'2026-08-16', connReqDate:null, connDate:null, notes:'',
+    { id:'c4', gridId:'grid_wa_market_map', name:'Helen Joe', company:'Water Corporation', role:'Transformation Lead', url:'https://linkedin.com/in/helen-joe-watercorp', seqId:'seniorLeaders', state:'found', foundDate:'2026-08-16', connReqDate:null, connDate:null, notes:'',
       thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[] },
-    { id:'c5', name:'Vicky Hetherington', company:'ATCO Australia', role:'Product Owner', url:'https://linkedin.com/in/vicky-hetherington-atco', seqId:'seniorLeaders', state:'opened', foundDate:'2026-08-14', connReqDate:null, connDate:null, notes:'Profile viewed, connection request not yet sent.',
+    { id:'c5', gridId:'grid_wa_market_map', name:'Vicky Hetherington', company:'ATCO Australia', role:'Product Owner', url:'https://linkedin.com/in/vicky-hetherington-atco', seqId:'seniorLeaders', state:'opened', foundDate:'2026-08-14', connReqDate:null, connDate:null, notes:'Profile viewed, connection request not yet sent.',
       thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[] },
-    { id:'c6', name:'Claire Hall', company:'Hancock Iron Ore', role:'Digital and Tech', url:'https://linkedin.com/in/claire-hall-hancock', seqId:'digitalTech', state:'connected', foundDate:'2026-08-10', connReqDate:'2026-08-11', connDate:'2026-08-16', notes:'Runs the agile coaching guild internally.',
+    { id:'c6', gridId:'grid_wa_market_map', name:'Claire Hall', company:'Hancock Iron Ore', role:'Digital and Tech', url:'https://linkedin.com/in/claire-hall-hancock', seqId:'digitalTech', state:'connected', foundDate:'2026-08-10', connReqDate:'2026-08-11', connDate:'2026-08-16', notes:'Runs the agile coaching guild internally.',
       thread:{ connSent:'2026-08-16', m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[] },
-    { id:'c7', name:'Heath Harnden', company:'Shell Australia', role:'Transformation Lead', url:'https://linkedin.com/in/heath-harnden-shell', seqId:'seniorLeaders', state:'messaging', foundDate:'2026-07-25', connReqDate:'2026-07-26', connDate:'2026-07-28', notes:'Vocal on LinkedIn about change fatigue in his org.',
+    { id:'c7', gridId:'grid_wa_market_map', name:'Heath Harnden', company:'Shell Australia', role:'Transformation Lead', url:'https://linkedin.com/in/heath-harnden-shell', seqId:'seniorLeaders', state:'messaging', foundDate:'2026-07-25', connReqDate:'2026-07-26', connDate:'2026-07-28', notes:'Vocal on LinkedIn about change fatigue in his org.',
       thread:{ connSent:'2026-07-28', m1:{sent:'2026-08-01',replied:true}, m2:{sent:'2026-08-07',replied:true}, cta:null, booked:false }, generated:{},
       touchPoints:[ { id:'tp4', date:'2026-08-01', type:'LinkedIn message', notes:'Replied same day, keen to keep talking.' } ] },
-    { id:'c8', name:'Shawn Fernando', company:'RAC WA', role:'Digital and Tech', url:'https://linkedin.com/in/shawn-fernando-rac', seqId:'digitalTech', state:'found', foundDate:'2026-08-17', connReqDate:null, connDate:null, notes:'',
+    { id:'c8', gridId:'grid_wa_market_map', name:'Shawn Fernando', company:'RAC WA', role:'Digital and Tech', url:'https://linkedin.com/in/shawn-fernando-rac', seqId:'digitalTech', state:'found', foundDate:'2026-08-17', connReqDate:null, connDate:null, notes:'',
       thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[] },
-    { id:'c9', name:'Hume Saunders', company:'Fortescue', role:'Product Owner', url:'https://linkedin.com/in/hume-saunders-fmg', seqId:'seniorLeaders', state:'opened', foundDate:'2026-08-03', connReqDate:'2026-08-06', connDate:null, notes:'Connection request sent, no response yet.',
+    { id:'c9', gridId:'grid_wa_market_map', name:'Hume Saunders', company:'Fortescue', role:'Product Owner', url:'https://linkedin.com/in/hume-saunders-fmg', seqId:'seniorLeaders', state:'opened', foundDate:'2026-08-03', connReqDate:'2026-08-06', connDate:null, notes:'Connection request sent, no response yet.',
       thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[] },
-    { id:'c10', name:'Tenille Frichot', company:'Western Power', role:'Digital and Tech', url:'https://linkedin.com/in/tenille-frichot-wp', seqId:'digitalTech', state:'messaging', foundDate:'2026-07-28', connReqDate:'2026-07-29', connDate:'2026-08-02', notes:'Leading a platform modernisation squad.',
+    { id:'c10', gridId:'grid_wa_market_map', name:'Tenille Frichot', company:'Western Power', role:'Digital and Tech', url:'https://linkedin.com/in/tenille-frichot-wp', seqId:'digitalTech', state:'messaging', foundDate:'2026-07-28', connReqDate:'2026-07-29', connDate:'2026-08-02', notes:'Leading a platform modernisation squad.',
       thread:{ connSent:'2026-08-02', m1:{sent:'2026-08-05',replied:true}, m2:{sent:'2026-08-11',replied:true}, cta:null, booked:false }, generated:{}, touchPoints:[] }
   ],
   bookings: [
@@ -580,6 +598,28 @@ function loadPersistedState(){
     if(!raw) return false;
     const defaultSettings = rawState.settings;
     const saved = JSON.parse(raw);
+
+    // Migrate pre-multi-grid saves (flat companies/gridColumns/companyLinkedIn,
+    // no grids array yet) into a single default grid so nothing is lost.
+    if(!saved.grids || !saved.grids.length){
+      const migratedGridId = 'grid_wa_market_map';
+      const migratedGrid = {
+        id: migratedGridId,
+        name: 'WA Market Map',
+        companies: saved.companies || rawState.grids[0].companies,
+        columns: saved.gridColumns || rawState.grids[0].columns,
+        companyLinkedIn: saved.companyLinkedIn || {},
+        createdAt: rawState.grids[0].createdAt,
+        updatedAt: isoDate(TODAY)
+      };
+      saved.grids = [migratedGrid];
+      saved.currentGridId = migratedGridId;
+      delete saved.companies;
+      delete saved.gridColumns;
+      delete saved.companyLinkedIn;
+      (saved.contacts || []).forEach(c => { if(!c.gridId) c.gridId = migratedGridId; });
+    }
+
     Object.assign(rawState, saved);
     if(saved.settings){
       rawState.settings = Object.assign({}, defaultSettings, saved.settings, {
@@ -673,15 +713,95 @@ function getPendingDays(c){
   return daysBetween(c.foundDate);
 }
 
+/* ===================== GRIDS ===================== */
+// Each grid is a standalone company x job-title matrix (its own companies,
+// columns, and companyLinkedIn map). Contacts stay in the single global
+// state.contacts array, each tagged with gridId - Dashboard, Roadmap,
+// Sequences, Campaigns, Calendar, Analytics and Intelligence all keep
+// working across every contact regardless of which grid it came from.
+
+function currentGrid(){
+  return state.grids.find(g => g.id === state.currentGridId) || state.grids[0];
+}
+
+function gridContacts(gridId){
+  return state.contacts.filter(c => c.gridId === gridId);
+}
+
+function gridNameForContact(contact){
+  const grid = state.grids.find(g => g.id === contact.gridId);
+  return grid ? grid.name : '';
+}
+
+function allGridColumns(){
+  const set = new Set();
+  state.grids.forEach(g => (g.columns || []).forEach(c => set.add(c)));
+  return Array.from(set);
+}
+
+function touchGrid(gridId){
+  const grid = state.grids.find(g => g.id === gridId);
+  if(grid) grid.updatedAt = isoDate(TODAY);
+}
+
+function createGrid(name){
+  const grid = { id: uid('grid'), name, companies: [], columns: [], companyLinkedIn: {}, createdAt: isoDate(TODAY), updatedAt: isoDate(TODAY) };
+  state.grids.push(grid);
+  return grid;
+}
+
+function resolveGridIdByName(name){
+  if(!name) return state.grids[0] ? state.grids[0].id : null;
+  let grid = state.grids.find(g => g.name.toLowerCase() === name.toLowerCase());
+  if(!grid) grid = createGrid(name);
+  return grid.id;
+}
+
+function openGrid(gridId){
+  state.currentGridId = gridId;
+  navigate('grid');
+}
+
+function createNewGridFlow(){
+  const name = (prompt('New grid name:') || '').trim();
+  if(!name) return;
+  const grid = createGrid(name);
+  openGrid(grid.id);
+  toast('Grid "'+name+'" created', 'success');
+}
+
+function importCsvForNewGrid(){
+  const name = (prompt('Name this grid before importing:') || '').trim();
+  if(!name) return;
+  const grid = createGrid(name);
+  openGrid(grid.id);
+  document.getElementById('csvImportInput').click();
+}
+
+function gridStatus(grid){
+  return gridContacts(grid.id).length ? 'Active' : 'Setup';
+}
+
+function goToNewCampaign(){
+  navigate('campaigns');
+  setCampaignTab('new');
+}
+
+function goToRunIntelligence(){
+  navigate('intelligence');
+  runIntelligence();
+}
+
 /* ===================== NAV / RENDER DISPATCH ===================== */
 
 const NAV = [
+  { id:'home', label:'Home', icon:'ti-home' },
   { id:'dashboard', label:'Dashboard', icon:'ti-layout-dashboard' },
-  { id:'grid', label:'Grid', icon:'ti-grid-dots' },
+  { id:'grid', label:'Grid', icon:'ti-grid-dots', hidden:true },
   { id:'roadmap', label:'Roadmap', icon:'ti-route' },
   { id:'sequences', label:'Sequences', icon:'ti-git-branch' },
-  { id:'campaigns', label:'Campaigns', icon:'ti-rocket' },
   { id:'calendar', label:'Calendar', icon:'ti-calendar' },
+  { id:'campaigns', label:'Campaigns', icon:'ti-rocket' },
   { id:'analytics', label:'Analytics', icon:'ti-chart-bar' },
   { id:'intelligence', label:'Intelligence', icon:'ti-brain' },
   { id:'settings', label:'Settings', icon:'ti-settings' },
@@ -690,21 +810,23 @@ const NAV = [
 
 function renderSidebar(){
   const nav = document.getElementById('sidebarNav');
-  nav.innerHTML = NAV.map(n => (
+  nav.innerHTML = NAV.filter(n => !n.hidden).map(n => (
     '<button class="nav-item '+(state.currentPage===n.id?'active':'')+'" onclick="navigate(\''+n.id+'\')"><i class="ti '+n.icon+'"></i><span>'+n.label+'</span></button>'
   )).join('');
 }
 
 function navigate(page){
   state.currentPage = page;
-  document.getElementById('topbarTitle').textContent = NAV.find(n=>n.id===page).label;
+  const navEntry = NAV.find(n=>n.id===page);
+  const grid = page === 'grid' ? currentGrid() : null;
+  document.getElementById('topbarTitle').textContent = grid ? grid.name : (navEntry ? navEntry.label : '');
   renderSidebar();
   renderPage();
 }
 
 function renderPage(){
   const el = document.getElementById('pageContent');
-  const renderers = { dashboard: renderDashboard, howitworks: renderHowItWorks, grid: renderGrid, roadmap: renderRoadmap, sequences: renderSequences, campaigns: renderCampaigns, calendar: renderCalendar, analytics: renderAnalytics, intelligence: renderIntelligence, settings: renderSettings };
+  const renderers = { home: renderHome, dashboard: renderDashboard, howitworks: renderHowItWorks, grid: renderGrid, roadmap: renderRoadmap, sequences: renderSequences, campaigns: renderCampaigns, calendar: renderCalendar, analytics: renderAnalytics, intelligence: renderIntelligence, settings: renderSettings };
   el.innerHTML = renderers[state.currentPage]();
   afterRender(state.currentPage);
 }
@@ -712,6 +834,61 @@ function renderPage(){
 function afterRender(page){
   if(page === 'sequences') initSequenceDrag();
   if(page === 'roadmap') initRoadmapDrag();
+}
+
+/* ===================== HOME ===================== */
+
+function renderHome(){
+  return `
+  <div class="section-title" style="font-size:22px;margin-bottom:2px;">Hey Marcus, ready to get started?</div>
+  <div class="muted" style="margin-bottom:20px;">Your WA market intelligence engine.</div>
+
+  <div class="home-actions">
+    <div class="home-action-card" onclick="createNewGridFlow()">
+      <div class="home-action-icon" style="background:#fdf4e6;color:#8a6a1f;"><i class="ti ti-grid-dots"></i></div>
+      <div class="home-action-title">New Grid</div>
+      <div class="home-action-desc">Create a blank grid</div>
+    </div>
+    <div class="home-action-card" onclick="importCsvForNewGrid()">
+      <div class="home-action-icon" style="background:#e3f5eb;color:#1f7a4f;"><i class="ti ti-file-upload"></i></div>
+      <div class="home-action-title">Import from CSV</div>
+      <div class="home-action-desc">Import a company + contact list</div>
+    </div>
+    <div class="home-action-card" onclick="goToNewCampaign()">
+      <div class="home-action-icon" style="background:#e2f2fa;color:#0d6a96;"><i class="ti ti-rocket"></i></div>
+      <div class="home-action-title">New Campaign</div>
+      <div class="home-action-desc">Set up a new outreach campaign</div>
+    </div>
+    <div class="home-action-card" onclick="goToRunIntelligence()">
+      <div class="home-action-icon" style="background:#fde9d6;color:#a1571c;"><i class="ti ti-brain"></i></div>
+      <div class="home-action-title">Run Intelligence</div>
+      <div class="home-action-desc">Analyse everything, surface insights</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-layout-grid"></i> Your Grids</div>
+      <button class="btn btn-primary btn-sm" onclick="createNewGridFlow()"><i class="ti ti-plus"></i> New Grid</button>
+    </div>
+    <div class="perf-table-wrap">
+      <table class="perf-table">
+        <thead><tr><th>Name</th><th>Companies</th><th>Contacts</th><th>Last updated</th><th>Status</th></tr></thead>
+        <tbody>
+          ${state.grids.map(g => `
+            <tr class="home-grid-row" onclick="openGrid('${g.id}')">
+              <td class="perf-name">${esc(g.name)}</td>
+              <td>${g.companies.length}</td>
+              <td>${gridContacts(g.id).length}</td>
+              <td>${fmtDate(g.updatedAt)}</td>
+              <td><span class="tag ${gridStatus(g)==='Active'?'tag-connected':'tag-found'}">${gridStatus(g)}</span></td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  `;
 }
 
 /* ===================== DASHBOARD ===================== */
@@ -1171,9 +1348,12 @@ function renderHowItWorks(){
 /* ===================== GRID PAGE ===================== */
 
 function renderGrid(){
-  const cols = state.gridColumns;
+  const grid = currentGrid();
+  const cols = grid.columns;
   window.__connectionsShots = [];
   return `
+  <button class="btn btn-ghost btn-sm" style="margin-bottom:10px;" onclick="navigate('home')"><i class="ti ti-arrow-left"></i> Home</button>
+  <div class="section-title" style="margin-bottom:14px;"><i class="ti ti-grid-dots"></i> ${esc(grid.name)}</div>
   <div class="toolbar">
     <div class="field">
       <label>Add company</label>
@@ -1199,7 +1379,7 @@ function renderGrid(){
     <table class="grid-table">
       <thead><tr><th>Company</th>${cols.map(c=>'<th>'+esc(c)+'</th>').join('')}</tr></thead>
       <tbody id="gridBody">
-        ${state.companies.map(company => `
+        ${grid.companies.map(company => `
           <tr>
             <td class="company-cell">${esc(company)}${renderCompanyLinkedInIcon(company)}</td>
             ${cols.map(role => renderGridCell(company, role)).join('')}
@@ -1227,12 +1407,13 @@ function renderGrid(){
     <button class="btn btn-accent" id="readConnectionsBtn" style="margin-top:14px;" onclick="readConnectionsScreenshot()"><i class="ti ti-wand"></i> Read screenshot(s)</button>
   </div>
 
-  <div class="status-bar"><span class="live-dot"></span> Live · ${state.contacts.length} contacts tracked across ${state.companies.length} companies</div>
+  <div class="status-bar"><span class="live-dot"></span> Live · ${gridContacts(grid.id).length} contacts tracked across ${grid.companies.length} companies</div>
   `;
 }
 
 function findContact(company, role){
-  return state.contacts.find(c => c.company === company && c.role === role);
+  const gridId = currentGrid().id;
+  return state.contacts.find(c => c.gridId === gridId && c.company === company && c.role === role);
 }
 
 function renderGridCell(company, role){
@@ -1256,33 +1437,38 @@ function renderGridCell(company, role){
 }
 
 function addGridColumn(){
+  const grid = currentGrid();
   const input = document.getElementById('newColInput');
   const val = input.value.trim();
   if(!val) return;
-  if(state.gridColumns.includes(val)){ toast('Column already exists','warn'); return; }
-  state.gridColumns.push(val);
+  if(grid.columns.includes(val)){ toast('Column already exists','warn'); return; }
+  grid.columns.push(val);
+  touchGrid(grid.id);
   renderPage();
   toast('Column "'+val+'" added','success');
 }
 
 function addGridCompany(){
+  const grid = currentGrid();
   const input = document.getElementById('newCompanyInput');
   const val = input.value.trim();
   if(!val) return;
-  if(state.companies.includes(val)){ toast('Company already on the grid','warn'); return; }
-  state.companies.push(val);
+  if(grid.companies.includes(val)){ toast('Company already on the grid','warn'); return; }
+  grid.companies.push(val);
+  touchGrid(grid.id);
   renderPage();
   toast('"'+val+'" added to the grid','success');
 
   fetch('/api/airtable/company', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: val })
+    body: JSON.stringify({ name: val, gridName: grid.name })
   }).catch(err => console.warn('Airtable company sync failed:', err.message));
 }
 
 function companyLinkedInUrl(company){
-  return (state.companyLinkedIn[company] && state.companyLinkedIn[company].linkedinUrl) || '';
+  const linkMap = currentGrid().companyLinkedIn;
+  return (linkMap[company] && linkMap[company].linkedinUrl) || '';
 }
 
 function renderCompanyLinkedInIcon(company){
@@ -1292,28 +1478,29 @@ function renderCompanyLinkedInIcon(company){
 }
 
 async function findCompanyLinkedInPages(){
+  const grid = currentGrid();
   const btn = document.getElementById('findCompanyLinkedInBtn');
   const original = btn.innerHTML;
   btn.disabled = true;
 
   let foundCount = 0;
   let searchedCount = 0;
-  for(let i=0; i<state.companies.length; i++){
-    const company = state.companies[i];
-    if(state.companyLinkedIn[company] && state.companyLinkedIn[company].linkedinUrl) continue;
+  for(let i=0; i<grid.companies.length; i++){
+    const company = grid.companies[i];
+    if(grid.companyLinkedIn[company] && grid.companyLinkedIn[company].linkedinUrl) continue;
     searchedCount++;
-    btn.innerHTML = `<i class="ti ti-loader-2"></i> Searching ${i+1}/${state.companies.length}...`;
+    btn.innerHTML = `<i class="ti ti-loader-2"></i> Searching ${i+1}/${grid.companies.length}...`;
     try {
       const res = await fetch(`/api/search-company-linkedin?company=${encodeURIComponent(company)}`);
       const data = await res.json();
       if(data.found && data.linkedinUrl){
-        state.companyLinkedIn[company] = { linkedinUrl: data.linkedinUrl, linkedinSlug: data.slug || null };
+        grid.companyLinkedIn[company] = { linkedinUrl: data.linkedinUrl, linkedinSlug: data.slug || null };
         foundCount++;
       }
     } catch(err){
       console.warn('Company LinkedIn search failed for', company, err.message);
     }
-    if(i < state.companies.length - 1) await sleep(300);
+    if(i < grid.companies.length - 1) await sleep(300);
   }
 
   btn.disabled = false;
@@ -1329,8 +1516,9 @@ async function findCompanyLinkedInPages(){
 }
 
 async function fetchLinkedInOrgIds(){
+  const grid = currentGrid();
   const btn = document.getElementById('orgIdBtn');
-  const companies = Object.keys(state.companyLinkedIn).filter(name => state.companyLinkedIn[name] && state.companyLinkedIn[name].linkedinSlug);
+  const companies = Object.keys(grid.companyLinkedIn).filter(name => grid.companyLinkedIn[name] && grid.companyLinkedIn[name].linkedinSlug);
   if(!companies.length){ toast('No companies with a LinkedIn slug on file yet - run "Find LinkedIn pages" first', 'warn'); return; }
 
   const original = btn.innerHTML;
@@ -1339,7 +1527,7 @@ async function fetchLinkedInOrgIds(){
   let foundCount = 0;
   for(let i=0; i<companies.length; i++){
     const companyName = companies[i];
-    const slug = state.companyLinkedIn[companyName].linkedinSlug;
+    const slug = grid.companyLinkedIn[companyName].linkedinSlug;
     btn.innerHTML = `<i class="ti ti-loader-2"></i> Looking up ${i+1}/${companies.length}...`;
     try {
       const res = await fetch(`/api/enrich/linkedin-org-id?slug=${encodeURIComponent(slug)}`);
@@ -1424,9 +1612,10 @@ function openCsvColumnModal(rows){
 }
 
 function confirmCsvImport(){
+  const grid = currentGrid();
   const colIdx = parseInt(document.getElementById('csvCompanyColumn').value);
   const rows = window.__csvImportRows || [];
-  const seen = new Set(state.companies.map(c => c.toLowerCase()));
+  const seen = new Set(grid.companies.map(c => c.toLowerCase()));
   let addedCount = 0;
   rows.forEach(r => {
     const val = (r[colIdx] || '').trim();
@@ -1434,9 +1623,10 @@ function confirmCsvImport(){
     const key = val.toLowerCase();
     if(seen.has(key)) return;
     seen.add(key);
-    state.companies.push(val);
+    grid.companies.push(val);
     addedCount++;
   });
+  if(addedCount) touchGrid(grid.id);
   closeModal();
   if(addedCount) renderPage();
   toast(addedCount + ' compan' + (addedCount===1?'y':'ies') + ' added from CSV', addedCount ? 'success' : 'warn');
@@ -1445,9 +1635,10 @@ function confirmCsvImport(){
 function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
 
 async function runDailySearch(){
-  const cols = state.gridColumns;
+  const grid = currentGrid();
+  const cols = grid.columns;
   const emptyCells = [];
-  state.companies.forEach(company => cols.forEach(role => { if(!findContact(company, role)) emptyCells.push({company, role}); }));
+  grid.companies.forEach(company => cols.forEach(role => { if(!findContact(company, role)) emptyCells.push({company, role}); }));
   if(!emptyCells.length){ toast('No open roles left to search — every cell has a contact','warn'); return; }
 
   const btn = document.getElementById('runSearchBtn');
@@ -1469,12 +1660,13 @@ async function runDailySearch(){
       if(data.found && data.name && data.url){
         const seqId = role === 'Digital and Tech' ? 'digitalTech' : 'seniorLeaders';
         const newContact = {
-          id: uid('c'), name: data.name, company, role, url: data.url,
+          id: uid('c'), gridId: grid.id, name: data.name, company, role, url: data.url,
           seqId, state:'found', foundDate: isoDate(TODAY), connReqDate:null, connDate:null, notes:'',
           thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[]
         };
         state.contacts.push(newContact);
         foundCount++;
+        touchGrid(grid.id);
         if(cellEl) cellEl.outerHTML = renderGridCellHTML(newContact);
         notifyWebhook(newContact);
       } else {
@@ -1575,6 +1767,7 @@ function notifyWebhook(contact) {
 }
 
 function syncContactToAirtable(contact) {
+  const grid = state.grids.find(g => g.id === contact.gridId);
   fetch('/api/airtable/contact', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1586,7 +1779,8 @@ function syncContactToAirtable(contact) {
       state: contact.state,
       icpRoleCategory: contact.role,
       notes: contact.notes || '',
-      companyLinkedinUrl: companyLinkedInUrl(contact.company)
+      companyLinkedinUrl: grid ? ((grid.companyLinkedIn[contact.company] && grid.companyLinkedIn[contact.company].linkedinUrl) || '') : '',
+      gridName: gridNameForContact(contact)
     })
   }).catch(err => console.warn('Airtable contact sync failed:', err.message));
 }
@@ -1604,16 +1798,18 @@ function syncStageToAirtable(contact) {
 }
 
 async function syncAllContactsToAirtable(){
-  if(!state.contacts.length){ toast('No contacts to sync yet', 'warn'); return; }
+  const grid = currentGrid();
+  const contacts = gridContacts(grid.id);
+  if(!contacts.length){ toast('No contacts to sync yet', 'warn'); return; }
 
   const btn = document.getElementById('syncAirtableBtn');
   const original = btn.innerHTML;
   btn.disabled = true;
 
   let syncedCount = 0;
-  for(let i=0; i<state.contacts.length; i++){
-    const contact = state.contacts[i];
-    btn.innerHTML = `<i class="ti ti-loader-2"></i> Syncing contact ${i+1}/${state.contacts.length}...`;
+  for(let i=0; i<contacts.length; i++){
+    const contact = contacts[i];
+    btn.innerHTML = `<i class="ti ti-loader-2"></i> Syncing contact ${i+1}/${contacts.length}...`;
     try {
       const res = await fetch('/api/airtable/contact', {
         method: 'POST',
@@ -1626,40 +1822,41 @@ async function syncAllContactsToAirtable(){
           state: contact.state,
           icpRoleCategory: contact.role,
           notes: contact.notes || '',
-          companyLinkedinUrl: companyLinkedInUrl(contact.company)
+          companyLinkedinUrl: companyLinkedInUrl(contact.company),
+          gridName: grid.name
         })
       });
       if(res.ok) syncedCount++;
     } catch(err){
       console.warn('Airtable sync failed for', contact.name, err.message);
     }
-    if(i < state.contacts.length - 1) await sleep(250);
+    if(i < contacts.length - 1) await sleep(250);
   }
 
   let companySyncedCount = 0;
-  for(let i=0; i<state.companies.length; i++){
-    const company = state.companies[i];
-    btn.innerHTML = `<i class="ti ti-loader-2"></i> Syncing company ${i+1}/${state.companies.length}...`;
+  for(let i=0; i<grid.companies.length; i++){
+    const company = grid.companies[i];
+    btn.innerHTML = `<i class="ti ti-loader-2"></i> Syncing company ${i+1}/${grid.companies.length}...`;
     try {
       const res = await fetch('/api/airtable/company', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: company })
+        body: JSON.stringify({ name: company, gridName: grid.name })
       });
       if(res.ok) companySyncedCount++;
     } catch(err){
       console.warn('Airtable company sync failed for', company, err.message);
     }
-    if(i < state.companies.length - 1) await sleep(250);
+    if(i < grid.companies.length - 1) await sleep(250);
   }
 
-  const linkedCompanyNames = Object.keys(state.companyLinkedIn).filter(name => {
-    const entry = state.companyLinkedIn[name];
+  const linkedCompanyNames = Object.keys(grid.companyLinkedIn).filter(name => {
+    const entry = grid.companyLinkedIn[name];
     return entry && entry.linkedinUrl && entry.linkedinSlug;
   });
   for(let i=0; i<linkedCompanyNames.length; i++){
     const companyName = linkedCompanyNames[i];
-    const entry = state.companyLinkedIn[companyName];
+    const entry = grid.companyLinkedIn[companyName];
     btn.innerHTML = `<i class="ti ti-loader-2"></i> Syncing LinkedIn ${i+1}/${linkedCompanyNames.length}...`;
     try {
       await fetch('/api/airtable/company/linkedin', {
@@ -1675,7 +1872,7 @@ async function syncAllContactsToAirtable(){
 
   btn.disabled = false;
   btn.innerHTML = original;
-  const allSynced = syncedCount === state.contacts.length && companySyncedCount === state.companies.length;
+  const allSynced = syncedCount === contacts.length && companySyncedCount === grid.companies.length;
   toast(`${syncedCount} contacts and ${companySyncedCount} companies synced to Airtable`, allSynced ? 'success' : 'warn');
 }
 
@@ -1693,6 +1890,7 @@ async function hydrateContactsFromAirtable(){
       const role = f['Job Title'] || '';
       return {
         id: r.id || uid('c'),
+        gridId: resolveGridIdByName(f['Grid Name']),
         name: f['Full Name'] || '',
         company: f['Company'] || '',
         role: role,
@@ -1725,7 +1923,8 @@ function csvField(val){
 const EXPORTABLE_STATES = ['found','opened','connected','messaging','booked'];
 
 function exportContactsCsv(){
-  const rows = state.contacts.filter(c => EXPORTABLE_STATES.includes(c.state) && c.url && c.url.trim());
+  const gridId = currentGrid().id;
+  const rows = gridContacts(gridId).filter(c => EXPORTABLE_STATES.includes(c.state) && c.url && c.url.trim());
   if(!rows.length){ toast('No found contacts to export yet', 'warn'); return; }
 
   const header = ['Name','Company','Domain','LinkedIn URL'];
@@ -3768,7 +3967,7 @@ function renderSettings(){
           <div style="font-weight:700;">${esc(a.name)} ${a.primary ? '<span class="tag tag-booked" style="margin-left:6px;">Primary</span>' : ''}</div>
           <div class="muted" style="font-size:12px;margin-top:2px;">${esc(a.url)}</div>
           <div class="checkbox-row" style="margin-top:8px;">
-            ${state.gridColumns.map(col => `
+            ${allGridColumns().map(col => `
               <label class="checkbox-item"><input type="checkbox" ${a.columns.includes(col)?'checked':''} onchange="toggleAccountColumn(${i},'${esc(col)}')"> ${esc(col)}</label>
             `).join('')}
           </div>

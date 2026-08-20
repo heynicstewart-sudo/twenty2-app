@@ -133,7 +133,7 @@ app.get('/api/airtable/contact', async (req, res) => {
 app.post('/api/airtable/contact', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
-  const { name, company, role, linkedinUrl, state: contactState, icpRoleCategory, notes, companyLinkedinUrl } = req.body;
+  const { name, company, role, linkedinUrl, state: contactState, icpRoleCategory, notes, companyLinkedinUrl, gridName } = req.body;
   if (!name || !company) return res.status(400).json({ error: 'name and company are required' });
 
   try {
@@ -152,7 +152,8 @@ app.post('/api/airtable/contact', async (req, res) => {
       'Job Title': role || '',
       'LinkedIn URL': linkedinUrl || '',
       'Journey Stage': mapStateToStage(contactState),
-      'Notes': notes || ''
+      'Notes': notes || '',
+      'Grid Name': gridName || ''
     };
     if (companyLinkedinUrl) fields['Company LinkedIn URL'] = companyLinkedinUrl;
 
@@ -178,7 +179,7 @@ app.post('/api/airtable/contact', async (req, res) => {
 app.post('/api/airtable/company', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
-  const { name } = req.body;
+  const { name, gridName } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
 
   try {
@@ -193,7 +194,7 @@ app.post('/api/airtable/company', async (req, res) => {
     }
 
     const data = await airtableRequest('POST', 'Companies', {
-      records: [{ fields: { 'Company Name': name } }]
+      records: [{ fields: { 'Company Name': name, 'Grid Name': gridName || '' } }]
     });
     res.json({ success: true, skipped: false, recordId: data.records[0].id });
   } catch (err) {
