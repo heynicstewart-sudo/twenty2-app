@@ -231,6 +231,23 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .intel-draft-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;}
 .intel-draft-name{font-weight:700;font-size:13px;color:#0d6a96;}
 .intel-draft-text{font-size:12.5px;white-space:pre-wrap;margin-top:8px;color:var(--text);line-height:1.5;}
+.campaign-list{display:flex;flex-direction:column;gap:12px;}
+.campaign-card{background:#fff;border:1px solid var(--border);border-radius:14px;padding:16px;cursor:pointer;transition:border-color .15s;}
+.campaign-card:hover{border-color:var(--accent);}
+.campaign-card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;}
+.campaign-card-name{font-weight:800;font-size:14.5px;}
+.campaign-status{display:inline-flex;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:800;white-space:nowrap;}
+.campaign-status-draft{background:var(--border);color:var(--muted);}
+.campaign-status-active{background:#e3f5eb;color:#1f7a4f;}
+.campaign-status-paused{background:#fdf0d9;color:#a1701c;}
+.campaign-status-complete{background:#e2f2fa;color:#0d6a96;}
+.campaign-metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:10px;padding-top:12px;border-top:1px solid var(--border);}
+.campaign-metric-num{font-size:16px;font-weight:800;color:var(--primary);text-align:center;}
+.campaign-metric-label{font-size:10.5px;color:var(--muted);font-weight:600;text-align:center;margin-top:2px;}
+.campaign-chat{display:flex;flex-direction:column;gap:10px;max-height:340px;overflow-y:auto;padding-right:2px;}
+.campaign-chat-msg{max-width:88%;padding:9px 13px;border-radius:12px;font-size:12.5px;line-height:1.5;}
+.campaign-chat-msg.assistant{background:#faf6f1;align-self:flex-start;border-bottom-left-radius:3px;}
+.campaign-chat-msg.user{background:var(--primary);color:#fff;align-self:flex-end;border-bottom-right-radius:3px;}
 
 /* Modal */
 .modal-overlay{position:fixed;inset:0;background:rgba(26,26,46,0.45);display:flex;align-items:center;justify-content:center;z-index:100;padding:20px;}
@@ -374,6 +391,7 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
   .an-stats{grid-template-columns:repeat(2,1fr);}
   .analysis-grid{grid-template-columns:1fr;}
   .howto-grid{grid-template-columns:1fr;}
+  .campaign-metrics{grid-template-columns:repeat(3,1fr);row-gap:12px;}
 }
 </style>
 </head>
@@ -417,6 +435,7 @@ let rawState = {
   gridColumns: ['Product Owner','Transformation Lead','Digital and Tech'],
   companies: ['Woodside Energy','Chevron Australia','Rio Tinto','Water Corporation','ATCO Australia','Hancock Iron Ore','Shell Australia','RAC WA','Fortescue','Western Power'],
   companyLinkedIn: {},
+  campaigns: [],
   seqActiveTab: 'seniorLeaders',
   calMonth: TODAY.getMonth(),
   calYear: TODAY.getFullYear(),
@@ -637,6 +656,7 @@ const NAV = [
   { id:'grid', label:'Grid', icon:'ti-grid-dots' },
   { id:'roadmap', label:'Roadmap', icon:'ti-route' },
   { id:'sequences', label:'Sequences', icon:'ti-git-branch' },
+  { id:'campaigns', label:'Campaigns', icon:'ti-rocket' },
   { id:'calendar', label:'Calendar', icon:'ti-calendar' },
   { id:'analytics', label:'Analytics', icon:'ti-chart-bar' },
   { id:'intelligence', label:'Intelligence', icon:'ti-brain' },
@@ -660,7 +680,7 @@ function navigate(page){
 
 function renderPage(){
   const el = document.getElementById('pageContent');
-  const renderers = { dashboard: renderDashboard, howitworks: renderHowItWorks, grid: renderGrid, roadmap: renderRoadmap, sequences: renderSequences, calendar: renderCalendar, analytics: renderAnalytics, intelligence: renderIntelligence, settings: renderSettings };
+  const renderers = { dashboard: renderDashboard, howitworks: renderHowItWorks, grid: renderGrid, roadmap: renderRoadmap, sequences: renderSequences, campaigns: renderCampaigns, calendar: renderCalendar, analytics: renderAnalytics, intelligence: renderIntelligence, settings: renderSettings };
   el.innerHTML = renderers[state.currentPage]();
   afterRender(state.currentPage);
 }
@@ -713,7 +733,26 @@ Today's actions rules, checked in priority order (first match wins, one action p
 - Messaging, last message sent has no reply after >5 days -> "Follow up"
 - Connected/messaging, no touch point in 21 days -> "Re-engage"
 */
+function activeCampaignForContact(c){
+  return state.campaigns.find(camp => camp.status === 'Active' && (camp.contactIds||[]).includes(c.id)) || null;
+}
+
 function getContactAction(c){
+  const campaign = activeCampaignForContact(c);
+  const natural = getNaturalContactAction(c);
+  if(natural){
+    if(campaign) natural.campaignName = campaign.name;
+    return natural;
+  }
+  if(campaign){
+    const lastTouch = lastTouchPointDate(c);
+    const nextStage = c.thread.m2 ? 'cta' : (c.thread.m1 ? 'm2' : (c.connDate ? 'm1' : 'connect'));
+    return { type:'Campaign outreach', stage: nextStage, daysSinceTouch: lastTouch ? daysBetween(lastTouch) : null, campaignName: campaign.name };
+  }
+  return null;
+}
+
+function getNaturalContactAction(c){
   if(c.state === 'found' || c.state === 'opened') return null;
 
   const lastTouch = lastTouchPointDate(c);
@@ -808,6 +847,7 @@ function renderTodaysActionItem(a){
       <div>
         <div class="todo-item-name">${esc(c.name)}</div>
         <div class="muted" style="font-size:12px;">${esc(c.role)} · ${esc(c.company)}</div>
+        ${a.campaignName ? `<div style="margin-top:4px;"><span class="pill" style="background:#e2f2fa;color:#0d6a96;"><i class="ti ti-rocket" style="font-size:11px;"></i> ${esc(a.campaignName)}</span></div>` : ''}
       </div>
       <div style="text-align:right;">
         <span class="pill">${esc(a.type)}</span>
@@ -2569,14 +2609,21 @@ async function generateMessageForModal(cid, stageKey){
   const seq = state.sequences.find(s=>s.id===c.seqId) || state.sequences[0];
   const st = STAGE_META.find(s=>s.key===stageKey);
   const notes = document.getElementById('genNotes') ? document.getElementById('genNotes').value : c.notes;
-  const template = seq.stages[stageKey] || '';
+
+  const campaign = activeCampaignForContact(c);
+  const campaignStageMap = { m1:'message1', m2:'followUp1', cta:'followUp2' };
+  const campaignStage = campaign && campaignStageMap[stageKey] ? campaign.sequence[campaignStageMap[stageKey]] : null;
+  const template = (campaignStage && campaignStage.content) ? campaignStage.content : (seq.stages[stageKey] || '');
+
   const profileImages = (window.__genCtx && window.__genCtx.profileImages) || [];
   const convoImages = (window.__genCtx && window.__genCtx.convoImages) || [];
   const images = [...profileImages, ...convoImages].map(f => ({ mediaType: f.mediaType, base64: f.base64 }));
   let imageNote = '';
   if(profileImages.length) imageNote += ` You've been given ${profileImages.length} screenshot(s) of the contact's LinkedIn profile — read their bio, posts and work history and weave in anything relevant.`;
   if(convoImages.length) imageNote += ` You've also been given ${convoImages.length} screenshot(s) of the conversation so far — read what they actually said and write a reply that responds to it naturally, rather than restating the template.`;
-  const prompt = `Template for this stage:\n${template}\n\nContact: ${c.name}, ${c.role} at ${c.company}. Sequence stage: ${st.label} (message ${messageNumberForStage(stageKey) || 'n/a'} in the sequence). Profile notes: ${notes || 'none'}.\n\n${ctaStrategyNote(stageKey)}\n\n${voiceRulesText()}${imageNote}\n\nWrite the actual message for this specific contact, replacing placeholders naturally. Return only the message text.`;
+  const campaignNote = campaign ? `\n\nThis contact is part of the active campaign "${campaign.name}" (goal: ${campaign.goal}). Campaign strategy: ${campaign.strategyBrief || 'none recorded'}. Write in line with this strategy.` : '';
+
+  const prompt = `Template for this stage:\n${template}\n\nContact: ${c.name}, ${c.role} at ${c.company}. Sequence stage: ${st.label} (message ${messageNumberForStage(stageKey) || 'n/a'} in the sequence). Profile notes: ${notes || 'none'}.\n\n${ctaStrategyNote(stageKey)}\n\n${voiceRulesText()}${imageNote}${campaignNote}\n\nWrite the actual message for this specific contact, replacing placeholders naturally. Return only the message text.`;
   const result = await callAI(prompt, 400, ()=>fillTemplate(template, c, stageKey), images);
   const out = document.getElementById('genOutput');
   if(out) out.value = result;
@@ -2619,6 +2666,378 @@ function saveGeneratedMessage(cid, stageKey){
   toast('Message saved for '+c.name, 'success');
   if(window.__genCtx && window.__genCtx.onDone) window.__genCtx.onDone();
   else renderPage();
+}
+
+/* ===================== CAMPAIGNS PAGE ===================== */
+
+const CAMPAIGN_QUESTIONS = [
+  { key:'goal', label:'What is the goal of this campaign?', placeholder:'e.g. sell Product Owner training', type:'text' },
+  { key:'product', label:'Which product or service are you promoting?', placeholder:'e.g. POPM Certification', type:'text' },
+  { key:'audienceDescription', label:'Which contacts do you want to target?', placeholder:'e.g. Scrum Masters in mining with 3+ touch points', type:'textarea' },
+  { key:'hasExistingStrategy', label:'Do you have an existing strategy or sales script?', type:'yesno' },
+  { key:'successMetric', label:'What does success look like?', type:'select', options:['Bookings','Replies','Meetings'] },
+  { key:'timeline', label:"What's your timeline?", placeholder:'e.g. 4 weeks, by end of September', type:'text' }
+];
+
+const CAMPAIGN_STAGE_META = [['message1','Message 1'],['followUp1','Follow up 1'],['followUp2','Follow up 2']];
+
+function renderCampaigns(){
+  if(window.__activeCampaignDetail){
+    const campaign = state.campaigns.find(c => c.id === window.__activeCampaignDetail);
+    if(campaign) return renderCampaignDetail(campaign);
+    window.__activeCampaignDetail = null;
+  }
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title"><i class="ti ti-rocket"></i> Campaigns</div>
+    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Goal-driven outreach pushes with their own target segment, AI-generated sequence and strategy, and their own metrics.</p>
+    <button class="btn btn-primary" onclick="openCampaignWizard()"><i class="ti ti-sparkles"></i> New Campaign</button>
+  </div>
+  ${state.campaigns.length ? renderCampaignList() : '<div class="card"><div class="empty-state">No campaigns yet. Click "New Campaign" to build one.</div></div>'}
+  `;
+}
+
+function campaignMetrics(campaign){
+  const contacts = state.contacts.filter(c => (campaign.contactIds||[]).includes(c.id));
+  const contactCount = contacts.length;
+  let touchPoints = 0, replies = 0;
+  contacts.forEach(c => {
+    touchPoints += (c.touchPoints||[]).length;
+    if(c.thread.m1 && c.thread.m1.replied) replies++;
+    if(c.thread.m2 && c.thread.m2.replied) replies++;
+  });
+  const bookings = contacts.filter(c => c.thread.booked).length;
+  const conversionRate = contactCount ? Math.round((bookings/contactCount)*100) : 0;
+  return { contactCount, touchPoints, replies, bookings, conversionRate };
+}
+
+function renderCampaignList(){
+  return `
+  <div class="campaign-list">
+    ${state.campaigns.map(campaign => {
+      const m = campaignMetrics(campaign);
+      return `
+      <div class="campaign-card" onclick="openCampaignDetail('${campaign.id}')">
+        <div class="campaign-card-head">
+          <div>
+            <div class="campaign-card-name">${esc(campaign.name)}</div>
+            <div class="muted" style="font-size:12px;margin-top:2px;">${esc(campaign.goal)}</div>
+          </div>
+          <span class="campaign-status campaign-status-${campaign.status.toLowerCase()}">${esc(campaign.status)}</span>
+        </div>
+        ${campaign.targetSegmentSummary ? `<div class="muted" style="font-size:12px;margin-top:8px;">${esc(campaign.targetSegmentSummary)}</div>` : ''}
+        <div class="campaign-metrics">
+          <div><div class="campaign-metric-num">${m.contactCount}</div><div class="campaign-metric-label">Contacts</div></div>
+          <div><div class="campaign-metric-num">${m.touchPoints}</div><div class="campaign-metric-label">Touch points</div></div>
+          <div><div class="campaign-metric-num">${m.replies}</div><div class="campaign-metric-label">Replies</div></div>
+          <div><div class="campaign-metric-num">${m.bookings}</div><div class="campaign-metric-label">Bookings</div></div>
+          <div><div class="campaign-metric-num">${m.conversionRate}%</div><div class="campaign-metric-label">Conversion</div></div>
+        </div>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+function openCampaignDetail(campaignId){
+  window.__activeCampaignDetail = campaignId;
+  renderPage();
+}
+function closeCampaignDetail(){
+  window.__activeCampaignDetail = null;
+  renderPage();
+}
+
+function renderCampaignDetail(campaign){
+  const m = campaignMetrics(campaign);
+  const contacts = state.contacts.filter(c => (campaign.contactIds||[]).includes(c.id));
+
+  return `
+  <button class="btn btn-ghost" style="margin-bottom:14px;" onclick="closeCampaignDetail()"><i class="ti ti-arrow-left"></i> Back to campaigns</button>
+
+  <div class="card" style="margin-bottom:16px;">
+    <div class="campaign-card-head">
+      <div>
+        <div class="section-title" style="margin-bottom:2px;">${esc(campaign.name)}</div>
+        <div class="muted" style="font-size:12.5px;">${esc(campaign.goal)}</div>
+      </div>
+      <span class="campaign-status campaign-status-${campaign.status.toLowerCase()}">${esc(campaign.status)}</span>
+    </div>
+    <div class="campaign-metrics">
+      <div><div class="campaign-metric-num">${m.contactCount}</div><div class="campaign-metric-label">Contacts</div></div>
+      <div><div class="campaign-metric-num">${m.touchPoints}</div><div class="campaign-metric-label">Touch points</div></div>
+      <div><div class="campaign-metric-num">${m.replies}</div><div class="campaign-metric-label">Replies</div></div>
+      <div><div class="campaign-metric-num">${m.bookings}</div><div class="campaign-metric-label">Bookings</div></div>
+      <div><div class="campaign-metric-num">${m.conversionRate}%</div><div class="campaign-metric-label">Conversion</div></div>
+    </div>
+    <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;">
+      ${['Draft','Active','Paused','Complete'].map(s => `<button class="btn ${campaign.status===s?'btn-primary':'btn-secondary'} btn-sm" onclick="setCampaignStatus('${campaign.id}','${s}')">${s}</button>`).join('')}
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title"><i class="ti ti-target"></i> Target segment</div>
+    <p style="font-size:12.5px;line-height:1.6;">${esc(campaign.targetSegmentSummary || campaign.audienceDescription || '')}</p>
+    <p class="muted" style="font-size:11.5px;margin-top:8px;">Success metric: ${esc(campaign.successMetric||'—')} · Timeline: ${esc(campaign.timeline||'—')} · Started ${fmtDate(campaign.startDate)}</p>
+  </div>
+
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title"><i class="ti ti-notes"></i> Strategy brief</div>
+    <p style="font-size:12.5px;white-space:pre-wrap;line-height:1.6;">${esc(campaign.strategyBrief||'')}</p>
+  </div>
+
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title"><i class="ti ti-git-branch"></i> Sequence</div>
+    <div class="flow">
+      ${CAMPAIGN_STAGE_META.map(([key,label]) => {
+        const stage = campaign.sequence[key] || {};
+        return `
+        <div class="flow-node">
+          <div class="flow-node-head stage-connect"><div class="stage-label">${esc(label)}</div><div class="stage-hint">${esc(stage.timing||'')}</div></div>
+          <div class="flow-node-body"><textarea onchange="setCampaignStageContent('${campaign.id}','${key}',this.value)">${esc(stage.content||'')}</textarea></div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="section-title"><i class="ti ti-users"></i> Contacts in this campaign (${contacts.length})</div>
+    ${contacts.length ? contacts.map(c => `
+      <div class="delivery-item">
+        <div>
+          <div style="font-weight:700;">${esc(c.name)}</div>
+          <div class="muted" style="font-size:12px;">${esc(c.role)} · ${esc(c.company)}</div>
+        </div>
+        <span class="tag tag-${c.state}">${esc(c.state)}</span>
+      </div>
+    `).join('') : '<div class="empty-state">No contacts matched this segment yet.</div>'}
+  </div>
+  `;
+}
+
+function setCampaignStageContent(campaignId, stageKey, val){
+  const campaign = state.campaigns.find(c => c.id === campaignId);
+  if(!campaign) return;
+  if(!campaign.sequence[stageKey]) campaign.sequence[stageKey] = {};
+  campaign.sequence[stageKey].content = val;
+}
+
+function setCampaignStatus(campaignId, status){
+  const campaign = state.campaigns.find(c => c.id === campaignId);
+  if(!campaign) return;
+  campaign.status = status;
+  syncCampaignStatusToAirtable(campaign);
+  toast(`Campaign marked ${status}`, 'success');
+  renderPage();
+}
+
+/* Campaign setup wizard */
+
+function openCampaignWizard(){
+  window.__campaignSetup = { step: 0, answers: {} };
+  renderCampaignWizardStep();
+}
+
+function formatCampaignAnswer(q, val){
+  if(q.type === 'yesno') return val ? 'Yes' : 'No';
+  return val || '';
+}
+
+function renderCampaignAnswerInput(q, answers){
+  const existingVal = answers[q.key];
+  if(q.type === 'text'){
+    return `<input id="campaignAnswerInput" placeholder="${esc(q.placeholder||'')}" value="${esc(existingVal||'')}">`;
+  }
+  if(q.type === 'textarea'){
+    const roleChips = state.gridColumns.map(role => `<span class="pill" style="cursor:pointer;" onclick="appendToCampaignTextarea('${esc(role)}')">${esc(role)}</span>`).join('');
+    return `
+      <textarea id="campaignAnswerInput" rows="3" placeholder="${esc(q.placeholder||'')}">${esc(existingVal||'')}</textarea>
+      <div class="muted" style="font-size:11px;margin-top:6px;">Quick add a role: ${roleChips}</div>
+    `;
+  }
+  if(q.type === 'yesno'){
+    const isYes = existingVal === true;
+    const isNo = existingVal === false;
+    return `
+      <div style="display:flex;gap:8px;margin-bottom:10px;">
+        <button type="button" class="btn ${isYes?'btn-primary':'btn-secondary'} btn-sm" onclick="setCampaignHasStrategy(true)">Yes</button>
+        <button type="button" class="btn ${isNo?'btn-primary':'btn-secondary'} btn-sm" onclick="setCampaignHasStrategy(false)">No</button>
+      </div>
+      <div id="campaignStrategyTextWrap" style="${isYes?'':'display:none;'}">
+        <textarea id="campaignStrategyText" rows="4" placeholder="Paste your strategy or script...">${esc(answers.existingStrategyText||'')}</textarea>
+      </div>
+    `;
+  }
+  if(q.type === 'select'){
+    return `<select id="campaignAnswerInput">${q.options.map(o=>`<option ${existingVal===o?'selected':''}>${esc(o)}</option>`).join('')}</select>`;
+  }
+  return '';
+}
+
+function renderCampaignWizardStep(){
+  const setup = window.__campaignSetup;
+  const q = CAMPAIGN_QUESTIONS[setup.step];
+  const isLast = setup.step === CAMPAIGN_QUESTIONS.length - 1;
+
+  const history = CAMPAIGN_QUESTIONS.slice(0, setup.step).map(prevQ => `
+    <div class="campaign-chat-msg assistant">${esc(prevQ.label)}</div>
+    <div class="campaign-chat-msg user">${esc(formatCampaignAnswer(prevQ, setup.answers[prevQ.key]))}</div>
+  `).join('');
+
+  const body = `
+    <div class="campaign-chat" id="campaignChatScroll">
+      ${history}
+      <div class="campaign-chat-msg assistant">${esc(q.label)}</div>
+      <div id="campaignAnswerField">${renderCampaignAnswerInput(q, setup.answers)}</div>
+    </div>
+  `;
+  const footer = `
+    ${setup.step > 0 ? `<button class="btn btn-secondary" onclick="campaignWizardBack()">Back</button>` : ''}
+    <button class="btn btn-primary" onclick="campaignWizardNext()">${isLast ? 'Build campaign' : 'Next'}</button>
+  `;
+  openModal('New Campaign', body, footer);
+  const scrollEl = document.getElementById('campaignChatScroll');
+  if(scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight;
+}
+
+function appendToCampaignTextarea(text){
+  const el = document.getElementById('campaignAnswerInput');
+  if(!el) return;
+  el.value = el.value ? el.value.trim() + ', ' + text : text;
+}
+
+function setCampaignHasStrategy(val){
+  window.__campaignSetup.answers.hasExistingStrategy = val;
+  renderCampaignWizardStep();
+}
+
+function campaignWizardBack(){
+  window.__campaignSetup.step = Math.max(0, window.__campaignSetup.step - 1);
+  renderCampaignWizardStep();
+}
+
+function campaignWizardNext(){
+  const setup = window.__campaignSetup;
+  const q = CAMPAIGN_QUESTIONS[setup.step];
+
+  if(q.type === 'yesno'){
+    if(setup.answers.hasExistingStrategy === undefined){ toast('Please choose yes or no', 'warn'); return; }
+    if(setup.answers.hasExistingStrategy){
+      const textEl = document.getElementById('campaignStrategyText');
+      setup.answers.existingStrategyText = textEl ? textEl.value.trim() : '';
+    }
+  } else {
+    const input = document.getElementById('campaignAnswerInput');
+    const val = input ? input.value.trim() : '';
+    if(!val && q.key === 'goal'){ toast('Please answer before continuing', 'warn'); return; }
+    if(!val && q.key === 'audienceDescription'){ toast('Please answer before continuing', 'warn'); return; }
+    setup.answers[q.key] = val;
+  }
+
+  if(setup.step === CAMPAIGN_QUESTIONS.length - 1){
+    buildCampaignFromSetup();
+    return;
+  }
+  setup.step++;
+  renderCampaignWizardStep();
+}
+
+async function buildCampaignFromSetup(){
+  const setup = window.__campaignSetup;
+  const body = `<div class="muted" style="font-size:12.5px;text-align:center;padding:26px 0;"><i class="ti ti-loader-2"></i> Building your campaign — matching contacts and drafting the sequence...</div>`;
+  openModal('New Campaign', body, '');
+
+  try {
+    const res = await fetch('/api/campaign/build', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        goal: setup.answers.goal,
+        product: setup.answers.product || '',
+        audienceDescription: setup.answers.audienceDescription,
+        hasExistingStrategy: !!setup.answers.hasExistingStrategy,
+        existingStrategyText: setup.answers.existingStrategyText || '',
+        successMetric: setup.answers.successMetric,
+        timeline: setup.answers.timeline || ''
+      })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+
+    saveBuiltCampaign(setup.answers, data);
+  } catch(err){
+    console.warn('Campaign build failed:', err.message);
+    closeModal();
+    toast('Could not build campaign: ' + err.message, 'warn');
+  }
+}
+
+function saveBuiltCampaign(answers, data){
+  const matchedNames = data.matchedContactNames || [];
+  const contactIds = state.contacts
+    .filter(c => matchedNames.some(n => n.trim().toLowerCase() === c.name.trim().toLowerCase()))
+    .map(c => c.id);
+
+  const campaign = {
+    id: uid('camp'),
+    name: data.campaignName || 'Untitled campaign',
+    goal: answers.goal,
+    product: answers.product || '',
+    audienceDescription: answers.audienceDescription,
+    targetSegmentSummary: data.targetSegmentSummary || '',
+    contactIds,
+    sequence: data.sequence || {},
+    strategyBrief: data.strategyBrief || '',
+    hasExistingStrategy: !!answers.hasExistingStrategy,
+    existingStrategyText: answers.existingStrategyText || '',
+    successMetric: answers.successMetric,
+    timeline: answers.timeline || '',
+    startDate: isoDate(TODAY),
+    status: 'Draft',
+    createdAt: isoDate(TODAY)
+  };
+
+  state.campaigns.push(campaign);
+  syncCampaignToAirtable(campaign);
+  closeModal();
+  toast(`Campaign "${campaign.name}" created with ${contactIds.length} matched contact${contactIds.length===1?'':'s'}`, 'success');
+  renderPage();
+  openCampaignDetail(campaign.id);
+}
+
+function formatSequenceForAirtable(sequence){
+  return CAMPAIGN_STAGE_META.map(([key,label]) => {
+    const stage = sequence[key];
+    if(!stage) return '';
+    return `${label} (${stage.timing || 'timing not set'}):\n${stage.content || ''}`;
+  }).filter(Boolean).join('\n\n');
+}
+
+function syncCampaignToAirtable(campaign){
+  const contactNames = state.contacts.filter(c => (campaign.contactIds||[]).includes(c.id)).map(c => c.name);
+  fetch('/api/airtable/campaign', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: campaign.name,
+      goal: campaign.goal,
+      product: campaign.product,
+      targetIcp: campaign.audienceDescription,
+      contactIds: contactNames,
+      sequenceTemplates: formatSequenceForAirtable(campaign.sequence),
+      strategyNotes: campaign.strategyBrief,
+      successMetric: campaign.successMetric,
+      startDate: campaign.startDate,
+      status: campaign.status
+    })
+  }).catch(err => console.warn('Airtable campaign sync failed:', err.message));
+}
+
+function syncCampaignStatusToAirtable(campaign){
+  fetch('/api/airtable/campaign/status', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: campaign.name, status: campaign.status })
+  }).catch(err => console.warn('Airtable campaign status sync failed:', err.message));
 }
 
 /* ===================== CALENDAR PAGE ===================== */

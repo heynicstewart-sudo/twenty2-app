@@ -233,6 +233,74 @@ app.patch('/api/airtable/company/linkedin', async (req, res) => {
   }
 });
 
+// Create a campaign in Airtable, skipping if one with that name already exists
+app.post('/api/airtable/campaign', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const { name, goal, product, targetIcp, contactIds, sequenceTemplates, strategyNotes, successMetric, startDate, status } = req.body;
+  if (!name) return res.status(400).json({ error: 'name is required' });
+
+  try {
+    const searchRes = await fetch(
+      `${AIRTABLE_URL}/Campaigns?filterByFormula=${encodeURIComponent(`{Name}="${name}"`)}`,
+      { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
+    );
+    const searchData = await searchRes.json();
+    const existing = searchData.records && searchData.records[0];
+    if (existing) {
+      return res.json({ success: true, skipped: true, recordId: existing.id });
+    }
+
+    const data = await airtableRequest('POST', 'Campaigns', {
+      records: [{
+        fields: {
+          'Name': name,
+          'Goal': goal || '',
+          'Product': product || '',
+          'Target ICP': targetIcp || '',
+          'Contact IDs': (contactIds || []).join(', '),
+          'Sequence Templates': sequenceTemplates || '',
+          'Strategy Notes': strategyNotes || '',
+          'Success Metric': successMetric || '',
+          'Start Date': startDate || '',
+          'Status': status || 'Draft'
+        }
+      }]
+    });
+    res.json({ success: true, skipped: false, recordId: data.records[0].id });
+  } catch (err) {
+    console.error('Airtable campaign create error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update a campaign's status in Airtable
+app.patch('/api/airtable/campaign/status', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const { name, status } = req.body;
+  if (!name || !status) return res.status(400).json({ error: 'name and status are required' });
+
+  try {
+    const searchRes = await fetch(
+      `${AIRTABLE_URL}/Campaigns?filterByFormula=${encodeURIComponent(`{Name}="${name}"`)}`,
+      { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
+    );
+    const searchData = await searchRes.json();
+    const record = searchData.records && searchData.records[0];
+    if (!record) return res.json({ success: false, message: 'Campaign not found in Airtable' });
+
+    await airtableRequest('PATCH', 'Campaigns', {
+      records: [{ id: record.id, fields: { 'Status': status } }]
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Airtable campaign status update error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Log a touch point in Airtable
 app.post('/api/airtable/touchpoint', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
@@ -641,6 +709,105 @@ If the search results do not give enough to fill a field confidently, say so pla
     res.json({ success: true, profile, formattedText });
   } catch (err) {
     console.error('Enrichment error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===================== CAMPAIGN BUILD =====================
+// Takes the campaign setup wizard answers, pulls the full contact list from
+// Airtable, and asks Claude to pick matching contacts and draft a 3-stage
+// sequence plus a strategy brief, all in one call.
+
+app.post('/api/campaign/build', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  const { goal, product, audienceDescription, hasExistingStrategy, existingStrategyText, successMetric, timeline } = req.body;
+  if (!goal || !audienceDescription) return res.status(400).json({ error: 'goal and audienceDescription are required' });
+
+  try {
+    const contactsData = await airtableRequest('GET', 'Contacts');
+    const contacts = (contactsData.records || []).map(r => ({
+      name: r.fields['Full Name'] || '',
+      company: Array.isArray(r.fields['Company']) ? '' : (r.fields['Company'] || ''),
+      role: r.fields['Job Title'] || '',
+      journeyStage: r.fields['Journey Stage'] || '',
+      notes: r.fields['Notes'] || ''
+    })).filter(c => c.name);
+
+    const prompt = `You are building an outreach campaign for T2C Outreach, a LinkedIn outreach CRM for Twenty2 Collective, a Perth-based Agile and change consultancy.
+
+Campaign setup answers from the user:
+- Goal: ${goal}
+- Product/service being promoted: ${product || 'not specified'}
+- Target audience description: ${audienceDescription}
+- Existing strategy provided: ${hasExistingStrategy ? 'yes' : 'no'}
+${hasExistingStrategy && existingStrategyText ? `- Existing strategy/script to build from:\n${existingStrategyText}` : ''}
+- Success metric: ${successMetric || 'not specified'}
+- Timeline: ${timeline || 'not specified'}
+
+Here is the full contact list synced from Airtable to match against the target audience description:
+${JSON.stringify(contacts, null, 2)}
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{
+  "campaignName": string,
+  "targetSegmentSummary": string,
+  "matchedContactNames": string[],
+  "sequence": {
+    "message1": { "content": string, "timing": string },
+    "followUp1": { "content": string, "timing": string },
+    "followUp2": { "content": string, "timing": string }
+  },
+  "strategyBrief": string
+}
+
+Guidance:
+- matchedContactNames: full names of contacts from the list above whose role, company or notes plausibly match the target audience description. Only include contacts that actually appear in the list above. Return an empty array if nothing matches rather than inventing names.
+- sequence: three outreach stages. If an existing strategy/script was provided, adapt it rather than starting from scratch. Otherwise write fresh copy. UK English, no em dashes, peer to peer tone, one observation and one question per message, 3-4 sentences, signed off "Marcus". "timing" is when to send relative to the previous step, e.g. "Day 0", "3 days after message 1", "7 days after follow-up 1".
+- strategyBrief: 3-5 sentences summarising the angle, why it should work for this audience, and what to watch for.`;
+
+    const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 2000,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+
+    if (!aiRes.ok) {
+      const errText = await aiRes.text();
+      throw new Error(`Claude API error ${aiRes.status}: ${errText}`);
+    }
+
+    const aiData = await aiRes.json();
+    const block = (aiData.content || []).find(b => b.type === 'text');
+    if (!block) throw new Error('No text content in Claude response');
+
+    let campaign;
+    try {
+      const jsonMatch = block.text.match(/\{[\s\S]*\}/);
+      campaign = JSON.parse(jsonMatch ? jsonMatch[0] : block.text);
+    } catch (parseErr) {
+      throw new Error('Could not parse Claude response as JSON');
+    }
+
+    res.json({
+      campaignName: campaign.campaignName || 'Untitled campaign',
+      targetSegmentSummary: campaign.targetSegmentSummary || '',
+      matchedContactNames: campaign.matchedContactNames || [],
+      sequence: campaign.sequence || {},
+      strategyBrief: campaign.strategyBrief || '',
+      contactPoolSize: contacts.length
+    });
+  } catch (err) {
+    console.error('Campaign build error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
