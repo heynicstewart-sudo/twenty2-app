@@ -133,6 +133,22 @@ async function findRecordByFieldName(table, fieldName, value) {
   return (data.records && data.records[0]) || null;
 }
 
+// Campaign lookup by name for the Sales tab routes - fetches the whole
+// Campaigns table and matches by exact string equality in JS instead of
+// going through findRecordByFieldName's filterByFormula. That formula gets
+// the campaign name interpolated raw into `{Name}="${value}"`, so any name
+// containing a double quote (or other formula-special character) silently
+// breaks the match and the campaign comes back "not found" even though it
+// exists - the same "fetch everything, filter in memory" convention
+// /api/campaign/:id/analytics already uses for this exact table/purpose
+// (via fetchCampaigns()) doesn't have that failure mode, so Sales-tab
+// campaign resolution uses it too.
+async function findCampaignRecordByName(campaignName) {
+  if (!campaignName) return null;
+  const data = await airtableRequest('GET', 'Campaigns');
+  return (data.records || []).find(r => (r.fields['Name'] || '') === campaignName) || null;
+}
+
 // Shared Claude call - `content` is either a plain string (text-only) or an
 // array of content blocks (for vision/PDF document prompts). Every new
 // Claude-calling route added in the Context tab work uses this instead of
@@ -446,7 +462,7 @@ app.post('/api/airtable/touchpoint', async (req, res) => {
 
     if (campaignName) {
       try {
-        const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
+        const campaignRecord = await findCampaignRecordByName(campaignName);
         if (campaignRecord) {
           await airtableRequest('PATCH', 'Touch Points', { records: [{ id: recordId, fields: { 'Campaign': [campaignRecord.id] } }] });
         }
@@ -1973,7 +1989,7 @@ app.get('/api/campaign/:id/sales-overview', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   const campaignName = decodeURIComponent(req.params.id);
   try {
-    const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
+    const campaignRecord = await findCampaignRecordByName(campaignName);
     if (!campaignRecord) return res.status(404).json({ error: 'Campaign not found' });
 
     const [ccRows, dealsData, tpData, contactsData, companiesData, repsData] = await Promise.all([
@@ -2066,7 +2082,7 @@ app.get('/api/campaign/:id/conversion-intelligence', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   const campaignName = decodeURIComponent(req.params.id);
   try {
-    const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
+    const campaignRecord = await findCampaignRecordByName(campaignName);
     if (!campaignRecord) return res.status(404).json({ error: 'Campaign not found' });
 
     const [ccRows, dealsData, tpData, contactsData] = await Promise.all([
@@ -2190,7 +2206,7 @@ app.post('/api/campaign/:id/deals', async (req, res) => {
   const { contactId, companyId, outcome, dealValue, assigneeId, notes, date, sentiment } = req.body;
   if (!contactId) return res.status(400).json({ error: 'contactId is required' });
   try {
-    const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
+    const campaignRecord = await findCampaignRecordByName(campaignName);
     const fields = {
       'Contact': [contactId],
       'Outcome': outcome || 'Pending',
