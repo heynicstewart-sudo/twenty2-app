@@ -385,21 +385,40 @@ app.patch('/api/campaign/status', async (req, res) => {
   if (!name || !status) return res.status(400).json({ error: 'name and status are required' });
 
   try {
-    const searchRes = await fetch(
-      `${AIRTABLE_URL}/Campaigns?filterByFormula=${encodeURIComponent(`{Name}="${name}"`)}`,
-      { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
-    );
-    const searchData = await searchRes.json();
-    const record = searchData.records && searchData.records[0];
+    const record = await findCampaignRecordByName(name);
     if (!record) return res.json({ success: false, message: 'Campaign not found in Airtable' });
 
     await airtableRequest('PATCH', 'Campaigns', {
-      records: [{ id: record.id, fields: { 'Status': status } }]
+      records: [{ id: record.id, fields: { 'Status': status } }],
+      typecast: true
     });
 
     res.json({ success: true });
   } catch (err) {
     console.error('Campaign status update error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Permanently deletes a campaign's Campaigns record in Airtable. Scoped to
+// just that record - does not cascade-delete its Campaign Contacts rows,
+// Deals, or Touch Points, since that wasn't asked for and would turn one
+// bounded delete into a much larger destructive operation.
+app.delete('/api/campaign/:id', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const campaignName = decodeURIComponent(req.params.id);
+
+  try {
+    const record = await findCampaignRecordByName(campaignName);
+    if (!record) return res.json({ success: true, alreadyDeleted: true });
+
+    const url = `${AIRTABLE_URL}/Campaigns?records[]=${encodeURIComponent(record.id)}`;
+    const resp = await fetch(url, { method: 'DELETE', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } });
+    if (!resp.ok) { const err = await resp.text(); throw new Error(`Airtable error ${resp.status}: ${err}`); }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Delete campaign error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

@@ -256,10 +256,13 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .intel-draft-name{font-weight:700;font-size:13px;color:#0d6a96;}
 .intel-draft-text{font-size:12.5px;white-space:pre-wrap;margin-top:8px;color:var(--text);line-height:1.5;}
 .campaign-card-name{font-weight:800;font-size:14.5px;}
-.campaign-status{display:inline-flex;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:800;white-space:nowrap;}
+.campaign-status{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:800;white-space:nowrap;}
 .campaign-status-draft{background:var(--border);color:var(--muted);}
 .campaign-status-active{background:#e3f5eb;color:#1f7a4f;}
 .campaign-status-complete{background:#e2f2fa;color:#0d6a96;}
+.campaign-status-paused{background:#fdf0d5;color:#a1731c;}
+.campaign-status.clickable{cursor:pointer;}
+.campaign-status.clickable:hover{filter:brightness(0.96);}
 .campaign-chat{display:flex;flex-direction:column;gap:10px;max-height:340px;overflow-y:auto;padding-right:2px;}
 .campaign-chat-msg{max-width:88%;padding:9px 13px;border-radius:12px;font-size:12.5px;line-height:1.5;}
 .campaign-chat-msg.assistant{background:#faf6f1;align-self:flex-start;border-bottom-left-radius:3px;}
@@ -3570,7 +3573,8 @@ function saveGeneratedMessage(cid, stageKey){
 const CAMPAIGN_STAGE_META = [['message1','Message 1'],['followUp1','Follow up 1'],['followUp2','Follow up 2']];
 const CAMPAIGN_OPENING_MESSAGE = 'Tell me about the campaign you want to run. You can be as detailed or as brief as you like.';
 const SEQUENCE_TOUCH_TYPES = ['LinkedIn message','Email','Call'];
-const CAMPAIGN_STATUS_CLASS = { Draft:'campaign-status-draft', Live:'campaign-status-active', Past:'campaign-status-complete' };
+const CAMPAIGN_STATUS_CLASS = { Draft:'campaign-status-draft', Live:'campaign-status-active', Paused:'campaign-status-paused', Past:'campaign-status-complete' };
+const CAMPAIGN_STATUS_OPTIONS = ['Draft', 'Live', 'Paused', 'Past'];
 
 function renderCampaigns(){
   const view = window.__campaignView || 'list';
@@ -3914,9 +3918,8 @@ function renderCampaignDetail(){
       <div class="muted" style="font-size:12.5px;">${esc(campaign.goal||'')}</div>
     </div>
     <div style="display:flex;align-items:center;gap:10px;">
-      <span class="campaign-status ${statusClass}">${esc(campaign.status)}</span>
-      ${campaign.status === 'Draft' ? `<button class="btn btn-primary btn-sm" onclick="publishCampaign('${campaign.id}')"><i class="ti ti-rocket"></i> Launch campaign</button>` : ''}
-      ${campaign.status === 'Live' ? `<button class="btn btn-secondary btn-sm" onclick="pauseCampaign('${campaign.id}')"><i class="ti ti-player-pause"></i> Pause</button><button class="btn btn-ghost btn-sm" onclick="completeCampaign('${campaign.id}')" title="Mark complete"><i class="ti ti-flag-check"></i></button>` : ''}
+      <span class="campaign-status ${statusClass} clickable" onclick="toggleCampaignStatusMenu(event,'${campaign.id}')">${esc(campaign.status)} <i class="ti ti-chevron-down" style="font-size:10px;"></i></span>
+      <button class="btn btn-ghost btn-sm" onclick="confirmDeleteCampaign('${campaign.id}')" title="Delete campaign"><i class="ti ti-trash"></i></button>
     </div>
   </div>
   <div class="seq-tabs">
@@ -5237,37 +5240,70 @@ async function analyzeSalesTranscript(campaignId){
 }
 
 /* ---- Status transitions + Airtable sync ---- */
+// The status badge on the campaign detail header is itself the trigger -
+// clicking it opens a small dropdown (same positioned-div pattern as
+// showContextMenu/closeContextMenu) offering all four status values;
+// picking one writes straight to Airtable via syncCampaignStatusToAirtable,
+// same as the single-status transitions this replaced used to.
 
-function publishCampaign(campaignId){
+function toggleCampaignStatusMenu(e, campaignId){
+  e.stopPropagation();
+  closeCampaignStatusMenu();
   const campaign = state.campaigns.find(c => c.id === campaignId);
   if(!campaign) return;
-  campaign.status = 'Live';
-  campaign.liveDate = isoDate(TODAY);
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  menu.id = 'campaignStatusMenu';
+  const rect = e.target.closest('.campaign-status').getBoundingClientRect();
+  menu.style.left = rect.left + 'px';
+  menu.style.top = (rect.bottom + 4) + 'px';
+  menu.innerHTML = CAMPAIGN_STATUS_OPTIONS.map(s => `<div class="ctx-item" onclick="setCampaignStatus('${campaignId}','${s}')">${s===campaign.status?'<i class="ti ti-check"></i>':'<span style="width:16px;display:inline-block;"></span>'} ${s}</div>`).join('');
+  document.body.appendChild(menu);
+  setTimeout(()=>document.addEventListener('click', closeCampaignStatusMenu, { once:true }), 0);
+}
+function closeCampaignStatusMenu(){ const m = document.getElementById('campaignStatusMenu'); if(m) m.remove(); }
+
+function setCampaignStatus(campaignId, status){
+  closeCampaignStatusMenu();
+  const campaign = state.campaigns.find(c => c.id === campaignId);
+  if(!campaign || campaign.status === status) return;
+  campaign.status = status;
+  if(status === 'Live') campaign.liveDate = isoDate(TODAY);
+  if(status === 'Past') campaign.endedDate = isoDate(TODAY);
   campaign.updatedAt = isoDate(TODAY);
   syncCampaignStatusToAirtable(campaign);
-  toast(`Campaign "${campaign.name}" is live — ${(campaign.contactIds||[]).length} contacts activated in Today's actions`, 'success');
+  toast(`Campaign "${campaign.name}" set to ${status}`, 'success');
   renderPage();
 }
 
-function pauseCampaign(campaignId){
+function confirmDeleteCampaign(campaignId){
   const campaign = state.campaigns.find(c => c.id === campaignId);
   if(!campaign) return;
-  campaign.status = 'Draft';
-  campaign.updatedAt = isoDate(TODAY);
-  syncCampaignStatusToAirtable(campaign);
-  toast(`Campaign "${campaign.name}" paused and moved back to Draft`, 'success');
-  renderPage();
+  const body = `<p style="font-size:13px;">Delete this campaign? This cannot be undone.</p>`;
+  const footer = `
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" id="confirmDeleteCampaignBtn" style="background:var(--danger);border-color:var(--danger);" onclick="deleteCampaignConfirmed('${campaignId}')"><i class="ti ti-trash"></i> Delete</button>
+  `;
+  openModal(`Delete "${esc(campaign.name)}"`, body, footer);
 }
 
-function completeCampaign(campaignId){
+async function deleteCampaignConfirmed(campaignId){
   const campaign = state.campaigns.find(c => c.id === campaignId);
   if(!campaign) return;
-  campaign.status = 'Past';
-  campaign.endedDate = isoDate(TODAY);
-  campaign.updatedAt = isoDate(TODAY);
-  syncCampaignStatusToAirtable(campaign);
-  toast(`Campaign "${campaign.name}" marked complete`, 'success');
-  renderPage();
+  const btn = document.getElementById('confirmDeleteCampaignBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Deleting...'; }
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}`, { method: 'DELETE' });
+    const json = await res.json();
+    if(!res.ok || !json.success) throw new Error(json.error || 'Delete failed');
+    state.campaigns = state.campaigns.filter(c => c.id !== campaignId);
+    closeModal();
+    toast(`Campaign "${campaign.name}" deleted`, 'success');
+    backToCampaignList();
+  } catch(err){
+    toast('Could not delete campaign: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-trash"></i> Delete'; }
+  }
 }
 
 function formatSequenceForAirtable(sequence){
