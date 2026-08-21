@@ -2348,8 +2348,9 @@ app.get('/api/calendar/events', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   const assigneeId = (req.query.assigneeId || '').trim();
   try {
-    const [dealsData, contactsData, companiesData, campaignsData, repsData] = await Promise.all([
+    const [dealsData, remindersData, contactsData, companiesData, campaignsData, repsData] = await Promise.all([
       airtableRequest('GET', 'Deals'),
+      airtableRequest('GET', 'Reminders'),
       airtableRequest('GET', 'Contacts'),
       airtableRequest('GET', 'Companies'),
       airtableRequest('GET', 'Campaigns'),
@@ -2372,6 +2373,7 @@ app.get('/api/calendar/events', async (req, res) => {
         const camp = campaignRecId ? campaignsById[campaignRecId] : null;
         const rep = assigneeRecId ? repsById[assigneeRecId] : null;
         return {
+          type: 'deal',
           dealId: r.id,
           date: r.fields['Date'] || '',
           contactName: contact ? (contact.fields['Full Name'] || '') : '',
@@ -2385,7 +2387,28 @@ app.get('/api/calendar/events', async (req, res) => {
       })
       .filter(ev => ev.date);
 
+    const reminderEvents = (remindersData.records || [])
+      .map(r => {
+        const contactId = (r.fields['Contact'] || [])[0] || null;
+        const companyId = (r.fields['Company'] || [])[0] || null;
+        const campaignRecId = (r.fields['Campaign'] || [])[0] || null;
+        const contact = contactId ? contactsById[contactId] : null;
+        const company = companyId ? companiesById[companyId] : null;
+        const camp = campaignRecId ? campaignsById[campaignRecId] : null;
+        return {
+          type: 'reminder',
+          reminderId: r.id,
+          date: r.fields['Due Date'] || '',
+          description: r.fields['Description'] || '',
+          contactName: contact ? (contact.fields['Full Name'] || '') : '',
+          companyName: company ? (company.fields['Company Name'] || '') : '',
+          campaignName: camp ? (camp.fields['Name'] || '') : ''
+        };
+      })
+      .filter(ev => ev.date);
+
     if (assigneeId) events = events.filter(ev => ev.assigneeId === assigneeId);
+    events = events.concat(reminderEvents);
 
     res.json({ events });
   } catch (err) {
@@ -2936,6 +2959,488 @@ Recommend a realistic content posting cadence across LinkedIn, Blog, and Newslet
     res.json({ success: true, cadence });
   } catch (err) {
     console.error('Content cadence error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===================== PROFILE DRAWERS (contacts + companies) =====================
+// Backs the slide-out profile drawer opened from a Grid contact/company
+// name. Contact/company lookups use findRecordByFieldName (name-based,
+// filterByFormula) - the same convention every other Contacts/Companies
+// route in this file already uses, not the more robust
+// findCampaignRecordByName fetch-all-and-match pattern (that fix was
+// Campaigns-specific). A name containing a double quote would fail to
+// resolve here, same as it already would everywhere else in this file.
+
+// Reminders created from note-extracted actions are a separate table from
+// Deals, specifically so a "follow up next Wednesday" nudge never counts
+// toward the Sales tab's pipeline funnel/scorecards.
+
+app.get('/api/contacts/profile', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const name = (req.query.name || '').trim();
+  const campaignName = (req.query.campaignName || '').trim();
+  if (!name) return res.status(400).json({ error: 'name is required' });
+
+  try {
+    const contactRecord = await findRecordByFieldName('Contacts', 'Full Name', name);
+    if (!contactRecord) return res.status(404).json({ error: 'Contact not found' });
+    const cf = contactRecord.fields || {};
+
+    const [companiesData, campaignsData, ccRows, tpData, dealsData, campaignRecord] = await Promise.all([
+      airtableRequest('GET', 'Companies'),
+      airtableRequest('GET', 'Campaigns'),
+      fetchCampaignContactsRows(),
+      airtableRequest('GET', 'Touch Points'),
+      airtableRequest('GET', 'Deals'),
+      campaignName ? findCampaignRecordByName(campaignName) : Promise.resolve(null)
+    ]);
+
+    const companiesById = {}; (companiesData.records || []).forEach(r => { companiesById[r.id] = r; });
+    const campaignsById = {}; (campaignsData.records || []).forEach(r => { campaignsById[r.id] = r; });
+
+    const companyId = (cf['Company'] || [])[0] || null;
+    const company = companyId ? companiesById[companyId] : null;
+
+    const myCcRows = ccRows.filter(r => (r.fields['Contact'] || []).includes(contactRecord.id));
+    const campaigns = myCcRows
+      .map(r => {
+        const campId = (r.fields['Campaign'] || [])[0];
+        return campId && campaignsById[campId] ? { id: campId, name: campaignsById[campId].fields['Name'] || '' } : null;
+      })
+      .filter(Boolean);
+
+    let sequenceStage = null;
+    if (campaignRecord) {
+      const row = myCcRows.find(r => (r.fields['Campaign'] || []).includes(campaignRecord.id));
+      if (row) sequenceStage = row.fields['Sequence Stage'] || '';
+    }
+
+    let touchPoints = (tpData.records || [])
+      .filter(r => (r.fields['Contact'] || []).includes(contactRecord.id))
+      .map(r => {
+        const campId = (r.fields['Campaign'] || [])[0] || null;
+        const tpCampaignName = campId && campaignsById[campId] ? (campaignsById[campId].fields['Name'] || '') : '';
+        return { date: r.fields['Date'] || '', type: r.fields['Type'] || '', notes: r.fields['Summary'] || '', campaignName: tpCampaignName, relevantToCurrentCampaign: null };
+      })
+      .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    // Campaign relevance judgement - only when opened from within a
+    // campaign and there are touch points logged under a different one.
+    if (campaignRecord) {
+      const otherIndexes = [];
+      touchPoints.forEach((tp, i) => { if (tp.campaignName && tp.campaignName !== campaignName) otherIndexes.push(i); });
+      if (otherIndexes.length) {
+        try {
+          const cRec = campaignRecord.fields || {};
+          const prompt = `You are judging touch point relevance for a CRM. Current campaign context:
+Goal: ${cRec['Goal'] || ''}
+Target ICP: ${cRec['Target ICP'] || ''}
+Strategy notes: ${cRec['Strategy Notes'] || ''}
+
+For each of these touch points logged with this same contact under OTHER campaigns, judge whether it discussed the same ICP pain points or products as the current campaign (making it worth surfacing here too), or is genuinely unrelated.
+
+Touch points:
+${JSON.stringify(otherIndexes.map(i => ({ index: i, notes: touchPoints[i].notes, campaignName: touchPoints[i].campaignName })), null, 2)}
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "results": [{ "index": number, "relevant": boolean }] }`;
+          const parsed = await callClaudeJson(prompt, 800);
+          const relevanceByIndex = {};
+          (parsed.results || []).forEach(r => { relevanceByIndex[r.index] = !!r.relevant; });
+          touchPoints = touchPoints.map((tp, i) => otherIndexes.includes(i) ? Object.assign({}, tp, { relevantToCurrentCampaign: relevanceByIndex[i] || false }) : tp);
+        } catch (relErr) {
+          console.warn('Campaign relevance judgement failed (non-fatal):', relErr.message);
+        }
+      }
+    }
+
+    const deals = (dealsData.records || [])
+      .filter(r => (r.fields['Contact'] || []).includes(contactRecord.id))
+      .map(r => {
+        const campId = (r.fields['Campaign'] || [])[0] || null;
+        return {
+          id: r.id,
+          outcome: r.fields['Outcome'] || '',
+          dealValue: r.fields['Deal Value'] || 0,
+          date: r.fields['Date'] || '',
+          notes: r.fields['Notes'] || '',
+          campaignName: campId && campaignsById[campId] ? (campaignsById[campId].fields['Name'] || '') : ''
+        };
+      });
+
+    const firstContactedDate = touchPoints.length ? touchPoints[touchPoints.length - 1].date : null;
+    const enrichMatch = (cf['AI Summary'] || '').match(/^\[Enriched:\s*(\d{4}-\d{2}-\d{2})\]/);
+
+    res.json({
+      contact: {
+        id: contactRecord.id,
+        fullName: cf['Full Name'] || '',
+        jobTitle: cf['Job Title'] || '',
+        companyName: company ? (company.fields['Company Name'] || '') : '',
+        companyId,
+        linkedinUrl: cf['LinkedIn URL'] || '',
+        journeyStage: cf['Journey Stage'] || '',
+        aiSummary: cf['AI Summary'] || '',
+        notes: cf['Notes'] || '',
+        lastEnrichedDate: enrichMatch ? enrichMatch[1] : null
+      },
+      sequenceStage,
+      campaigns,
+      touchPoints,
+      deals,
+      firstContactedDate
+    });
+  } catch (err) {
+    console.error('Contact profile error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/contacts/enrich', async (req, res) => {
+  if (!process.env.SERPER_API_KEY) return res.status(500).json({ error: 'SERPER_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { name, company } = req.body;
+  if (!name) return res.status(400).json({ error: 'name is required' });
+
+  try {
+    const contactRecord = await findRecordByFieldName('Contacts', 'Full Name', name);
+    if (!contactRecord) return res.status(404).json({ error: 'Contact not found' });
+    const slug = extractLinkedInSlug(contactRecord.fields['LinkedIn URL'] || '');
+
+    const [profileSearch, newsSearch] = await Promise.all([
+      fetch(SERPER_URL, { method: 'POST', headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ q: slug ? `site:linkedin.com/in/${slug}` : `${name} LinkedIn` }) }).then(r => r.json()),
+      fetch(SERPER_URL, { method: 'POST', headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ q: `${name} ${company || ''}`.trim() }) }).then(r => r.json())
+    ]);
+    const profileResults = (profileSearch.organic || []).slice(0, 5).map(r => `${r.title || ''}\n${r.snippet || ''}`).join('\n\n');
+    const newsResults = (newsSearch.organic || []).slice(0, 5).map(r => `${r.title || ''}\n${r.snippet || ''}\n${r.link || ''}`).join('\n\n');
+
+    const prompt = `You are researching a LinkedIn contact for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM, ahead of outreach.
+
+Contact: ${name}${company ? ' at ' + company : ''}.
+
+LinkedIn search results:
+${profileResults || 'No results found.'}
+
+General/news search results for "${name} ${company || ''}":
+${newsResults || 'No results found.'}
+
+Based only on the above, return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "headline": string, "bioSummary": string, "recentPosts": [{"summary": string}], "newsMentions": string[], "yearsInRole": string, "previousCompanies": string[] }
+
+"recentPosts" should have at most 3 entries, each a one-or-two sentence summary of a real post if findable, empty array if none found. If a field can't be determined from the results, say "Not enough public information found" rather than inventing detail.`;
+
+    const enrichment = await callClaudeJson(prompt, 1200);
+    const today = new Date().toISOString().slice(0, 10);
+    const formattedBlock = [
+      `[Enriched: ${today}]`,
+      `Headline: ${enrichment.headline || '—'}`,
+      `Bio: ${enrichment.bioSummary || '—'}`,
+      (enrichment.recentPosts || []).length ? `Recent posts:\n${enrichment.recentPosts.map(p => `- ${p.summary}`).join('\n')}` : '',
+      (enrichment.newsMentions || []).length ? `News mentions:\n${enrichment.newsMentions.map(n => `- ${n}`).join('\n')}` : '',
+      `Years in current role: ${enrichment.yearsInRole || '—'}`,
+      (enrichment.previousCompanies || []).length ? `Previous companies: ${enrichment.previousCompanies.join(', ')}` : ''
+    ].filter(Boolean).join('\n');
+
+    const existingSummary = contactRecord.fields['AI Summary'] || '';
+    const newSummary = existingSummary ? formattedBlock + '\n\n' + existingSummary : formattedBlock;
+    await airtableRequest('PATCH', 'Contacts', { records: [{ id: contactRecord.id, fields: { 'AI Summary': newSummary } }] });
+
+    res.json(Object.assign({ success: true, enrichedDate: today }, enrichment));
+  } catch (err) {
+    console.error('Contact enrich error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/contacts/notes', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { name, noteText } = req.body;
+  if (!name || !noteText) return res.status(400).json({ error: 'name and noteText are required' });
+  try {
+    const contactRecord = await findRecordByFieldName('Contacts', 'Full Name', name);
+    if (!contactRecord) return res.status(404).json({ error: 'Contact not found' });
+    const dateLabel = new Date().toISOString().slice(0, 10);
+    const existing = contactRecord.fields['Notes'] || '';
+    const line = `[${dateLabel}] ${noteText}`;
+    const newNotes = existing ? existing + '\n\n' + line : line;
+    await airtableRequest('PATCH', 'Contacts', { records: [{ id: contactRecord.id, fields: { 'Notes': newNotes } }] });
+    res.json({ success: true, notes: newNotes });
+  } catch (err) {
+    console.error('Contact notes error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/contacts/update-summary', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  const { name, noteText } = req.body;
+  if (!name || !noteText) return res.status(400).json({ error: 'name and noteText are required' });
+  try {
+    const contactRecord = await findRecordByFieldName('Contacts', 'Full Name', name);
+    if (!contactRecord) return res.status(404).json({ error: 'Contact not found' });
+    await refreshContactAndCompanySummaries(contactRecord.id, null, noteText);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Contact update-summary error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/contacts/extract-actions', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  const { name, noteText, campaignName } = req.body;
+  if (!name || !noteText) return res.status(400).json({ error: 'name and noteText are required' });
+  try {
+    const contactRecord = await findRecordByFieldName('Contacts', 'Full Name', name);
+    if (!contactRecord) return res.status(404).json({ error: 'Contact not found' });
+    const campaignRecord = campaignName ? await findCampaignRecordByName(campaignName) : null;
+
+    const today = new Date();
+    const todayLabel = today.toISOString().slice(0, 10);
+    const dayName = today.toLocaleDateString('en-AU', { weekday: 'long' });
+
+    const prompt = `Today is ${dayName}, ${todayLabel}. Read this note about a CRM contact and identify any time-based follow-up actions or reminders mentioned (e.g. "contact next Wednesday", "follow up in two weeks", "call Thursday morning"). Resolve relative dates against today's date.
+
+Note: "${noteText}"
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "actions": [{ "description": string, "dueDate": "YYYY-MM-DD" }] }
+
+Return an empty array if there are no time-based actions in the note - do not invent one.`;
+
+    const parsed = await callClaudeJson(prompt, 500);
+    const actionsFound = parsed.actions || [];
+    const createdDate = todayLabel;
+
+    const created = [];
+    for (const action of actionsFound) {
+      if (!action.description || !action.dueDate) continue;
+      const fields = { 'Description': action.description, 'Due Date': action.dueDate, 'Contact': [contactRecord.id], 'Source Note': noteText, 'Created Date': createdDate };
+      if (campaignRecord) fields['Campaign'] = [campaignRecord.id];
+      const data = await airtableRequest('POST', 'Reminders', { records: [{ fields }] });
+      created.push({ reminderId: data.records[0].id, description: action.description, dueDate: action.dueDate });
+    }
+
+    res.json({ success: true, actions: created });
+  } catch (err) {
+    console.error('Contact extract-actions error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/reminders/:id', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const url = `${AIRTABLE_URL}/Reminders?records[]=${encodeURIComponent(req.params.id)}`;
+    const resp = await fetch(url, { method: 'DELETE', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } });
+    if (!resp.ok) { const err = await resp.text(); throw new Error(`Airtable error ${resp.status}: ${err}`); }
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Delete reminder error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/companies/profile', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const name = (req.query.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'name is required' });
+
+  try {
+    const companyRecord = await findRecordByFieldName('Companies', 'Company Name', name);
+    if (!companyRecord) return res.status(404).json({ error: 'Company not found' });
+    const cf = companyRecord.fields || {};
+
+    const [contactsData, tpData, dealsData, signalsData] = await Promise.all([
+      airtableRequest('GET', 'Contacts'),
+      airtableRequest('GET', 'Touch Points'),
+      airtableRequest('GET', 'Deals'),
+      airtableRequest('GET', 'Content Signals')
+    ]);
+
+    const myContactIds = new Set(cf['Contacts'] || []);
+    const contactsById = {}; (contactsData.records || []).forEach(r => { contactsById[r.id] = r; });
+
+    const keyContacts = (contactsData.records || [])
+      .filter(r => myContactIds.has(r.id))
+      .map(r => ({ id: r.id, name: r.fields['Full Name'] || '', journeyStage: r.fields['Journey Stage'] || '' }));
+
+    const touchPoints = (tpData.records || [])
+      .filter(r => (r.fields['Contact'] || []).some(cid => myContactIds.has(cid)))
+      .map(r => {
+        const contactId = (r.fields['Contact'] || [])[0] || null;
+        const contact = contactId ? contactsById[contactId] : null;
+        return { date: r.fields['Date'] || '', type: r.fields['Type'] || '', notes: r.fields['Summary'] || '', contactName: contact ? (contact.fields['Full Name'] || '') : '' };
+      })
+      .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    const deals = (dealsData.records || [])
+      .filter(r => (r.fields['Company'] || []).includes(companyRecord.id))
+      .map(r => ({ id: r.id, outcome: r.fields['Outcome'] || '', dealValue: r.fields['Deal Value'] || 0, date: r.fields['Date'] || '', notes: r.fields['Notes'] || '' }));
+
+    const contentSignals = (signalsData.records || [])
+      .filter(r => (r.fields['Related Companies'] || []).includes(companyRecord.id))
+      .map(r => ({ id: r.id, theme: r.fields['Theme'] || '', detectedDate: r.fields['Detected Date'] || '' }));
+
+    const enrichMatch = (cf['AI Summary'] || '').match(/^\[Enriched:\s*(\d{4}-\d{2}-\d{2})\]/);
+
+    res.json({
+      company: {
+        id: companyRecord.id,
+        name: cf['Company Name'] || '',
+        industry: cf['Industry'] || '',
+        sector: cf['Sector'] || '',
+        linkedinUrl: cf['Company LinkedIn URL'] || '',
+        aiSummary: cf['AI Summary'] || '',
+        notes: cf['Notes'] || '',
+        latestSignal: cf['Latest Signal'] || '',
+        signalDate: cf['Signal Date'] || '',
+        lastEnrichedDate: enrichMatch ? enrichMatch[1] : null
+      },
+      keyContacts,
+      touchPoints,
+      deals,
+      contentSignals
+    });
+  } catch (err) {
+    console.error('Company profile error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/companies/enrich', async (req, res) => {
+  if (!process.env.SERPER_API_KEY) return res.status(500).json({ error: 'SERPER_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { name } = req.body;
+  if (!name) return res.status(400).json({ error: 'name is required' });
+
+  try {
+    const companyRecord = await findRecordByFieldName('Companies', 'Company Name', name);
+    if (!companyRecord) return res.status(404).json({ error: 'Company not found' });
+
+    const [linkedinSearch, newsSearch] = await Promise.all([
+      fetch(SERPER_URL, { method: 'POST', headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ q: `${name} site:linkedin.com/company/` }) }).then(r => r.json()),
+      fetch(SERPER_URL, { method: 'POST', headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ q: `${name} news` }) }).then(r => r.json())
+    ]);
+    const linkedinResults = (linkedinSearch.organic || []).slice(0, 5).map(r => `${r.title || ''}\n${r.snippet || ''}`).join('\n\n');
+    const newsResults = (newsSearch.organic || []).slice(0, 5).map(r => `${r.title || ''}\n${r.snippet || ''}\n${r.link || ''}`).join('\n\n');
+
+    const prompt = `You are researching a company for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM, ahead of outreach.
+
+Company: ${name}
+
+LinkedIn search results:
+${linkedinResults || 'No results found.'}
+
+News search results:
+${newsResults || 'No results found.'}
+
+Based only on the above, return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "industry": string, "estimatedSize": string, "linkedinSignalSummary": string, "recentNews": string[], "techStack": string[] }
+
+If a field can't be determined from the results, say "Not enough public information found" rather than inventing detail.`;
+
+    const enrichment = await callClaudeJson(prompt, 1000);
+    const today = new Date().toISOString().slice(0, 10);
+    const formattedBlock = [
+      `[Enriched: ${today}]`,
+      `Industry: ${enrichment.industry || '—'}`,
+      `Estimated size: ${enrichment.estimatedSize || '—'}`,
+      `LinkedIn signal: ${enrichment.linkedinSignalSummary || '—'}`,
+      (enrichment.recentNews || []).length ? `Recent news:\n${enrichment.recentNews.map(n => `- ${n}`).join('\n')}` : '',
+      (enrichment.techStack || []).length ? `Tech stack: ${enrichment.techStack.join(', ')}` : ''
+    ].filter(Boolean).join('\n');
+
+    const existingSummary = companyRecord.fields['AI Summary'] || '';
+    const newSummary = existingSummary ? formattedBlock + '\n\n' + existingSummary : formattedBlock;
+    await airtableRequest('PATCH', 'Companies', { records: [{ id: companyRecord.id, fields: { 'AI Summary': newSummary } }] });
+
+    res.json(Object.assign({ success: true, enrichedDate: today }, enrichment));
+  } catch (err) {
+    console.error('Company enrich error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/companies/notes', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { name, noteText } = req.body;
+  if (!name || !noteText) return res.status(400).json({ error: 'name and noteText are required' });
+  try {
+    const companyRecord = await findRecordByFieldName('Companies', 'Company Name', name);
+    if (!companyRecord) return res.status(404).json({ error: 'Company not found' });
+    const dateLabel = new Date().toISOString().slice(0, 10);
+    const existing = companyRecord.fields['Notes'] || '';
+    const line = `[${dateLabel}] ${noteText}`;
+    const newNotes = existing ? existing + '\n\n' + line : line;
+    await airtableRequest('PATCH', 'Companies', { records: [{ id: companyRecord.id, fields: { 'Notes': newNotes } }] });
+    res.json({ success: true, notes: newNotes });
+  } catch (err) {
+    console.error('Company notes error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/companies/update-summary', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  const { name, noteText } = req.body;
+  if (!name || !noteText) return res.status(400).json({ error: 'name and noteText are required' });
+  try {
+    const companyRecord = await findRecordByFieldName('Companies', 'Company Name', name);
+    if (!companyRecord) return res.status(404).json({ error: 'Company not found' });
+    await refreshContactAndCompanySummaries(null, companyRecord.id, noteText);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Company update-summary error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/companies/extract-actions', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  const { name, noteText, campaignName } = req.body;
+  if (!name || !noteText) return res.status(400).json({ error: 'name and noteText are required' });
+  try {
+    const companyRecord = await findRecordByFieldName('Companies', 'Company Name', name);
+    if (!companyRecord) return res.status(404).json({ error: 'Company not found' });
+    const campaignRecord = campaignName ? await findCampaignRecordByName(campaignName) : null;
+
+    const today = new Date();
+    const todayLabel = today.toISOString().slice(0, 10);
+    const dayName = today.toLocaleDateString('en-AU', { weekday: 'long' });
+
+    const prompt = `Today is ${dayName}, ${todayLabel}. Read this note about a CRM company account and identify any time-based follow-up actions or reminders mentioned (e.g. "check back next Wednesday", "follow up in two weeks"). Resolve relative dates against today's date.
+
+Note: "${noteText}"
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "actions": [{ "description": string, "dueDate": "YYYY-MM-DD" }] }
+
+Return an empty array if there are no time-based actions in the note - do not invent one.`;
+
+    const parsed = await callClaudeJson(prompt, 500);
+    const actionsFound = parsed.actions || [];
+    const createdDate = todayLabel;
+
+    const created = [];
+    for (const action of actionsFound) {
+      if (!action.description || !action.dueDate) continue;
+      const fields = { 'Description': action.description, 'Due Date': action.dueDate, 'Company': [companyRecord.id], 'Source Note': noteText, 'Created Date': createdDate };
+      if (campaignRecord) fields['Campaign'] = [campaignRecord.id];
+      const data = await airtableRequest('POST', 'Reminders', { records: [{ fields }] });
+      created.push({ reminderId: data.records[0].id, description: action.description, dueDate: action.dueDate });
+    }
+
+    res.json({ success: true, actions: created });
+  } catch (err) {
+    console.error('Company extract-actions error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

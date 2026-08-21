@@ -337,6 +337,20 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .event-chip.grey{background:#eee9e2;color:#6b6355;}
 .event-chip.purple{background:#efe4f7;color:#6b3fa0;}
 .event-chip.yellow{background:#fef3d6;color:#8a6a1f;}
+.event-chip.reminder-chip{background:#f1f1ee;color:#6b6558;cursor:pointer;}
+
+/* Profile drawer (contacts + companies) */
+.drawer-overlay{position:fixed;inset:0;background:rgba(26,26,46,0.25);z-index:410;}
+.profile-drawer{position:fixed;top:0;right:0;height:100vh;width:440px;max-width:92vw;background:#fff;box-shadow:-8px 0 24px rgba(0,0,0,.15);overflow-y:auto;transform:translateX(100%);transition:transform .25s ease;z-index:411;padding:22px;}
+.profile-drawer.open{transform:translateX(0);}
+.drawer-close{position:absolute;top:16px;right:16px;cursor:pointer;font-size:20px;color:var(--muted);background:none;border:none;line-height:1;}
+.drawer-avatar{width:56px;height:56px;border-radius:50%;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:20px;flex-shrink:0;}
+.drawer-section{margin-top:20px;padding-top:16px;border-top:1px solid var(--border);}
+.drawer-section:first-of-type{border-top:none;margin-top:16px;padding-top:0;}
+.note-item{padding:8px 0;border-bottom:1px solid var(--border);font-size:12.5px;white-space:pre-wrap;}
+.note-item:last-child{border-bottom:none;}
+.tp-item{padding:8px 10px;border-radius:8px;font-size:12px;margin-bottom:6px;background:var(--bg);}
+.tp-item.other{opacity:.75;}
 .event-chip:hover .event-tooltip{display:block;}
 .event-tooltip{display:none;position:absolute;bottom:120%;left:0;background:var(--primary);color:#fff;padding:8px 10px;border-radius:8px;font-size:11px;white-space:nowrap;z-index:30;font-weight:600;}
 
@@ -2035,7 +2049,7 @@ function renderGrid(){
       <tbody id="gridBody">
         ${grid.companies.map(company => `
           <tr>
-            <td class="company-cell">${esc(company)}${renderCompanyLinkedInIcon(company)}</td>
+            <td class="company-cell"><span style="cursor:pointer;" onclick="openCompanyDrawer('${esc(company)}')">${esc(company)}</span>${renderCompanyLinkedInIcon(company)}</td>
             ${cols.map(role => renderGridCell(company, role)).join('')}
           </tr>
         `).join('')}
@@ -2081,7 +2095,7 @@ function renderGridCell(company, role){
   const stateLabel = c.thread.booked ? 'booked' : c.state;
   return `<td>
     <div class="grid-cell ${cellClass}">
-      <div class="cell-name"><a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.name)}</a></div>
+      <div class="cell-name" style="cursor:pointer;" onclick="openContactDrawer('${esc(c.name)}', ${currentGridCampaignName() ? `'${esc(currentGridCampaignName())}'` : 'null'})">${esc(c.name)}${c.url ? ` <a href="${esc(c.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open on LinkedIn" style="margin-left:2px;color:var(--blue);"><i class="ti ti-brand-linkedin"></i></a>` : ''}</div>
       <div class="cell-meta">
         <span class="day-badge ${dayBadgeClass(days)}">${days}d</span>
         <span class="tag ${stateTagClass}">${stateLabel}</span>
@@ -2341,7 +2355,7 @@ async function runDailySearch(){
 function renderGridCellHTML(c){
   const days = daysBetween(c.foundDate);
   return `<td><div class="grid-cell cell-${c.state}">
-      <div class="cell-name"><a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.name)}</a></div>
+      <div class="cell-name" style="cursor:pointer;" onclick="openContactDrawer('${esc(c.name)}', ${currentGridCampaignName() ? `'${esc(currentGridCampaignName())}'` : 'null'})">${esc(c.name)}${c.url ? ` <a href="${esc(c.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open on LinkedIn" style="margin-left:2px;color:var(--blue);"><i class="ti ti-brand-linkedin"></i></a>` : ''}</div>
       <div class="cell-meta">
         <span class="day-badge ${dayBadgeClass(days)}">${days}d</span>
         <span class="tag tag-${c.state}">${c.state}</span>
@@ -3178,6 +3192,377 @@ function openModal(title, bodyHtml, footerHtml){
   document.body.appendChild(overlay);
 }
 function closeModal(){ const m = document.getElementById('modalOverlay'); if(m) m.remove(); }
+
+/* ===================== PROFILE DRAWERS ===================== */
+// Slide-out contact/company drawer, replacing the old "click a contact
+// name -> open LinkedIn directly" behaviour in the Grid. A small separate
+// LinkedIn icon still opens LinkedIn directly (event.stopPropagation()
+// keeps its click from also opening the drawer); clicking the name/card
+// body opens this drawer instead. No existing drawer/side-panel precedent
+// anywhere else in this codebase - openModal/closeModal above is only a
+// structural reference (overlay + close-on-outside-click), not something
+// extended.
+
+function currentGridCampaignName(){
+  try {
+    const camps = campaignsForGrid(currentGrid().id);
+    return camps.length === 1 ? camps[0].name : null;
+  } catch(e){ return null; }
+}
+
+function initials(name){
+  return (name||'').trim().split(/\s+/).slice(0,2).map(w=>w[0]||'').join('').toUpperCase();
+}
+
+function openDrawer(bodyHtml){
+  closeDrawer();
+  const overlay = document.createElement('div');
+  overlay.className = 'drawer-overlay';
+  overlay.id = 'drawerOverlay';
+  overlay.onclick = (e) => { if(e.target === overlay) closeDrawer(); };
+  const panel = document.createElement('div');
+  panel.className = 'profile-drawer';
+  panel.id = 'profileDrawer';
+  panel.innerHTML = bodyHtml;
+  overlay.appendChild(panel);
+  document.body.appendChild(overlay);
+  // setTimeout, not requestAnimationFrame - rAF callbacks are throttled/
+  // suspended for backgrounded tabs in some browsers, which could leave
+  // the drawer stuck off-screen if opened while the tab isn't focused.
+  setTimeout(() => panel.classList.add('open'), 10);
+}
+function closeDrawer(){
+  const o = document.getElementById('drawerOverlay');
+  if(o) o.remove();
+}
+function drawerBody(html){
+  const panel = document.getElementById('profileDrawer');
+  if(panel) panel.innerHTML = html;
+}
+function renderDrawerLoading(){
+  return `<button class="drawer-close" onclick="closeDrawer()">&times;</button><div class="muted" style="margin-top:40px;text-align:center;"><i class="ti ti-loader-2"></i> Loading profile...</div>`;
+}
+function renderDrawerError(msg){
+  return `<button class="drawer-close" onclick="closeDrawer()">&times;</button><div class="muted" style="margin-top:40px;text-align:center;">Could not load: ${esc(msg)}</div>`;
+}
+function renderNotesThread(notesText){
+  if(!notesText) return '<div class="muted" style="font-size:12px;">No notes yet.</div>';
+  return notesText.split('\n\n').filter(Boolean).map(e => `<div class="note-item">${esc(e)}</div>`).join('');
+}
+
+/* ---- Contact drawer ---- */
+
+async function openContactDrawer(name, campaignName){
+  window.__drawerContactName = name;
+  window.__drawerCampaignName = campaignName || null;
+  window.__drawerContactProfile = null;
+  openDrawer(renderDrawerLoading());
+  try {
+    const url = `/api/contacts/profile?name=${encodeURIComponent(name)}` + (campaignName ? `&campaignName=${encodeURIComponent(campaignName)}` : '');
+    const res = await fetch(url);
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__drawerContactProfile = data;
+    if(document.getElementById('profileDrawer')) drawerBody(renderContactDrawerContent(data, campaignName));
+  } catch(err){
+    if(document.getElementById('profileDrawer')) drawerBody(renderDrawerError(err.message));
+  }
+}
+
+function renderDrawerTouchPoint(tp, campaignName){
+  const isOther = !!(campaignName && tp.campaignName && tp.campaignName !== campaignName);
+  return `<div class="tp-item ${isOther?'other':''}">
+    <div style="display:flex;justify-content:space-between;"><strong>${esc(tp.type||'Touch point')}</strong><span class="muted">${fmtDate(tp.date)}</span></div>
+    <div style="margin-top:2px;">${esc((tp.notes||'').slice(0,140))}${(tp.notes||'').length>140?'…':''}</div>
+    ${tp.campaignName ? `<div class="muted" style="font-size:10.5px;margin-top:3px;">${esc(tp.campaignName)}${isOther && tp.relevantToCurrentCampaign ? ' · surfaced: related to this campaign' : ''}</div>` : ''}
+  </div>`;
+}
+
+function renderContactEnrichmentSection(c, fresh){
+  if(fresh){
+    return `
+    <div class="section-title" style="font-size:13px;"><i class="ti ti-search"></i> Enrichment</div>
+    <div class="muted" style="font-size:11px;margin-bottom:6px;">Last enriched ${fmtDate(fresh.enrichedDate)}</div>
+    <div style="font-size:12px;"><strong>Headline:</strong> ${esc(fresh.headline||'—')}</div>
+    <div style="font-size:12px;margin-top:6px;"><strong>Bio:</strong> ${esc(fresh.bioSummary||'—')}</div>
+    ${(fresh.recentPosts||[]).length ? `<div style="font-size:12px;margin-top:6px;"><strong>Recent posts:</strong><ul style="margin:4px 0 0 16px;padding:0;">${fresh.recentPosts.map(p=>`<li>${esc(p.summary)}</li>`).join('')}</ul></div>` : ''}
+    ${(fresh.newsMentions||[]).length ? `<div style="font-size:12px;margin-top:6px;"><strong>News:</strong><ul style="margin:4px 0 0 16px;padding:0;">${fresh.newsMentions.map(n=>`<li>${esc(n)}</li>`).join('')}</ul></div>` : ''}
+    <div style="font-size:12px;margin-top:6px;"><strong>Years in role:</strong> ${esc(fresh.yearsInRole||'—')}</div>
+    ${(fresh.previousCompanies||[]).length ? `<div style="font-size:12px;margin-top:6px;"><strong>Previous companies:</strong> ${esc(fresh.previousCompanies.join(', '))}</div>` : ''}
+    `;
+  }
+  return `
+  <div class="section-title" style="font-size:13px;"><i class="ti ti-search"></i> Enrichment</div>
+  ${c.lastEnrichedDate ? `<div class="muted" style="font-size:11px;">Last enriched ${fmtDate(c.lastEnrichedDate)}. Press Enrich to refresh.</div>` : '<div class="muted" style="font-size:12px;">Not enriched yet - press Enrich to research this contact.</div>'}
+  `;
+}
+
+function renderContactDrawerContent(data, campaignName){
+  const c = data.contact;
+  const myTps = (data.touchPoints||[]).filter(tp => campaignName ? tp.campaignName === campaignName : true);
+  const otherTps = campaignName ? (data.touchPoints||[]).filter(tp => tp.campaignName && tp.campaignName !== campaignName) : [];
+  const otherSurfaced = otherTps.filter(tp => tp.relevantToCurrentCampaign);
+  const otherCollapsed = otherTps.filter(tp => !tp.relevantToCurrentCampaign);
+  const mainList = myTps.concat(otherSurfaced);
+
+  return `
+  <button class="drawer-close" onclick="closeDrawer()">&times;</button>
+  <div style="display:flex;gap:14px;align-items:flex-start;">
+    <div class="drawer-avatar">${esc(initials(c.fullName))}</div>
+    <div style="flex:1;min-width:0;">
+      <div style="font-weight:800;font-size:16px;">${esc(c.fullName)}</div>
+      <div class="muted" style="font-size:12.5px;">${esc(c.jobTitle)}${c.companyName ? ' · '+esc(c.companyName) : ''}</div>
+      <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
+        ${c.linkedinUrl ? `<a href="${esc(c.linkedinUrl)}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm"><i class="ti ti-brand-linkedin"></i></a>` : ''}
+        <button class="btn btn-secondary btn-sm" id="enrichContactBtn" onclick="enrichContactDrawer()"><i class="ti ti-sparkles"></i> Enrich</button>
+      </div>
+      <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
+        ${c.journeyStage ? `<span class="tag tag-connected">${esc(c.journeyStage)}</span>` : ''}
+        ${data.sequenceStage ? `<span class="tag tag-messaging">${esc(data.sequenceStage)}</span>` : ''}
+      </div>
+    </div>
+  </div>
+
+  ${(data.campaigns||[]).length ? `<div class="drawer-section">
+    <div class="muted" style="font-size:11px;font-weight:700;margin-bottom:6px;">CAMPAIGNS</div>
+    ${data.campaigns.map(camp=>`<span class="pill" style="margin:0 4px 4px 0;">${esc(camp.name)}</span>`).join('')}
+  </div>` : ''}
+
+  <div class="drawer-section" id="enrichmentSection">
+    ${renderContactEnrichmentSection(c)}
+  </div>
+
+  <div class="drawer-section">
+    <div class="section-title" style="font-size:13px;"><i class="ti ti-history"></i> ${campaignName ? 'This campaign' : 'Account history'}</div>
+    ${c.notes !== undefined && data.firstContactedDate ? `<div class="muted" style="font-size:11px;margin-bottom:8px;">First contacted ${fmtDate(data.firstContactedDate)}</div>` : ''}
+    ${mainList.length ? mainList.map(tp=>renderDrawerTouchPoint(tp, campaignName)).join('') : '<div class="muted" style="font-size:12px;">No touch points logged yet.</div>'}
+    ${otherCollapsed.length ? `<details style="margin-top:8px;">
+      <summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--muted);">Other interactions (${otherCollapsed.length}) - from other campaigns</summary>
+      ${otherCollapsed.map(tp=>renderDrawerTouchPoint(tp, campaignName)).join('')}
+    </details>` : ''}
+    ${(data.deals||[]).length ? `<div class="muted" style="font-size:11px;font-weight:700;margin-top:12px;margin-bottom:6px;">DEALS</div>${data.deals.map(d=>`<div class="tp-item">${esc(d.outcome)}${d.dealValue?' · $'+Number(d.dealValue).toLocaleString():''} · ${fmtDate(d.date)}${d.campaignName?' · '+esc(d.campaignName):''}</div>`).join('')}` : ''}
+  </div>
+
+  <div class="drawer-section">
+    <div class="section-title" style="font-size:13px;"><i class="ti ti-notes"></i> Notes</div>
+    <div id="contactNotesThread">${renderNotesThread(c.notes)}</div>
+    <textarea id="contactNoteInput" rows="2" placeholder="Peter mentioned to follow up next Wednesday..." style="margin-top:8px;"></textarea>
+    <button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="saveContactDrawerNote()" id="saveContactNoteBtn"><i class="ti ti-device-floppy"></i> Save note</button>
+  </div>
+  `;
+}
+
+async function enrichContactDrawer(){
+  const btn = document.getElementById('enrichContactBtn');
+  const original = btn ? btn.innerHTML : '';
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i>'; }
+  try {
+    const profile = window.__drawerContactProfile;
+    const res = await fetch('/api/contacts/enrich', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ name: window.__drawerContactName, company: profile ? profile.contact.companyName : '' })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Enrich failed');
+    const section = document.getElementById('enrichmentSection');
+    if(section && profile) section.innerHTML = renderContactEnrichmentSection(profile.contact, data);
+    toast('Contact enriched', 'success');
+  } catch(err){
+    toast('Could not enrich: ' + err.message, 'warn');
+  } finally {
+    if(btn){ btn.disabled = false; btn.innerHTML = original; }
+  }
+}
+
+async function saveContactDrawerNote(){
+  const input = document.getElementById('contactNoteInput');
+  const noteText = input.value.trim();
+  if(!noteText) return;
+  const name = window.__drawerContactName;
+  const campaignName = window.__drawerCampaignName;
+  const btn = document.getElementById('saveContactNoteBtn');
+  if(btn) btn.disabled = true;
+  try {
+    const res = await fetch('/api/contacts/notes', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name, noteText }) });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Save failed');
+    const thread = document.getElementById('contactNotesThread');
+    if(thread) thread.innerHTML = renderNotesThread(data.notes);
+    input.value = '';
+    toast('Note saved', 'success');
+    if(window.__drawerContactProfile) window.__drawerContactProfile.contact.notes = data.notes;
+
+    // Background - neither call blocks the "note saved" feedback above.
+    fetch('/api/contacts/update-summary', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name, noteText }) })
+      .catch(err => console.warn('Background summary update failed:', err.message));
+
+    fetch('/api/contacts/extract-actions', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name, noteText, campaignName: campaignName || undefined }) })
+      .then(res2 => res2.json())
+      .then(d2 => {
+        (d2.actions || []).forEach(a => {
+          toastWithUndo(`Calendar reminder created: ${a.description} — ${fmtDate(a.dueDate)}. Undo?`, () => {
+            fetch(`/api/reminders/${a.reminderId}`, { method:'DELETE' }).catch(err => console.warn('Undo delete failed:', err.message));
+          });
+        });
+      })
+      .catch(err => console.warn('Extract actions failed:', err.message));
+  } catch(err){
+    toast('Could not save note: ' + err.message, 'warn');
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
+/* ---- Company drawer ---- */
+
+async function openCompanyDrawer(name){
+  window.__drawerCompanyName = name;
+  window.__drawerCompanyProfile = null;
+  openDrawer(renderDrawerLoading());
+  try {
+    const res = await fetch(`/api/companies/profile?name=${encodeURIComponent(name)}`);
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__drawerCompanyProfile = data;
+    if(document.getElementById('profileDrawer')) drawerBody(renderCompanyDrawerContent(data));
+  } catch(err){
+    if(document.getElementById('profileDrawer')) drawerBody(renderDrawerError(err.message));
+  }
+}
+
+function renderCompanyEnrichmentSection(c, fresh){
+  if(fresh){
+    return `
+    <div class="section-title" style="font-size:13px;"><i class="ti ti-search"></i> Enrichment</div>
+    <div class="muted" style="font-size:11px;margin-bottom:6px;">Last enriched ${fmtDate(fresh.enrichedDate)}</div>
+    <div style="font-size:12px;"><strong>Industry:</strong> ${esc(fresh.industry||'—')}</div>
+    <div style="font-size:12px;margin-top:6px;"><strong>Estimated size:</strong> ${esc(fresh.estimatedSize||'—')}</div>
+    <div style="font-size:12px;margin-top:6px;"><strong>LinkedIn signal:</strong> ${esc(fresh.linkedinSignalSummary||'—')}</div>
+    ${(fresh.recentNews||[]).length ? `<div style="font-size:12px;margin-top:6px;"><strong>Recent news:</strong><ul style="margin:4px 0 0 16px;padding:0;">${fresh.recentNews.map(n=>`<li>${esc(n)}</li>`).join('')}</ul></div>` : ''}
+    ${(fresh.techStack||[]).length ? `<div style="font-size:12px;margin-top:6px;"><strong>Tech stack:</strong> ${esc(fresh.techStack.join(', '))}</div>` : ''}
+    `;
+  }
+  return `
+  <div class="section-title" style="font-size:13px;"><i class="ti ti-search"></i> Enrichment</div>
+  ${c.lastEnrichedDate ? `<div class="muted" style="font-size:11px;">Last enriched ${fmtDate(c.lastEnrichedDate)}. Press Enrich to refresh.</div>` : '<div class="muted" style="font-size:12px;">Not enriched yet - press Enrich to research this company.</div>'}
+  `;
+}
+
+function renderCompanyDrawerContent(data){
+  const c = data.company;
+  return `
+  <button class="drawer-close" onclick="closeDrawer()">&times;</button>
+  <div style="display:flex;gap:14px;align-items:flex-start;">
+    <div class="drawer-avatar">${esc(initials(c.name))}</div>
+    <div style="flex:1;min-width:0;">
+      <div style="font-weight:800;font-size:16px;">${esc(c.name)}</div>
+      <div class="muted" style="font-size:12.5px;">${esc(c.industry)}${c.sector?' · '+esc(c.sector):''}</div>
+      <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
+        ${c.linkedinUrl ? `<a href="${esc(c.linkedinUrl)}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm"><i class="ti ti-brand-linkedin"></i></a>` : ''}
+        <button class="btn btn-secondary btn-sm" id="enrichCompanyBtn" onclick="enrichCompanyDrawer()"><i class="ti ti-sparkles"></i> Enrich</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="drawer-section" id="companyEnrichmentSection">
+    ${renderCompanyEnrichmentSection(c)}
+  </div>
+
+  ${c.latestSignal ? `<div class="drawer-section">
+    <div class="muted" style="font-size:11px;font-weight:700;margin-bottom:4px;">LATEST SIGNAL</div>
+    <div style="font-size:12px;">${esc(c.latestSignal)}${c.signalDate?` <span class="muted">(${fmtDate(c.signalDate)})</span>`:''}</div>
+  </div>` : ''}
+
+  ${(data.keyContacts||[]).length ? `<div class="drawer-section">
+    <div class="muted" style="font-size:11px;font-weight:700;margin-bottom:6px;">KEY CONTACTS</div>
+    ${data.keyContacts.map(kc=>`<div class="tp-item" style="cursor:pointer;" onclick="openContactDrawer('${esc(kc.name)}', null)"><strong>${esc(kc.name)}</strong>${kc.journeyStage?` <span class="muted">· ${esc(kc.journeyStage)}</span>`:''}</div>`).join('')}
+  </div>` : ''}
+
+  <div class="drawer-section">
+    <div class="section-title" style="font-size:13px;"><i class="ti ti-history"></i> Account history</div>
+    ${(data.touchPoints||[]).length ? data.touchPoints.map(tp=>`<div class="tp-item"><div style="display:flex;justify-content:space-between;"><strong>${esc(tp.contactName)}</strong><span class="muted">${fmtDate(tp.date)}</span></div><div style="margin-top:2px;">${esc((tp.notes||'').slice(0,140))}${(tp.notes||'').length>140?'…':''}</div></div>`).join('') : '<div class="muted" style="font-size:12px;">No touch points logged yet.</div>'}
+    ${(data.deals||[]).length ? `<div class="muted" style="font-size:11px;font-weight:700;margin-top:12px;margin-bottom:6px;">DEALS</div>${data.deals.map(d=>`<div class="tp-item">${esc(d.outcome)}${d.dealValue?' · $'+Number(d.dealValue).toLocaleString():''} · ${fmtDate(d.date)}</div>`).join('')}` : ''}
+    ${(data.contentSignals||[]).length ? `<div class="muted" style="font-size:11px;font-weight:700;margin-top:12px;margin-bottom:6px;">CONTENT SIGNALS</div>${data.contentSignals.map(s=>`<div class="tp-item">${esc(s.theme)}</div>`).join('')}` : ''}
+  </div>
+
+  <div class="drawer-section">
+    <div class="section-title" style="font-size:13px;"><i class="ti ti-notes"></i> Notes</div>
+    <div id="companyNotesThread">${renderNotesThread(c.notes)}</div>
+    <textarea id="companyNoteInput" rows="2" placeholder="Notes about this account..." style="margin-top:8px;"></textarea>
+    <button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="saveCompanyDrawerNote()" id="saveCompanyNoteBtn"><i class="ti ti-device-floppy"></i> Save note</button>
+  </div>
+  `;
+}
+
+async function enrichCompanyDrawer(){
+  const btn = document.getElementById('enrichCompanyBtn');
+  const original = btn ? btn.innerHTML : '';
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i>'; }
+  try {
+    const res = await fetch('/api/companies/enrich', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: window.__drawerCompanyName }) });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Enrich failed');
+    const section = document.getElementById('companyEnrichmentSection');
+    const profile = window.__drawerCompanyProfile;
+    if(section && profile) section.innerHTML = renderCompanyEnrichmentSection(profile.company, data);
+    toast('Company enriched', 'success');
+  } catch(err){
+    toast('Could not enrich: ' + err.message, 'warn');
+  } finally {
+    if(btn){ btn.disabled = false; btn.innerHTML = original; }
+  }
+}
+
+async function saveCompanyDrawerNote(){
+  const input = document.getElementById('companyNoteInput');
+  const noteText = input.value.trim();
+  if(!noteText) return;
+  const name = window.__drawerCompanyName;
+  const btn = document.getElementById('saveCompanyNoteBtn');
+  if(btn) btn.disabled = true;
+  try {
+    const res = await fetch('/api/companies/notes', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name, noteText }) });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Save failed');
+    const thread = document.getElementById('companyNotesThread');
+    if(thread) thread.innerHTML = renderNotesThread(data.notes);
+    input.value = '';
+    toast('Note saved', 'success');
+    if(window.__drawerCompanyProfile) window.__drawerCompanyProfile.company.notes = data.notes;
+
+    fetch('/api/companies/update-summary', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name, noteText }) })
+      .catch(err => console.warn('Background summary update failed:', err.message));
+
+    fetch('/api/companies/extract-actions', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name, noteText }) })
+      .then(res2 => res2.json())
+      .then(d2 => {
+        (d2.actions || []).forEach(a => {
+          toastWithUndo(`Calendar reminder created: ${a.description} — ${fmtDate(a.dueDate)}. Undo?`, () => {
+            fetch(`/api/reminders/${a.reminderId}`, { method:'DELETE' }).catch(err => console.warn('Undo delete failed:', err.message));
+          });
+        });
+      })
+      .catch(err => console.warn('Extract actions failed:', err.message));
+  } catch(err){
+    toast('Could not save note: ' + err.message, 'warn');
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
+/* ---- Toast with undo (adds to, does not replace, toast()) ---- */
+function toastWithUndo(message, onUndo){
+  const c = document.getElementById('toastContainer');
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.innerHTML = `<i class="ti ti-calendar-plus"></i><span>${esc(message)}</span> <button class="btn btn-ghost btn-sm" style="margin-left:8px;">Undo</button>`;
+  let undone = false;
+  el.querySelector('button').onclick = () => { undone = true; onUndo(); el.remove(); };
+  c.appendChild(el);
+  setTimeout(() => {
+    if(!undone){ el.style.transition = 'opacity .3s'; el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }
+  }, 5000);
+}
 
 /* Booking modal */
 function openBookingModal(cid){
@@ -5489,7 +5874,9 @@ function renderCalendar(){
       const dayEvents = events.filter(ev => ev.date === dateStr);
       return `<div class="cal-cell ${isToday?'today':''}">
         <div class="cal-date">${d}</div>
-        ${dayEvents.map(ev => `<div class="event-chip ${eventColorByAssignee(ev.assigneeId)}" onclick="openDealNotesModal('${ev.dealId}')">${esc(firstName(ev.contactName))} · ${esc(ev.stage)}
+        ${dayEvents.map(ev => ev.type === 'reminder' ? `<div class="event-chip reminder-chip" onclick="openReminderConfirm('${ev.reminderId}')"><i class="ti ti-bell" style="font-size:10px;"></i> ${esc((ev.description||'').slice(0,28))}
+          <div class="event-tooltip">${esc(ev.description)}<br>${ev.contactName?esc(ev.contactName):(ev.companyName?esc(ev.companyName):'')}${ev.campaignName?' · '+esc(ev.campaignName):''}, ${fmtDate(ev.date)}</div>
+        </div>` : `<div class="event-chip ${eventColorByAssignee(ev.assigneeId)}" onclick="openDealNotesModal('${ev.dealId}')">${esc(firstName(ev.contactName))} · ${esc(ev.stage)}
           <div class="event-tooltip">${esc(ev.contactName)} — ${esc(ev.companyName)}<br>${esc(ev.campaignName)} · ${esc(ev.stage)}<br>${ev.assigneeName?esc(ev.assigneeName):'Unassigned'}, ${fmtDate(ev.date)}</div>
         </div>`).join('')}
       </div>`;
@@ -5515,6 +5902,35 @@ function calNav(dir){
   renderPage();
 }
 function calToday(){ state.calMonth = TODAY.getMonth(); state.calYear = TODAY.getFullYear(); renderPage(); }
+
+// Reminders have no notes thread like deals do, so clicking one on the
+// calendar gets a small mark-done/delete confirm instead of the full
+// openDealNotesModal flow.
+function openReminderConfirm(reminderId){
+  const ev = (window.__calendarEvents && window.__calendarEvents.find) ? window.__calendarEvents.find(e => e.type === 'reminder' && e.reminderId === reminderId) : null;
+  const header = ev ? `
+    <div style="margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border);font-size:12.5px;">
+      <div><strong>${esc(ev.description)}</strong></div>
+      <div class="muted">${ev.contactName?esc(ev.contactName):(ev.companyName?esc(ev.companyName):'')}${ev.campaignName?' · '+esc(ev.campaignName):''} · ${fmtDate(ev.date)}</div>
+    </div>` : '';
+  const footer = `
+    <button class="btn btn-secondary" onclick="closeModal()">Close</button>
+    <button class="btn btn-primary" onclick="deleteReminder('${reminderId}')"><i class="ti ti-check"></i> Mark done / remove</button>
+  `;
+  openModal('Reminder', header, footer);
+}
+function deleteReminder(reminderId){
+  fetch(`/api/reminders/${reminderId}`, { method:'DELETE' }).then(res=>res.json()).then(data=>{
+    if(!data.success){ toast('Could not remove reminder', 'warn'); return; }
+    closeModal();
+    if(Array.isArray(window.__calendarEvents)){
+      const i = window.__calendarEvents.findIndex(e => e.type==='reminder' && e.reminderId===reminderId);
+      if(i>-1) window.__calendarEvents.splice(i,1);
+    }
+    toast('Reminder removed', 'success');
+    renderPage();
+  }).catch(err=>toast('Could not remove reminder: '+err.message,'warn'));
+}
 
 /* ===================== ANALYTICS PAGE ===================== */
 
