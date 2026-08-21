@@ -197,7 +197,12 @@ app.get('/api/airtable/contact', async (req, res) => {
 app.post('/api/airtable/contact', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
-  const { name, company, role, linkedinUrl, state: contactState, icpRoleCategory, notes, companyLinkedinUrl, gridName } = req.body;
+  // Note: "gridName" was previously written to a "Grid Name" field that
+  // does not exist on the real Contacts table - removed rather than added,
+  // per instruction not to create missing fields. Grid membership is still
+  // tracked locally in the app's own state; it just isn't mirrored to
+  // Airtable right now.
+  const { name, company, role, linkedinUrl, state: contactState, icpRoleCategory, notes, companyLinkedinUrl } = req.body;
   if (!name || !company) return res.status(400).json({ error: 'name and company are required' });
 
   try {
@@ -216,8 +221,7 @@ app.post('/api/airtable/contact', async (req, res) => {
       'Job Title': role || '',
       'LinkedIn URL': linkedinUrl || '',
       'Journey Stage': mapStateToStage(contactState),
-      'Notes': notes || '',
-      'Grid Name': gridName || ''
+      'Notes': notes || ''
     };
     if (companyLinkedinUrl) fields['Company LinkedIn URL'] = companyLinkedinUrl;
 
@@ -243,7 +247,9 @@ app.post('/api/airtable/contact', async (req, res) => {
 app.post('/api/airtable/company', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
-  const { name, gridName } = req.body;
+  // "gridName" no longer written - see the matching note in
+  // POST /api/airtable/contact above.
+  const { name } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
 
   try {
@@ -258,7 +264,7 @@ app.post('/api/airtable/company', async (req, res) => {
     }
 
     const data = await airtableRequest('POST', 'Companies', {
-      records: [{ fields: { 'Company Name': name, 'Grid Name': gridName || '' } }]
+      records: [{ fields: { 'Company Name': name } }]
     });
     res.json({ success: true, skipped: false, recordId: data.records[0].id });
   } catch (err) {
@@ -308,6 +314,11 @@ app.patch('/api/airtable/company/linkedin', async (req, res) => {
 app.post('/api/airtable/campaign', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
+  // pitchAngle/objectionHandling have no matching fields on the real
+  // Campaigns table (no "Pitch Angle"/"Objection Handling" columns exist),
+  // so they're folded into the existing "Strategy Notes" field as
+  // labelled sections rather than dropped - that field already exists and
+  // is semantically the right home for them.
   const { name, goal, product, targetIcp, contactIds, sequenceTemplates, strategyNotes, pitchAngle, objectionHandling, successMetric, startDate, status } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
 
@@ -319,6 +330,10 @@ app.post('/api/airtable/campaign', async (req, res) => {
     const searchData = await searchRes.json();
     const existing = searchData.records && searchData.records[0];
 
+    const strategyNotesParts = [strategyNotes || ''];
+    if (pitchAngle) strategyNotesParts.push(`Pitch angle: ${pitchAngle}`);
+    if (objectionHandling) strategyNotesParts.push(`Objection handling: ${objectionHandling}`);
+
     const fields = {
       'Name': name,
       'Goal': goal || '',
@@ -326,9 +341,7 @@ app.post('/api/airtable/campaign', async (req, res) => {
       'Target ICP': targetIcp || '',
       'Contact IDs': (contactIds || []).join(', '),
       'Sequence Templates': sequenceTemplates || '',
-      'Strategy Notes': strategyNotes || '',
-      'Pitch Angle': pitchAngle || '',
-      'Objection Handling': objectionHandling || '',
+      'Strategy Notes': strategyNotesParts.filter(Boolean).join('\n\n'),
       'Success Metric': successMetric || '',
       'Start Date': startDate || '',
       'Status': status || 'Draft'
@@ -383,10 +396,18 @@ app.patch('/api/campaign/status', async (req, res) => {
 // on Touch Points - previously "company" was accepted but never written
 // anywhere; every existing caller that already sends a company name now
 // gets it properly linked as a bonus, not a behaviour change for them.
+// The real Touch Points table has no "Company" linked field at all (only
+// "Contact"), no "Replied" checkbox, its long-text notes field is named
+// "Summary" not "Notes", and its AI-brief-style field is named "Outreach
+// Brief" not "AI Brief". Company association still works fine via Contact
+// -> Contact's own Company link wherever this app needs it; "replied" is
+// derived from Outcome === "Replied" everywhere it's read, which is what
+// this field was always set from anyway, so nothing is lost by not storing
+// it a second time as a separate boolean.
 app.post('/api/airtable/touchpoint', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
-  const { contactName, contactNames, contactRecordIds, company, companyName, companyRecordId, date, type, notes, outcome, communicationMethod, aiBrief } = req.body;
+  const { contactName, contactNames, contactRecordIds, date, type, notes, outcome, communicationMethod, aiBrief } = req.body;
   if (!type) return res.status(400).json({ error: 'type is required' });
 
   try {
@@ -403,24 +424,13 @@ app.post('/api/airtable/touchpoint', async (req, res) => {
     const fields = {
       'Date': date || new Date().toISOString().slice(0, 10),
       'Type': type,
-      'Notes': notes || '',
+      'Summary': notes || '',
       'Outcome': outcome || 'No reply',
-      'Direction': 'Outbound',
-      'Replied': outcome === 'Replied'
+      'Direction': 'Outbound'
     };
     if (communicationMethod) fields['Communication Method'] = communicationMethod;
-    if (aiBrief) fields['AI Brief'] = aiBrief;
+    if (aiBrief) fields['Outreach Brief'] = aiBrief;
     if (contactIds.length) fields['Contact'] = contactIds;
-
-    let resolvedCompanyId = companyRecordId || null;
-    if (!resolvedCompanyId) {
-      const resolvedCompanyName = companyName || company;
-      if (resolvedCompanyName) {
-        const companyRecord = await findRecordByFieldName('Companies', 'Company Name', resolvedCompanyName);
-        if (companyRecord) resolvedCompanyId = companyRecord.id;
-      }
-    }
-    if (resolvedCompanyId) fields['Company'] = [resolvedCompanyId];
 
     const data = await airtableRequest('POST', 'Touch Points', { records: [{ fields }] });
     res.json({ success: true, recordId: data.records[0].id });
@@ -573,10 +583,11 @@ app.get('/api/enrich/linkedin-org-id', async (req, res) => {
 // ===================== LEARNING DATA =====================
 // Historical customer/deal CSVs get mined by Claude for ICP and sales
 // patterns, and the resulting analysis is stored in the Airtable Learning
-// Data table (fields: Type, Analysis, Record Count, Date - unconfirmed,
-// guessed to match existing table-field-naming conventions). Every future
-// analysis, including /api/intelligence, pulls this table back in as
-// context so it compounds with each upload instead of starting fresh.
+// Data table (fields: Type, Analysis, Record Count, Created Date - the
+// date field is actually named "Created Date" on the real table, not
+// "Date").  Every future analysis, including /api/intelligence, pulls this
+// table back in as context so it compounds with each upload instead of
+// starting fresh.
 
 async function fetchLearningData() {
   try {
@@ -585,7 +596,7 @@ async function fetchLearningData() {
       type: r.fields['Type'] || '',
       analysis: r.fields['Analysis'] || '',
       recordCount: r.fields['Record Count'] || 0,
-      date: r.fields['Date'] || ''
+      date: r.fields['Created Date'] || ''
     }));
   } catch (err) {
     console.warn('Could not fetch Learning Data (table may not exist yet):', err.message);
@@ -600,7 +611,7 @@ async function storeLearningData(type, analysis, recordCount) {
         'Type': type,
         'Analysis': JSON.stringify(analysis),
         'Record Count': recordCount,
-        'Date': new Date().toISOString().slice(0, 10)
+        'Created Date': new Date().toISOString().slice(0, 10)
       }
     }]
   });
@@ -812,7 +823,7 @@ function computeCampaignPerformance(campaigns, contacts, touchPoints, conversion
         (!camp.startDate || !tp.date || tp.date >= camp.startDate)
       );
       const touchPointsSent = campaignTouchPoints.length;
-      const replies = campaignTouchPoints.filter(tp => tp.replied || tp.outcome === 'Replied').length;
+      const replies = campaignTouchPoints.filter(tp => tp.outcome === 'Replied').length;
       const bookings = conversions.filter(cv => cv.campaign === camp.name).length;
       const contactsTargeted = targetNames.length;
       const conversionRate = contactsTargeted ? Math.round((bookings / contactsTargeted) * 100) : 0;
@@ -857,9 +868,8 @@ app.post('/api/intelligence', async (req, res) => {
       date: r.fields['Date'] || '',
       type: r.fields['Type'] || '',
       outcome: r.fields['Outcome'] || '',
-      replied: !!r.fields['Replied'],
       direction: r.fields['Direction'] || '',
-      notes: r.fields['Notes'] || ''
+      notes: r.fields['Summary'] || ''
     }));
 
     const whatsWorking = computeWhatsWorking(conversions);
@@ -1517,7 +1527,7 @@ function computeCampaignAnalytics(campaign, contacts, touchPoints, conversions) 
   oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
   const touchPointsSentThisWeek = campaignTouchPoints.filter(tp => tp.date && new Date(tp.date) >= oneWeekAgo).length;
 
-  const replies = campaignTouchPoints.filter(tp => tp.replied || tp.outcome === 'Replied').length;
+  const replies = campaignTouchPoints.filter(tp => tp.outcome === 'Replied').length;
   const replyRate = campaignTouchPoints.length ? Math.round((replies / campaignTouchPoints.length) * 100) : 0;
 
   const campaignConversions = conversions.filter(cv => cv.campaign === campaign.name);
@@ -1586,8 +1596,7 @@ app.get('/api/campaign/:id/analytics', async (req, res) => {
     const touchPoints = (touchPointsData.records || []).map(r => ({
       contact: (r.fields['Contact'] || [])[0] || null,
       date: r.fields['Date'] || '',
-      outcome: r.fields['Outcome'] || '',
-      replied: !!r.fields['Replied']
+      outcome: r.fields['Outcome'] || ''
     }));
 
     const analytics = computeCampaignAnalytics(campaign, contacts, touchPoints, conversions);
@@ -1629,8 +1638,7 @@ app.get('/api/campaign/:id/insights', async (req, res) => {
       contact: (r.fields['Contact'] || [])[0] || null,
       date: r.fields['Date'] || '',
       type: r.fields['Type'] || '',
-      outcome: r.fields['Outcome'] || '',
-      replied: !!r.fields['Replied']
+      outcome: r.fields['Outcome'] || ''
     }));
 
     const nameToId = {};
@@ -1752,7 +1760,7 @@ app.get('/api/context/data', async (req, res) => {
     (touchPointsData.records || []).forEach(r => {
       (r.fields['Contact'] || []).forEach(cid => {
         if (!touchPointsByContact[cid]) touchPointsByContact[cid] = [];
-        touchPointsByContact[cid].push({ date: r.fields['Date'] || '', type: r.fields['Type'] || '', notes: r.fields['Notes'] || '' });
+        touchPointsByContact[cid].push({ date: r.fields['Date'] || '', type: r.fields['Type'] || '', notes: r.fields['Summary'] || '' });
       });
     });
 
@@ -1826,7 +1834,7 @@ app.post('/api/context/debrief-questions', async (req, res) => {
     const touchPointsData = await airtableRequest('GET', 'Touch Points');
     const recentTouchPoints = (touchPointsData.records || [])
       .filter(r => (r.fields['Contact'] || []).includes(contactId))
-      .map(r => ({ date: r.fields['Date'] || '', type: r.fields['Type'] || '', notes: r.fields['Notes'] || '' }))
+      .map(r => ({ date: r.fields['Date'] || '', type: r.fields['Type'] || '', notes: r.fields['Summary'] || '' }))
       .sort((a, b) => new Date(b.date) - new Date(a.date))
       .slice(0, 3);
 
@@ -1876,7 +1884,7 @@ app.post('/api/context/update-summaries', async (req, res) => {
       const f = record.fields || {};
       const touchPoints = (touchPointsData.records || [])
         .filter(r => (r.fields['Contact'] || []).includes(contactId))
-        .map(r => ({ date: r.fields['Date'] || '', type: r.fields['Type'] || '', notes: r.fields['Notes'] || '', outcome: r.fields['Outcome'] || '' }))
+        .map(r => ({ date: r.fields['Date'] || '', type: r.fields['Type'] || '', notes: r.fields['Summary'] || '', outcome: r.fields['Outcome'] || '' }))
         .sort((a, b) => new Date(b.date) - new Date(a.date));
 
       const prompt = `You are maintaining the AI Summary field for a contact in T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM.
@@ -1906,8 +1914,8 @@ Rewrite the AI Summary as a concise intelligence brief for Marcus to read before
           .filter(r => (r.fields['Company'] || []).includes(companyId))
           .map(r => r.id);
         const companyTouchPoints = (touchPointsData.records || [])
-          .filter(r => (r.fields['Company'] || []).includes(companyId) || (r.fields['Contact'] || []).some(cid => companyContactIds.includes(cid)))
-          .map(r => ({ date: r.fields['Date'] || '', type: r.fields['Type'] || '', notes: r.fields['Notes'] || '' }))
+          .filter(r => (r.fields['Contact'] || []).some(cid => companyContactIds.includes(cid)))
+          .map(r => ({ date: r.fields['Date'] || '', type: r.fields['Type'] || '', notes: r.fields['Summary'] || '' }))
           .sort((a, b) => new Date(b.date) - new Date(a.date));
 
         const prompt = `You are maintaining the AI Summary field for a company account in T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM.
@@ -2104,21 +2112,25 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 
     await airtableRequest('PATCH', table, { records: [{ id: record.id, fields: { 'AI Summary': newSummary } }] });
 
+    // No plain-text "Company" field exists on Learning Data - only linked
+    // "Related Company"/"Related Contact" fields, so this links back to
+    // the record already resolved above instead of writing a name string.
+    // "Date" is also "Created Date" on the real table, same as elsewhere
+    // Learning Data is written.
     let learningDataWritten = false;
     if (tag === 'Past Customer' || tag === 'Past Deal') {
-      await airtableRequest('POST', 'Learning Data', {
-        records: [{
-          fields: {
-            'Type': tag,
-            'Company': targetName,
-            'Outcome': parsed.outcome || '',
-            'ICP Role': parsed.icpRole || '',
-            'Key Signals': parsed.keySignals || '',
-            'Source': 'Historical upload',
-            'Date': dateLabel
-          }
-        }]
-      });
+      const learningFields = {
+        'Type': tag,
+        'Outcome': parsed.outcome || '',
+        'ICP Role': parsed.icpRole || '',
+        'Key Signals': parsed.keySignals || '',
+        'Source': 'Historical upload',
+        'Created Date': dateLabel
+      };
+      if (targetType === 'Company') learningFields['Related Company'] = [record.id];
+      else learningFields['Related Contact'] = [record.id];
+
+      await airtableRequest('POST', 'Learning Data', { records: [{ fields: learningFields }] });
       learningDataWritten = true;
     }
 
