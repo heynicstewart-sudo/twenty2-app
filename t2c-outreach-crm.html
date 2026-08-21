@@ -350,6 +350,7 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .analysis-block h4{display:flex;align-items:center;gap:7px;font-size:13px;margin-bottom:10px;}
 .analysis-block ul{padding-left:18px;font-size:12.5px;line-height:1.6;}
 .learning-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;}
+.context-upload-grid{grid-template-columns:repeat(3,1fr);}
 .learning-panel{border-radius:12px;padding:16px;background:#f7f7fa;border:1px solid #e3e3ea;}
 .learning-panel h4{display:flex;align-items:center;gap:7px;font-size:13px;margin-bottom:6px;}
 .learning-result{margin-top:14px;font-size:12.5px;line-height:1.6;}
@@ -416,6 +417,7 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
   .an-stats{grid-template-columns:repeat(2,1fr);}
   .analysis-grid{grid-template-columns:1fr;}
   .learning-grid{grid-template-columns:1fr;}
+  .context-upload-grid{grid-template-columns:1fr;}
   .health-stat-grid{grid-template-columns:repeat(2,1fr);}
   .home-actions{grid-template-columns:repeat(2,1fr);}
   .howto-grid{grid-template-columns:1fr;}
@@ -791,6 +793,7 @@ function goToRunIntelligence(){
 const NAV = [
   { id:'home', label:'Home', icon:'ti-home' },
   { id:'dashboard', label:'Dashboard', icon:'ti-layout-dashboard' },
+  { id:'context', label:'Context', icon:'ti-database-cog' },
   { id:'grid', label:'Grid', icon:'ti-grid-dots', hidden:true },
   { id:'roadmap', label:'Roadmap', icon:'ti-route' },
   { id:'sequences', label:'Sequences', icon:'ti-git-branch' },
@@ -820,7 +823,7 @@ function navigate(page){
 
 function renderPage(){
   const el = document.getElementById('pageContent');
-  const renderers = { home: renderHome, dashboard: renderDashboard, howitworks: renderHowItWorks, grid: renderGrid, roadmap: renderRoadmap, sequences: renderSequences, campaigns: renderCampaigns, calendar: renderCalendar, analytics: renderAnalytics, intelligence: renderIntelligence, settings: renderSettings };
+  const renderers = { home: renderHome, dashboard: renderDashboard, howitworks: renderHowItWorks, grid: renderGrid, context: renderContext, roadmap: renderRoadmap, sequences: renderSequences, campaigns: renderCampaigns, calendar: renderCalendar, analytics: renderAnalytics, intelligence: renderIntelligence, settings: renderSettings };
   el.innerHTML = renderers[state.currentPage]();
   afterRender(state.currentPage);
 }
@@ -828,6 +831,7 @@ function renderPage(){
 function afterRender(page){
   if(page === 'sequences') initSequenceDrag();
   if(page === 'roadmap') initRoadmapDrag();
+  if(page === 'context' && !window.__contextData && !window.__contextDataLoading && !window.__contextDataError) loadContextData();
 }
 
 /* ===================== HOME ===================== */
@@ -883,6 +887,615 @@ function renderHome(){
     </div>
   </div>
   `;
+}
+
+/* ===================== CONTEXT PAGE ===================== */
+// Marcus's primary data input hub. Fetches live from Airtable into
+// window.__contextData rather than the reactive state/localStorage model -
+// Sequence Stage, AI Summary, Conversation Context and Next Message Draft
+// are new Airtable-only fields with no equivalent on state.contacts, and
+// folding them into the core contact model would be a much larger, riskier
+// change than this feature asked for. Journey Stage - which still drives
+// Dashboard prioritisation - is never touched by anything in this tab.
+
+const TOUCH_POINT_TYPE_OPTIONS_CONTEXT = ['Coffee','Call','LinkedIn DM','Email','Event','Other'];
+const HISTORICAL_UPLOAD_TAGS = ['Past Customer','Past Deal','Conversation History','General Background'];
+
+// silent=true refreshes window.__contextData in the background with no
+// re-render at all, so a just-shown result panel (e.g. "3 contacts
+// updated") isn't immediately wiped out by a full-page loading skeleton.
+// Used after every Section 1/2/3 action; the plain (non-silent) call is
+// only for the tab's initial load and the error-state Retry button.
+async function loadContextData(silent){
+  if(!silent){
+    window.__contextDataLoading = true;
+    window.__contextDataError = null;
+    renderPage();
+  }
+  try {
+    const res = await fetch('/api/context/data');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+    window.__contextData = data;
+  } catch(err){
+    if(!silent) window.__contextDataError = err.message;
+    else console.warn('Silent context data refresh failed:', err.message);
+  }
+  if(!silent){
+    window.__contextDataLoading = false;
+    renderPage();
+  }
+}
+
+function renderContext(){
+  if(window.__contextDataLoading){
+    return '<div class="card"><div class="muted"><i class="ti ti-loader-2"></i> Loading context data from Airtable...</div></div>';
+  }
+  if(window.__contextDataError){
+    return `<div class="card"><div class="muted">Could not load context data: ${esc(window.__contextDataError)}</div><button class="btn btn-secondary btn-sm" style="margin-top:10px;" onclick="loadContextData()"><i class="ti ti-refresh"></i> Retry</button></div>`;
+  }
+  if(!window.__contextData){
+    return '<div class="card"><div class="empty-state">Loading...</div></div>';
+  }
+  return `
+  <div class="section-title" style="font-size:20px;margin-bottom:2px;">Context</div>
+  <div class="muted" style="margin-bottom:14px;">Marcus's primary data input hub - log touch points, upload context, and keep AI Summaries current.</div>
+  <div id="ctxUpdatingIndicator" class="muted" style="font-size:11.5px;margin-bottom:14px;display:none;"><i class="ti ti-loader-2"></i> Updating AI summaries...</div>
+  ${renderTouchPointLogger()}
+  ${renderContextUploadSection()}
+  ${renderHistoricalUploadSection()}
+  `;
+}
+
+function showContextUpdatingIndicator(){
+  const el = document.getElementById('ctxUpdatingIndicator');
+  if(el) el.style.display = 'block';
+}
+function hideContextUpdatingIndicator(){
+  const el = document.getElementById('ctxUpdatingIndicator');
+  if(el) el.style.display = 'none';
+}
+
+/* ---- Section 1: Touch Point Logger ---- */
+
+function initContextLogger(){
+  window.__ctxLogger = {
+    companyId: '',
+    contactIds: [],
+    touchType: 'Coffee',
+    otherType: '',
+    date: isoDate(TODAY),
+    mode: null, // null | 'loading' | 'debrief' | 'notes'
+    debriefQuestions: [],
+    saving: false
+  };
+}
+
+function renderTouchPointLogger(){
+  if(!window.__ctxLogger) initContextLogger();
+  const logger = window.__ctxLogger;
+  const data = window.__contextData;
+  const contactsForCompany = logger.companyId ? data.contacts.filter(c => c.companyId === logger.companyId) : [];
+
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title"><i class="ti ti-message-2"></i> Touch Point Logger</div>
+    <div class="toolbar">
+      <div class="field"><label>Company</label>
+        <select id="ctxCompany" onchange="setContextCompany(this.value)">
+          <option value="">Select a company...</option>
+          ${data.companies.map(c=>`<option value="${esc(c.id)}" ${logger.companyId===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}
+        </select>
+      </div>
+      ${logger.companyId ? `
+      <div class="field"><label>Touch point type</label>
+        <select id="ctxTouchType" onchange="setContextTouchType(this.value)">
+          ${TOUCH_POINT_TYPE_OPTIONS_CONTEXT.map(t=>`<option ${logger.touchType===t?'selected':''}>${t}</option>`).join('')}
+        </select>
+      </div>
+      ${logger.touchType==='Other' ? `<div class="field"><label>Specify type</label><input id="ctxOtherType" value="${esc(logger.otherType)}" onchange="setContextOtherType(this.value)" placeholder="e.g. Webinar"></div>` : ''}
+      <div class="field"><label>Date</label><input type="date" id="ctxDate" value="${esc(logger.date)}" onchange="setContextDate(this.value)"></div>
+      ` : ''}
+    </div>
+    ${logger.companyId ? `
+    <div class="field">
+      <label>Contacts</label>
+      <div class="checkbox-row">
+        ${contactsForCompany.length ? contactsForCompany.map(c => `
+          <label class="checkbox-item"><input type="checkbox" value="${esc(c.id)}" ${logger.contactIds.includes(c.id)?'checked':''} onchange="toggleContextContact('${c.id}')"> ${esc(c.name)}${c.role?` <span class="muted">(${esc(c.role)})</span>`:''}</label>
+        `).join('') : '<span class="muted" style="font-size:12px;">No contacts on file for this company.</span>'}
+      </div>
+    </div>
+    ` : ''}
+    ${logger.companyId && logger.contactIds.length && !logger.mode ? `
+    <div style="display:flex;gap:10px;margin-top:12px;">
+      <button class="btn btn-primary btn-sm" onclick="getContextDebriefQuestions()"><i class="ti ti-sparkles"></i> Get AI Questions</button>
+      <button class="btn btn-secondary btn-sm" onclick="skipContextDebrief()"><i class="ti ti-arrow-right"></i> Skip AI, just log it</button>
+    </div>
+    ` : ''}
+    <div id="ctxDebriefArea">${renderContextDebriefArea(logger)}</div>
+  </div>
+  `;
+}
+
+function renderContextDebriefArea(logger){
+  if(logger.mode === 'loading') return '<div class="muted" style="margin-top:12px;font-size:12.5px;"><i class="ti ti-loader-2"></i> Getting questions from Claude...</div>';
+  if(logger.mode === 'debrief'){
+    return `
+    <div style="margin-top:14px;">
+      ${logger.debriefQuestions.map((q,i) => `<div class="field"><label>${esc(q)}</label><textarea id="ctxDebriefAnswer-${i}" rows="2"></textarea></div>`).join('')}
+      <button class="btn btn-primary btn-sm" onclick="saveContextTouchPoint()" ${logger.saving?'disabled':''}><i class="ti ti-device-floppy"></i> ${logger.saving?'Saving...':'Save touch point'}</button>
+    </div>`;
+  }
+  if(logger.mode === 'notes'){
+    return `
+    <div style="margin-top:14px;">
+      <div class="field"><label>Notes</label><textarea id="ctxNotes" rows="3"></textarea></div>
+      <button class="btn btn-primary btn-sm" onclick="saveContextTouchPoint()" ${logger.saving?'disabled':''}><i class="ti ti-device-floppy"></i> ${logger.saving?'Saving...':'Save touch point'}</button>
+    </div>`;
+  }
+  return '';
+}
+
+function setContextCompany(companyId){
+  const l = window.__ctxLogger;
+  l.companyId = companyId;
+  l.contactIds = [];
+  l.mode = null;
+  renderPage();
+}
+function setContextTouchType(type){
+  window.__ctxLogger.touchType = type;
+  window.__ctxLogger.mode = null;
+  renderPage();
+}
+function setContextOtherType(val){ window.__ctxLogger.otherType = val; }
+function setContextDate(val){ window.__ctxLogger.date = val; }
+function toggleContextContact(contactId){
+  const l = window.__ctxLogger;
+  const idx = l.contactIds.indexOf(contactId);
+  if(idx === -1) l.contactIds.push(contactId); else l.contactIds.splice(idx,1);
+  l.mode = null;
+  renderPage();
+}
+function skipContextDebrief(){
+  window.__ctxLogger.mode = 'notes';
+  renderPage();
+}
+
+async function getContextDebriefQuestions(){
+  const l = window.__ctxLogger;
+  l.mode = 'loading';
+  renderPage();
+  try {
+    const res = await fetch('/api/context/debrief-questions', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ contactId: l.contactIds[0] })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+    l.debriefQuestions = data.questions || [];
+    l.mode = l.debriefQuestions.length ? 'debrief' : 'notes';
+  } catch(err){
+    toast('Could not get AI questions: ' + err.message, 'warn');
+    l.mode = 'notes';
+  }
+  renderPage();
+}
+
+async function saveContextTouchPoint(){
+  const l = window.__ctxLogger;
+  const data = window.__contextData;
+  const company = data.companies.find(c => c.id === l.companyId);
+  const contacts = data.contacts.filter(c => l.contactIds.includes(c.id));
+  if(!company || !contacts.length) return;
+
+  const type = l.touchType === 'Other' ? (l.otherType.trim() || 'Other') : l.touchType;
+  const date = l.date || isoDate(TODAY);
+
+  let notes = '';
+  if(l.mode === 'debrief'){
+    notes = l.debriefQuestions.map((q,i) => {
+      const ans = (document.getElementById('ctxDebriefAnswer-'+i)?.value || '').trim();
+      return ans ? `Q: ${q}\nA: ${ans}` : '';
+    }).filter(Boolean).join('\n\n');
+  } else {
+    notes = (document.getElementById('ctxNotes')?.value || '').trim();
+  }
+
+  l.saving = true;
+  renderPage();
+
+  try {
+    const res = await fetch('/api/airtable/touchpoint', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        contactRecordIds: l.contactIds,
+        companyRecordId: l.companyId,
+        type, date, notes
+      })
+    });
+    const result = await res.json();
+    if(!res.ok) throw new Error(result.error || ('Request failed with status '+res.status));
+
+    toast('Touch point logged for ' + contacts.map(c=>c.name).join(', '), 'success');
+
+    showContextUpdatingIndicator();
+    fetch('/api/context/update-summaries', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ contactIds: l.contactIds, companyId: l.companyId })
+    }).then(() => { hideContextUpdatingIndicator(); loadContextData(true); })
+      .catch(() => hideContextUpdatingIndicator());
+
+    initContextLogger();
+    renderPage();
+  } catch(err){
+    l.saving = false;
+    toast('Could not save touch point: ' + err.message, 'warn');
+    renderPage();
+  }
+}
+
+/* ---- Section 2: Upload Context ---- */
+
+function renderContextUploadSection(){
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title"><i class="ti ti-upload"></i> Upload Context</div>
+    <div class="learning-grid context-upload-grid">
+      ${renderContextConnectionsCard()}
+      ${renderContextScreenshotCard()}
+      ${renderContextContentCard()}
+    </div>
+  </div>
+  `;
+}
+
+function renderContextConnectionsCard(){
+  return `
+  <div class="learning-panel">
+    <h4><i class="ti ti-brand-linkedin"></i> LinkedIn Connections</h4>
+    <p class="muted" style="font-size:12px;margin-bottom:12px;">Upload your LinkedIn connections CSV export. Matches First + Last name against Contacts and advances anyone in "Connection Requested" to "Connected".</p>
+    <input type="file" id="ctxConnectionsInput" accept=".csv" style="display:none;" onchange="handleContextConnectionsCsv(event)">
+    <button class="btn btn-secondary btn-sm" onclick="document.getElementById('ctxConnectionsInput').click()"><i class="ti ti-upload"></i> Upload CSV</button>
+    <div id="ctxConnectionsResult" class="learning-result"></div>
+  </div>
+  `;
+}
+
+function handleContextConnectionsCsv(event){
+  const file = event.target.files && event.target.files[0];
+  event.target.value = '';
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const rows = parseCsv(String(reader.result));
+    if(rows.length < 2){ toast('That CSV looks empty', 'warn'); return; }
+    runContextConnectionsImport(rows);
+  };
+  reader.onerror = () => toast('Could not read that file', 'warn');
+  reader.readAsText(file);
+}
+
+async function runContextConnectionsImport(rows){
+  const resultEl = document.getElementById('ctxConnectionsResult');
+  const headers = rows[0].map(h => h.trim().toLowerCase());
+  const firstIdx = headers.indexOf('first name');
+  const lastIdx = headers.indexOf('last name');
+  if(firstIdx === -1 || lastIdx === -1){
+    toast('CSV must have "First Name" and "Last Name" columns', 'warn');
+    return;
+  }
+
+  const contacts = window.__contextData.contacts;
+  const byName = {};
+  contacts.forEach(c => {
+    const key = c.name.trim().toLowerCase();
+    (byName[key] = byName[key] || []).push(c);
+  });
+
+  const toUpdate = [];
+  const flagged = [];
+  let skippedOtherStage = 0;
+
+  rows.slice(1).forEach(row => {
+    const first = (row[firstIdx]||'').trim();
+    const last = (row[lastIdx]||'').trim();
+    if(!first && !last) return;
+    const fullName = (first+' '+last).trim();
+    const matches = byName[fullName.toLowerCase()] || [];
+    if(matches.length !== 1){
+      flagged.push(`Could not match "${esc(fullName)}" from CSV. No contact updated.`);
+      return;
+    }
+    const contact = matches[0];
+    if(contact.sequenceStage !== 'Connection Requested'){
+      skippedOtherStage++;
+      return;
+    }
+    toUpdate.push(contact);
+  });
+
+  if(resultEl) resultEl.innerHTML = `<div class="muted"><i class="ti ti-loader-2"></i> Updating ${toUpdate.length} contact${toUpdate.length===1?'':'s'}...</div>`;
+
+  let updatedCount = 0;
+  for(const contact of toUpdate){
+    try {
+      const res = await fetch('/api/context/contact-fields', {
+        method: 'PATCH',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ contactId: contact.id, journeyStage: 'Connected', sequenceStage: 'Connected' })
+      });
+      if(res.ok) updatedCount++;
+    } catch(err){
+      console.warn('Connection update failed for', contact.name, err.message);
+    }
+  }
+
+  if(resultEl){
+    resultEl.innerHTML = `
+      <p style="font-size:12.5px;font-weight:700;">${updatedCount} contact${updatedCount===1?'':'s'} updated &middot; ${flagged.length} not found</p>
+      ${skippedOtherStage ? `<p class="muted" style="font-size:11.5px;margin-top:4px;">${skippedOtherStage} matched but not in "Connection Requested" - skipped.</p>` : ''}
+      ${flagged.length ? `<ul style="padding-left:18px;font-size:11.5px;margin-top:6px;">${flagged.map(f=>`<li>${f}</li>`).join('')}</ul>` : ''}
+    `;
+  }
+  toast(`${updatedCount} contacts updated from CSV`, updatedCount ? 'success' : 'warn');
+  if(updatedCount) loadContextData(true);
+}
+
+function renderContextScreenshotCard(){
+  return `
+  <div class="learning-panel">
+    <h4><i class="ti ti-message-circle"></i> DM / Email Screenshot or Paste</h4>
+    <p class="muted" style="font-size:12px;margin-bottom:12px;">Upload a screenshot, or paste the raw text of a DM or email exchange.</p>
+    <input type="file" id="ctxScreenshotInput" accept="image/*" style="display:none;" onchange="handleContextScreenshotUpload(event)">
+    <button class="btn btn-secondary btn-sm" onclick="document.getElementById('ctxScreenshotInput').click()"><i class="ti ti-upload"></i> Upload screenshot</button>
+    <div id="ctxScreenshotPreview" style="font-size:11.5px;margin-top:8px;"></div>
+    <div class="field" style="margin-top:10px;"><label>Or paste text</label><textarea id="ctxScreenshotText" rows="4" placeholder="Paste the conversation..."></textarea></div>
+    <button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="runContextParseScreenshot()"><i class="ti ti-sparkles"></i> Parse with Claude</button>
+    <div id="ctxScreenshotResult" class="learning-result"></div>
+  </div>
+  `;
+}
+
+function handleContextScreenshotUpload(event){
+  const file = event.target.files && event.target.files[0];
+  event.target.value = '';
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const match = String(reader.result).match(/^data:([^;]+);base64,(.*)$/);
+    if(match){
+      window.__ctxScreenshotImage = { mediaType: match[1], base64: match[2] };
+      const el = document.getElementById('ctxScreenshotPreview');
+      if(el) el.innerHTML = `<span class="tag tag-connected">${esc(file.name)} attached</span> <button class="btn btn-ghost btn-sm" onclick="clearContextScreenshot()"><i class="ti ti-x"></i></button>`;
+    }
+  };
+  reader.readAsDataURL(file);
+}
+function clearContextScreenshot(){
+  window.__ctxScreenshotImage = null;
+  const el = document.getElementById('ctxScreenshotPreview');
+  if(el) el.innerHTML = '';
+}
+
+async function runContextParseScreenshot(){
+  const image = window.__ctxScreenshotImage;
+  const text = (document.getElementById('ctxScreenshotText')?.value || '').trim();
+  if(!image && !text){ toast('Upload a screenshot or paste some text first', 'warn'); return; }
+
+  const resultEl = document.getElementById('ctxScreenshotResult');
+  if(resultEl) resultEl.innerHTML = '<div class="muted"><i class="ti ti-loader-2"></i> Reading with Claude...</div>';
+
+  try {
+    const res = await fetch('/api/context/parse-screenshot', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ image: image || undefined, text: image ? undefined : text })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+
+    if(!data.success){
+      if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;color:#b3413a;">${esc(data.reason)}</p>`;
+      return;
+    }
+
+    if(resultEl){
+      resultEl.innerHTML = `
+        <p style="font-size:12.5px;"><strong>${esc(data.contactName)}</strong> ${data.replied ? '<span class="tag tag-connected">Replied</span>' : '<span class="tag tag-opened">No reply yet</span>'}</p>
+        <p style="font-size:12px;margin-top:6px;">${esc(data.messageSummary)}</p>
+        <p class="muted" style="font-size:11.5px;margin-top:8px;">Stage: ${esc(data.previousStage||'—')} &rarr; ${esc(data.newStage||'—')}</p>
+        ${data.draft ? `<div style="margin-top:10px;"><div style="font-weight:700;font-size:11.5px;">Next message draft</div><textarea readonly rows="4" style="margin-top:4px;">${esc(data.draft)}</textarea></div>` : ''}
+      `;
+    }
+    toast('Conversation parsed and contact updated', 'success');
+    const textEl = document.getElementById('ctxScreenshotText');
+    if(textEl) textEl.value = '';
+    clearContextScreenshot();
+    loadContextData(true);
+  } catch(err){
+    if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;">Could not parse: ${esc(err.message)}</p>`;
+    toast('Could not parse screenshot: ' + err.message, 'warn');
+  }
+}
+
+function renderContextContentCard(){
+  return `
+  <div class="learning-panel">
+    <h4><i class="ti ti-news"></i> General Content</h4>
+    <p class="muted" style="font-size:12px;margin-bottom:12px;">Paste a LinkedIn post, article, announcement, or note about a contact or company.</p>
+    <div class="field"><label>Who or what is this about?</label><input id="ctxContentTarget" placeholder="Company or Contact name"></div>
+    <div class="field"><label>Type</label>
+      <select id="ctxContentTargetType">
+        <option value="Company">Company</option>
+        <option value="Contact">Contact</option>
+      </select>
+    </div>
+    <div class="field"><label>Content</label><textarea id="ctxContentBody" rows="4" placeholder="Paste the content..."></textarea></div>
+    <button class="btn btn-primary btn-sm" onclick="submitContextLogContent()"><i class="ti ti-sparkles"></i> Log this signal</button>
+    <div id="ctxContentResult" class="learning-result"></div>
+  </div>
+  `;
+}
+
+async function submitContextLogContent(){
+  const targetName = (document.getElementById('ctxContentTarget')?.value || '').trim();
+  const targetType = document.getElementById('ctxContentTargetType')?.value;
+  const content = (document.getElementById('ctxContentBody')?.value || '').trim();
+  if(!targetName || !content){ toast('Add both who this is about and the content', 'warn'); return; }
+
+  const resultEl = document.getElementById('ctxContentResult');
+  if(resultEl) resultEl.innerHTML = '<div class="muted"><i class="ti ti-loader-2"></i> Summarising with Claude...</div>';
+
+  try {
+    const res = await fetch('/api/context/log-content', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ content, targetType, targetName })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+
+    if(!data.success){
+      if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;color:#b3413a;">${esc(data.reason)}</p>`;
+      return;
+    }
+
+    if(resultEl) resultEl.innerHTML = `<p style="font-size:12.5px;">Logged: "${esc(data.appendedLine)}"</p>`;
+    toast('Signal logged to ' + targetName, 'success');
+    const bodyEl = document.getElementById('ctxContentBody');
+    if(bodyEl) bodyEl.value = '';
+    loadContextData(true);
+  } catch(err){
+    if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;">Could not log content: ${esc(err.message)}</p>`;
+    toast('Could not log content: ' + err.message, 'warn');
+  }
+}
+
+/* ---- Section 3: Historical Context Upload ---- */
+
+function renderHistoricalUploadSection(){
+  return `
+  <div class="card">
+    <div class="section-title"><i class="ti ti-history"></i> Historical Context Upload</div>
+    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Paste text, or upload a PDF or plain text file. Claude extracts decision makers, pain points, outcomes, objections and timelines into the linked record's AI Summary.</p>
+    <div class="toolbar">
+      <div class="field"><label>Tag</label>
+        <select id="ctxHistTag">
+          ${HISTORICAL_UPLOAD_TAGS.map(t=>`<option>${t}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field"><label>Type</label>
+        <select id="ctxHistTargetType">
+          <option value="Company">Company</option>
+          <option value="Contact">Contact</option>
+        </select>
+      </div>
+      <div class="field"><label>Company or Contact name</label><input id="ctxHistTarget" placeholder="e.g. Fortescue"></div>
+    </div>
+    <input type="file" id="ctxHistFileInput" accept=".pdf,.txt,text/plain,application/pdf" style="display:none;" onchange="handleContextHistoricalFile(event)">
+    <button class="btn btn-secondary btn-sm" onclick="document.getElementById('ctxHistFileInput').click()"><i class="ti ti-upload"></i> Upload PDF or text file</button>
+    <div id="ctxHistFilePreview" style="font-size:11.5px;margin-top:8px;"></div>
+    <div class="field" style="margin-top:10px;"><label>Or paste text</label><textarea id="ctxHistText" rows="5" placeholder="Paste the content..."></textarea></div>
+    <button class="btn btn-primary btn-sm" style="margin-top:10px;" onclick="submitContextHistoricalUpload()"><i class="ti ti-sparkles"></i> Extract and save</button>
+    <div id="ctxHistResult" class="learning-result"></div>
+  </div>
+  `;
+}
+
+function handleContextHistoricalFile(event){
+  const file = event.target.files && event.target.files[0];
+  event.target.value = '';
+  if(!file) return;
+
+  if(file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')){
+    const reader = new FileReader();
+    reader.onload = () => {
+      const match = String(reader.result).match(/^data:([^;]+);base64,(.*)$/);
+      if(match){
+        window.__ctxHistFile = { mediaType: 'application/pdf', base64: match[2], name: file.name };
+        renderContextHistFilePreview();
+      }
+    };
+    reader.readAsDataURL(file);
+  } else {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const textEl = document.getElementById('ctxHistText');
+      if(textEl) textEl.value = String(reader.result);
+      window.__ctxHistFile = null;
+      renderContextHistFilePreview(file.name + ' loaded into the text field');
+    };
+    reader.readAsText(file);
+  }
+}
+function renderContextHistFilePreview(label){
+  const el = document.getElementById('ctxHistFilePreview');
+  if(!el) return;
+  if(window.__ctxHistFile){
+    el.innerHTML = `<span class="tag tag-connected">${esc(window.__ctxHistFile.name)} attached</span> <button class="btn btn-ghost btn-sm" onclick="clearContextHistFile()"><i class="ti ti-x"></i></button>`;
+  } else if(label){
+    el.innerHTML = `<span class="muted">${esc(label)}</span>`;
+  } else {
+    el.innerHTML = '';
+  }
+}
+function clearContextHistFile(){
+  window.__ctxHistFile = null;
+  renderContextHistFilePreview();
+}
+
+async function submitContextHistoricalUpload(){
+  const tag = document.getElementById('ctxHistTag')?.value;
+  const targetType = document.getElementById('ctxHistTargetType')?.value;
+  const targetName = (document.getElementById('ctxHistTarget')?.value || '').trim();
+  const text = (document.getElementById('ctxHistText')?.value || '').trim();
+  const file = window.__ctxHistFile;
+
+  if(!targetName){ toast('Add a Company or Contact name to link this to', 'warn'); return; }
+  if(!text && !file){ toast('Paste some text or upload a file first', 'warn'); return; }
+
+  const resultEl = document.getElementById('ctxHistResult');
+  if(resultEl) resultEl.innerHTML = '<div class="muted"><i class="ti ti-loader-2"></i> Extracting with Claude...</div>';
+
+  try {
+    const res = await fetch('/api/context/historical-upload', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        content: file ? undefined : text,
+        fileBase64: file ? file.base64 : undefined,
+        fileMediaType: file ? file.mediaType : undefined,
+        tag, targetType, targetName
+      })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+
+    if(!data.success){
+      if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;color:#b3413a;">${esc(data.reason)}</p>`;
+      return;
+    }
+
+    if(resultEl){
+      resultEl.innerHTML = `
+        <p style="font-size:12.5px;">${esc(data.summary)}</p>
+        ${data.learningDataWritten ? '<p class="muted" style="font-size:11.5px;margin-top:6px;">Also written to Learning Data.</p>' : ''}
+      `;
+    }
+    toast('Historical context saved to ' + targetName, 'success');
+    const textEl = document.getElementById('ctxHistText');
+    if(textEl) textEl.value = '';
+    clearContextHistFile();
+    loadContextData(true);
+  } catch(err){
+    if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;">Could not extract: ${esc(err.message)}</p>`;
+    toast('Could not save historical context: ' + err.message, 'warn');
+  }
 }
 
 /* ===================== DASHBOARD ===================== */

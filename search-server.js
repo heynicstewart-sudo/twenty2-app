@@ -111,6 +111,70 @@ async function airtableRequest(method, table, body) {
   return res.json();
 }
 
+// Fetch a single Airtable record by its record id (not a search-by-field lookup)
+async function airtableGetRecord(table, recordId) {
+  const res = await fetch(`${AIRTABLE_URL}/${encodeURIComponent(table)}/${recordId}`, {
+    headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` }
+  });
+  if (!res.ok) return null;
+  return res.json();
+}
+
+// Shared "find one record where {fieldName}=value" lookup - used throughout
+// this file already as an inlined fetch per-route; new code in this task
+// uses this shared version instead of repeating it again.
+async function findRecordByFieldName(table, fieldName, value) {
+  if (!value) return null;
+  const res = await fetch(
+    `${AIRTABLE_URL}/${encodeURIComponent(table)}?filterByFormula=${encodeURIComponent(`{${fieldName}}="${value}"`)}`,
+    { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
+  );
+  const data = await res.json();
+  return (data.records && data.records[0]) || null;
+}
+
+// Shared Claude call - `content` is either a plain string (text-only) or an
+// array of content blocks (for vision/PDF document prompts). Every new
+// Claude-calling route added in the Context tab work uses this instead of
+// re-inlining the fetch/parse boilerplate that the older routes each have.
+async function callClaudeMessages(content, maxTokens) {
+  const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': process.env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: 'claude-opus-4-6',
+      max_tokens: maxTokens,
+      messages: [{ role: 'user', content }]
+    })
+  });
+  if (!aiRes.ok) {
+    const errText = await aiRes.text();
+    throw new Error(`Claude API error ${aiRes.status}: ${errText}`);
+  }
+  const aiData = await aiRes.json();
+  const block = (aiData.content || []).find(b => b.type === 'text');
+  if (!block) throw new Error('No text content in Claude response');
+  return block.text;
+}
+
+async function callClaudeText(content, maxTokens) {
+  return (await callClaudeMessages(content, maxTokens)).trim();
+}
+
+async function callClaudeJson(content, maxTokens) {
+  const text = await callClaudeMessages(content, maxTokens);
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  try {
+    return JSON.parse(jsonMatch ? jsonMatch[0] : text);
+  } catch (parseErr) {
+    throw new Error('Could not parse Claude response as JSON');
+  }
+}
+
 // ===================== MIDDLEWARE =====================
 app.use(express.json());
 
@@ -311,20 +375,30 @@ app.patch('/api/campaign/status', async (req, res) => {
 });
 
 // Log a touch point in Airtable
+// contactName/company (single, by name) are the original call shape used
+// throughout the rest of the app. contactRecordIds/companyRecordId (direct
+// Airtable ids, possibly multiple contacts) are used by the Context tab,
+// which already has ids from GET /api/context/data and shouldn't have to
+// round-trip a name search it doesn't need. Company is a new linked field
+// on Touch Points - previously "company" was accepted but never written
+// anywhere; every existing caller that already sends a company name now
+// gets it properly linked as a bonus, not a behaviour change for them.
 app.post('/api/airtable/touchpoint', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
-  const { contactName, company, date, type, notes, outcome, communicationMethod, aiBrief } = req.body;
-  if (!contactName || !type) return res.status(400).json({ error: 'contactName and type are required' });
+  const { contactName, contactNames, contactRecordIds, company, companyName, companyRecordId, date, type, notes, outcome, communicationMethod, aiBrief } = req.body;
+  if (!type) return res.status(400).json({ error: 'type is required' });
 
   try {
-    // First find the contact record in Airtable
-    const searchRes = await fetch(
-      `${AIRTABLE_URL}/Contacts?filterByFormula=${encodeURIComponent(`{Full Name}="${contactName}"`)}`,
-      { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
-    );
-    const searchData = await searchRes.json();
-    const contactRecord = searchData.records && searchData.records[0];
+    let contactIds = [];
+    if (Array.isArray(contactRecordIds) && contactRecordIds.length) {
+      contactIds = contactRecordIds;
+    } else {
+      const names = (Array.isArray(contactNames) && contactNames.length) ? contactNames : (contactName ? [contactName] : []);
+      if (!names.length) return res.status(400).json({ error: 'contactName(s) or contactRecordIds are required' });
+      const records = await Promise.all(names.map(n => findRecordByFieldName('Contacts', 'Full Name', n)));
+      contactIds = records.filter(Boolean).map(r => r.id);
+    }
 
     const fields = {
       'Date': date || new Date().toISOString().slice(0, 10),
@@ -336,11 +410,17 @@ app.post('/api/airtable/touchpoint', async (req, res) => {
     };
     if (communicationMethod) fields['Communication Method'] = communicationMethod;
     if (aiBrief) fields['AI Brief'] = aiBrief;
+    if (contactIds.length) fields['Contact'] = contactIds;
 
-    // Link to contact record if found
-    if (contactRecord) {
-      fields['Contact'] = [contactRecord.id];
+    let resolvedCompanyId = companyRecordId || null;
+    if (!resolvedCompanyId) {
+      const resolvedCompanyName = companyName || company;
+      if (resolvedCompanyName) {
+        const companyRecord = await findRecordByFieldName('Companies', 'Company Name', resolvedCompanyName);
+        if (companyRecord) resolvedCompanyId = companyRecord.id;
+      }
     }
+    if (resolvedCompanyId) fields['Company'] = [resolvedCompanyId];
 
     const data = await airtableRequest('POST', 'Touch Points', { records: [{ fields }] });
     res.json({ success: true, recordId: data.records[0].id });
@@ -1625,6 +1705,426 @@ If there isn't enough data yet for a confident insight, return fewer than 5 rath
     });
   } catch (err) {
     console.error('Campaign insights error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===================== CONTEXT TAB =====================
+// Marcus's primary data input hub. Fields referenced below that don't exist
+// yet on Contacts/Companies need to be created in Airtable (unconfirmed
+// exact names, following this app's existing naming style):
+//   Contacts: "Sequence Stage" (single select, values below), "AI Summary"
+//   (long text), "Conversation Context" (long text), "Next Message Draft"
+//   (long text).
+//   Companies: "AI Summary" (long text).
+//   Touch Points: "Company" (linked record) - new, see the touchpoint
+//   route above.
+//   Learning Data: "Company", "Outcome", "ICP Role", "Key Signals",
+//   "Source" - new fields on the existing table (it already has
+//   Type/Analysis/Record Count/Date from the Learning Data upload feature;
+//   this reuses the same table with additional fields rather than a
+//   second table, matching the brief's literal "write a record to the
+//   Learning Data table").
+// Journey Stage is left untouched everywhere in this section - it keeps
+// driving Dashboard prioritisation exactly as before. Sequence Stage is
+// the new, separate, more granular field this tab reads and writes.
+
+// GET /api/context/data - not one of the five endpoints named in the brief,
+// but necessary supporting infrastructure: the Company dropdown and
+// per-company Contact multi-select in the Touch Point Logger have nothing
+// to populate from without it, and there was no existing route that
+// returns Companies at all (only create/update-linkedin routes existed).
+app.get('/api/context/data', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  try {
+    const [companiesData, contactsData, touchPointsData] = await Promise.all([
+      airtableRequest('GET', 'Companies'),
+      airtableRequest('GET', 'Contacts'),
+      airtableRequest('GET', 'Touch Points')
+    ]);
+
+    const companies = (companiesData.records || [])
+      .map(r => ({ id: r.id, name: r.fields['Company Name'] || '' }))
+      .filter(c => c.name);
+
+    const touchPointsByContact = {};
+    (touchPointsData.records || []).forEach(r => {
+      (r.fields['Contact'] || []).forEach(cid => {
+        if (!touchPointsByContact[cid]) touchPointsByContact[cid] = [];
+        touchPointsByContact[cid].push({ date: r.fields['Date'] || '', type: r.fields['Type'] || '', notes: r.fields['Notes'] || '' });
+      });
+    });
+
+    const contacts = (contactsData.records || [])
+      .map(r => {
+        const companyIds = r.fields['Company'] || [];
+        const recentTouchPoints = (touchPointsByContact[r.id] || [])
+          .sort((a, b) => new Date(b.date) - new Date(a.date))
+          .slice(0, 3);
+        return {
+          id: r.id,
+          name: r.fields['Full Name'] || '',
+          companyId: companyIds[0] || null,
+          role: r.fields['Job Title'] || '',
+          journeyStage: r.fields['Journey Stage'] || '',
+          sequenceStage: r.fields['Sequence Stage'] || '',
+          aiSummary: r.fields['AI Summary'] || '',
+          conversationContext: r.fields['Conversation Context'] || '',
+          nextMessageDraft: r.fields['Next Message Draft'] || '',
+          recentTouchPoints
+        };
+      })
+      .filter(c => c.name);
+
+    res.json({ companies, contacts });
+  } catch (err) {
+    console.error('Context data error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PATCH /api/context/contact-fields - also not one of the five named
+// endpoints, but the LinkedIn Connections CSV card needs to write Journey
+// Stage + Sequence Stage together by record id, and the existing PATCH
+// /api/airtable/contact/stage route works by name search and maps a
+// found/opened/connected/messaging/booked app-state enum to Journey Stage
+// rather than accepting either field directly - reusing it would have
+// meant overloading it with a second, unrelated update shape.
+app.patch('/api/context/contact-fields', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const { contactId, journeyStage, sequenceStage } = req.body;
+  if (!contactId) return res.status(400).json({ error: 'contactId is required' });
+
+  try {
+    const fields = {};
+    if (journeyStage) fields['Journey Stage'] = journeyStage;
+    if (sequenceStage) fields['Sequence Stage'] = sequenceStage;
+    if (!Object.keys(fields).length) return res.status(400).json({ error: 'journeyStage or sequenceStage is required' });
+
+    await airtableRequest('PATCH', 'Contacts', { records: [{ id: contactId, fields }] });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Context contact-fields update error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/context/debrief-questions', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  const { contactId } = req.body;
+  if (!contactId) return res.status(400).json({ error: 'contactId is required' });
+
+  try {
+    const contactRecord = await airtableGetRecord('Contacts', contactId);
+    if (!contactRecord) return res.status(404).json({ error: 'Contact not found in Airtable' });
+    const f = contactRecord.fields || {};
+
+    const touchPointsData = await airtableRequest('GET', 'Touch Points');
+    const recentTouchPoints = (touchPointsData.records || [])
+      .filter(r => (r.fields['Contact'] || []).includes(contactId))
+      .map(r => ({ date: r.fields['Date'] || '', type: r.fields['Type'] || '', notes: r.fields['Notes'] || '' }))
+      .sort((a, b) => new Date(b.date) - new Date(a.date))
+      .slice(0, 3);
+
+    const prompt = `You are prepping Marcus for a touch point with a contact at Twenty2 Collective, a Perth-based Agile and change consultancy.
+
+Contact: ${f['Full Name'] || ''}, ${f['Job Title'] || ''}.
+Journey stage: ${f['Journey Stage'] || 'unknown'}.
+Current AI Summary: ${f['AI Summary'] || '(none yet)'}
+
+Last 3 touch points (most recent first):
+${JSON.stringify(recentTouchPoints, null, 2)}
+
+Return 2-3 short, targeted questions Marcus should answer after this touch point to capture what actually matters given where this contact is right now - not generic questions.
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "questions": string[] }`;
+
+    const parsed = await callClaudeJson(prompt, 400);
+    res.json({ questions: parsed.questions || [] });
+  } catch (err) {
+    console.error('Debrief questions error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/context/update-summaries', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  const { contactIds, companyId } = req.body;
+  if ((!contactIds || !contactIds.length) && !companyId) {
+    return res.status(400).json({ error: 'contactIds or companyId is required' });
+  }
+
+  try {
+    const [contactsData, touchPointsData] = await Promise.all([
+      airtableRequest('GET', 'Contacts'),
+      airtableRequest('GET', 'Touch Points')
+    ]);
+    const contactsById = {};
+    (contactsData.records || []).forEach(r => { contactsById[r.id] = r; });
+
+    const updatedContacts = [];
+    for (const contactId of (contactIds || [])) {
+      const record = contactsById[contactId];
+      if (!record) continue;
+      const f = record.fields || {};
+      const touchPoints = (touchPointsData.records || [])
+        .filter(r => (r.fields['Contact'] || []).includes(contactId))
+        .map(r => ({ date: r.fields['Date'] || '', type: r.fields['Type'] || '', notes: r.fields['Notes'] || '', outcome: r.fields['Outcome'] || '' }))
+        .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+      const prompt = `You are maintaining the AI Summary field for a contact in T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM.
+
+Contact: ${f['Full Name'] || ''}, ${f['Job Title'] || ''}.
+Journey stage: ${f['Journey Stage'] || ''}. Sequence stage: ${f['Sequence Stage'] || ''}.
+
+EXISTING AI SUMMARY (this is the current intelligence brief - preserve everything useful in it, never lose information that isn't superseded by newer touch points):
+${f['AI Summary'] || '(no summary yet)'}
+
+ALL TOUCH POINTS ON FILE (${touchPoints.length}, most recent first):
+${JSON.stringify(touchPoints, null, 2)}
+
+Rewrite the AI Summary as a concise intelligence brief for Marcus to read before his next touch point with this contact. Cover: who they are, where the relationship stands, key pain points/signals raised, what's been discussed, and what to do next. Preserve every piece of real information from the existing summary that is still relevant - only replace details that newer touch points have superseded. Never produce a summary shorter or less informative than the existing one unless information has genuinely become outdated. UK English, no em dashes. Return only the summary text, nothing else.`;
+
+      const summary = await callClaudeText(prompt, 700);
+      await airtableRequest('PATCH', 'Contacts', { records: [{ id: contactId, fields: { 'AI Summary': summary } }] });
+      updatedContacts.push({ contactId, name: f['Full Name'] || '', summary });
+    }
+
+    let companyResult = null;
+    if (companyId) {
+      const companyRecord = await airtableGetRecord('Companies', companyId);
+      if (companyRecord) {
+        const cf = companyRecord.fields || {};
+        const companyContactIds = (contactsData.records || [])
+          .filter(r => (r.fields['Company'] || []).includes(companyId))
+          .map(r => r.id);
+        const companyTouchPoints = (touchPointsData.records || [])
+          .filter(r => (r.fields['Company'] || []).includes(companyId) || (r.fields['Contact'] || []).some(cid => companyContactIds.includes(cid)))
+          .map(r => ({ date: r.fields['Date'] || '', type: r.fields['Type'] || '', notes: r.fields['Notes'] || '' }))
+          .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+        const prompt = `You are maintaining the AI Summary field for a company account in T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM.
+
+Company: ${cf['Company Name'] || ''}
+
+EXISTING AI SUMMARY (preserve everything useful, never lose information unless a newer touch point supersedes it):
+${cf['AI Summary'] || '(no summary yet)'}
+
+ALL TOUCH POINTS ACROSS EVERY CONTACT AT THIS COMPANY (${companyTouchPoints.length}, most recent first):
+${JSON.stringify(companyTouchPoints, null, 2)}
+
+Rewrite the AI Summary as a concise account-level intelligence brief: who's engaged, what's been raised across contacts, signals worth acting on, and where the account stands overall. Preserve every real detail from the existing summary that newer touch points haven't superseded. Never produce something shorter or less informative than what's there now unless it's genuinely outdated. UK English, no em dashes. Return only the summary text, nothing else.`;
+
+        const summary = await callClaudeText(prompt, 700);
+        await airtableRequest('PATCH', 'Companies', { records: [{ id: companyId, fields: { 'AI Summary': summary } }] });
+        companyResult = { companyId, name: cf['Company Name'] || '', summary };
+      }
+    }
+
+    res.json({ success: true, contacts: updatedContacts, company: companyResult });
+  } catch (err) {
+    console.error('Update summaries error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Advancing FROM "Pending Reply (M1)"/"(M2)" isn't explicitly in the brief
+// (which only describes advancing from "Message 1/2 Sent"), but leaving no
+// forward path once a contact is already waiting on a reply would be a
+// clear gap - a reply landing while a contact sits in "Pending Reply (M1)"
+// should still advance them the same way "Message 1 Sent" would.
+const SEQUENCE_STAGE_ADVANCE = {
+  'Message 1 Sent': { replied: 'Ready for Message 2', noReply: 'Pending Reply (M1)' },
+  'Pending Reply (M1)': { replied: 'Ready for Message 2', noReply: 'Pending Reply (M1)' },
+  'Message 2 Sent': { replied: 'Ready for Message 3', noReply: 'Pending Reply (M2)' },
+  'Pending Reply (M2)': { replied: 'Ready for Message 3', noReply: 'Pending Reply (M2)' }
+};
+
+app.post('/api/context/parse-screenshot', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  const { image, text } = req.body;
+  if (!image && !text) return res.status(400).json({ error: 'image or text is required' });
+
+  try {
+    const extractPrompt = `You are reading a LinkedIn DM or email exchange for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM.
+
+${text ? `Here is the pasted conversation text:\n${text}` : 'Read the attached screenshot of the conversation.'}
+
+Extract: the other person's name, a short summary of the message content/exchange, and whether they have replied (i.e. there is a message from them, not just Marcus).
+
+If you cannot confidently identify the contact's name or read the message content, do not guess - set "confident" to false and explain why in "reason".
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "confident": boolean, "reason": string, "contactName": string, "messageSummary": string, "replied": boolean }`;
+
+    const content = image
+      ? [
+          { type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.base64 } },
+          { type: 'text', text: extractPrompt }
+        ]
+      : extractPrompt;
+
+    const parsed = await callClaudeJson(content, 800);
+
+    if (!parsed.confident) {
+      return res.json({ success: false, reason: parsed.reason || 'Could not read this screenshot clearly. Please re-upload a cleaner crop of the conversation.' });
+    }
+
+    const contactRecord = await findRecordByFieldName('Contacts', 'Full Name', parsed.contactName);
+    if (!contactRecord) {
+      return res.json({ success: false, reason: `Could not match "${parsed.contactName}" to a contact in Airtable.` });
+    }
+
+    const f = contactRecord.fields || {};
+    const existingContext = f['Conversation Context'] || '';
+    const dateLabel = new Date().toISOString().slice(0, 10);
+    const newContext = (existingContext ? existingContext + '\n\n' : '') + `[${dateLabel}] ${parsed.messageSummary}`;
+
+    const currentStage = f['Sequence Stage'] || '';
+    const advance = SEQUENCE_STAGE_ADVANCE[currentStage];
+    const newStage = advance ? (parsed.replied ? advance.replied : advance.noReply) : currentStage;
+
+    const updateFields = { 'Conversation Context': newContext };
+    if (newStage !== currentStage) updateFields['Sequence Stage'] = newStage;
+
+    let draft = null;
+    if (newStage.startsWith('Ready for Message')) {
+      const draftPrompt = `You are drafting the next LinkedIn message for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM.
+
+Contact: ${f['Full Name'] || ''}, ${f['Job Title'] || ''}.
+AI Summary: ${f['AI Summary'] || 'none yet'}
+Conversation so far: ${newContext}
+
+Write the next message in the conversation, following on naturally from what they just said. UK English, no em dashes, peer to peer tone, 3-4 sentences, one observation and one question, signed off "Marcus". Return only the message text.`;
+      draft = await callClaudeText(draftPrompt, 400);
+      updateFields['Next Message Draft'] = draft;
+    }
+
+    await airtableRequest('PATCH', 'Contacts', { records: [{ id: contactRecord.id, fields: updateFields }] });
+
+    res.json({
+      success: true,
+      contactName: f['Full Name'] || parsed.contactName,
+      contactId: contactRecord.id,
+      messageSummary: parsed.messageSummary,
+      replied: parsed.replied,
+      previousStage: currentStage,
+      newStage,
+      draft
+    });
+  } catch (err) {
+    console.error('Parse screenshot error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/context/log-content', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  const { content, targetType, targetName } = req.body;
+  if (!content || !targetType || !targetName) return res.status(400).json({ error: 'content, targetType and targetName are required' });
+  if (targetType !== 'Company' && targetType !== 'Contact') return res.status(400).json({ error: 'targetType must be Company or Contact' });
+
+  try {
+    const table = targetType === 'Company' ? 'Companies' : 'Contacts';
+    const fieldName = targetType === 'Company' ? 'Company Name' : 'Full Name';
+    const record = await findRecordByFieldName(table, fieldName, targetName);
+    if (!record) return res.json({ success: false, reason: `Could not find a ${targetType.toLowerCase()} named "${targetName}" in Airtable.` });
+
+    const prompt = `Summarise this content into one short, dated intelligence signal for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM. It's about: ${targetName}.
+
+Content:
+${content}
+
+Return ONLY the single summary line, in this exact style: "[${new Date().toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })}] <summary>. Source: <inferred source type, e.g. LinkedIn post, news article, personal note>." Nothing else.`;
+
+    const signalLine = await callClaudeText(prompt, 200);
+
+    const existingSummary = record.fields['AI Summary'] || '';
+    const newSummary = existingSummary ? existingSummary + '\n' + signalLine : signalLine;
+
+    await airtableRequest('PATCH', table, { records: [{ id: record.id, fields: { 'AI Summary': newSummary } }] });
+
+    res.json({ success: true, targetId: record.id, appendedLine: signalLine });
+  } catch (err) {
+    console.error('Log content error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/context/historical-upload', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  const { content, fileBase64, fileMediaType, tag, targetType, targetName } = req.body;
+  if (!content && !fileBase64) return res.status(400).json({ error: 'content or fileBase64 is required' });
+  if (!tag || !targetType || !targetName) return res.status(400).json({ error: 'tag, targetType and targetName are required' });
+  if (targetType !== 'Company' && targetType !== 'Contact') return res.status(400).json({ error: 'targetType must be Company or Contact' });
+
+  const validTags = ['Past Customer', 'Past Deal', 'Conversation History', 'General Background'];
+  if (!validTags.includes(tag)) return res.status(400).json({ error: 'tag must be one of: ' + validTags.join(', ') });
+
+  try {
+    const table = targetType === 'Company' ? 'Companies' : 'Contacts';
+    const fieldName = targetType === 'Company' ? 'Company Name' : 'Full Name';
+    const record = await findRecordByFieldName(table, fieldName, targetName);
+    if (!record) return res.json({ success: false, reason: `Could not find a ${targetType.toLowerCase()} named "${targetName}" in Airtable.` });
+
+    const extractPrompt = `You are extracting historical context for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM. This document is tagged "${tag}" and is about: ${targetName}.
+
+${content ? `Content:\n${content}` : 'Read the attached document.'}
+
+Extract key signals: decision makers, pain points, outcomes, objections, and timelines where present. Write a structured summary, clearly marked as historical context with the tag and today's date. Also separately identify: the ICP role of the key decision maker (if determinable), a one-line outcome (if this was a deal/customer), and a short comma-separated list of key signals.
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "summaryForRecord": string, "icpRole": string, "outcome": string, "keySignals": string }`;
+
+    const content_ = fileBase64
+      ? [
+          { type: 'document', source: { type: 'base64', media_type: fileMediaType || 'application/pdf', data: fileBase64 } },
+          { type: 'text', text: extractPrompt }
+        ]
+      : extractPrompt;
+
+    const parsed = await callClaudeJson(content_, 1500);
+
+    const dateLabel = new Date().toISOString().slice(0, 10);
+    const historicalBlock = `\n\n[Historical context - ${tag} - added ${dateLabel}]\n${parsed.summaryForRecord || ''}`;
+    const newSummary = (record.fields['AI Summary'] || '') + historicalBlock;
+
+    await airtableRequest('PATCH', table, { records: [{ id: record.id, fields: { 'AI Summary': newSummary } }] });
+
+    let learningDataWritten = false;
+    if (tag === 'Past Customer' || tag === 'Past Deal') {
+      await airtableRequest('POST', 'Learning Data', {
+        records: [{
+          fields: {
+            'Type': tag,
+            'Company': targetName,
+            'Outcome': parsed.outcome || '',
+            'ICP Role': parsed.icpRole || '',
+            'Key Signals': parsed.keySignals || '',
+            'Source': 'Historical upload',
+            'Date': dateLabel
+          }
+        }]
+      });
+      learningDataWritten = true;
+    }
+
+    res.json({ success: true, targetId: record.id, summary: parsed.summaryForRecord || '', learningDataWritten });
+  } catch (err) {
+    console.error('Historical upload error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
