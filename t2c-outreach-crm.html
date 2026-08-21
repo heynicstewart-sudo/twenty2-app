@@ -161,6 +161,14 @@ label{font-size:12px;font-weight:700;color:var(--muted);display:block;margin-bot
 .tag-connected{background:#e3f5eb;color:#1f7a4f;}
 .tag-messaging{background:#e2f2fa;color:#0d6a96;}
 .tag-booked{background:#1a1a2e;color:#fff;}
+.tag-won{background:#e3f5eb;color:#1f7a4f;}
+.tag-lost{background:#fbe4e0;color:#b3413a;}
+.tag-pending{background:#fdf4e6;color:#8a6a1f;}
+.tag-started{background:#e2f2fa;color:#0d6a96;}
+.tag-sent-positive{background:#e3f5eb;color:#1f7a4f;}
+.tag-sent-neutral{background:#f1f1ee;color:#6b6558;}
+.tag-sent-cold{background:#e2f2fa;color:#0d6a96;}
+.tag-sent-negative{background:#fbe4e0;color:#b3413a;}
 .day-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:800;}
 .day-green{background:#e3f5eb;color:#1f7a4f;}
 .day-amber{background:#fdf0d9;color:#a1701c;}
@@ -324,6 +332,8 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .event-chip.blue{background:#e2f2fa;color:#0d6a96;}
 .event-chip.peach{background:#fde4d6;color:#a1571c;}
 .event-chip.grey{background:#eee9e2;color:#6b6355;}
+.event-chip.purple{background:#efe4f7;color:#6b3fa0;}
+.event-chip.yellow{background:#fef3d6;color:#8a6a1f;}
 .event-chip:hover .event-tooltip{display:block;}
 .event-tooltip{display:none;position:absolute;bottom:120%;left:0;background:var(--primary);color:#fff;padding:8px 10px;border-radius:8px;font-size:11px;white-space:nowrap;z-index:30;font-weight:600;}
 
@@ -338,6 +348,19 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .bar-track{background:var(--border);border-radius:8px;height:10px;overflow:hidden;display:flex;}
 .bar-fill{background:var(--primary);height:100%;}
 .bar-fill.secondary{background:var(--accent);}
+
+/* Sales tab: pipeline funnel + best-time heatmap (no Chart.js type fits either) */
+.funnel-row{display:flex;align-items:center;gap:12px;margin-bottom:10px;}
+.funnel-label{width:132px;flex-shrink:0;font-size:12px;font-weight:700;}
+.funnel-track{flex:1;background:var(--border);border-radius:8px;height:26px;position:relative;overflow:hidden;}
+.funnel-fill{background:var(--blue);height:100%;display:flex;align-items:center;justify-content:flex-end;padding-right:10px;color:#fff;font-size:12px;font-weight:800;border-radius:8px;transition:width .3s;}
+.funnel-fill.won{background:var(--success);}
+.funnel-fill.lost{background:var(--danger);}
+.funnel-conv{width:96px;flex-shrink:0;font-size:11px;color:var(--muted);text-align:right;}
+.heatmap-grid{display:grid;grid-template-columns:70px repeat(5,1fr);gap:3px;font-size:10.5px;}
+.heatmap-grid .hm-head{font-weight:700;text-align:center;color:var(--muted);padding:4px 2px;}
+.heatmap-grid .hm-row-label{font-weight:700;padding:6px 4px;display:flex;align-items:center;}
+.heatmap-cell{border-radius:6px;padding:6px 2px;text-align:center;font-weight:700;color:var(--primary);min-height:26px;display:flex;align-items:center;justify-content:center;}
 .cta-row{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--border);}
 .cta-row:last-child{border-bottom:none;}
 .count-pill{background:var(--border);color:var(--muted);border-radius:20px;padding:2px 10px;font-size:11.5px;font-weight:800;}
@@ -871,8 +894,17 @@ function afterRender(page){
     if(tab === 'roadmap') initRoadmapDrag();
     if(tab === 'intelligence') ensureContextDataLoaded();
     if(tab === 'analytics' && campaign) initCampaignAnalyticsCharts(campaign);
+    if(tab === 'sales' && campaign){
+      if(window.__salesData === undefined) loadSalesOverview(campaign);
+      if(window.__salesConversionIntel === undefined) loadConversionIntelligence(campaign);
+      if(window.__salesData && window.__salesConversionIntel) initSalesConversionCharts(window.__salesConversionIntel);
+    }
   }
   if(page === 'intelligence' && (window.__intelSubTab||'intelligence') === 'context') ensureContextDataLoaded();
+  if(page === 'calendar'){
+    if(window.__calendarEvents === undefined) loadCalendarEvents();
+    if(window.__repsCache === undefined) loadRepsCache();
+  }
 }
 
 /* ===================== HOME ===================== */
@@ -3832,6 +3864,8 @@ function openCampaignDetail(campaignId, tab){
   window.__campaignInsightsError = null;
   window.__campaignContactsFilter = { search:'', status:'all' };
   window.__salesPeriod = window.__salesPeriod || 'thisWeek';
+  window.__salesData = undefined;
+  window.__salesConversionIntel = undefined;
   window.__ctxCampaignTag = campaign ? { id: campaign.id, name: campaign.name } : null;
   renderPage();
 }
@@ -4227,6 +4261,7 @@ function renderCampaignStrategyTab(campaign){
     <div class="field"><label>Pitch angle</label><textarea id="stratPitch" rows="3">${esc(campaign.pitchAngle||'')}</textarea></div>
     <div class="field"><label>Objection handling</label><textarea id="stratObjections" rows="3">${esc(campaign.objectionHandling||'')}</textarea></div>
     <div class="field"><label>Success metric</label><input id="stratSuccessMetric" value="${esc(campaign.successMetric||'')}"></div>
+    <div class="field"><label>CTAs (one per line)</label><textarea id="stratCtas" rows="3" placeholder="e.g. Change Value Check&#10;Free session&#10;Community Connect event">${esc(campaign.ctas||'')}</textarea><div class="muted" style="font-size:11px;margin-top:4px;">Used by the Sales tab's "CTA converting to bookings" chart - match these labels when logging touch points for best results.</div></div>
     <div style="display:flex;gap:10px;">
       <button class="btn btn-primary btn-sm" onclick="saveCampaignStrategy('${campaign.id}')"><i class="ti ti-device-floppy"></i> Save changes</button>
       <button class="btn btn-secondary btn-sm" onclick="editCampaign('${campaign.id}')"><i class="ti ti-message-circle"></i> Continue in chat</button>
@@ -4253,6 +4288,7 @@ function saveCampaignStrategy(campaignId){
   campaign.pitchAngle = document.getElementById('stratPitch').value.trim();
   campaign.objectionHandling = document.getElementById('stratObjections').value.trim();
   campaign.successMetric = document.getElementById('stratSuccessMetric').value.trim();
+  campaign.ctas = document.getElementById('stratCtas').value.trim();
   campaign.updatedAt = isoDate(TODAY);
   syncCampaignToAirtable(campaign);
   renderPage();
@@ -4468,82 +4504,630 @@ function initCampaignAnalyticsCharts(campaign){
 }
 
 /* ---- Sales tab ---- */
-// Scorecards + deal log + transcript scoring, all scoped to this campaign
-// and the selected time period (shares CAMPAIGN_PERIOD_OPTIONS/
-// campaignPeriodBounds with the Analytics tab).
-
-function dealOutcomeTagClass(outcome){
-  if(outcome === 'won') return 'tag-connected';
-  if(outcome === 'lost') return 'tag-opened';
-  return 'tag-messaging';
-}
+// Five sections, all reading from window.__salesData (Section 1/2/4/5,
+// one bulk fetch via loadSalesOverview) and window.__salesConversionIntel
+// (Section 3, its own fetch since gender inference has a Claude + Airtable
+// write side effect that shouldn't block the fast bulk load). Both are
+// fetched once per campaign-open in afterRender() and cached on window
+// until openCampaignDetail() resets them - same lifecycle as
+// window.__campaignAnalytics on the Analytics tab.
 
 function setSalesPeriod(period){
   window.__salesPeriod = period;
   renderPage();
 }
 
+async function loadSalesOverview(campaign){
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/sales-overview`);
+    const json = await res.json();
+    if(!res.ok) throw new Error(json.error || ('Request failed with status '+res.status));
+    window.__salesData = json;
+  } catch(err){
+    window.__salesData = { error: err.message };
+  }
+  if(window.__campaignDetailTab === 'sales') renderPage();
+}
+
+async function loadConversionIntelligence(campaign){
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/conversion-intelligence`);
+    const json = await res.json();
+    if(!res.ok) throw new Error(json.error || ('Request failed with status '+res.status));
+    window.__salesConversionIntel = json;
+  } catch(err){
+    window.__salesConversionIntel = { error: err.message };
+  }
+  if(window.__campaignDetailTab === 'sales') renderPage();
+}
+
 function renderCampaignSalesTab(campaign){
   const period = window.__salesPeriod || 'thisWeek';
-  const { start, end, prevStart, prevEnd } = campaignPeriodBounds(period);
-  const contacts = campaignContacts(campaign);
-  const contactIds = new Set(contacts.map(c=>c.id));
-  const deals = campaign.deals || [];
+  const data = window.__salesData;
+  if(data === undefined) return '<div class="card"><div class="muted"><i class="ti ti-loader-2"></i> Loading sales data...</div></div>';
+  if(data.error) return `<div class="card"><div class="muted">Could not load sales data: ${esc(data.error)}</div></div>`;
+  return `
+    ${renderSalesPeriodSelector(period)}
+    ${renderPipelineFunnel(data)}
+    ${renderSalesScorecards(data, period)}
+    ${renderConversionIntelligence(window.__salesConversionIntel)}
+    ${renderSalesLog(campaign, data, period)}
+    ${renderWeeklySalesCard(data, period)}
+    ${renderSalesTranscriptCard(campaign)}
+  `;
+}
 
-  const scorecardFor = (s,e) => ({
-    leads: contacts.filter(c => inDateRange(c.foundDate, s, e)).length,
-    meetings: state.bookings.filter(b => contactIds.has(b.contactId) && inDateRange(b.date, s, e)).length,
-    won: deals.filter(d => d.outcome==='won' && inDateRange(d.date, s, e)).length,
-    lost: deals.filter(d => d.outcome==='lost' && inDateRange(d.date, s, e)).length
-  });
-  const current = scorecardFor(start, end);
-  const previous = scorecardFor(prevStart, prevEnd);
-  const deltaLabel = (a,b) => { const d = a-b; return d===0 ? 'No change vs last period' : (d>0 ? `+${d} vs last period` : `${d} vs last period`); };
-
-  const periodDeals = deals.filter(d => inDateRange(d.date, start, end)).slice().sort((a,b)=>new Date(b.date)-new Date(a.date));
-
+function renderSalesPeriodSelector(period){
   return `
   <div class="card" style="margin-bottom:16px;">
-    <div class="toolbar" style="margin-bottom:6px;">
+    <div class="toolbar" style="margin-bottom:0;">
       <div class="field" style="max-width:220px;"><label>Time period</label>
         <select onchange="setSalesPeriod(this.value)">
           ${CAMPAIGN_PERIOD_OPTIONS.map(([k,l])=>`<option value="${k}" ${period===k?'selected':''}>${l}</option>`).join('')}
         </select>
       </div>
     </div>
-    <div class="mini-cards" style="margin-bottom:0;">
-      <div class="mini-card"><div class="num">${current.leads}</div><div class="label">Leads captured</div><div class="muted" style="font-size:11px;margin-top:4px;">${deltaLabel(current.leads,previous.leads)}</div></div>
-      <div class="mini-card"><div class="num">${current.meetings}</div><div class="label">Meetings booked</div><div class="muted" style="font-size:11px;margin-top:4px;">${deltaLabel(current.meetings,previous.meetings)}</div></div>
-      <div class="mini-card"><div class="num">${current.won}</div><div class="label">Deals closed</div><div class="muted" style="font-size:11px;margin-top:4px;">${deltaLabel(current.won,previous.won)}</div></div>
-      <div class="mini-card"><div class="num">${current.lost}</div><div class="label">Deals lost</div><div class="muted" style="font-size:11px;margin-top:4px;">${deltaLabel(current.lost,previous.lost)}</div></div>
-    </div>
-  </div>
+  </div>`;
+}
 
+/* -- Section 1: Pipeline progress funnel -- */
+// Cumulative "reached this stage or later" counts, not a bucketed
+// snapshot of current stage - that's the only way "% moved from M1 to M2"
+// is meaningful. Reads the union of each Campaign Contacts row's dated
+// Stage History log and its current Sequence Stage (covers rows created
+// before Stage History existed). Won/Lost come from Deals, not Sequence
+// Stage - there are no Won/Lost stage options, and deal outcomes are the
+// real source of truth for those two.
+const FUNNEL_STAGE_GROUPS = [
+  { key:'connected', label:'Connections Made', stages:['Connected','Message 1 Sent','Pending Reply M1','Ready for Message 2','Message 2 Sent','Pending Reply M2','Ready for Message 3','Message 3 Sent','Pending Reply M3','Meeting Booked'] },
+  { key:'m1', label:'Message 1 Sent', stages:['Message 1 Sent','Pending Reply M1','Ready for Message 2','Message 2 Sent','Pending Reply M2','Ready for Message 3','Message 3 Sent','Pending Reply M3','Meeting Booked'] },
+  { key:'m2', label:'Message 2 Sent', stages:['Message 2 Sent','Pending Reply M2','Ready for Message 3','Message 3 Sent','Pending Reply M3','Meeting Booked'] },
+  { key:'m3', label:'Message 3 Sent', stages:['Message 3 Sent','Pending Reply M3','Meeting Booked'] },
+  { key:'meeting', label:'Meetings Booked', stages:['Meeting Booked'] }
+];
+
+function reachedStagesFor(cc){
+  const set = new Set((cc.stageHistory||[]).map(h=>h.stage));
+  if(cc.sequenceStage) set.add(cc.sequenceStage);
+  return set;
+}
+
+function computeFunnelCounts(data){
+  const stageCounts = FUNNEL_STAGE_GROUPS.map(g => ({
+    key: g.key, label: g.label,
+    count: data.campaignContacts.filter(cc => g.stages.some(s => reachedStagesFor(cc).has(s))).length
+  }));
+  const won = data.deals.filter(d => d.outcome === 'Won').length;
+  const lost = data.deals.filter(d => d.outcome === 'Lost').length;
+  return { stageCounts, won, lost };
+}
+
+function renderPipelineFunnel(data){
+  const { stageCounts, won, lost } = computeFunnelCounts(data);
+  const maxCount = Math.max(1, ...stageCounts.map(s=>s.count), won, lost);
+  const rows = stageCounts.map((s,i) => {
+    const prev = i>0 ? stageCounts[i-1].count : null;
+    const conv = (prev !== null && prev > 0) ? Math.round(s.count/prev*100) : null;
+    const width = Math.max(4, Math.round(s.count/maxCount*100));
+    return `<div class="funnel-row">
+      <div class="funnel-label">${s.label}</div>
+      <div class="funnel-track"><div class="funnel-fill" style="width:${width}%">${s.count}</div></div>
+      <div class="funnel-conv">${conv!==null ? `${conv}% moved from prior` : '—'}</div>
+    </div>`;
+  }).join('');
+  const meetingsCount = stageCounts[stageCounts.length-1].count;
+  const wonPct = meetingsCount ? Math.round(won/meetingsCount*100) : 0;
+  const lostPct = meetingsCount ? Math.round(lost/meetingsCount*100) : 0;
+  return `
   <div class="card" style="margin-bottom:16px;">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+    <div class="section-title"><i class="ti ti-filter"></i> Pipeline progress</div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:12px;">How many contacts in this campaign have reached each stage, and the conversion rate into it. Won/Lost come from the Sales Log below.</div>
+    ${rows}
+    <div class="funnel-row"><div class="funnel-label">Won</div><div class="funnel-track"><div class="funnel-fill won" style="width:${Math.max(4,Math.round(won/maxCount*100))}%">${won}</div></div><div class="funnel-conv">${meetingsCount?`${wonPct}% of meetings`:'—'}</div></div>
+    <div class="funnel-row"><div class="funnel-label">Lost</div><div class="funnel-track"><div class="funnel-fill lost" style="width:${Math.max(4,Math.round(lost/maxCount*100))}%">${lost}</div></div><div class="funnel-conv">${meetingsCount?`${lostPct}% of meetings`:'—'}</div></div>
+  </div>`;
+}
+
+/* -- Section 2: Scorecard strip -- */
+function computeSalesScorecards(data, period){
+  const { start, end, prevStart, prevEnd } = campaignPeriodBounds(period);
+  function metricsFor(s, e){
+    const connections = [], meetingsBooked = [];
+    data.campaignContacts.forEach(cc => {
+      (cc.stageHistory||[]).forEach(h => {
+        if(h.stage === 'Connected' && inDateRange(h.date, s, e)) connections.push({ cc, date:h.date });
+        if(h.stage === 'Meeting Booked' && inDateRange(h.date, s, e)) meetingsBooked.push({ cc, date:h.date });
+      });
+    });
+    const messagesSent = data.touchPoints.filter(tp => tp.type !== 'Inbound Reply' && inDateRange(tp.date, s, e));
+    const repliesReceived = data.touchPoints.filter(tp => tp.replied && inDateRange(tp.date, s, e));
+    const won = data.deals.filter(d => d.outcome === 'Won' && inDateRange(d.date, s, e));
+    const lost = data.deals.filter(d => d.outcome === 'Lost' && inDateRange(d.date, s, e));
+    const responseRate = messagesSent.length ? Math.round(repliesReceived.length / messagesSent.length * 100) : 0;
+
+    let daysSum = 0, daysCount = 0;
+    connections.forEach(({cc, date}) => {
+      const replyDates = data.touchPoints.filter(tp => tp.contactId === cc.contactId && tp.replied && tp.date).map(tp=>tp.date).sort();
+      const firstReply = replyDates.find(d => new Date(d) >= new Date(date));
+      if(firstReply){
+        const diff = Math.round((new Date(firstReply) - new Date(date)) / 86400000);
+        if(diff >= 0){ daysSum += diff; daysCount++; }
+      }
+    });
+    const avgDaysToReply = daysCount ? Math.round(daysSum/daysCount*10)/10 : null;
+
+    let touchesSum = 0, touchesCount = 0;
+    meetingsBooked.forEach(({cc, date}) => {
+      const touchesBefore = data.touchPoints.filter(tp => tp.contactId === cc.contactId && tp.date && new Date(tp.date) <= new Date(date)).length;
+      if(touchesBefore){ touchesSum += touchesBefore; touchesCount++; }
+    });
+    const avgTouchesToBooking = touchesCount ? Math.round(touchesSum/touchesCount*10)/10 : null;
+
+    return { connections: connections.length, messagesSent: messagesSent.length, repliesReceived: repliesReceived.length, meetingsBooked: meetingsBooked.length, won: won.length, lost: lost.length, responseRate, avgDaysToReply, avgTouchesToBooking };
+  }
+  return { current: metricsFor(start, end), previous: metricsFor(prevStart, prevEnd) };
+}
+
+function renderSalesScorecards(data, period){
+  const { current, previous } = computeSalesScorecards(data, period);
+  const delta = (a,b) => { if(a===null||b===null) return ''; const d = Math.round((a-b)*10)/10; return d===0 ? 'No change vs last period' : (d>0 ? `+${d} vs last period` : `${d} vs last period`); };
+  const cards = [
+    ['Connections made', current.connections, delta(current.connections, previous.connections)],
+    ['Messages sent', current.messagesSent, delta(current.messagesSent, previous.messagesSent)],
+    ['Replies received', current.repliesReceived, delta(current.repliesReceived, previous.repliesReceived)],
+    ['Meetings booked', current.meetingsBooked, delta(current.meetingsBooked, previous.meetingsBooked)],
+    ['Won', current.won, delta(current.won, previous.won)],
+    ['Lost', current.lost, delta(current.lost, previous.lost)],
+    ['Response rate', current.responseRate + '%', delta(current.responseRate, previous.responseRate)],
+    ['Avg days connection \u2192 first reply', current.avgDaysToReply ?? '\u2014', delta(current.avgDaysToReply, previous.avgDaysToReply)],
+    ['Avg touches to booking', current.avgTouchesToBooking ?? '\u2014', delta(current.avgTouchesToBooking, previous.avgTouchesToBooking)]
+  ];
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title"><i class="ti ti-chart-bar"></i> Scorecard</div>
+    <div class="mini-cards" style="grid-template-columns:repeat(3,1fr);margin-bottom:0;">
+      ${cards.map(([label,val,d])=>`<div class="mini-card"><div class="num">${val}</div><div class="label">${label}</div>${d?`<div class="muted" style="font-size:11px;margin-top:4px;">${d}</div>`:''}</div>`).join('')}
+    </div>
+  </div>`;
+}
+
+/* -- Section 3: Conversion intelligence (6 panels) -- */
+const HEATMAP_DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+const HEATMAP_BUCKETS = ['Morning','Midday','Afternoon','Evening','Late night'];
+
+function renderBestTimeHeatmap(rows){
+  if(!rows || !rows.length) return '<div class="empty-state">No message timestamps extracted yet - upload DM screenshots with visible timestamps to build this out.</div>';
+  const counts = {};
+  let max = 1;
+  rows.forEach(r => { counts[`${r.day}|${r.bucket}`] = r.count; if(r.count > max) max = r.count; });
+  const cells = ['<div class="hm-head"></div>'];
+  HEATMAP_BUCKETS.forEach(b => cells.push(`<div class="hm-head">${b}</div>`));
+  HEATMAP_DAYS.forEach(day => {
+    cells.push(`<div class="hm-row-label">${day.slice(0,3)}</div>`);
+    HEATMAP_BUCKETS.forEach(bucket => {
+      const c = counts[`${day}|${bucket}`] || 0;
+      const opacity = c ? 0.15 + (c/max)*0.65 : 0;
+      cells.push(`<div class="heatmap-cell" style="background:rgba(0,132,197,${opacity})">${c || ''}</div>`);
+    });
+  });
+  return `<div class="heatmap-grid">${cells.join('')}</div>`;
+}
+
+function renderConversionIntelligence(intel){
+  if(intel === undefined) return `<div class="card" style="margin-bottom:16px;"><div class="section-title"><i class="ti ti-bulb-filled"></i> Conversion intelligence</div><div class="muted"><i class="ti ti-loader-2"></i> Loading...</div></div>`;
+  if(!intel || intel.error) return `<div class="card" style="margin-bottom:16px;"><div class="section-title"><i class="ti ti-bulb-filled"></i> Conversion intelligence</div><div class="muted">Could not load: ${esc(intel && intel.error || 'unknown error')}</div></div>`;
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title"><i class="ti ti-bulb-filled"></i> Conversion intelligence</div>
+    <div class="two-col">
+      <div class="card"><div class="section-title" style="margin-bottom:10px;font-size:13px;">Message step \u2192 booking</div><div style="position:relative;height:220px;"><canvas id="salesStepChart"></canvas></div></div>
+      <div class="card"><div class="section-title" style="margin-bottom:10px;font-size:13px;">CTA \u2192 booking</div><div style="position:relative;height:220px;">${intel.ctaToBooking.length ? '<canvas id="salesCtaChart"></canvas>' : '<div class="empty-state">Add CTAs on the Strategy tab to see this chart.</div>'}</div></div>
+    </div>
+    <div class="two-col">
+      <div class="card"><div class="section-title" style="margin-bottom:10px;font-size:13px;">Response rate by touch point type</div><div style="position:relative;height:220px;">${intel.responseRateByType.length ? '<canvas id="salesTypeChart"></canvas>' : '<div class="empty-state">No touch points logged yet.</div>'}</div></div>
+      <div class="card"><div class="section-title" style="margin-bottom:10px;font-size:13px;">Response rate by gender</div><div style="position:relative;height:220px;"><canvas id="salesGenderChart"></canvas></div></div>
+    </div>
+    <div class="two-col">
+      <div class="card"><div class="section-title" style="margin-bottom:10px;font-size:13px;">Reply sentiment breakdown</div><div style="position:relative;height:220px;"><canvas id="salesSentimentChart"></canvas></div></div>
+      <div class="card"><div class="section-title" style="margin-bottom:10px;font-size:13px;">Best time to message</div>${renderBestTimeHeatmap(intel.bestTimeToMessage)}</div>
+    </div>
+  </div>`;
+}
+
+function initSalesConversionCharts(intel){
+  if(typeof Chart === 'undefined' || !intel || intel.error) return;
+  window.__salesCharts = window.__salesCharts || {};
+  ['step','cta','type','gender','sentiment'].forEach(k => { if(window.__salesCharts[k]){ window.__salesCharts[k].destroy(); window.__salesCharts[k] = null; } });
+
+  const stepEl = document.getElementById('salesStepChart');
+  if(stepEl){
+    window.__salesCharts.step = new Chart(stepEl, {
+      type: 'bar',
+      data: { labels: intel.messageStepToBooking.map(s=>s.step), datasets: [
+        { label:'Total reached', data: intel.messageStepToBooking.map(s=>s.total), backgroundColor:'#0084C5' },
+        { label:'Booked', data: intel.messageStepToBooking.map(s=>s.booked), backgroundColor:'#44A574' }
+      ]},
+      options: { responsive:true, maintainAspectRatio:false, scales:{ y:{ beginAtZero:true, ticks:{ precision:0 } } }, plugins:{ legend:{ position:'bottom', labels:{ boxWidth:10, font:{ size:11 } } } } }
+    });
+  }
+  const ctaEl = document.getElementById('salesCtaChart');
+  if(ctaEl && intel.ctaToBooking.length){
+    window.__salesCharts.cta = new Chart(ctaEl, {
+      type: 'bar',
+      data: { labels: intel.ctaToBooking.map(c=>c.cta), datasets: [
+        { label:'Touches', data: intel.ctaToBooking.map(c=>c.touches), backgroundColor:'#FFD05D' },
+        { label:'Bookings', data: intel.ctaToBooking.map(c=>c.bookings), backgroundColor:'#44A574' }
+      ]},
+      options: { responsive:true, maintainAspectRatio:false, indexAxis:'y', scales:{ x:{ beginAtZero:true, ticks:{ precision:0 } } }, plugins:{ legend:{ position:'bottom', labels:{ boxWidth:10, font:{ size:11 } } } } }
+    });
+  }
+  const typeEl = document.getElementById('salesTypeChart');
+  if(typeEl && intel.responseRateByType.length){
+    window.__salesCharts.type = new Chart(typeEl, {
+      type: 'bar',
+      data: { labels: intel.responseRateByType.map(t=>t.type), datasets: [{ label:'Response rate %', data: intel.responseRateByType.map(t=>t.rate), backgroundColor:'#FF834C' }] },
+      options: { responsive:true, maintainAspectRatio:false, scales:{ y:{ beginAtZero:true, max:100 } }, plugins:{ legend:{ display:false } } }
+    });
+  }
+  const genderEl = document.getElementById('salesGenderChart');
+  if(genderEl){
+    window.__salesCharts.gender = new Chart(genderEl, {
+      type: 'bar',
+      data: { labels: intel.responseRateByGender.map(g=>g.gender), datasets: [{ label:'Response rate %', data: intel.responseRateByGender.map(g=>g.rate), backgroundColor:['#0084C5','#FF834C','#8a8a8a'] }] },
+      options: { responsive:true, maintainAspectRatio:false, scales:{ y:{ beginAtZero:true, max:100 } }, plugins:{ legend:{ display:false } } }
+    });
+  }
+  const sentimentEl = document.getElementById('salesSentimentChart');
+  if(sentimentEl){
+    window.__salesCharts.sentiment = new Chart(sentimentEl, {
+      type: 'pie',
+      data: { labels: intel.sentimentBreakdown.map(s=>s.sentiment), datasets: [{ data: intel.sentimentBreakdown.map(s=>s.count), backgroundColor:['#44A574','#8a8a8a','#0084C5','#c44a2a'] }] },
+      options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:'bottom', labels:{ boxWidth:10, font:{ size:11 } } } } }
+    });
+  }
+}
+
+/* -- Section 4: Sales log -- */
+function dealOutcomeTagClass(outcome){
+  const o = (outcome||'').toLowerCase();
+  if(o === 'won') return 'tag-won';
+  if(o === 'lost') return 'tag-lost';
+  if(o === 'started') return 'tag-started';
+  return 'tag-pending';
+}
+function sentimentTagClass(sentiment){
+  const s = (sentiment||'').toLowerCase();
+  if(s === 'positive') return 'tag-sent-positive';
+  if(s === 'cold') return 'tag-sent-cold';
+  if(s === 'negative') return 'tag-sent-negative';
+  return 'tag-sent-neutral';
+}
+
+// Looks in whichever deal list is currently cached - the Sales tab's
+// window.__salesData.deals, or window.__calendarEvents when this is
+// called from the Sales Calendar's click-to-expand instead.
+function findDealById(dealId){
+  const fromSales = (window.__salesData && window.__salesData.deals || []).find(d => d.id === dealId);
+  if(fromSales) return fromSales;
+  const fromCal = (window.__calendarEvents || []).find(e => e.dealId === dealId);
+  if(fromCal) return { id: fromCal.dealId, notes: fromCal.notes || '' };
+  return null;
+}
+
+function renderSalesLog(campaign, data, period){
+  const { start, end } = campaignPeriodBounds(period);
+  const periodDeals = data.deals.filter(d => inDateRange(d.date, start, end)).slice().sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const reps = data.reps || [];
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-notes"></i> Sales log</div>
-      <button class="btn btn-primary btn-sm" onclick="openAddDealModal('${campaign.id}')"><i class="ti ti-plus"></i> Log a deal</button>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-secondary btn-sm" onclick="openManageRepsModal()"><i class="ti ti-users"></i> Manage reps</button>
+        <button class="btn btn-primary btn-sm" onclick="openAddDealModal('${campaign.id}')"><i class="ti ti-plus"></i> Log a deal</button>
+      </div>
     </div>
     <div class="perf-table-wrap">
       <table class="perf-table">
-        <thead><tr><th>Date</th><th>Contact</th><th>Company</th><th>Outcome</th><th>Deal value</th><th>Notes</th></tr></thead>
+        <thead><tr><th></th><th>Date</th><th>Contact</th><th>Company</th><th>Stage</th><th>Deal value</th><th>Assignee</th><th>Sentiment</th><th>Notes</th></tr></thead>
         <tbody>
           ${periodDeals.length ? periodDeals.map(d => `
-            <tr>
+            <tr style="cursor:pointer;" onclick="toggleDealRow('${d.id}')">
+              <td><i class="ti ti-chevron-right" id="dealChevron-${d.id}"></i></td>
               <td>${fmtDate(d.date)}</td>
               <td class="perf-name">${esc(d.contactName)}</td>
-              <td>${esc(d.company)}</td>
-              <td><span class="tag ${dealOutcomeTagClass(d.outcome)}">${esc(d.outcome)}</span></td>
-              <td>${d.value ? '$'+Number(d.value).toLocaleString() : '—'}</td>
-              <td>${esc((d.notes||'').slice(0,80))}${(d.notes||'').length>80?'…':''}</td>
+              <td>${esc(d.companyName)}</td>
+              <td onclick="event.stopPropagation()">
+                <span class="tag ${dealOutcomeTagClass(d.outcome)}" style="margin-right:6px;">${esc(d.outcome)}</span>
+                <select onchange="updateDealField('${d.id}','outcome',this.value)">
+                  ${['Pending','Started','Won','Lost'].map(o=>`<option value="${o}" ${d.outcome===o?'selected':''}>${o}</option>`).join('')}
+                </select>
+              </td>
+              <td onclick="event.stopPropagation()"><input type="number" min="0" value="${d.dealValue||0}" style="width:90px;" onchange="updateDealField('${d.id}','dealValue',this.value)"></td>
+              <td onclick="event.stopPropagation()">
+                <select onchange="updateDealField('${d.id}','assigneeId',this.value)">
+                  <option value="">\u2014</option>
+                  ${reps.map(r=>`<option value="${r.id}" ${d.assigneeId===r.id?'selected':''}>${esc(r.name)}</option>`).join('')}
+                </select>
+              </td>
+              <td>${d.sentiment ? `<span class="tag ${sentimentTagClass(d.sentiment)}">${esc(d.sentiment)}</span>` : '<span class="muted">\u2014</span>'}</td>
+              <td>${esc((d.notes||'').split('\\n')[0].slice(0,60))}${(d.notes||'').length>60?'\u2026':''}</td>
             </tr>
-          `).join('') : `<tr><td colspan="6"><span class="muted">No deals logged for this period.</span></td></tr>`}
+            <tr id="dealNotes-${d.id}" style="display:none;"><td colspan="9"><div class="deal-notes-body" style="padding:12px 4px;"></div></td></tr>
+          `).join('') : `<tr><td colspan="9"><span class="muted">No deals logged for this period.</span></td></tr>`}
         </tbody>
       </table>
     </div>
-  </div>
+  </div>`;
+}
 
-  <div class="card">
+function toggleDealRow(dealId){
+  const row = document.getElementById('dealNotes-'+dealId);
+  const chevron = document.getElementById('dealChevron-'+dealId);
+  if(!row) return;
+  const isHidden = row.style.display === 'none' || !row.style.display;
+  row.style.display = isHidden ? 'table-row' : 'none';
+  if(chevron) chevron.className = isHidden ? 'ti ti-chevron-down' : 'ti ti-chevron-right';
+  if(isHidden){
+    const deal = findDealById(dealId);
+    const body = row.querySelector('.deal-notes-body');
+    if(body && deal) body.innerHTML = renderDealNotesThread(deal);
+  }
+}
+
+// Deals.Notes is an append-log, same convention as Conversation Context:
+// "[timestamp] (Pre-meeting|Post-meeting) note text", blocks separated by
+// a blank line.
+function parseDealNotes(notesText){
+  if(!notesText) return [];
+  return notesText.split('\n\n').map(block => {
+    const m = block.match(/^\[([^\]]+)\]\s*\(([^)]+)\)\s*([\s\S]*)$/);
+    if(m) return { timestamp: m[1], phase: m[2], text: m[3] };
+    return { timestamp: '', phase: '', text: block };
+  }).filter(n => n.text || n.timestamp);
+}
+
+function renderDealNotesThread(deal){
+  if(!deal) return '<div class="muted">Deal not found.</div>';
+  const notes = parseDealNotes(deal.notes);
+  return `
+    <div style="max-width:640px;">
+      ${notes.length ? notes.map(n => `
+        <div style="margin-bottom:10px;padding:8px 10px;background:var(--bg);border-radius:8px;">
+          <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:3px;">${esc(n.phase||'Note')}${n.timestamp?` \u00b7 ${esc(n.timestamp)}`:''}</div>
+          <div style="font-size:12.5px;">${esc(n.text)}</div>
+        </div>`).join('') : '<div class="muted" style="margin-bottom:10px;">No notes yet.</div>'}
+      <div class="field"><label>Add a note</label><textarea id="dealNoteText-${deal.id}" rows="2" placeholder="e.g. They mentioned budget in their reply"></textarea></div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-secondary btn-sm" onclick="submitDealNote('${deal.id}','pre')"><i class="ti ti-clock"></i> Add pre-meeting note</button>
+        <button class="btn btn-secondary btn-sm" onclick="submitDealNote('${deal.id}','post')"><i class="ti ti-checkbox"></i> Add post-meeting note</button>
+      </div>
+    </div>`;
+}
+
+async function submitDealNote(dealId, phase){
+  const textEl = document.getElementById(`dealNoteText-${dealId}`);
+  const noteText = textEl ? textEl.value.trim() : '';
+  if(!noteText){ toast('Write a note first', 'warn'); return; }
+  try {
+    const res = await fetch(`/api/deals/${dealId}/notes`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ noteText, phase })
+    });
+    const json = await res.json();
+    if(!res.ok || !json.success) throw new Error(json.error || 'Save failed');
+
+    const salesDeal = window.__salesData && (window.__salesData.deals||[]).find(d => d.id === dealId);
+    if(salesDeal) salesDeal.notes = json.notes;
+    const calEvent = (window.__calendarEvents||[]).find(e => e.dealId === dealId);
+    if(calEvent) calEvent.notes = json.notes;
+
+    const deal = findDealById(dealId);
+    const container = textEl.closest('.deal-notes-body') || textEl.closest('.modal-body');
+    if(container && deal) container.innerHTML = renderDealNotesThread(deal);
+    toast('Note added \u2014 also feeding the contact/company AI Summary in the background', 'success');
+  } catch(err){
+    toast('Could not save note: ' + err.message, 'warn');
+  }
+}
+
+async function updateDealField(dealId, field, value){
+  const campaign = state.campaigns.find(c => c.id === window.__campaignDetailId);
+  if(!campaign) return;
+  const body = {};
+  if(field === 'outcome') body.outcome = value;
+  if(field === 'dealValue') body.dealValue = value ? parseFloat(value) : 0;
+  if(field === 'assigneeId') body.assigneeId = value || null;
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/deals/${dealId}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+    if(!res.ok) throw new Error('Update failed');
+    const deal = (window.__salesData && window.__salesData.deals || []).find(d => d.id === dealId);
+    if(deal) Object.assign(deal, body.outcome!==undefined?{outcome:body.outcome}:body.dealValue!==undefined?{dealValue:body.dealValue}:{assigneeId:body.assigneeId});
+    toast('Deal updated', 'success');
+  } catch(err){
+    toast('Could not update deal: ' + err.message, 'warn');
+    loadSalesOverview(campaign);
+  }
+}
+
+function openAddDealModal(campaignId){
+  const campaign = state.campaigns.find(c => c.id === campaignId);
+  const data = window.__salesData;
+  if(!campaign || !data || data.error){ toast('Sales data still loading, try again in a moment', 'warn'); return; }
+  window.__addDealCampaignId = campaignId;
+  const contacts = data.campaignContacts;
+  const reps = data.reps || [];
+  const body = `
+    <div class="field"><label>Contact</label>
+      <select id="dealContactId" onchange="onDealContactChange()">
+        <option value="">Select a contact...</option>
+        ${contacts.map(c=>`<option value="${c.contactId}" data-company="${esc(c.company)}" data-company-id="${c.companyId||''}">${esc(c.contactName)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="field"><label>Company</label><input id="dealCompany" disabled placeholder="Auto-fills from contact"></div>
+    <div class="row">
+      <div class="field"><label>Outcome</label>
+        <select id="dealOutcome">
+          <option value="Pending" selected>Pending</option>
+          <option value="Started">Started</option>
+          <option value="Won">Won</option>
+          <option value="Lost">Lost</option>
+        </select>
+      </div>
+      <div class="field"><label>Deal value ($)</label><input type="number" id="dealValue" min="0" placeholder="0"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Assignee</label>
+        <select id="dealAssignee"><option value="">\u2014</option>${reps.map(r=>`<option value="${r.id}">${esc(r.name)}</option>`).join('')}</select>
+      </div>
+      <div class="field"><label>Sentiment</label>
+        <select id="dealSentiment"><option value="">\u2014</option>${['Positive','Neutral','Cold','Negative'].map(s=>`<option value="${s}">${s}</option>`).join('')}</select>
+      </div>
+    </div>
+    <div class="field"><label>Date</label><input type="date" id="dealDate" value="${isoDate(TODAY)}"></div>
+    <div class="field"><label>Notes</label><textarea id="dealNotes" rows="3"></textarea></div>
+  `;
+  const footer = `
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" id="confirmAddDealBtn" onclick="confirmAddDeal()"><i class="ti ti-check"></i> Save deal</button>
+  `;
+  openModal('Log a deal', body, footer);
+}
+
+function onDealContactChange(){
+  const sel = document.getElementById('dealContactId');
+  const opt = sel.options[sel.selectedIndex];
+  const companyEl = document.getElementById('dealCompany');
+  if(companyEl) companyEl.value = opt ? (opt.dataset.company || '') : '';
+}
+
+// Unlike every other write in this app, this one awaits the Airtable save
+// before closing the modal - Deals now has no local fallback array to
+// render from, so the real save has to land before the UI can show it.
+async function confirmAddDeal(){
+  const campaign = state.campaigns.find(c => c.id === window.__addDealCampaignId);
+  if(!campaign) return;
+  const contactId = document.getElementById('dealContactId').value;
+  if(!contactId){ toast('Select a contact', 'warn'); return; }
+  const sel = document.getElementById('dealContactId');
+  const companyId = sel.options[sel.selectedIndex].dataset.companyId || null;
+  const outcome = document.getElementById('dealOutcome').value;
+  const dealValue = document.getElementById('dealValue').value;
+  const assigneeId = document.getElementById('dealAssignee').value || null;
+  const sentiment = document.getElementById('dealSentiment').value || null;
+  const date = document.getElementById('dealDate').value || isoDate(TODAY);
+  const notes = document.getElementById('dealNotes').value.trim();
+
+  const btn = document.getElementById('confirmAddDealBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Saving...'; }
+
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/deals`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contactId, companyId, outcome, dealValue: dealValue ? parseFloat(dealValue) : 0, assigneeId, notes, date, sentiment })
+    });
+    const json = await res.json();
+    if(!res.ok || !json.success) throw new Error(json.error || 'Save failed');
+    closeModal();
+    toast('Deal logged', 'success');
+    await loadSalesOverview(campaign);
+  } catch(err){
+    toast('Could not save deal: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-check"></i> Save deal'; }
+  }
+}
+
+function openManageRepsModal(){
+  renderManageRepsModalBody();
+}
+
+function renderManageRepsModalBody(){
+  const reps = (window.__salesData && window.__salesData.reps) || window.__repsCache || [];
+  const body = `
+    <div id="repsListWrap">
+      ${reps.length ? reps.map(r=>`
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);">
+          <div><strong>${esc(r.name)}</strong>${r.email?` <span class="muted" style="font-size:11px;">${esc(r.email)}</span>`:''}</div>
+          <button class="btn btn-ghost btn-sm" onclick="deleteRep('${r.id}')"><i class="ti ti-trash"></i></button>
+        </div>`).join('') : '<div class="muted" style="padding:8px 0;">No reps yet.</div>'}
+    </div>
+    <div style="margin-top:14px;display:flex;gap:8px;">
+      <input id="newRepName" placeholder="Rep name" style="flex:1;">
+      <input id="newRepEmail" placeholder="Email (optional)" style="flex:1;">
+      <button class="btn btn-primary btn-sm" onclick="addRep()"><i class="ti ti-plus"></i> Add</button>
+    </div>
+  `;
+  const footer = `<button class="btn btn-secondary" onclick="closeModal()">Done</button>`;
+  openModal('Manage reps', body, footer);
+}
+
+async function addRep(){
+  const name = document.getElementById('newRepName').value.trim();
+  const email = document.getElementById('newRepEmail').value.trim();
+  if(!name){ toast('Enter a rep name', 'warn'); return; }
+  try {
+    const res = await fetch('/api/reps', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name, email }) });
+    const json = await res.json();
+    if(!res.ok || !json.success) throw new Error(json.error || 'Save failed');
+    if(window.__salesData && window.__salesData.reps) window.__salesData.reps.push(json.rep);
+    if(window.__repsCache) window.__repsCache.push(json.rep);
+    toast('Rep added', 'success');
+    renderManageRepsModalBody();
+  } catch(err){
+    toast('Could not add rep: ' + err.message, 'warn');
+  }
+}
+
+async function deleteRep(repId){
+  try {
+    const res = await fetch(`/api/reps/${repId}`, { method:'DELETE' });
+    if(!res.ok) throw new Error('Delete failed');
+    if(window.__salesData && window.__salesData.reps) window.__salesData.reps = window.__salesData.reps.filter(r=>r.id!==repId);
+    if(window.__repsCache) window.__repsCache = window.__repsCache.filter(r=>r.id!==repId);
+    toast('Rep removed', 'success');
+    renderManageRepsModalBody();
+  } catch(err){
+    toast('Could not remove rep: ' + err.message, 'warn');
+  }
+}
+
+/* -- Section 5: Weekly sales report card -- */
+function renderWeeklySalesCard(data, period){
+  const { current } = computeSalesScorecards(data, period);
+  const intel = window.__salesConversionIntel;
+  const periodLabel = (CAMPAIGN_PERIOD_OPTIONS.find(([k])=>k===period) || [null, period])[1];
+  let topStep = '\u2014';
+  if(intel && !intel.error && intel.messageStepToBooking && intel.messageStepToBooking.length){
+    const best = intel.messageStepToBooking.slice().sort((a,b)=>b.booked-a.booked)[0];
+    if(best && best.booked) topStep = `${best.step} (${best.booked} booked)`;
+  }
+  let topCta = '\u2014';
+  if(intel && !intel.error && intel.ctaToBooking && intel.ctaToBooking.length){
+    const best = intel.ctaToBooking.slice().sort((a,b)=>b.bookings-a.bookings)[0];
+    if(best && best.bookings) topCta = `${best.cta} (${best.bookings} booked)`;
+  }
+  return `
+  <div class="card" id="weeklySalesCard" style="margin-top:16px;">
+    <div class="section-title"><i class="ti ti-report"></i> Weekly sales report card \u2014 ${esc(periodLabel)}</div>
+    <div class="mini-cards" style="grid-template-columns:repeat(3,1fr);">
+      <div class="mini-card"><div class="num">${current.connections}</div><div class="label">Connections made</div></div>
+      <div class="mini-card"><div class="num">${current.messagesSent}</div><div class="label">Messages sent</div></div>
+      <div class="mini-card"><div class="num">${current.repliesReceived}</div><div class="label">Replies</div></div>
+      <div class="mini-card"><div class="num">${current.meetingsBooked}</div><div class="label">Meetings booked</div></div>
+      <div class="mini-card"><div class="num">${current.won}</div><div class="label">Won</div></div>
+      <div class="mini-card"><div class="num">${current.lost}</div><div class="label">Lost</div></div>
+      <div class="mini-card"><div class="num">${current.responseRate}%</div><div class="label">Response rate</div></div>
+      <div class="mini-card"><div class="num" style="font-size:14px;">${esc(topStep)}</div><div class="label">Top converting step</div></div>
+      <div class="mini-card"><div class="num" style="font-size:14px;">${esc(topCta)}</div><div class="label">Top performing CTA</div></div>
+    </div>
+  </div>`;
+}
+
+function renderSalesTranscriptCard(campaign){
+  return `
+  <div class="card" style="margin-top:16px;">
     <div class="section-title"><i class="ti ti-file-text"></i> Sales conversation transcripts</div>
     <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Paste a transcript or upload a file. Claude scores it against this campaign's Strategy (script adherence, CTAs used, objections raised) and saves the analysis to Airtable, tagged to this campaign so it feeds account-level intelligence.</p>
     <input type="file" id="salesTranscriptFile" accept=".txt,.pdf,text/plain,application/pdf" style="display:none;" onchange="handleSalesTranscriptFile(event)">
@@ -4565,59 +5149,7 @@ function renderCampaignSalesTab(campaign){
         </div>
       `).join('')}
     </div>` : ''}
-  </div>
-  `;
-}
-
-function openAddDealModal(campaignId){
-  window.__addDealCampaignId = campaignId;
-  const body = `
-    <div class="field"><label>Contact name</label><input id="dealContactName" placeholder="e.g. Stuart Williams"></div>
-    <div class="field"><label>Company</label><input id="dealCompany" placeholder="e.g. Woodside Energy"></div>
-    <div class="row">
-      <div class="field"><label>Outcome</label>
-        <select id="dealOutcome">
-          <option value="won">Won</option>
-          <option value="lost">Lost</option>
-          <option value="in progress" selected>In progress</option>
-        </select>
-      </div>
-      <div class="field"><label>Deal value ($)</label><input type="number" id="dealValue" min="0" placeholder="0"></div>
-    </div>
-    <div class="field"><label>Date</label><input type="date" id="dealDate" value="${isoDate(TODAY)}"></div>
-    <div class="field"><label>Notes</label><textarea id="dealNotes" rows="3"></textarea></div>
-  `;
-  const footer = `
-    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-    <button class="btn btn-primary" onclick="confirmAddDeal()"><i class="ti ti-check"></i> Save deal</button>
-  `;
-  openModal('Log a deal', body, footer);
-}
-
-function confirmAddDeal(){
-  const campaign = state.campaigns.find(c => c.id === window.__addDealCampaignId);
-  if(!campaign) return;
-  const contactName = document.getElementById('dealContactName').value.trim();
-  const company = document.getElementById('dealCompany').value.trim();
-  const outcome = document.getElementById('dealOutcome').value;
-  const value = document.getElementById('dealValue').value;
-  const date = document.getElementById('dealDate').value || isoDate(TODAY);
-  const notes = document.getElementById('dealNotes').value.trim();
-  if(!contactName){ toast('Add a contact name', 'warn'); return; }
-
-  if(!campaign.deals) campaign.deals = [];
-  const deal = { id: uid('deal'), contactName, company, outcome, value: value ? parseFloat(value) : 0, notes, date };
-  campaign.deals.push(deal);
-  campaign.updatedAt = isoDate(TODAY);
-  closeModal();
-  renderPage();
-  toast('Deal logged', 'success');
-
-  fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/sales/deal`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(Object.assign({ campaignId: campaign.id, campaignName: campaign.name }, deal))
-  }).catch(err => console.warn('Sales log Airtable sync failed:', err.message));
+  </div>`;
 }
 
 function handleSalesTranscriptFile(event){
@@ -4763,7 +5295,8 @@ function syncCampaignToAirtable(campaign){
       objectionHandling: campaign.objectionHandling || '',
       successMetric: campaign.successMetric || '',
       startDate: campaign.createdAt,
-      status: campaign.status
+      status: campaign.status,
+      ctas: campaign.ctas || ''
     })
   }).catch(err => console.warn('Airtable campaign sync failed:', err.message));
 }
@@ -4792,7 +5325,60 @@ function syncCampaignStatusToAirtable(campaign){
 
 /* ===================== CALENDAR PAGE ===================== */
 
+// Sales Calendar (top-level nav). Reads real meetings from the Deals table
+// (window.__calendarEvents, fetched by loadCalendarEvents in afterRender)
+// rather than the local state.bookings demo data - state.bookings/
+// confirmBooking()/openBookingModal() are left untouched since they still
+// feed the separate legacy Intelligence > Analytics sub-tab.
+
+// Fetches the full account-wide event list once; the Per-Assignee view
+// filters this same cached list client-side rather than re-fetching on
+// every dropdown change (rep counts are small - see /api/calendar/events'
+// optional ?assigneeId= server-side filter, unused here on purpose).
+async function loadCalendarEvents(){
+  try {
+    const res = await fetch('/api/calendar/events');
+    const json = await res.json();
+    if(!res.ok) throw new Error(json.error || ('Request failed with status '+res.status));
+    window.__calendarEvents = json.events;
+  } catch(err){
+    window.__calendarEvents = { error: err.message };
+  }
+  if(state.currentPage === 'calendar') renderPage();
+}
+
+async function loadRepsCache(){
+  try {
+    const res = await fetch('/api/reps');
+    const json = await res.json();
+    if(!res.ok) throw new Error(json.error || ('Request failed with status '+res.status));
+    window.__repsCache = json.reps;
+  } catch(err){
+    window.__repsCache = [];
+  }
+  if(state.currentPage === 'calendar') renderPage();
+}
+
+function setCalendarView(view){
+  window.__calendarView = view;
+  renderPage();
+}
+
+function setCalendarAssignee(repId){
+  window.__calendarAssigneeFilter = repId || null;
+  renderPage();
+}
+
+const CALENDAR_ASSIGNEE_PALETTE = ['', 'blue', 'peach', 'grey', 'purple', 'yellow'];
+function eventColorByAssignee(assigneeId){
+  if(!assigneeId) return 'grey';
+  let hash = 0;
+  for(let i=0;i<assigneeId.length;i++) hash = (hash * 31 + assigneeId.charCodeAt(i)) >>> 0;
+  return CALENDAR_ASSIGNEE_PALETTE[hash % CALENDAR_ASSIGNEE_PALETTE.length];
+}
+
 function renderCalendar(){
+  const view = window.__calendarView || 'overview';
   const y = state.calYear, m = state.calMonth;
   const first = new Date(y, m, 1);
   const startDow = first.getDay();
@@ -4802,7 +5388,26 @@ function renderCalendar(){
   for(let i=0;i<startDow;i++) cells.push(null);
   for(let d=1; d<=daysInMonth; d++) cells.push(d);
 
+  const eventsRaw = window.__calendarEvents;
+  const loading = eventsRaw === undefined;
+  const errored = eventsRaw && eventsRaw.error;
+  let events = loading || errored ? [] : eventsRaw;
+  if(view === 'perAssignee' && window.__calendarAssigneeFilter) events = events.filter(ev => ev.assigneeId === window.__calendarAssigneeFilter);
+
+  const reps = window.__repsCache || [];
+
   return `
+  <div class="seq-tabs">
+    <div class="seq-tab ${view==='overview'?'active':''}" onclick="setCalendarView('overview')">Overview</div>
+    <div class="seq-tab ${view==='perAssignee'?'active':''}" onclick="setCalendarView('perAssignee')">Per assignee</div>
+  </div>
+  ${view === 'perAssignee' ? `
+  <div class="field" style="max-width:260px;margin-bottom:14px;"><label>Rep</label>
+    <select onchange="setCalendarAssignee(this.value)">
+      <option value="">All reps</option>
+      ${reps.map(r=>`<option value="${r.id}" ${window.__calendarAssigneeFilter===r.id?'selected':''}>${esc(r.name)}</option>`).join('')}
+    </select>
+  </div>` : ''}
   <div class="cal-header">
     <div style="font-size:16px;font-weight:800;">${monthLabel}</div>
     <div class="cal-nav">
@@ -4811,29 +5416,35 @@ function renderCalendar(){
       <button class="btn btn-secondary btn-sm" onclick="calNav(1)"><i class="ti ti-chevron-right"></i></button>
     </div>
   </div>
+  ${loading ? '<div class="muted"><i class="ti ti-loader-2"></i> Loading meetings...</div>' : ''}
+  ${errored ? `<div class="muted">Could not load meetings: ${esc(eventsRaw.error)}</div>` : ''}
   <div class="cal-grid">
     ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d=>`<div class="cal-dow">${d}</div>`).join('')}
     ${cells.map(d => {
       if(d===null) return '<div class="cal-cell empty"></div>';
       const dateStr = `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
       const isToday = dateStr === isoDate(TODAY);
-      const events = state.bookings.filter(b=>b.date === dateStr);
+      const dayEvents = events.filter(ev => ev.date === dateStr);
       return `<div class="cal-cell ${isToday?'today':''}">
         <div class="cal-date">${d}</div>
-        ${events.map(ev => `<div class="event-chip ${eventColorClass(ev.service)}">${esc(firstName(ev.name))} · ${esc(ev.service)}
-          <div class="event-tooltip">${esc(ev.name)} — ${esc(ev.company)}<br>${esc(ev.service)}, ${fmtDate(ev.date)}</div>
+        ${dayEvents.map(ev => `<div class="event-chip ${eventColorByAssignee(ev.assigneeId)}" onclick="openDealNotesModal('${ev.dealId}')">${esc(firstName(ev.contactName))} · ${esc(ev.stage)}
+          <div class="event-tooltip">${esc(ev.contactName)} — ${esc(ev.companyName)}<br>${esc(ev.campaignName)} · ${esc(ev.stage)}<br>${ev.assigneeName?esc(ev.assigneeName):'Unassigned'}, ${fmtDate(ev.date)}</div>
         </div>`).join('')}
       </div>`;
     }).join('')}
   </div>
   `;
 }
-function eventColorClass(service){
-  const s = service.toLowerCase();
-  if(/agile|sprint|scrum/.test(s)) return '';
-  if(/team|reset|change/.test(s)) return 'blue';
-  if(/training|certif|workshop/.test(s)) return 'peach';
-  return 'grey';
+
+function openDealNotesModal(dealId){
+  const ev = (window.__calendarEvents && window.__calendarEvents.find) ? window.__calendarEvents.find(e => e.dealId === dealId) : null;
+  const deal = findDealById(dealId);
+  const header = ev ? `
+    <div style="margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border);font-size:12.5px;">
+      <div><strong>${esc(ev.contactName)}</strong> — ${esc(ev.companyName)}</div>
+      <div class="muted">${esc(ev.campaignName)} · ${esc(ev.stage)} · ${ev.assigneeName?esc(ev.assigneeName):'Unassigned'} · ${fmtDate(ev.date)}</div>
+    </div>` : '';
+  openModal('Deal notes', header + renderDealNotesThread(deal), `<button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
 }
 function calNav(dir){
   state.calMonth += dir;

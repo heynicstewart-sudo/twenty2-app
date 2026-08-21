@@ -319,7 +319,7 @@ app.post('/api/airtable/campaign', async (req, res) => {
   // so they're folded into the existing "Strategy Notes" field as
   // labelled sections rather than dropped - that field already exists and
   // is semantically the right home for them.
-  const { name, goal, product, targetIcp, contactIds, sequenceTemplates, strategyNotes, pitchAngle, objectionHandling, successMetric, startDate, status } = req.body;
+  const { name, goal, product, targetIcp, contactIds, sequenceTemplates, strategyNotes, pitchAngle, objectionHandling, successMetric, startDate, status, ctas } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
 
   try {
@@ -344,7 +344,8 @@ app.post('/api/airtable/campaign', async (req, res) => {
       'Strategy Notes': strategyNotesParts.filter(Boolean).join('\n\n'),
       'Success Metric': successMetric || '',
       'Start Date': startDate || '',
-      'Status': status || 'Draft'
+      'Status': status || 'Draft',
+      'CTAs': ctas || ''
     };
 
     if (existing) {
@@ -407,10 +408,10 @@ app.patch('/api/campaign/status', async (req, res) => {
 // campaignId/campaignName (optional) come from the Campaign > Intelligence
 // tab, which reuses this exact endpoint so saves there work identically to
 // the top-level Context tab - just tagged with the campaign too. The real
-// Touch Points table has no confirmed "Campaign" field, so the tag is
-// written into Summary (guaranteed to work) and a best-effort "Campaign"
-// field write is also attempted, swallowed silently if that field doesn't
-// exist, so it never breaks the primary save either way.
+// Touch Points table now has a "Campaign" link field, so the tag is written
+// both into Summary (readable at a glance) and as a real link once the
+// Campaign record is resolved by name - wrapped in try/catch and non-fatal
+// since it's still a secondary write to the primary save.
 app.post('/api/airtable/touchpoint', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
@@ -445,9 +446,12 @@ app.post('/api/airtable/touchpoint', async (req, res) => {
 
     if (campaignName) {
       try {
-        await airtableRequest('PATCH', 'Touch Points', { records: [{ id: recordId, fields: { 'Campaign': campaignName } }] });
+        const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
+        if (campaignRecord) {
+          await airtableRequest('PATCH', 'Touch Points', { records: [{ id: recordId, fields: { 'Campaign': [campaignRecord.id] } }] });
+        }
       } catch (tagErr) {
-        console.warn('Best-effort Campaign field write on Touch Points failed (field may not exist):', tagErr.message);
+        console.warn('Best-effort Campaign field write on Touch Points failed:', tagErr.message);
       }
     }
 
@@ -1739,45 +1743,9 @@ If there isn't enough data yet for a confident insight, return fewer than 5 rath
 // Deal log entries and transcript scoring both write to a "Sales Log"
 // table, mirroring the Learning Data pattern elsewhere in this file - the
 // table is app-specific and may not exist in every base yet, so failures
-// are caught and logged rather than treated as fatal. The client keeps
-// campaign.deals/transcriptAnalyses locally regardless, same as bookings
-// and touch points elsewhere in the app (local state is the source of
-// truth, Airtable is a best-effort mirror).
-
-// Records one entry from the Sales tab's deal log against the Sales Log
-// table, tagged with the campaign name/id so it rolls up into account-level
-// intelligence alongside everything else that table feeds.
-app.post('/api/campaign/:id/sales/deal', async (req, res) => {
-  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
-
-  const campaignName = decodeURIComponent(req.params.id);
-  const { campaignId, contactName, company, outcome, value, notes, date } = req.body;
-  if (!contactName) return res.status(400).json({ error: 'contactName is required' });
-
-  try {
-    await airtableRequest('POST', 'Sales Log', {
-      records: [{
-        fields: {
-          'Campaign': campaignName,
-          'Campaign ID': campaignId || '',
-          'Contact Name': contactName,
-          'Company': company || '',
-          'Outcome': outcome || 'in progress',
-          'Deal Value': value || 0,
-          'Notes': notes || '',
-          'Date': date || new Date().toISOString().slice(0, 10)
-        }
-      }],
-      typecast: true
-    });
-    res.json({ success: true });
-  } catch (err) {
-    console.warn('Sales Log write failed (table may not exist yet):', err.message);
-    // Non-fatal - the deal is already saved in the app's own local state,
-    // which is what the Sales tab actually reads from.
-    res.json({ success: false, reason: err.message });
-  }
-});
+// are caught and logged rather than treated as fatal. Deal logging itself
+// (below) now targets the real "Deals" table instead - see the Sales tab
+// rebuild routes further down this file, after the transcript route.
 
 // Scores a pasted/uploaded sales call transcript against this campaign's
 // Strategy (goal, ICP, pitch angle, objection handling, sequence
@@ -1857,6 +1825,542 @@ Score how closely the conversation followed the campaign's script and strategy, 
   }
 });
 
+// ===================== SALES TAB (pipeline, scorecards, conversion intelligence, deals, reps) =====================
+// Reads/writes the real Deals/Reps tables (both already existed in the
+// base, unused until this feature) plus the Stage History/Sentiment fields
+// on Campaign Contacts and the Campaign/Message Time/CTA fields on Touch
+// Points added alongside this route block. Stage History is the linchpin:
+// Sequence Stage is only ever a snapshot, so the pipeline funnel and every
+// period-scoped scorecard below read the dated log instead - see
+// appendStageHistory/parseStageHistory near SEQUENCE_STAGE_ADVANCE above.
+
+function parseCtaList(ctaText) {
+  return (ctaText || '').split('\n').map(s => s.trim()).filter(Boolean);
+}
+
+function normalizeCta(s) {
+  return (s || '').toLowerCase().trim();
+}
+
+function touchPointIsReply(fields) {
+  if (fields['Type'] === 'Inbound Reply') return true;
+  const outcome = (fields['Outcome'] || '').toLowerCase();
+  if (!outcome) return false;
+  return outcome !== 'no reply' && !outcome.includes('no reply') && outcome !== 'pending';
+}
+
+// "Tuesday 10am" -> { day: 'Tuesday', hour: 22 } (24h). Returns null for
+// anything that doesn't match the format Claude is instructed to write.
+function parseMessageTime(str) {
+  const m = (str || '').match(/^(\w+)\s+(\d{1,2})(am|pm)$/i);
+  if (!m) return null;
+  const day = m[1][0].toUpperCase() + m[1].slice(1).toLowerCase();
+  let hour = parseInt(m[2], 10) % 12;
+  if (m[3].toLowerCase() === 'pm') hour += 12;
+  return { day, hour };
+}
+
+function hourBucketLabel(hour) {
+  if (hour >= 6 && hour < 11) return 'Morning';
+  if (hour >= 11 && hour < 14) return 'Midday';
+  if (hour >= 14 && hour < 18) return 'Afternoon';
+  if (hour >= 18 && hour < 22) return 'Evening';
+  return 'Late night';
+}
+
+// Unions the dated Stage History log with the current Sequence Stage, so
+// rows created before Stage History existed (whose current stage is real
+// but undated) still count correctly for funnel/panel aggregation.
+function reachedStageSet(ccRow) {
+  const set = new Set(parseStageHistory(ccRow.fields['Stage History']).map(h => h.stage));
+  if (ccRow.fields['Sequence Stage']) set.add(ccRow.fields['Sequence Stage']);
+  return set;
+}
+
+// One batched Claude call across every first name missing Gender, so the
+// inference runs once per contact ever rather than once per report load -
+// callers are responsible for caching the result back onto Contacts.Gender.
+async function inferGendersForNames(fullNames) {
+  const firstNames = [...new Set(fullNames.map(n => (n || '').trim().split(/\s+/)[0]).filter(Boolean))];
+  if (!firstNames.length) return {};
+  const prompt = `For each of these first names, infer the most likely gender based on common usage. Names may be from any culture or nationality. If a name is unisex or you are not confident, use "Unknown" rather than guessing.
+
+Names: ${JSON.stringify(firstNames)}
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "results": [{ "name": string, "gender": "Male"|"Female"|"Unknown" }] }`;
+  try {
+    const parsed = await callClaudeJson(prompt, 1500);
+    const map = {};
+    (parsed.results || []).forEach(r => { map[r.name] = r.gender; });
+    return map;
+  } catch (err) {
+    console.warn('Gender inference failed:', err.message);
+    return {};
+  }
+}
+
+// Rewrites Contacts.AI Summary and (if a company is linked) Companies.AI
+// Summary, folding in one new signal line alongside everything already on
+// file - same prompt shape as /api/context/update-summaries, but scoped to
+// a single new signal (e.g. a deal note) rather than a full touch-point
+// re-scan. Never throws - callers fire this in the background and don't
+// await it, so failures here must not surface as a broken request.
+async function refreshContactAndCompanySummaries(contactId, companyId, extraContextLine) {
+  try {
+    if (contactId) {
+      const [contactRecord, touchPointsData] = await Promise.all([
+        airtableGetRecord('Contacts', contactId),
+        airtableRequest('GET', 'Touch Points')
+      ]);
+      if (contactRecord) {
+        const f = contactRecord.fields || {};
+        const touchPoints = (touchPointsData.records || [])
+          .filter(r => (r.fields['Contact'] || []).includes(contactId))
+          .map(r => ({ date: r.fields['Date'] || '', type: r.fields['Type'] || '', notes: r.fields['Summary'] || '' }))
+          .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+        const prompt = `You are maintaining the AI Summary field for a contact in T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM.
+
+Contact: ${f['Full Name'] || ''}, ${f['Job Title'] || ''}.
+
+EXISTING AI SUMMARY (preserve everything useful, never lose information unless a newer signal supersedes it):
+${f['AI Summary'] || '(no summary yet)'}
+
+NEW SIGNAL JUST LOGGED:
+${extraContextLine}
+
+ALL TOUCH POINTS ON FILE (${touchPoints.length}, most recent first):
+${JSON.stringify(touchPoints, null, 2)}
+
+Rewrite the AI Summary as a concise intelligence brief, folding in the new signal above alongside everything already known. UK English, no em dashes. Return only the summary text, nothing else.`;
+
+        const summary = await callClaudeText(prompt, 700);
+        await airtableRequest('PATCH', 'Contacts', { records: [{ id: contactId, fields: { 'AI Summary': summary } }] });
+      }
+    }
+
+    if (companyId) {
+      const companyRecord = await airtableGetRecord('Companies', companyId);
+      if (companyRecord) {
+        const cf = companyRecord.fields || {};
+        const prompt = `You are maintaining the AI Summary field for a company account in T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM.
+
+Company: ${cf['Company Name'] || ''}
+
+EXISTING AI SUMMARY (preserve everything useful, never lose information unless a newer signal supersedes it):
+${cf['AI Summary'] || '(no summary yet)'}
+
+NEW SIGNAL JUST LOGGED (from a deal involving this account):
+${extraContextLine}
+
+Rewrite the AI Summary folding in this new signal alongside everything already known about the account. UK English, no em dashes. Return only the summary text, nothing else.`;
+
+        const summary = await callClaudeText(prompt, 700);
+        await airtableRequest('PATCH', 'Companies', { records: [{ id: companyId, fields: { 'AI Summary': summary } }] });
+      }
+    }
+  } catch (err) {
+    console.warn('Background AI Summary refresh failed (non-fatal):', err.message);
+  }
+}
+
+// One bulk fetch for Sections 1/2/4/5 of the Sales tab - fetch everything
+// once, let the frontend bucket by period locally, same "fetch once" idea
+// as campaignPeriodBounds/buildCampaignSeries already use on the frontend
+// for the Analytics tab.
+app.get('/api/campaign/:id/sales-overview', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const campaignName = decodeURIComponent(req.params.id);
+  try {
+    const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
+    if (!campaignRecord) return res.status(404).json({ error: 'Campaign not found' });
+
+    const [ccRows, dealsData, tpData, contactsData, companiesData, repsData] = await Promise.all([
+      fetchCampaignContactsRows(),
+      airtableRequest('GET', 'Deals'),
+      airtableRequest('GET', 'Touch Points'),
+      airtableRequest('GET', 'Contacts'),
+      airtableRequest('GET', 'Companies'),
+      airtableRequest('GET', 'Reps')
+    ]);
+
+    const contactsById = {}; (contactsData.records || []).forEach(r => { contactsById[r.id] = r; });
+    const companiesById = {}; (companiesData.records || []).forEach(r => { companiesById[r.id] = r; });
+    const repsById = {}; (repsData.records || []).forEach(r => { repsById[r.id] = r; });
+
+    const myCcRows = ccRows.filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id));
+    const myContactIds = new Set(myCcRows.map(r => (r.fields['Contact'] || [])[0]).filter(Boolean));
+
+    const campaignContacts = myCcRows.map(r => {
+      const contactId = (r.fields['Contact'] || [])[0] || null;
+      const contact = contactId ? contactsById[contactId] : null;
+      const companyId = contact ? (contact.fields['Company'] || [])[0] || null : null;
+      const company = companyId ? companiesById[companyId] : null;
+      return {
+        campaignContactId: r.id,
+        contactId,
+        contactName: contact ? (contact.fields['Full Name'] || '') : '',
+        companyId,
+        company: company ? (company.fields['Company Name'] || '') : '',
+        sequenceStage: r.fields['Sequence Stage'] || '',
+        sentiment: r.fields['Sentiment'] || null,
+        stageHistory: parseStageHistory(r.fields['Stage History']),
+        addedDate: r.fields['Added Date'] || ''
+      };
+    }).filter(c => c.contactId);
+
+    const deals = (dealsData.records || [])
+      .filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id))
+      .map(r => {
+        const contactId = (r.fields['Contact'] || [])[0] || null;
+        const companyId = (r.fields['Company'] || [])[0] || null;
+        const assigneeId = (r.fields['Assignee'] || [])[0] || null;
+        const contact = contactId ? contactsById[contactId] : null;
+        const company = companyId ? companiesById[companyId] : null;
+        const rep = assigneeId ? repsById[assigneeId] : null;
+        return {
+          id: r.id,
+          contactId,
+          contactName: contact ? (contact.fields['Full Name'] || '') : '',
+          companyId,
+          companyName: company ? (company.fields['Company Name'] || '') : '',
+          outcome: r.fields['Outcome'] || 'Pending',
+          dealValue: r.fields['Deal Value'] || 0,
+          assigneeId,
+          assigneeName: rep ? (rep.fields['Name'] || '') : '',
+          sentiment: r.fields['Sentiment'] || null,
+          notes: r.fields['Notes'] || '',
+          date: r.fields['Date'] || ''
+        };
+      });
+
+    const touchPoints = (tpData.records || [])
+      .filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id) || (r.fields['Contact'] || []).some(cid => myContactIds.has(cid)))
+      .map(r => ({
+        contactId: (r.fields['Contact'] || [])[0] || null,
+        date: r.fields['Date'] || '',
+        type: r.fields['Type'] || '',
+        communicationMethod: r.fields['Communication Method'] || '',
+        cta: r.fields['CTA'] || '',
+        outcome: r.fields['Outcome'] || '',
+        messageTime: r.fields['Message Time'] || '',
+        replied: touchPointIsReply(r.fields)
+      }));
+
+    const reps = (repsData.records || []).map(r => ({ id: r.id, name: r.fields['Name'] || '', email: r.fields['Email'] || '' }));
+    const ctas = parseCtaList(campaignRecord.fields['CTAs']);
+
+    res.json({ campaignContacts, deals, touchPoints, reps, ctas, generatedAt: new Date().toISOString() });
+  } catch (err) {
+    console.error('Sales overview error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Section 3's six conversion-intelligence panels. Separate from
+// sales-overview above because two panels (gender inference) have a Claude
+// call + Airtable-write side effect, which shouldn't block the fast bulk
+// load the rest of the tab depends on.
+app.get('/api/campaign/:id/conversion-intelligence', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const campaignName = decodeURIComponent(req.params.id);
+  try {
+    const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
+    if (!campaignRecord) return res.status(404).json({ error: 'Campaign not found' });
+
+    const [ccRows, dealsData, tpData, contactsData] = await Promise.all([
+      fetchCampaignContactsRows(),
+      airtableRequest('GET', 'Deals'),
+      airtableRequest('GET', 'Touch Points'),
+      airtableRequest('GET', 'Contacts')
+    ]);
+
+    const contactsById = {}; (contactsData.records || []).forEach(r => { contactsById[r.id] = r; });
+
+    const myCcRows = ccRows.filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id));
+    const myContactIds = new Set(myCcRows.map(r => (r.fields['Contact'] || [])[0]).filter(Boolean));
+    const myDeals = (dealsData.records || []).filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id));
+    const myTouchPoints = (tpData.records || []).filter(r =>
+      (r.fields['Campaign'] || []).includes(campaignRecord.id) || (r.fields['Contact'] || []).some(cid => myContactIds.has(cid))
+    );
+
+    // Panel 1: which message step converted to a booking
+    const stepBuckets = { M1: { total: 0, booked: 0 }, M2: { total: 0, booked: 0 }, M3: { total: 0, booked: 0 } };
+    myCcRows.forEach(r => {
+      const reached = reachedStageSet(r);
+      const booked = reached.has('Meeting Booked');
+      let step = null;
+      if (reached.has('Message 3 Sent')) step = 'M3';
+      else if (reached.has('Message 2 Sent')) step = 'M2';
+      else if (reached.has('Message 1 Sent')) step = 'M1';
+      if (step) { stepBuckets[step].total++; if (booked) stepBuckets[step].booked++; }
+    });
+    const messageStepToBooking = Object.entries(stepBuckets).map(([step, v]) => ({ step, total: v.total, booked: v.booked }));
+
+    // Panel 2: which CTA is converting to bookings - exact/substring match
+    // for v1, since Campaigns.CTAs and Touch Points.CTA are both free text.
+    const ctaList = parseCtaList(campaignRecord.fields['CTAs']);
+    const bookedContactIds = new Set(myCcRows.filter(r => reachedStageSet(r).has('Meeting Booked')).map(r => (r.fields['Contact'] || [])[0]));
+    const ctaStats = {};
+    ctaList.forEach(cta => { ctaStats[cta] = { touches: new Set(), bookings: new Set() }; });
+    myTouchPoints.forEach(r => {
+      const ctaText = normalizeCta(r.fields['CTA']);
+      if (!ctaText) return;
+      const contactId = (r.fields['Contact'] || [])[0] || null;
+      ctaList.forEach(cta => {
+        const norm = normalizeCta(cta);
+        if (norm && (ctaText.includes(norm) || norm.includes(ctaText))) {
+          if (contactId) {
+            ctaStats[cta].touches.add(contactId);
+            if (bookedContactIds.has(contactId)) ctaStats[cta].bookings.add(contactId);
+          }
+        }
+      });
+    });
+    const ctaToBooking = ctaList.map(cta => ({ cta, touches: ctaStats[cta].touches.size, bookings: ctaStats[cta].bookings.size }));
+
+    // Panel 3: response rate by touch point type
+    const typeStats = {};
+    myTouchPoints.forEach(r => {
+      const type = r.fields['Type'] || 'Unknown';
+      if (!typeStats[type]) typeStats[type] = { total: 0, replied: 0 };
+      typeStats[type].total++;
+      if (touchPointIsReply(r.fields)) typeStats[type].replied++;
+    });
+    const responseRateByType = Object.entries(typeStats).map(([type, v]) => ({ type, total: v.total, replied: v.replied, rate: v.total ? Math.round(v.replied / v.total * 100) : 0 }));
+
+    // Panel 4: response rate by gender - infer + cache once per contact
+    const missingGenderContacts = [...myContactIds].map(id => contactsById[id]).filter(c => c && !c.fields['Gender']);
+    if (missingGenderContacts.length) {
+      const genderMap = await inferGendersForNames(missingGenderContacts.map(c => c.fields['Full Name']));
+      const patches = missingGenderContacts.map(c => {
+        const firstName = (c.fields['Full Name'] || '').trim().split(/\s+/)[0];
+        const gender = genderMap[firstName] || 'Unknown';
+        c.fields['Gender'] = gender;
+        return { id: c.id, fields: { 'Gender': gender } };
+      });
+      if (patches.length) await airtableBatchPatch('Contacts', patches);
+    }
+    const genderStats = { Male: { total: 0, replied: 0 }, Female: { total: 0, replied: 0 }, Unknown: { total: 0, replied: 0 } };
+    const repliedContactIds = new Set(myTouchPoints.filter(r => touchPointIsReply(r.fields)).map(r => (r.fields['Contact'] || [])[0]));
+    myContactIds.forEach(cid => {
+      const c = contactsById[cid];
+      const gender = (c && c.fields['Gender']) || 'Unknown';
+      if (!genderStats[gender]) genderStats[gender] = { total: 0, replied: 0 };
+      genderStats[gender].total++;
+      if (repliedContactIds.has(cid)) genderStats[gender].replied++;
+    });
+    const responseRateByGender = Object.entries(genderStats).map(([gender, v]) => ({ gender, total: v.total, replied: v.replied, rate: v.total ? Math.round(v.replied / v.total * 100) : 0 }));
+
+    // Panel 5: reply sentiment breakdown - union of Deals.Sentiment (once a
+    // deal exists) and Campaign Contacts.Sentiment (scored at reply time,
+    // before any deal necessarily exists).
+    const sentimentCounts = { Positive: 0, Neutral: 0, Cold: 0, Negative: 0 };
+    myDeals.forEach(r => { const s = r.fields['Sentiment']; if (s && sentimentCounts[s] !== undefined) sentimentCounts[s]++; });
+    myCcRows.forEach(r => { const s = r.fields['Sentiment']; if (s && sentimentCounts[s] !== undefined) sentimentCounts[s]++; });
+    const sentimentBreakdown = Object.entries(sentimentCounts).map(([sentiment, count]) => ({ sentiment, count }));
+
+    // Panel 6: best time to message, from Touch Points.Message Time
+    const heatmap = {};
+    myTouchPoints.forEach(r => {
+      const parsed = parseMessageTime(r.fields['Message Time']);
+      if (!parsed) return;
+      const bucket = hourBucketLabel(parsed.hour);
+      const key = `${parsed.day}|${bucket}`;
+      heatmap[key] = (heatmap[key] || 0) + 1;
+    });
+    const bestTimeToMessage = Object.entries(heatmap).map(([key, count]) => {
+      const [day, bucket] = key.split('|');
+      return { day, bucket, count };
+    });
+
+    res.json({ messageStepToBooking, ctaToBooking, responseRateByType, responseRateByGender, sentimentBreakdown, bestTimeToMessage, generatedAt: new Date().toISOString() });
+  } catch (err) {
+    console.error('Conversion intelligence error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Section 4's "Log a deal" - writes to the real Deals table (replaces the
+// old speculative Sales Log write this route used to make).
+app.post('/api/campaign/:id/deals', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const campaignName = decodeURIComponent(req.params.id);
+  const { contactId, companyId, outcome, dealValue, assigneeId, notes, date, sentiment } = req.body;
+  if (!contactId) return res.status(400).json({ error: 'contactId is required' });
+  try {
+    const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
+    const fields = {
+      'Contact': [contactId],
+      'Outcome': outcome || 'Pending',
+      'Deal Value': dealValue || 0,
+      'Notes': notes || '',
+      'Date': date || new Date().toISOString().slice(0, 10)
+    };
+    if (companyId) fields['Company'] = [companyId];
+    if (assigneeId) fields['Assignee'] = [assigneeId];
+    if (sentiment) fields['Sentiment'] = sentiment;
+    if (campaignRecord) fields['Campaign'] = [campaignRecord.id];
+    const data = await airtableRequest('POST', 'Deals', { records: [{ fields }], typecast: true });
+    res.json({ success: true, deal: data.records[0] });
+  } catch (err) {
+    console.error('Create deal error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Inline-edit endpoint for the Sales Log table's Stage/Deal Value/Assignee cells.
+app.patch('/api/campaign/:id/deals/:dealId', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { dealId } = req.params;
+  const { outcome, dealValue, assigneeId } = req.body;
+  try {
+    const fields = {};
+    if (outcome !== undefined) fields['Outcome'] = outcome;
+    if (dealValue !== undefined) fields['Deal Value'] = dealValue;
+    if (assigneeId !== undefined) fields['Assignee'] = assigneeId ? [assigneeId] : [];
+    if (!Object.keys(fields).length) return res.status(400).json({ error: 'Nothing to update' });
+    await airtableRequest('PATCH', 'Deals', { records: [{ id: dealId, fields }], typecast: true });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Update deal error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// The pre/post-meeting notes thread on an expanded Sales Log row. Appends
+// to Deals.Notes (same append-log convention as Conversation Context),
+// responds immediately, then kicks off a background AI Summary refresh on
+// the linked Contact/Company so meeting intelligence never stays siloed
+// inside the deal log.
+app.post('/api/deals/:dealId/notes', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { dealId } = req.params;
+  const { noteText, phase } = req.body;
+  if (!noteText || !phase) return res.status(400).json({ error: 'noteText and phase are required' });
+  try {
+    const dealRecord = await airtableGetRecord('Deals', dealId);
+    if (!dealRecord) return res.status(404).json({ error: 'Deal not found' });
+    const phaseLabel = phase === 'pre' ? 'Pre-meeting' : 'Post-meeting';
+    const timestamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
+    const line = `[${timestamp}] (${phaseLabel}) ${noteText}`;
+    const existing = dealRecord.fields['Notes'] || '';
+    const newNotes = existing ? existing + '\n\n' + line : line;
+    await airtableRequest('PATCH', 'Deals', { records: [{ id: dealId, fields: { 'Notes': newNotes } }] });
+
+    res.json({ success: true, notes: newNotes });
+
+    const contactId = (dealRecord.fields['Contact'] || [])[0] || null;
+    const companyId = (dealRecord.fields['Company'] || [])[0] || null;
+    if (contactId || companyId) {
+      refreshContactAndCompanySummaries(contactId, companyId, `${phaseLabel} note on a deal: ${noteText}`)
+        .catch(err => console.warn('Background summary refresh error:', err.message));
+    }
+  } catch (err) {
+    console.error('Deal notes error:', err.message);
+    if (!res.headersSent) res.status(500).json({ error: err.message });
+  }
+});
+
+// Reps CRUD - "Manage reps" modal on the Sales tab.
+app.get('/api/reps', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const data = await airtableRequest('GET', 'Reps');
+    res.json({ reps: (data.records || []).map(r => ({ id: r.id, name: r.fields['Name'] || '', email: r.fields['Email'] || '' })) });
+  } catch (err) {
+    console.error('List reps error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/reps', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { name, email } = req.body;
+  if (!name) return res.status(400).json({ error: 'name is required' });
+  try {
+    const data = await airtableRequest('POST', 'Reps', {
+      records: [{ fields: { 'Name': name, 'Email': email || '', 'Added Date': new Date().toISOString().slice(0, 10) } }]
+    });
+    const r = data.records[0];
+    res.json({ success: true, rep: { id: r.id, name: r.fields['Name'] || '', email: r.fields['Email'] || '' } });
+  } catch (err) {
+    console.error('Create rep error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Airtable's delete endpoint takes record ids as query params, not a JSON
+// body - airtableRequest always JSON-encodes body, so this is a bespoke
+// fetch rather than a reuse of that helper.
+app.delete('/api/reps/:repId', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const url = `${AIRTABLE_URL}/Reps?records[]=${encodeURIComponent(req.params.repId)}`;
+    const resp = await fetch(url, { method: 'DELETE', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } });
+    if (!resp.ok) { const err = await resp.text(); throw new Error(`Airtable error ${resp.status}: ${err}`); }
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Delete rep error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Sales Calendar (top-level nav, not campaign-scoped) - meetings from Deals
+// where Outcome is Pending or Started. ?assigneeId= narrows server-side,
+// though the frontend mostly filters the already-fetched list client-side
+// instead (rep counts are small, avoids a second network round trip).
+app.get('/api/calendar/events', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const assigneeId = (req.query.assigneeId || '').trim();
+  try {
+    const [dealsData, contactsData, companiesData, campaignsData, repsData] = await Promise.all([
+      airtableRequest('GET', 'Deals'),
+      airtableRequest('GET', 'Contacts'),
+      airtableRequest('GET', 'Companies'),
+      airtableRequest('GET', 'Campaigns'),
+      airtableRequest('GET', 'Reps')
+    ]);
+    const contactsById = {}; (contactsData.records || []).forEach(r => { contactsById[r.id] = r; });
+    const companiesById = {}; (companiesData.records || []).forEach(r => { companiesById[r.id] = r; });
+    const campaignsById = {}; (campaignsData.records || []).forEach(r => { campaignsById[r.id] = r; });
+    const repsById = {}; (repsData.records || []).forEach(r => { repsById[r.id] = r; });
+
+    let events = (dealsData.records || [])
+      .filter(r => ['Pending', 'Started'].includes(r.fields['Outcome']))
+      .map(r => {
+        const contactId = (r.fields['Contact'] || [])[0] || null;
+        const companyId = (r.fields['Company'] || [])[0] || null;
+        const campaignRecId = (r.fields['Campaign'] || [])[0] || null;
+        const assigneeRecId = (r.fields['Assignee'] || [])[0] || null;
+        const contact = contactId ? contactsById[contactId] : null;
+        const company = companyId ? companiesById[companyId] : null;
+        const camp = campaignRecId ? campaignsById[campaignRecId] : null;
+        const rep = assigneeRecId ? repsById[assigneeRecId] : null;
+        return {
+          dealId: r.id,
+          date: r.fields['Date'] || '',
+          contactName: contact ? (contact.fields['Full Name'] || '') : '',
+          companyName: company ? (company.fields['Company Name'] || '') : '',
+          campaignName: camp ? (camp.fields['Name'] || '') : '',
+          stage: r.fields['Outcome'] || '',
+          assigneeId: assigneeRecId,
+          assigneeName: rep ? (rep.fields['Name'] || '') : '',
+          notes: r.fields['Notes'] || ''
+        };
+      })
+      .filter(ev => ev.date);
+
+    if (assigneeId) events = events.filter(ev => ev.assigneeId === assigneeId);
+
+    res.json({ events });
+  } catch (err) {
+    console.error('Calendar events error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ===================== CONTEXT TAB =====================
 // Marcus's primary data input hub. Fields referenced below that don't exist
 // yet on Contacts/Companies need to be created in Airtable (unconfirmed
@@ -1917,6 +2421,7 @@ function findCampaignContactRow(rows, contactId, campaignRecordId) {
 async function getOrCreateCampaignContactRow(contactId, contactName, campaignRecordId, campaignName, rows) {
   const existing = findCampaignContactRow(rows, contactId, campaignRecordId);
   if (existing) return existing;
+  const addedDate = new Date().toISOString().slice(0, 10);
   const data = await airtableRequest('POST', CAMPAIGN_CONTACTS_TABLE, {
     records: [{
       fields: {
@@ -1924,7 +2429,8 @@ async function getOrCreateCampaignContactRow(contactId, contactName, campaignRec
         'Contact': [contactId],
         'Campaign': [campaignRecordId],
         'Sequence Stage': 'Connection Requested',
-        'Added Date': new Date().toISOString().slice(0, 10)
+        'Stage History': appendStageHistory('', 'Connection Requested', addedDate),
+        'Added Date': addedDate
       }
     }]
   });
@@ -2140,7 +2646,11 @@ app.patch('/api/context/contact-fields', async (req, res) => {
       const rows = await fetchCampaignContactsRows();
       const pendingRows = rows.filter(r => (r.fields['Contact'] || []).includes(contactId) && (r.fields['Sequence Stage'] || '') === 'Connection Requested');
       if (pendingRows.length) {
-        await airtableBatchPatch(CAMPAIGN_CONTACTS_TABLE, pendingRows.map(r => ({ id: r.id, fields: { 'Sequence Stage': 'Connected' } })));
+        const today = new Date().toISOString().slice(0, 10);
+        await airtableBatchPatch(CAMPAIGN_CONTACTS_TABLE, pendingRows.map(r => ({
+          id: r.id,
+          fields: { 'Sequence Stage': 'Connected', 'Stage History': appendStageHistory(r.fields['Stage History'], 'Connected', today) }
+        })));
         campaignContactRowsSynced = pendingRows.length;
       }
     }
@@ -2298,8 +2808,35 @@ const SEQUENCE_STAGE_ADVANCE = {
   'Message 1 Sent': { replied: 'Ready for Message 2', noReply: 'Pending Reply M1' },
   'Pending Reply M1': { replied: 'Ready for Message 2', noReply: 'Pending Reply M1' },
   'Message 2 Sent': { replied: 'Ready for Message 3', noReply: 'Pending Reply M2' },
-  'Pending Reply M2': { replied: 'Ready for Message 3', noReply: 'Pending Reply M2' }
+  'Pending Reply M2': { replied: 'Ready for Message 3', noReply: 'Pending Reply M2' },
+  // No "Ready for Message 4" - the sequence stops at 3 messages, so a reply
+  // at M3 goes straight to the terminal positive state instead of another
+  // "Ready for..." draft step. "Message 3 Sent"/"Pending Reply M3" are new
+  // Sequence Stage choices (auto-created by Airtable via typecast:true on
+  // first write, same as every other new single-select value in this file).
+  'Message 3 Sent': { replied: 'Meeting Booked', noReply: 'Pending Reply M3' },
+  'Pending Reply M3': { replied: 'Meeting Booked', noReply: 'Pending Reply M3' }
 };
+
+// Appends one line to a Campaign Contacts row's Stage History log (creating
+// the field's first line if empty) - the dated record of every stage
+// transition that the pipeline funnel and period-scoped scorecards read,
+// since Sequence Stage itself only ever holds the current value.
+function appendStageHistory(existingHistory, stage, dateLabel) {
+  const line = `[${dateLabel || new Date().toISOString().slice(0, 10)}] ${stage}`;
+  return existingHistory ? existingHistory + '\n' + line : line;
+}
+
+// Parses a Stage History field back into [{date, stage}], most recent last,
+// same order it was written in. Used by the sales-overview endpoint so the
+// frontend never has to regex the raw text itself.
+function parseStageHistory(historyText) {
+  if (!historyText) return [];
+  return historyText.split('\n').map(line => {
+    const m = line.match(/^\[(\d{4}-\d{2}-\d{2})\]\s*(.*)$/);
+    return m ? { date: m[1], stage: m[2] } : null;
+  }).filter(Boolean);
+}
 
 // campaignId/campaignName scope the Sequence Stage advance + Next Message
 // Draft write to that campaign's Campaign Contacts row (created on demand
@@ -2325,8 +2862,12 @@ Extract: the other person's name, a short summary of the message content/exchang
 
 If you cannot confidently identify the contact's name or read the message content, do not guess - set "confident" to false and explain why in "reason".
 
+If the other person has replied, also classify the sentiment of their reply as exactly one of: "Positive", "Neutral", "Cold", "Negative". If they haven't replied, set sentiment to null.
+
+If a timestamp for the most recent message is visible in the screenshot (e.g. "10:42 AM", "Tue 9:15am"), extract it and infer the day of week and hour it was sent. Format as "Monday 10am" (day name, then hour rounded to the nearest hour with am/pm, no leading zero). If no timestamp is visible, or this was pasted as text rather than a screenshot, set messageTime to null - do not guess.
+
 Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
-{ "confident": boolean, "reason": string, "contactName": string, "messageSummary": string, "replied": boolean }`;
+{ "confident": boolean, "reason": string, "contactName": string, "messageSummary": string, "replied": boolean, "sentiment": string|null, "messageTime": string|null }`;
 
     const content = image
       ? [
@@ -2356,8 +2897,9 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 
     let currentStage = '', newStage = '', draft = null;
 
+    let campaignRecord = null;
     if (campaignName) {
-      const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
+      campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
       if (campaignRecord) {
         const rows = await fetchCampaignContactsRows();
         const row = await getOrCreateCampaignContactRow(contactRecord.id, contactName, campaignRecord.id, campaignName, rows);
@@ -2367,7 +2909,15 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
         newStage = advance ? (parsed.replied ? advance.replied : advance.noReply) : currentStage;
 
         const rowUpdateFields = {};
-        if (newStage && newStage !== currentStage) rowUpdateFields['Sequence Stage'] = newStage;
+        if (newStage && newStage !== currentStage) {
+          rowUpdateFields['Sequence Stage'] = newStage;
+          rowUpdateFields['Stage History'] = appendStageHistory(row.fields['Stage History'], newStage, dateLabel);
+        }
+        // Written unconditionally (not just on a stage change) since a
+        // reply's sentiment is meaningful even when it doesn't move the
+        // contact to a new stage - this is what the Section 3 sentiment
+        // breakdown chart reads for contacts that don't have a Deal yet.
+        if (parsed.sentiment) rowUpdateFields['Sentiment'] = parsed.sentiment;
 
         if (newStage.startsWith('Ready for Message')) {
           const draftPrompt = `You are drafting the next LinkedIn message for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM. This is for the "${campaignName}" campaign.
@@ -2382,9 +2932,29 @@ Write the next message in the conversation, following on naturally from what the
         }
 
         if (Object.keys(rowUpdateFields).length) {
-          await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, { records: [{ id: row.id, fields: rowUpdateFields }] });
+          await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, { records: [{ id: row.id, fields: rowUpdateFields }], typecast: true });
         }
       }
+    }
+
+    // Screenshots don't otherwise create a Touch Points row at all, so
+    // without this the response-rate-by-type and best-time-to-message
+    // panels on the Sales tab have nothing to read. Non-fatal on failure -
+    // the primary Conversation Context / stage-advance saves above have
+    // already succeeded regardless of whether this secondary write lands.
+    try {
+      const tpFields = {
+        'Date': dateLabel,
+        'Type': parsed.replied ? 'Inbound Reply' : 'LinkedIn Message',
+        'Direction': parsed.replied ? 'Inbound' : 'Outbound',
+        'Summary': parsed.messageSummary,
+        'Contact': [contactRecord.id]
+      };
+      if (parsed.messageTime) tpFields['Message Time'] = parsed.messageTime;
+      if (campaignRecord) tpFields['Campaign'] = [campaignRecord.id];
+      await airtableRequest('POST', 'Touch Points', { records: [{ fields: tpFields }], typecast: true });
+    } catch (tpErr) {
+      console.warn('Touch Points write from screenshot parse failed (non-fatal):', tpErr.message);
     }
 
     res.json({
@@ -2393,6 +2963,8 @@ Write the next message in the conversation, following on naturally from what the
       contactId: contactRecord.id,
       messageSummary: parsed.messageSummary,
       replied: parsed.replied,
+      sentiment: parsed.sentiment || null,
+      messageTime: parsed.messageTime || null,
       previousStage: currentStage,
       newStage,
       draft,
