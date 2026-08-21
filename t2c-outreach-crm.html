@@ -849,15 +849,30 @@ function renderPage(){
 // (untagged) and a campaign's Intelligence tab (tagged via
 // window.__ctxCampaignTag, set by renderCampaignIntelligenceTab). Both call
 // into the same renderContext()/loadContextData() functions below.
+//
+// Loads (or reloads) window.__contextData if it's missing, or if it was
+// loaded for a different campaign scope than the one currently active -
+// Sequence Stage is per-campaign now, so switching from one campaign's
+// Intelligence tab to another's (or to/from the untagged top-level Context
+// tab) needs a fresh fetch, not the previous campaign's cached rows.
+function ensureContextDataLoaded(){
+  if(window.__contextDataLoading) return;
+  const wantId = window.__ctxCampaignTag ? window.__ctxCampaignTag.id : null;
+  // __contextDataScopeId is undefined until the first load attempt ever
+  // finishes, so this is also true on that very first call.
+  const scopeChanged = window.__contextDataScopeId !== wantId;
+  if(scopeChanged || (!window.__contextData && !window.__contextDataError)) loadContextData();
+}
+
 function afterRender(page){
   if(page === 'campaigns' && window.__campaignView === 'detail'){
     const tab = window.__campaignDetailTab;
     const campaign = state.campaigns.find(c => c.id === window.__campaignDetailId);
     if(tab === 'roadmap') initRoadmapDrag();
-    if(tab === 'intelligence' && !window.__contextData && !window.__contextDataLoading && !window.__contextDataError) loadContextData();
+    if(tab === 'intelligence') ensureContextDataLoaded();
     if(tab === 'analytics' && campaign) initCampaignAnalyticsCharts(campaign);
   }
-  if(page === 'intelligence' && (window.__intelSubTab||'intelligence') === 'context' && !window.__contextData && !window.__contextDataLoading && !window.__contextDataError) loadContextData();
+  if(page === 'intelligence' && (window.__intelSubTab||'intelligence') === 'context') ensureContextDataLoaded();
 }
 
 /* ===================== HOME ===================== */
@@ -920,11 +935,15 @@ function renderHome(){
 /* ===================== CONTEXT PAGE ===================== */
 // Marcus's primary data input hub. Fetches live from Airtable into
 // window.__contextData rather than the reactive state/localStorage model -
-// Sequence Stage, AI Summary, Conversation Context and Next Message Draft
-// are new Airtable-only fields with no equivalent on state.contacts, and
+// AI Summary, Conversation Context, Sequence Stage and Next Message Draft
+// are Airtable-only fields with no equivalent on state.contacts, and
 // folding them into the core contact model would be a much larger, riskier
 // change than this feature asked for. Journey Stage - which still drives
 // Dashboard prioritisation - is never touched by anything in this tab.
+// Sequence Stage/Next Message Draft are per-campaign (Campaign Contacts
+// junction table, not a field on Contacts) - window.__ctxCampaignTag says
+// which campaign's row loadContextData() should fetch, and both come back
+// blank when it's null (the untagged top-level Context tab).
 
 const TOUCH_POINT_TYPE_OPTIONS_CONTEXT = ['Coffee','Call','LinkedIn DM','Email','Event','Other'];
 const HISTORICAL_UPLOAD_TAGS = ['Past Customer','Past Deal','Conversation History','General Background'];
@@ -934,14 +953,24 @@ const HISTORICAL_UPLOAD_TAGS = ['Past Customer','Past Deal','Conversation Histor
 // updated") isn't immediately wiped out by a full-page loading skeleton.
 // Used after every Section 1/2/3 action; the plain (non-silent) call is
 // only for the tab's initial load and the error-state Retry button.
+//
+// Sequence Stage is now per-campaign (Campaign Contacts junction table),
+// so every load is scoped to whichever campaign is active per
+// window.__ctxCampaignTag (null for the untagged top-level Context tab).
+// window.__contextDataScopeId records which scope the last load attempt
+// was for (success or failure) so ensureContextDataLoaded() below can tell
+// a stale cross-campaign cache apart from a genuinely fresh one and reload
+// rather than reuse it.
 async function loadContextData(silent){
+  const scopeCampaignId = window.__ctxCampaignTag ? window.__ctxCampaignTag.id : null;
   if(!silent){
     window.__contextDataLoading = true;
     window.__contextDataError = null;
     renderPage();
   }
   try {
-    const res = await fetch('/api/context/data');
+    const qs = scopeCampaignId ? '?campaignId='+encodeURIComponent(scopeCampaignId)+'&campaignName='+encodeURIComponent(window.__ctxCampaignTag.name) : '';
+    const res = await fetch('/api/context/data'+qs);
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
     window.__contextData = data;
@@ -949,6 +978,11 @@ async function loadContextData(silent){
     if(!silent) window.__contextDataError = err.message;
     else console.warn('Silent context data refresh failed:', err.message);
   }
+  // Recorded after every attempt, success or failure, so ensureContextDataLoaded()
+  // can tell "this scope already failed, wait for a manual Retry" apart from
+  // "a different scope just became active, worth trying fresh" - both leave
+  // window.__contextData falsy, so that alone can't distinguish them.
+  if(!silent) window.__contextDataScopeId = scopeCampaignId;
   if(!silent){
     window.__contextDataLoading = false;
     renderPage();
@@ -1158,7 +1192,10 @@ async function saveContextTouchPoint(){
     fetch('/api/context/update-summaries', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ contactIds: l.contactIds, companyId: l.companyId })
+      body: JSON.stringify({
+        contactIds: l.contactIds, companyId: l.companyId,
+        campaignName: window.__ctxCampaignTag ? window.__ctxCampaignTag.name : undefined
+      })
     }).then(() => { hideContextUpdatingIndicator(); loadContextData(true); })
       .catch(() => hideContextUpdatingIndicator());
 
@@ -1244,7 +1281,10 @@ async function runContextConnectionsImport(rows){
       return;
     }
     const contact = matches[0];
-    if(contact.sequenceStage !== 'Connection Requested'){
+    // hasPendingConnection is account-wide (any campaign, not just the
+    // active one) - Connection Requested -> Connected is shared across
+    // every campaign a contact is in, per Campaign Contacts.
+    if(!contact.hasPendingConnection){
       skippedOtherStage++;
       return;
     }
@@ -1326,7 +1366,11 @@ async function runContextParseScreenshot(){
     const res = await fetch('/api/context/parse-screenshot', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ image: image || undefined, text: image ? undefined : text })
+      body: JSON.stringify({
+        image: image || undefined, text: image ? undefined : text,
+        campaignId: window.__ctxCampaignTag ? window.__ctxCampaignTag.id : undefined,
+        campaignName: window.__ctxCampaignTag ? window.__ctxCampaignTag.name : undefined
+      })
     });
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
@@ -1340,7 +1384,9 @@ async function runContextParseScreenshot(){
       resultEl.innerHTML = `
         <p style="font-size:12.5px;"><strong>${esc(data.contactName)}</strong> ${data.replied ? '<span class="tag tag-connected">Replied</span>' : '<span class="tag tag-opened">No reply yet</span>'}</p>
         <p style="font-size:12px;margin-top:6px;">${esc(data.messageSummary)}</p>
-        <p class="muted" style="font-size:11.5px;margin-top:8px;">Stage: ${esc(data.previousStage||'—')} &rarr; ${esc(data.newStage||'—')}</p>
+        ${data.campaignScoped
+          ? `<p class="muted" style="font-size:11.5px;margin-top:8px;">Sequence stage in this campaign: ${esc(data.previousStage||'—')} &rarr; ${esc(data.newStage||'—')}</p>`
+          : `<p class="muted" style="font-size:11.5px;margin-top:8px;">No campaign active, so sequence stage wasn't advanced - open this from a campaign's Intelligence tab to track that.</p>`}
         ${data.draft ? `<div style="margin-top:10px;"><div style="font-weight:700;font-size:11.5px;">Next message draft</div><textarea readonly rows="4" style="margin-top:4px;">${esc(data.draft)}</textarea></div>` : ''}
       `;
     }
@@ -2674,12 +2720,14 @@ function renderKCard(c, colKey){
   const isPending = colKey === 'pending';
   const days = isPending ? getPendingDays(c) : daysBetween(c.connDate);
   const flagged = isPending && days >= state.settings.timeoutDays;
+  const seqStage = window.__roadmapCampaignId ? campaignSequenceStageFor(c.name) : '';
   return `
   <div class="kcard" draggable="true" id="kcard-${c.id}" data-id="${c.id}" ondragstart="onCardDragStart(event,'${c.id}')" ondragend="onCardDragEnd(event)" oncontextmenu="showContextMenu(event,'${c.id}')">
     <div class="kcard-head" onclick="toggleThread('${c.id}')">
       <div>
         <div class="kcard-name">${esc(c.name)}</div>
         <div class="kcard-role">${esc(c.role)} · ${esc(c.company)}</div>
+        ${seqStage ? `<div style="margin-top:4px;"><span class="tp-badge" title="Sequence stage in this campaign"><i class="ti ti-route"></i> ${esc(seqStage)}</span></div>` : ''}
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
         <span class="day-badge ${dayBadgeClass(days)}">${days}d</span>
@@ -3796,7 +3844,6 @@ function backToCampaignList(){
 
 function setCampaignDetailTab(tab){
   window.__campaignDetailTab = tab;
-  if(tab === 'intelligence' && !window.__contextData && !window.__contextDataLoading && !window.__contextDataError) loadContextData();
   renderPage();
   if(tab === 'analytics' && !window.__campaignAnalytics) runCampaignAnalytics();
   if(tab === 'analytics' && window.__campaignInsights === null && !window.__campaignInsightsError) runCampaignInsights();
@@ -3945,6 +3992,8 @@ function confirmImportGrids(){
   if(!checked.length){ toast('No grids selected', 'warn'); return; }
   if(!campaign.gridIds) campaign.gridIds = [];
   checked.forEach(id => { if(!campaign.gridIds.includes(id)) campaign.gridIds.push(id); });
+  const newContactNames = checked.flatMap(gridId => gridContacts(gridId).map(c => c.name));
+  linkContactsToCampaignAirtable(campaign, newContactNames);
   closeModal();
   renderPage();
   toast(`${checked.length} grid${checked.length===1?'':'s'} linked to ${campaign.name}`, 'success');
@@ -3960,13 +4009,48 @@ function unlinkGridFromCampaign(campaignId, gridId){
 
 /* ---- Roadmap tab ---- */
 
+// window.__roadmapCampaignId tells renderKCard which campaign's Sequence
+// Stage map to read from window.__campaignSequenceStages - a plain global
+// rather than threading a campaign param through renderRoadmap/renderKCard,
+// consistent with how window.__ctxCampaignTag etc. carry render-time
+// context elsewhere in this file.
 function renderCampaignRoadmapTab(campaign){
+  window.__roadmapCampaignId = campaign.id;
+  if(!window.__campaignSequenceStages || !window.__campaignSequenceStages[campaign.id]) loadCampaignSequenceStages(campaign);
   return `
   <div style="display:flex;justify-content:flex-end;margin-bottom:10px;">
     <button class="btn btn-secondary btn-sm" onclick="openAddCampaignContactsModal('${campaign.id}')"><i class="ti ti-user-plus"></i> Add contacts</button>
   </div>
   ${renderRoadmap(campaignContacts(campaign))}
   `;
+}
+
+// Sequence Stage now lives on Campaign Contacts (Airtable), filtered to
+// this campaign - this is what makes that data the actual source of truth
+// for the badge on each Roadmap card, rather than reading it off the
+// Contacts table (see the search-server.js Context Tab notes for the full
+// migration story). Matched to local contacts by name, same convention as
+// the rest of this app's Airtable <-> local-state matching.
+async function loadCampaignSequenceStages(campaign){
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/campaign-contacts`);
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+    const map = {};
+    (data.rows||[]).forEach(r => { if(r.contactName) map[r.contactName.trim().toLowerCase()] = r.sequenceStage; });
+    window.__campaignSequenceStages = window.__campaignSequenceStages || {};
+    window.__campaignSequenceStages[campaign.id] = map;
+  } catch(err){
+    console.warn('Could not load campaign sequence stages:', err.message);
+    window.__campaignSequenceStages = window.__campaignSequenceStages || {};
+    window.__campaignSequenceStages[campaign.id] = {};
+  }
+  if(window.__campaignView === 'detail' && window.__campaignDetailId === campaign.id && window.__campaignDetailTab === 'roadmap') renderPage();
+}
+
+function campaignSequenceStageFor(contactName){
+  const map = window.__roadmapCampaignId && window.__campaignSequenceStages && window.__campaignSequenceStages[window.__roadmapCampaignId];
+  return map ? (map[contactName.trim().toLowerCase()] || '') : '';
 }
 
 /* ---- Strategy tab: messaging templates (formerly the Sequence tab) ---- */
@@ -4121,6 +4205,7 @@ function confirmAddCampaignContacts(){
   checked.forEach(id => { if(!campaign.contactIds.includes(id)) campaign.contactIds.push(id); });
   campaign.updatedAt = isoDate(TODAY);
   syncCampaignToAirtable(campaign);
+  linkContactsToCampaignAirtable(campaign, checked.map(id => state.contacts.find(c=>c.id===id)).filter(Boolean).map(c=>c.name));
   closeModal();
   renderPage();
   toast(`${checked.length} contact${checked.length===1?'':'s'} added to campaign`, 'success');
@@ -4681,6 +4766,20 @@ function syncCampaignToAirtable(campaign){
       status: campaign.status
     })
   }).catch(err => console.warn('Airtable campaign sync failed:', err.message));
+}
+
+// Creates a Campaign Contacts junction row (Airtable) for each contact the
+// moment they join a campaign, whether via the Grid tab (linking/creating a
+// grid) or the Roadmap tab's Add contacts modal - so every campaign member
+// has a Sequence Stage row from day one instead of only once a touch point
+// or screenshot happens to create one.
+function linkContactsToCampaignAirtable(campaign, contactNames){
+  if(!contactNames.length) return;
+  fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/contacts/link`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contactNames })
+  }).catch(err => console.warn('Campaign Contacts link sync failed:', err.message));
 }
 
 function syncCampaignStatusToAirtable(campaign){

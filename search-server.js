@@ -1861,9 +1861,7 @@ Score how closely the conversation followed the campaign's script and strategy, 
 // Marcus's primary data input hub. Fields referenced below that don't exist
 // yet on Contacts/Companies need to be created in Airtable (unconfirmed
 // exact names, following this app's existing naming style):
-//   Contacts: "Sequence Stage" (single select, values below), "AI Summary"
-//   (long text), "Conversation Context" (long text), "Next Message Draft"
-//   (long text).
+//   Contacts: "AI Summary" (long text), "Conversation Context" (long text).
 //   Companies: "AI Summary" (long text).
 //   Touch Points: "Company" (linked record) - new, see the touchpoint
 //   route above.
@@ -1874,22 +1872,176 @@ Score how closely the conversation followed the campaign's script and strategy, 
 //   second table, matching the brief's literal "write a record to the
 //   Learning Data table").
 // Journey Stage is left untouched everywhere in this section - it keeps
-// driving Dashboard prioritisation exactly as before. Sequence Stage is
-// the new, separate, more granular field this tab reads and writes.
+// driving Dashboard prioritisation exactly as before and stays on the
+// Contact record, account-level.
+//
+// Sequence Stage used to live as a single select directly on Contacts, one
+// global value per contact. It's now tracked per campaign instead, on the
+// "Campaign Contacts" junction table (Contact link, Campaign link, Sequence
+// Stage, Next Message Draft, Added Date) - one row per contact per
+// campaign, so the same person can be at "Message 2 Sent" in one campaign
+// and "Ready for Message 3" in another. The old "Sequence Stage" and "Next
+// Message Draft" fields still exist on Contacts with whatever historical
+// data they hold - nothing already there was deleted - but nothing in this
+// file reads or writes them any more. The one exception carried over
+// unchanged is the Connection Requested -> Connected transition: LinkedIn
+// connection status is a fact about the person, not the campaign, so it
+// still syncs across every Campaign Contacts row for that contact (see
+// PATCH /api/context/contact-fields below) rather than being campaign-
+// specific like every later stage.
+
+const CAMPAIGN_CONTACTS_TABLE = 'Campaign Contacts';
+
+// Fetches the whole Campaign Contacts table, same "fetch everything, filter
+// in memory" approach already used for Touch Points/Contacts elsewhere in
+// this file - filterByFormula doesn't reliably support matching linked-
+// record cells by record id. Table may not exist in every base yet, so
+// failures are swallowed like the Learning Data/Sales Log tables.
+async function fetchCampaignContactsRows() {
+  try {
+    const data = await airtableRequest('GET', CAMPAIGN_CONTACTS_TABLE);
+    return data.records || [];
+  } catch (err) {
+    console.warn('Could not fetch Campaign Contacts (table may not exist yet):', err.message);
+    return [];
+  }
+}
+
+function findCampaignContactRow(rows, contactId, campaignRecordId) {
+  return rows.find(r => (r.fields['Contact'] || []).includes(contactId) && (r.fields['Campaign'] || []).includes(campaignRecordId));
+}
+
+// Looks for an existing junction row for this (contact, campaign) pair in
+// the already-fetched `rows`, creating one at the default first stage
+// ("Connection Requested") if none exists yet.
+async function getOrCreateCampaignContactRow(contactId, contactName, campaignRecordId, campaignName, rows) {
+  const existing = findCampaignContactRow(rows, contactId, campaignRecordId);
+  if (existing) return existing;
+  const data = await airtableRequest('POST', CAMPAIGN_CONTACTS_TABLE, {
+    records: [{
+      fields: {
+        'Name': `${contactName} — ${campaignName}`,
+        'Contact': [contactId],
+        'Campaign': [campaignRecordId],
+        'Sequence Stage': 'Connection Requested',
+        'Added Date': new Date().toISOString().slice(0, 10)
+      }
+    }]
+  });
+  return data.records[0];
+}
+
+// Airtable caps batch writes at 10 records per request.
+async function airtableBatchPatch(table, records) {
+  for (let i = 0; i < records.length; i += 10) {
+    await airtableRequest('PATCH', table, { records: records.slice(i, i + 10) });
+  }
+}
+
+// Called when contacts are added to a campaign in the app - via the Grid
+// tab (linking or creating a grid) or the Roadmap tab's "Add contacts"
+// modal - so every contact in a campaign has a Campaign Contacts row from
+// the moment they join it, not just once something happens to them there.
+// Matches contacts by Full Name, same convention as every other route in
+// this file that's given a name instead of an Airtable record id.
+app.post('/api/campaign/:id/contacts/link', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const campaignName = decodeURIComponent(req.params.id);
+  const { contactNames } = req.body;
+  if (!Array.isArray(contactNames) || !contactNames.length) return res.status(400).json({ error: 'contactNames is required' });
+
+  try {
+    const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
+    if (!campaignRecord) return res.json({ success: false, reason: 'Campaign not found in Airtable' });
+
+    const rows = await fetchCampaignContactsRows();
+    let linked = 0, alreadyLinked = 0, notFound = 0;
+
+    for (const name of contactNames) {
+      const contactRecord = await findRecordByFieldName('Contacts', 'Full Name', name);
+      if (!contactRecord) { notFound++; continue; }
+      if (findCampaignContactRow(rows, contactRecord.id, campaignRecord.id)) { alreadyLinked++; continue; }
+      const created = await getOrCreateCampaignContactRow(contactRecord.id, name, campaignRecord.id, campaignName, rows);
+      rows.push(created);
+      linked++;
+    }
+
+    res.json({ success: true, linked, alreadyLinked, notFound });
+  } catch (err) {
+    console.error('Campaign contacts link error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Feeds the campaign Roadmap tab's per-card Sequence Stage badge - the
+// Roadmap's kanban columns themselves stay driven by the app's own local
+// pipeline state (unrelated to Airtable), but the Sequence Stage shown on
+// each card is read live from Campaign Contacts, filtered to this campaign,
+// which is the actual source of truth for that value now.
+app.get('/api/campaign/:id/campaign-contacts', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const campaignName = decodeURIComponent(req.params.id);
+
+  try {
+    const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
+    if (!campaignRecord) return res.json({ rows: [] });
+
+    const [rows, contactsData] = await Promise.all([
+      fetchCampaignContactsRows(),
+      airtableRequest('GET', 'Contacts')
+    ]);
+    const nameById = {};
+    (contactsData.records || []).forEach(r => { nameById[r.id] = r.fields['Full Name'] || ''; });
+
+    const result = rows
+      .filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id))
+      .map(r => {
+        const contactId = (r.fields['Contact'] || [])[0] || null;
+        return {
+          campaignContactId: r.id,
+          contactId,
+          contactName: contactId ? (nameById[contactId] || '') : '',
+          sequenceStage: r.fields['Sequence Stage'] || '',
+          nextMessageDraft: r.fields['Next Message Draft'] || ''
+        };
+      })
+      .filter(r => r.contactName);
+
+    res.json({ rows: result });
+  } catch (err) {
+    console.error('Campaign contacts fetch error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // GET /api/context/data - not one of the five endpoints named in the brief,
 // but necessary supporting infrastructure: the Company dropdown and
 // per-company Contact multi-select in the Touch Point Logger have nothing
 // to populate from without it, and there was no existing route that
 // returns Companies at all (only create/update-linkedin routes existed).
+// campaignName (optional query param) scopes sequenceStage/nextMessageDraft
+// to that campaign's Campaign Contacts row per contact - omit it (as the
+// untagged top-level Context tab does) and both come back blank, since
+// Sequence Stage no longer has a single global value to show. hasPending
+// Connection is always computed account-wide regardless of campaignName,
+// since the Connection Requested -> Connected transition is shared across
+// every campaign a contact is in (see the note above the CONTEXT TAB
+// section) - it's what the LinkedIn Connections CSV upload uses to decide
+// who's eligible to advance.
 app.get('/api/context/data', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
+  const campaignName = (req.query.campaignName || '').trim();
+
   try {
-    const [companiesData, contactsData, touchPointsData] = await Promise.all([
+    const [companiesData, contactsData, touchPointsData, campaignContactRows, campaignRecord] = await Promise.all([
       airtableRequest('GET', 'Companies'),
       airtableRequest('GET', 'Contacts'),
-      airtableRequest('GET', 'Touch Points')
+      airtableRequest('GET', 'Touch Points'),
+      fetchCampaignContactsRows(),
+      campaignName ? findRecordByFieldName('Campaigns', 'Name', campaignName) : Promise.resolve(null)
     ]);
 
     const companies = (companiesData.records || [])
@@ -1904,28 +2056,51 @@ app.get('/api/context/data', async (req, res) => {
       });
     });
 
+    const campaignRowsByContact = {};
+    campaignContactRows.forEach(r => {
+      (r.fields['Contact'] || []).forEach(cid => {
+        if (!campaignRowsByContact[cid]) campaignRowsByContact[cid] = [];
+        campaignRowsByContact[cid].push(r);
+      });
+    });
+
     const contacts = (contactsData.records || [])
       .map(r => {
         const companyIds = r.fields['Company'] || [];
         const recentTouchPoints = (touchPointsByContact[r.id] || [])
           .sort((a, b) => new Date(b.date) - new Date(a.date))
           .slice(0, 3);
+
+        const myCampaignRows = campaignRowsByContact[r.id] || [];
+        const hasPendingConnection = myCampaignRows.some(cr => (cr.fields['Sequence Stage'] || '') === 'Connection Requested');
+        let sequenceStage = '', nextMessageDraft = '', campaignContactId = null;
+        if (campaignRecord) {
+          const myRow = myCampaignRows.find(cr => (cr.fields['Campaign'] || []).includes(campaignRecord.id));
+          if (myRow) {
+            sequenceStage = myRow.fields['Sequence Stage'] || '';
+            nextMessageDraft = myRow.fields['Next Message Draft'] || '';
+            campaignContactId = myRow.id;
+          }
+        }
+
         return {
           id: r.id,
           name: r.fields['Full Name'] || '',
           companyId: companyIds[0] || null,
           role: r.fields['Job Title'] || '',
           journeyStage: r.fields['Journey Stage'] || '',
-          sequenceStage: r.fields['Sequence Stage'] || '',
+          sequenceStage,
+          campaignContactId,
+          hasPendingConnection,
           aiSummary: r.fields['AI Summary'] || '',
           conversationContext: r.fields['Conversation Context'] || '',
-          nextMessageDraft: r.fields['Next Message Draft'] || '',
+          nextMessageDraft,
           recentTouchPoints
         };
       })
       .filter(c => c.name);
 
-    res.json({ companies, contacts });
+    res.json({ companies, contacts, campaignScoped: !!campaignRecord });
   } catch (err) {
     console.error('Context data error:', err.message);
     res.status(500).json({ error: err.message });
@@ -1934,25 +2109,43 @@ app.get('/api/context/data', async (req, res) => {
 
 // PATCH /api/context/contact-fields - also not one of the five named
 // endpoints, but the LinkedIn Connections CSV card needs to write Journey
-// Stage + Sequence Stage together by record id, and the existing PATCH
-// /api/airtable/contact/stage route works by name search and maps a
-// found/opened/connected/messaging/booked app-state enum to Journey Stage
-// rather than accepting either field directly - reusing it would have
-// meant overloading it with a second, unrelated update shape.
+// Stage by record id, and the existing PATCH /api/airtable/contact/stage
+// route works by name search and maps a found/opened/connected/messaging/
+// booked app-state enum to Journey Stage rather than accepting it directly
+// - reusing it would have meant overloading it with a second, unrelated
+// update shape.
+//
+// sequenceStage='Connected' is the one remaining piece of Sequence Stage
+// this route touches, and it no longer writes to Contacts at all - it
+// syncs every one of this contact's Campaign Contacts rows that's still
+// sitting at "Connection Requested" forward to "Connected", since accepting
+// a LinkedIn connection is true for every campaign the contact is in, not
+// just one. Rows already further along in a given campaign are left alone.
 app.patch('/api/context/contact-fields', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
   const { contactId, journeyStage, sequenceStage } = req.body;
   if (!contactId) return res.status(400).json({ error: 'contactId is required' });
+  if (!journeyStage && sequenceStage !== 'Connected') {
+    return res.status(400).json({ error: 'journeyStage is required, or sequenceStage must be "Connected"' });
+  }
 
   try {
-    const fields = {};
-    if (journeyStage) fields['Journey Stage'] = journeyStage;
-    if (sequenceStage) fields['Sequence Stage'] = sequenceStage;
-    if (!Object.keys(fields).length) return res.status(400).json({ error: 'journeyStage or sequenceStage is required' });
+    if (journeyStage) {
+      await airtableRequest('PATCH', 'Contacts', { records: [{ id: contactId, fields: { 'Journey Stage': journeyStage } }] });
+    }
 
-    await airtableRequest('PATCH', 'Contacts', { records: [{ id: contactId, fields }] });
-    res.json({ success: true });
+    let campaignContactRowsSynced = 0;
+    if (sequenceStage === 'Connected') {
+      const rows = await fetchCampaignContactsRows();
+      const pendingRows = rows.filter(r => (r.fields['Contact'] || []).includes(contactId) && (r.fields['Sequence Stage'] || '') === 'Connection Requested');
+      if (pendingRows.length) {
+        await airtableBatchPatch(CAMPAIGN_CONTACTS_TABLE, pendingRows.map(r => ({ id: r.id, fields: { 'Sequence Stage': 'Connected' } })));
+        campaignContactRowsSynced = pendingRows.length;
+      }
+    }
+
+    res.json({ success: true, campaignContactRowsSynced });
   } catch (err) {
     console.error('Context contact-fields update error:', err.message);
     res.status(500).json({ error: err.message });
@@ -2004,18 +2197,23 @@ app.post('/api/context/update-summaries', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
 
-  const { contactIds, companyId } = req.body;
+  const { contactIds, companyId, campaignName } = req.body;
   if ((!contactIds || !contactIds.length) && !companyId) {
     return res.status(400).json({ error: 'contactIds or companyId is required' });
   }
 
   try {
-    const [contactsData, touchPointsData] = await Promise.all([
+    const [contactsData, touchPointsData, campaignRecord] = await Promise.all([
       airtableRequest('GET', 'Contacts'),
-      airtableRequest('GET', 'Touch Points')
+      airtableRequest('GET', 'Touch Points'),
+      campaignName ? findRecordByFieldName('Campaigns', 'Name', campaignName) : Promise.resolve(null)
     ]);
     const contactsById = {};
     (contactsData.records || []).forEach(r => { contactsById[r.id] = r; });
+    // Sequence Stage is per-campaign now (Campaign Contacts), so it's only
+    // fetched and included in the prompt when this update was triggered
+    // from a specific campaign's Intelligence tab.
+    const campaignContactRows = campaignRecord ? await fetchCampaignContactsRows() : [];
 
     const updatedContacts = [];
     for (const contactId of (contactIds || [])) {
@@ -2027,10 +2225,16 @@ app.post('/api/context/update-summaries', async (req, res) => {
         .map(r => ({ date: r.fields['Date'] || '', type: r.fields['Type'] || '', notes: r.fields['Summary'] || '', outcome: r.fields['Outcome'] || '' }))
         .sort((a, b) => new Date(b.date) - new Date(a.date));
 
+      let sequenceStageLine = '';
+      if (campaignRecord) {
+        const row = findCampaignContactRow(campaignContactRows, contactId, campaignRecord.id);
+        if (row) sequenceStageLine = ` Sequence stage in the "${campaignName}" campaign: ${row.fields['Sequence Stage'] || ''}.`;
+      }
+
       const prompt = `You are maintaining the AI Summary field for a contact in T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM.
 
 Contact: ${f['Full Name'] || ''}, ${f['Job Title'] || ''}.
-Journey stage: ${f['Journey Stage'] || ''}. Sequence stage: ${f['Sequence Stage'] || ''}.
+Journey stage: ${f['Journey Stage'] || ''}.${sequenceStageLine}
 
 EXISTING AI SUMMARY (this is the current intelligence brief - preserve everything useful in it, never lose information that isn't superseded by newer touch points):
 ${f['AI Summary'] || '(no summary yet)'}
@@ -2083,23 +2287,33 @@ Rewrite the AI Summary as a concise account-level intelligence brief: who's enga
   }
 });
 
-// Advancing FROM "Pending Reply (M1)"/"(M2)" isn't explicitly in the brief
+// Advancing FROM "Pending Reply M1"/"M2" isn't explicitly in the brief
 // (which only describes advancing from "Message 1/2 Sent"), but leaving no
 // forward path once a contact is already waiting on a reply would be a
-// clear gap - a reply landing while a contact sits in "Pending Reply (M1)"
-// should still advance them the same way "Message 1 Sent" would.
+// clear gap - a reply landing while a contact sits in "Pending Reply M1"
+// should still advance them the same way "Message 1 Sent" would. Keys here
+// match the Sequence Stage single select's real option names exactly (no
+// parentheses).
 const SEQUENCE_STAGE_ADVANCE = {
-  'Message 1 Sent': { replied: 'Ready for Message 2', noReply: 'Pending Reply (M1)' },
-  'Pending Reply (M1)': { replied: 'Ready for Message 2', noReply: 'Pending Reply (M1)' },
-  'Message 2 Sent': { replied: 'Ready for Message 3', noReply: 'Pending Reply (M2)' },
-  'Pending Reply (M2)': { replied: 'Ready for Message 3', noReply: 'Pending Reply (M2)' }
+  'Message 1 Sent': { replied: 'Ready for Message 2', noReply: 'Pending Reply M1' },
+  'Pending Reply M1': { replied: 'Ready for Message 2', noReply: 'Pending Reply M1' },
+  'Message 2 Sent': { replied: 'Ready for Message 3', noReply: 'Pending Reply M2' },
+  'Pending Reply M2': { replied: 'Ready for Message 3', noReply: 'Pending Reply M2' }
 };
 
+// campaignId/campaignName scope the Sequence Stage advance + Next Message
+// Draft write to that campaign's Campaign Contacts row (created on demand
+// if this is the contact's first activity in the campaign). Conversation
+// Context stays on the Contact record either way - it's the one running
+// log of what's actually been said, not a campaign-specific concept.
+// Without a campaign (the untagged top-level Context tab), there's no
+// Campaign Contacts row to advance, so the stage/draft step is skipped
+// entirely and only Conversation Context gets updated.
 app.post('/api/context/parse-screenshot', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
 
-  const { image, text } = req.body;
+  const { image, text, campaignId, campaignName } = req.body;
   if (!image && !text) return res.status(400).json({ error: 'image or text is required' });
 
   try {
@@ -2133,41 +2347,56 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
     }
 
     const f = contactRecord.fields || {};
+    const contactName = f['Full Name'] || parsed.contactName;
     const existingContext = f['Conversation Context'] || '';
     const dateLabel = new Date().toISOString().slice(0, 10);
     const newContext = (existingContext ? existingContext + '\n\n' : '') + `[${dateLabel}] ${parsed.messageSummary}`;
 
-    const currentStage = f['Sequence Stage'] || '';
-    const advance = SEQUENCE_STAGE_ADVANCE[currentStage];
-    const newStage = advance ? (parsed.replied ? advance.replied : advance.noReply) : currentStage;
+    await airtableRequest('PATCH', 'Contacts', { records: [{ id: contactRecord.id, fields: { 'Conversation Context': newContext } }] });
 
-    const updateFields = { 'Conversation Context': newContext };
-    if (newStage !== currentStage) updateFields['Sequence Stage'] = newStage;
+    let currentStage = '', newStage = '', draft = null;
 
-    let draft = null;
-    if (newStage.startsWith('Ready for Message')) {
-      const draftPrompt = `You are drafting the next LinkedIn message for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM.
+    if (campaignName) {
+      const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
+      if (campaignRecord) {
+        const rows = await fetchCampaignContactsRows();
+        const row = await getOrCreateCampaignContactRow(contactRecord.id, contactName, campaignRecord.id, campaignName, rows);
 
-Contact: ${f['Full Name'] || ''}, ${f['Job Title'] || ''}.
+        currentStage = row.fields['Sequence Stage'] || '';
+        const advance = SEQUENCE_STAGE_ADVANCE[currentStage];
+        newStage = advance ? (parsed.replied ? advance.replied : advance.noReply) : currentStage;
+
+        const rowUpdateFields = {};
+        if (newStage && newStage !== currentStage) rowUpdateFields['Sequence Stage'] = newStage;
+
+        if (newStage.startsWith('Ready for Message')) {
+          const draftPrompt = `You are drafting the next LinkedIn message for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM. This is for the "${campaignName}" campaign.
+
+Contact: ${contactName}, ${f['Job Title'] || ''}.
 AI Summary: ${f['AI Summary'] || 'none yet'}
 Conversation so far: ${newContext}
 
 Write the next message in the conversation, following on naturally from what they just said. UK English, no em dashes, peer to peer tone, 3-4 sentences, one observation and one question, signed off "Marcus". Return only the message text.`;
-      draft = await callClaudeText(draftPrompt, 400);
-      updateFields['Next Message Draft'] = draft;
-    }
+          draft = await callClaudeText(draftPrompt, 400);
+          rowUpdateFields['Next Message Draft'] = draft;
+        }
 
-    await airtableRequest('PATCH', 'Contacts', { records: [{ id: contactRecord.id, fields: updateFields }] });
+        if (Object.keys(rowUpdateFields).length) {
+          await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, { records: [{ id: row.id, fields: rowUpdateFields }] });
+        }
+      }
+    }
 
     res.json({
       success: true,
-      contactName: f['Full Name'] || parsed.contactName,
+      contactName,
       contactId: contactRecord.id,
       messageSummary: parsed.messageSummary,
       replied: parsed.replied,
       previousStage: currentStage,
       newStage,
-      draft
+      draft,
+      campaignScoped: !!campaignName
     });
   } catch (err) {
     console.error('Parse screenshot error:', err.message);
