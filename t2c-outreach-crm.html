@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
 :root{
   --bg:#f5f0eb;
@@ -754,8 +755,27 @@ function resolveGridIdByName(name){
 }
 
 function openGrid(gridId){
+  window.__gridReturnTo = null;
   state.currentGridId = gridId;
   navigate('grid');
+}
+
+// Same as openGrid, but remembers which campaign's Grid tab to return to
+// when the back button on the Grid page is used, instead of always going Home.
+function openGridFromCampaign(gridId, campaignId){
+  window.__gridReturnTo = { campaignId };
+  state.currentGridId = gridId;
+  navigate('grid');
+}
+
+function gridBackAction(){
+  const returnTo = window.__gridReturnTo;
+  if(returnTo && returnTo.campaignId && state.campaigns.some(c=>c.id===returnTo.campaignId)){
+    navigate('campaigns');
+    openCampaignDetail(returnTo.campaignId, 'grid');
+  } else {
+    navigate('home');
+  }
 }
 
 function createNewGridFlow(){
@@ -784,6 +804,7 @@ function goToNewCampaign(){
 }
 
 function goToRunIntelligence(){
+  window.__intelSubTab = 'intelligence';
   navigate('intelligence');
   runIntelligence();
 }
@@ -792,17 +813,12 @@ function goToRunIntelligence(){
 
 const NAV = [
   { id:'home', label:'Home', icon:'ti-home' },
-  { id:'dashboard', label:'Dashboard', icon:'ti-layout-dashboard' },
-  { id:'context', label:'Context', icon:'ti-database-cog' },
-  { id:'grid', label:'Grid', icon:'ti-grid-dots', hidden:true },
-  { id:'roadmap', label:'Roadmap', icon:'ti-route' },
-  { id:'sequences', label:'Sequences', icon:'ti-git-branch' },
-  { id:'calendar', label:'Calendar', icon:'ti-calendar' },
   { id:'campaigns', label:'Campaigns', icon:'ti-rocket' },
-  { id:'analytics', label:'Analytics', icon:'ti-chart-bar' },
+  { id:'calendar', label:'Sales Calendar', icon:'ti-calendar' },
   { id:'intelligence', label:'Intelligence', icon:'ti-brain' },
   { id:'settings', label:'Settings', icon:'ti-settings' },
-  { id:'howitworks', label:'How it works', icon:'ti-help-circle' }
+  { id:'howitworks', label:'How it works', icon:'ti-help-circle' },
+  { id:'grid', label:'Grid', icon:'ti-grid-dots', hidden:true }
 ];
 
 function renderSidebar(){
@@ -823,15 +839,25 @@ function navigate(page){
 
 function renderPage(){
   const el = document.getElementById('pageContent');
-  const renderers = { home: renderHome, dashboard: renderDashboard, howitworks: renderHowItWorks, grid: renderGrid, context: renderContext, roadmap: renderRoadmap, sequences: renderSequences, campaigns: renderCampaigns, calendar: renderCalendar, analytics: renderAnalytics, intelligence: renderIntelligence, settings: renderSettings };
+  const renderers = { home: renderHome, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderCalendar, intelligence: renderIntelligencePage, settings: renderSettings };
   el.innerHTML = renderers[state.currentPage]();
   afterRender(state.currentPage);
 }
 
+// Context-tab data (window.__contextData) and its logger are shared by two
+// spots that are never visible at once: the Intelligence > Context sub-tab
+// (untagged) and a campaign's Intelligence tab (tagged via
+// window.__ctxCampaignTag, set by renderCampaignIntelligenceTab). Both call
+// into the same renderContext()/loadContextData() functions below.
 function afterRender(page){
-  if(page === 'sequences') initSequenceDrag();
-  if(page === 'roadmap') initRoadmapDrag();
-  if(page === 'context' && !window.__contextData && !window.__contextDataLoading && !window.__contextDataError) loadContextData();
+  if(page === 'campaigns' && window.__campaignView === 'detail'){
+    const tab = window.__campaignDetailTab;
+    const campaign = state.campaigns.find(c => c.id === window.__campaignDetailId);
+    if(tab === 'roadmap') initRoadmapDrag();
+    if(tab === 'intelligence' && !window.__contextData && !window.__contextDataLoading && !window.__contextDataError) loadContextData();
+    if(tab === 'analytics' && campaign) initCampaignAnalyticsCharts(campaign);
+  }
+  if(page === 'intelligence' && (window.__intelSubTab||'intelligence') === 'context' && !window.__contextData && !window.__contextDataLoading && !window.__contextDataError) loadContextData();
 }
 
 /* ===================== HOME ===================== */
@@ -840,6 +866,8 @@ function renderHome(){
   return `
   <div class="section-title" style="font-size:22px;margin-bottom:2px;">Hey Marcus, ready to get started?</div>
   <div class="muted" style="margin-bottom:20px;">Your WA market intelligence engine.</div>
+
+  ${renderTodaysActions()}
 
   <div class="home-actions">
     <div class="home-action-card" onclick="createNewGridFlow()">
@@ -875,7 +903,7 @@ function renderHome(){
         <tbody>
           ${state.grids.map(g => `
             <tr class="home-grid-row" onclick="openGrid('${g.id}')">
-              <td class="perf-name">${esc(g.name)}</td>
+              <td class="perf-name">${esc(g.name)} ${campaignsForGrid(g.id).map(c=>`<span class="pill" style="background:#e2f2fa;color:#0d6a96;margin-left:4px;">${esc(c.name)}</span>`).join('')}</td>
               <td>${g.companies.length}</td>
               <td>${gridContacts(g.id).length}</td>
               <td>${fmtDate(g.updatedAt)}</td>
@@ -937,9 +965,11 @@ function renderContext(){
   if(!window.__contextData){
     return '<div class="card"><div class="empty-state">Loading...</div></div>';
   }
+  const campaignTag = window.__ctxCampaignTag;
   return `
-  <div class="section-title" style="font-size:20px;margin-bottom:2px;">Context</div>
-  <div class="muted" style="margin-bottom:14px;">Marcus's primary data input hub - log touch points, upload context, and keep AI Summaries current.</div>
+  <div class="section-title" style="font-size:20px;margin-bottom:2px;">${campaignTag ? 'Intelligence' : 'Context'}</div>
+  <div class="muted" style="margin-bottom:14px;">Marcus's primary data input hub - log touch points, upload context, and keep AI Summaries current.${campaignTag ? ` Everything logged here also tags the record with the <strong>${esc(campaignTag.name)}</strong> campaign, so it shows up at account level and pre-loads intelligence for future similar campaigns.` : ''}</div>
+  ${campaignTag ? `<div class="card" style="margin-bottom:16px;background:#e2f2fa;border-color:#bfe0f0;"><span class="pill" style="background:#fff;"><i class="ti ti-rocket" style="font-size:11px;"></i> ${esc(campaignTag.name)}</span> <span class="muted" style="font-size:12px;">Everything saved below is tagged to this campaign.</span></div>` : ''}
   <div id="ctxUpdatingIndicator" class="muted" style="font-size:11.5px;margin-bottom:14px;display:none;"><i class="ti ti-loader-2"></i> Updating AI summaries...</div>
   ${renderTouchPointLogger()}
   ${renderContextUploadSection()}
@@ -1114,7 +1144,9 @@ async function saveContextTouchPoint(){
       body: JSON.stringify({
         contactRecordIds: l.contactIds,
         companyRecordId: l.companyId,
-        type, date, notes
+        type, date, notes,
+        campaignId: window.__ctxCampaignTag ? window.__ctxCampaignTag.id : undefined,
+        campaignName: window.__ctxCampaignTag ? window.__ctxCampaignTag.name : undefined
       })
     });
     const result = await res.json();
@@ -1355,7 +1387,11 @@ async function submitContextLogContent(){
     const res = await fetch('/api/context/log-content', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ content, targetType, targetName })
+      body: JSON.stringify({
+        content, targetType, targetName,
+        campaignId: window.__ctxCampaignTag ? window.__ctxCampaignTag.id : undefined,
+        campaignName: window.__ctxCampaignTag ? window.__ctxCampaignTag.name : undefined
+      })
     });
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
@@ -1470,7 +1506,9 @@ async function submitContextHistoricalUpload(){
         content: file ? undefined : text,
         fileBase64: file ? file.base64 : undefined,
         fileMediaType: file ? file.mediaType : undefined,
-        tag, targetType, targetName
+        tag, targetType, targetName,
+        campaignId: window.__ctxCampaignTag ? window.__ctxCampaignTag.id : undefined,
+        campaignName: window.__ctxCampaignTag ? window.__ctxCampaignTag.name : undefined
       })
     });
     const data = await res.json();
@@ -1498,19 +1536,7 @@ async function submitContextHistoricalUpload(){
   }
 }
 
-/* ===================== DASHBOARD ===================== */
-
-function computeStats(){
-  const contacts = state.contacts;
-  const connected = contacts.filter(c=>c.connDate).length;
-  const messagesSent = contacts.reduce((sum,c)=>{
-    let n=0; if(c.thread.m1) n++; if(c.thread.m2) n++; return sum+n;
-  },0);
-  const booked = state.bookings.length;
-  const activeMessaging = contacts.filter(c=>c.state==='messaging' && !c.thread.booked).length;
-  const pipelineValue = booked*4500 + activeMessaging*3200;
-  return { found: contacts.length, connected, messagesSent, booked, pipelineValue };
-}
+/* ===================== TODAY'S ACTIONS (Home) ===================== */
 
 function computeHealth(){
   const withBoth = state.contacts.filter(c=>c.connReqDate && c.connDate);
@@ -1542,7 +1568,7 @@ Today's actions rules, checked in priority order (first match wins, one action p
 - Connected/messaging, no touch point in 21 days -> "Re-engage"
 */
 function activeCampaignForContact(c){
-  return state.campaigns.find(camp => camp.status === 'Live' && (camp.contactIds||[]).includes(c.id)) || null;
+  return state.campaigns.find(camp => camp.status === 'Live' && campaignContacts(camp).some(cc => cc.id === c.id)) || null;
 }
 
 function getContactAction(c){
@@ -1789,87 +1815,13 @@ async function copyContactBrief(cid){
   toast('Brief copied to clipboard', 'success');
 }
 
-function renderDashboard(){
-  const s = computeStats();
-  const h = computeHealth();
-  const upcoming = state.bookings.slice().sort((a,b)=>new Date(a.date)-new Date(b.date)).slice(0,5);
-  const dateStr = TODAY.toLocaleDateString('en-AU',{weekday:'long', day:'numeric', month:'long', year:'numeric'});
-
-  return `
-  <div class="section-title" style="font-size:20px;margin-bottom:2px;">Good morning, Marcus</div>
-  <div class="muted" style="margin-bottom:20px;">${dateStr}</div>
-
-  ${renderTodaysActions()}
-
-  <div class="stat-grid">
-    <div class="stat-card" style="background:${cssVar('--peach')}"><div class="label">Contacts found</div><div class="num">${s.found}</div></div>
-    <div class="stat-card" style="background:${cssVar('--blue')}"><div class="label">Connections made</div><div class="num">${s.connected}</div></div>
-    <div class="stat-card" style="background:${cssVar('--brown')}"><div class="label">Messages sent</div><div class="num">${s.messagesSent}</div></div>
-    <div class="stat-card" style="background:${cssVar('--success')}"><div class="label">Meetings booked</div><div class="num">${s.booked}</div></div>
-    <div class="stat-card" style="background:${cssVar('--yellow')};color:${cssVar('--brown')}"><div class="label" style="opacity:1;">Pipeline value</div><div class="num">$${s.pipelineValue.toLocaleString()}</div></div>
-  </div>
-
-  <div class="two-col">
-    <div class="card">
-      <div class="section-title"><i class="ti ti-activity"></i> Recent activity</div>
-      <div class="timeline">
-        ${state.activity.slice(0,8).map(a=>`
-          <div class="timeline-item">
-            <div class="timeline-dot" style="background:${activityColor(a.type)}"><i class="ti ${activityIcon(a.type)}" style="font-size:13px;"></i></div>
-            <div class="timeline-body">
-              <div class="t-text">${esc(a.text)}</div>
-              <div class="t-time">${relTime(a.date)}</div>
-            </div>
-          </div>
-        `).join('')}
-      </div>
-    </div>
-    <div class="card">
-      <div class="section-title"><i class="ti ti-calendar-event"></i> Upcoming deliveries</div>
-      ${upcoming.length ? upcoming.map(b=>`
-        <div class="delivery-item">
-          <div>
-            <div style="font-weight:700;">${esc(b.name)}</div>
-            <div class="muted" style="font-size:12px;">${esc(b.service)} · ${esc(b.company)}</div>
-          </div>
-          <div class="tag tag-booked">${fmtDateShort(b.date)}</div>
-        </div>
-      `).join('') : '<div class="empty-state">No deliveries booked yet</div>'}
-    </div>
-  </div>
-
-  <div class="mini-cards">
-    <div class="mini-card"><div class="num">${h.avgDays}d</div><div class="label">Avg days to connect</div></div>
-    <div class="mini-card"><div class="num">${h.replyRate}%</div><div class="label">Reply rate</div></div>
-    <div class="mini-card"><div class="num">${h.conversionRate}%</div><div class="label">Conversion rate</div></div>
-  </div>
-
-  <div class="card">
-    <div class="section-title"><i class="ti ti-bolt"></i> Quick actions</div>
-    <div class="quick-actions">
-      <button class="btn btn-primary" onclick="navigate('grid');runDailySearch();"><i class="ti ti-search"></i> Run daily search</button>
-      <button class="btn btn-secondary" onclick="navigate('grid');setTimeout(()=>document.getElementById('dropZoneUpload')?.scrollIntoView({behavior:'smooth'}),50);"><i class="ti ti-upload"></i> Upload connections screenshot</button>
-      <button class="btn btn-secondary" onclick="navigate('analytics');setTimeout(runAnalysis,80);"><i class="ti ti-sparkles"></i> Analyse strategy</button>
-    </div>
-  </div>
-  `;
-}
-
-function cssVar(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
-function activityColor(type){
-  return { booked: cssVar('--success'), connected: cssVar('--blue'), message: cssVar('--brown'), found: cssVar('--peach') }[type] || cssVar('--muted');
-}
-function activityIcon(type){
-  return { booked:'ti-calendar-check', connected:'ti-user-check', message:'ti-send', found:'ti-search' }[type] || 'ti-point';
-}
-
 /* ===================== HOW IT WORKS PAGE ===================== */
 
 function renderHowItWorks(){
   return `
   <div class="howto-hero">
     <h2>Welcome to T2C Outreach</h2>
-    <p>This is where you find the right people across WA's biggest employers, connect with them on LinkedIn, work them through a message sequence in your voice, and track every conversation through to a booked delivery. Here's how the six pages fit together, in the order you'll usually use them.</p>
+    <p>This is where you find the right people across WA's biggest employers, connect with them on LinkedIn, work them through a message sequence in your voice, and track every conversation through to a booked delivery and a closed deal. Here's how it fits together.</p>
     <div class="pipeline-visual">
       <span class="tag tag-found">Found</span><span class="arrow"><i class="ti ti-arrow-right"></i></span>
       <span class="tag tag-opened">Opened</span><span class="arrow"><i class="ti ti-arrow-right"></i></span>
@@ -1881,52 +1833,44 @@ function renderHowItWorks(){
 
   <div class="howto-grid">
     <div class="howto-item">
-      <div class="howto-item-head"><div class="howto-num">1</div><h4><i class="ti ti-grid-dots"></i> Grid — find people</h4></div>
-      <p>Start here. Each row is a company from your market map, each column a job title you're targeting. Click <strong>Run daily search</strong> and it works through every empty cell in turn, searching live and filling in a name or leaving "No confident match" if it can't verify a real profile.</p>
+      <div class="howto-item-head"><div class="howto-num">1</div><h4><i class="ti ti-home"></i> Home — your grids and today's actions</h4></div>
+      <p>Today's actions surfaces exactly who needs a message, a follow-up or a re-engage today, oldest first. Below that, Your Grids lists every company x job-title grid you've built - each row is a company, each column a job title. Click <strong>Run daily search</strong> inside a grid to fill empty cells with verified LinkedIn profiles.</p>
       <ul>
-        <li>Click a contact's name to open their LinkedIn profile in a new tab</li>
-        <li>The badge on each card shows days since found, colour-coded green / amber / red</li>
-        <li>Add extra companies or job title columns any time with the fields above the table</li>
-        <li>After you've sent connection requests in LinkedIn, drop or upload a screenshot of your connections list in the panel below and hit <strong>Read screenshot(s)</strong> to mark accepted contacts as connected</li>
+        <li>New Grid, Import from CSV, New Campaign and Run Intelligence are one click away from the top of Home</li>
+        <li>A grid linked to a campaign shows that campaign's name right on its row</li>
+        <li>After sending connection requests in LinkedIn, drop a screenshot of your connections list into a grid to mark accepted contacts as connected</li>
       </ul>
     </div>
     <div class="howto-item">
-      <div class="howto-item-head"><div class="howto-num">2</div><h4><i class="ti ti-route"></i> Roadmap — work the pipeline</h4></div>
-      <p>Every contact lands in one of four lanes: Connection pending, Connection made, Messaging, or Booked. Click a card's header to expand its message thread.</p>
+      <div class="howto-item-head"><div class="howto-num">2</div><h4><i class="ti ti-rocket"></i> Campaigns — where the work happens</h4></div>
+      <p>Every campaign has its own six tabs: Intelligence, Grid, Roadmap, Strategy, Analytics and Sales. Open a campaign and work through them left to right.</p>
       <ul>
-        <li>Tick off each step as you send it, and log whether they replied</li>
-        <li>Drag a card into the next lane to open the message-writing modal for that step</li>
-        <li>Contacts stuck 10+ days in "Connection pending" get flagged with a <strong>Delete?</strong> warning — remove them and they're logged in the archive at the bottom, so nothing just vanishes</li>
-        <li>Right-click any card for a quick "Mark as booked" shortcut</li>
+        <li><strong>Intelligence</strong> - log touch points and upload context, tagged to this campaign so it also feeds account-level intelligence</li>
+        <li><strong>Grid</strong> - link an existing grid from Home or create a new one; grids are never duplicated, just referenced</li>
+        <li><strong>Roadmap</strong> - the kanban board (Connection pending / made / Messaging / Booked) scoped to this campaign's contacts</li>
+        <li><strong>Strategy</strong> - the campaign brief plus its messaging templates, CTAs and AI redrafts - the controller for what gets said and to whom</li>
+        <li><strong>Analytics</strong> - a leads/meetings/sales-won line chart and a lead-status pie chart for this campaign only, with a time range selector</li>
+        <li><strong>Sales</strong> - scorecards, a deal log, and transcript scoring against this campaign's Strategy</li>
       </ul>
     </div>
     <div class="howto-item">
-      <div class="howto-item-head"><div class="howto-num">3</div><h4><i class="ti ti-git-branch"></i> Sequences — set the words</h4></div>
-      <p>This is where your message templates for each stage live, one sequence for Senior Leaders and one for Digital and Tech. Edit the template text directly, or hit <strong>Generate</strong> to have a fresh draft written for that stage.</p>
-      <ul>
-        <li>Contact chips under each stage show who's currently there</li>
-        <li>Drag a chip forward a stage to open the personalised message modal, which blends the template with that contact's profile notes</li>
-        <li>Switch to the <strong>Contact pipeline</strong> tab for a birds-eye view of every contact across all sequences at once</li>
-      </ul>
-    </div>
-    <div class="howto-item">
-      <div class="howto-item-head"><div class="howto-num">4</div><h4><i class="ti ti-calendar-check"></i> Booking a meeting</h4></div>
-      <p>From either the Roadmap or Sequences page, once a contact is ready, click <strong>Mark as meeting booked</strong> (or right-click their card).</p>
+      <div class="howto-item-head"><div class="howto-num">3</div><h4><i class="ti ti-calendar-check"></i> Booking a meeting</h4></div>
+      <p>From a campaign's Roadmap, once a contact is ready, click <strong>Mark as meeting booked</strong> (or right-click their card).</p>
       <ul>
         <li>Choose the service they've booked, the delivery date, and what CTA actually converted them</li>
         <li>Add a short note on what tipped it over the line, useful later for spotting patterns</li>
-        <li>Confirming automatically moves the card to Booked, adds the event to the Calendar, and logs it in Analytics</li>
+        <li>Confirming automatically moves the card to Booked and adds the event to the Sales Calendar</li>
       </ul>
     </div>
     <div class="howto-item">
-      <div class="howto-item-head"><div class="howto-num">5</div><h4><i class="ti ti-calendar"></i> Calendar — see what's delivering</h4></div>
-      <p>A straightforward month view of every booked delivery. Colour tells you the type of service at a glance: green for Agile/Sprint/Scrum work, blue for Team/Reset/Change, peach for Training/Certification/Workshops.</p>
+      <div class="howto-item-head"><div class="howto-num">4</div><h4><i class="ti ti-calendar"></i> Sales Calendar — see what's delivering</h4></div>
+      <p>A straightforward month view of every booked delivery across every campaign. Colour tells you the type of service at a glance: green for Agile/Sprint/Scrum work, blue for Team/Reset/Change, peach for Training/Certification/Workshops.</p>
       <ul><li>Hover any event chip for the full contact, company and date</li></ul>
     </div>
     <div class="howto-item">
-      <div class="howto-item-head"><div class="howto-num">6</div><h4><i class="ti ti-chart-bar"></i> Analytics — see what's working</h4></div>
-      <p>Every number here is pulled live from your Grid, Roadmap and booking data, no manual entry. Scroll to the bottom and click <strong>Analyse strategy</strong> for a plain-English read on what's converting and what isn't.</p>
-      <ul><li>Results are grouped as Wins, Gaps, Losses and Recommendations so you know exactly what to change next</li></ul>
+      <div class="howto-item-head"><div class="howto-num">5</div><h4><i class="ti ti-brain"></i> Intelligence — account-level view</h4></div>
+      <p>Intelligence has three sub-tabs. <strong>Intelligence</strong> pulls every contact, touch point, campaign and conversion for campaign ideas, cold contacts and ready-to-send drafts. <strong>Analytics</strong> is the account-wide numbers - strategy tally, CTA performance, bookings by service, connection speed. <strong>Context</strong> is the same touch-point logger and upload tools as a campaign's Intelligence tab, just untagged.</p>
+      <ul><li>Click <strong>Analyse strategy</strong> at the bottom of Analytics for a plain-English read on what's converting and what isn't</li></ul>
     </div>
   </div>
 
@@ -1934,11 +1878,11 @@ function renderHowItWorks(){
     <div class="section-title"><i class="ti ti-settings"></i> Before you start: check Settings</div>
     <div class="faq-item">
       <h5>LinkedIn accounts</h5>
-      <p>Add every LinkedIn account you're sending from and tell each one which job title columns it owns, so the Grid knows who's responsible for which searches.</p>
+      <p>Add every LinkedIn account you're sending from and tell each one which job title columns it owns, so grids know who's responsible for which searches.</p>
     </div>
     <div class="faq-item">
       <h5>Connection timeout</h5>
-      <p>Controls the day count that triggers the "Delete?" flag on the Roadmap. Default is 10 days — tighten it if you want to churn dead connections faster.</p>
+      <p>Controls the day count that triggers the "Delete?" flag on a campaign's Roadmap. Default is 10 days — tighten it if you want to churn dead connections faster.</p>
     </div>
     <div class="faq-item">
       <h5>Bookable services</h5>
@@ -1959,8 +1903,9 @@ function renderGrid(){
   const cols = grid.columns;
   window.__connectionsShots = [];
   return `
-  <button class="btn btn-ghost btn-sm" style="margin-bottom:10px;" onclick="navigate('home')"><i class="ti ti-arrow-left"></i> Home</button>
+  <button class="btn btn-ghost btn-sm" style="margin-bottom:10px;" onclick="gridBackAction()"><i class="ti ti-arrow-left"></i> ${window.__gridReturnTo && window.__gridReturnTo.campaignId ? 'Back to campaign' : 'Home'}</button>
   <div class="section-title" style="margin-bottom:14px;"><i class="ti ti-grid-dots"></i> ${esc(grid.name)}</div>
+  ${campaignsForGrid(grid.id).length ? `<div style="margin-bottom:10px;">${campaignsForGrid(grid.id).map(c=>`<span class="pill" style="background:#e2f2fa;color:#0d6a96;">Linked to ${esc(c.name)}</span>`).join(' ')}</div>` : ''}
   <div class="toolbar">
     <div class="field">
       <label>Add company</label>
@@ -2676,9 +2621,15 @@ const ROADMAP_COLS = [
   { key:'booked', label:'Booked' }
 ];
 
-function renderRoadmap(){
+// contactsOverride scopes the board to a subset of contacts (used by the
+// campaign Roadmap tab, which shows only that campaign's contacts). The
+// archive box below stays global - dead contacts aren't tagged per campaign
+// in the data model, so it's shown as a general "pending, unsuccessful"
+// record rather than pretending it's scoped.
+function renderRoadmap(contactsOverride){
+  const contactsList = contactsOverride || state.contacts;
   const grouped = { pending:[], made:[], messaging:[], booked:[] };
-  state.contacts.forEach(c => grouped[getRoadmapColumn(c)].push(c));
+  contactsList.forEach(c => grouped[getRoadmapColumn(c)].push(c));
 
   return `
   <div class="kanban" id="kanbanBoard">
@@ -3549,7 +3500,7 @@ function renderCampaigns(){
 }
 
 function campaignMetrics(campaign){
-  const contacts = state.contacts.filter(c => (campaign.contactIds||[]).includes(c.id));
+  const contacts = campaignContacts(campaign);
   const contactCount = contacts.length;
   let touchPoints = 0, replies = 0;
   contacts.forEach(c => {
@@ -3814,27 +3765,53 @@ function editCampaign(campaignId){
 
 /* ---- Detail view ---- */
 
-function openCampaignDetail(campaignId){
+const CAMPAIGN_DETAIL_TABS = [['intelligence','Intelligence'],['grid','Grid'],['roadmap','Roadmap'],['strategy','Strategy'],['analytics','Analytics'],['sales','Sales']];
+
+// tab param lets callers (e.g. the Grid page's back button) land on a
+// specific tab instead of always resetting to the first one.
+function openCampaignDetail(campaignId, tab){
+  const campaign = state.campaigns.find(c => c.id === campaignId);
+  if(campaign){
+    if(!campaign.gridIds) campaign.gridIds = [];
+    if(!campaign.deals) campaign.deals = [];
+    if(!campaign.transcriptAnalyses) campaign.transcriptAnalyses = [];
+  }
   window.__campaignView = 'detail';
   window.__campaignDetailId = campaignId;
-  window.__campaignDetailTab = 'sequence';
+  window.__campaignDetailTab = tab || 'intelligence';
   window.__campaignAnalytics = null;
   window.__campaignInsights = null;
   window.__campaignInsightsError = null;
   window.__campaignContactsFilter = { search:'', status:'all' };
+  window.__salesPeriod = window.__salesPeriod || 'thisWeek';
+  window.__ctxCampaignTag = campaign ? { id: campaign.id, name: campaign.name } : null;
   renderPage();
 }
 
 function backToCampaignList(){
   window.__campaignView = 'list';
+  window.__ctxCampaignTag = null;
   renderPage();
 }
 
 function setCampaignDetailTab(tab){
   window.__campaignDetailTab = tab;
+  if(tab === 'intelligence' && !window.__contextData && !window.__contextDataLoading && !window.__contextDataError) loadContextData();
   renderPage();
   if(tab === 'analytics' && !window.__campaignAnalytics) runCampaignAnalytics();
-  if(tab === 'insights' && window.__campaignInsights === null && !window.__campaignInsightsError) runCampaignInsights();
+  if(tab === 'analytics' && window.__campaignInsights === null && !window.__campaignInsightsError) runCampaignInsights();
+  if(tab === 'roadmap') initRoadmapDrag();
+}
+
+// Contacts belonging to a campaign are the union of anything explicitly
+// added via contactIds (the AI chat builder's matched contacts, or manual
+// adds) and anyone sitting on a grid linked to the campaign via gridIds -
+// grids are never duplicated, just referenced, so this is a live view, not
+// a copy.
+function campaignContacts(campaign){
+  const ids = new Set(campaign.contactIds || []);
+  (campaign.gridIds || []).forEach(gid => gridContacts(gid).forEach(c => ids.add(c.id)));
+  return state.contacts.filter(c => ids.has(c.id));
 }
 
 function renderCampaignDetail(){
@@ -3843,7 +3820,10 @@ function renderCampaignDetail(){
     window.__campaignView = 'list';
     return renderCampaignListView();
   }
-  const tab = window.__campaignDetailTab || 'sequence';
+  if(!campaign.gridIds) campaign.gridIds = [];
+  if(!campaign.deals) campaign.deals = [];
+  if(!campaign.transcriptAnalyses) campaign.transcriptAnalyses = [];
+  const tab = window.__campaignDetailTab || 'intelligence';
   const statusClass = CAMPAIGN_STATUS_CLASS[campaign.status] || 'campaign-status-draft';
   return `
   <button class="btn btn-ghost btn-sm" style="margin-bottom:10px;" onclick="backToCampaignList()"><i class="ti ti-arrow-left"></i> Campaigns</button>
@@ -3859,25 +3839,148 @@ function renderCampaignDetail(){
     </div>
   </div>
   <div class="seq-tabs">
-    <div class="seq-tab ${tab==='sequence'?'active':''}" onclick="setCampaignDetailTab('sequence')">Sequence</div>
-    <div class="seq-tab ${tab==='contacts'?'active':''}" onclick="setCampaignDetailTab('contacts')">Contacts</div>
-    <div class="seq-tab ${tab==='strategy'?'active':''}" onclick="setCampaignDetailTab('strategy')">Strategy</div>
-    <div class="seq-tab ${tab==='analytics'?'active':''}" onclick="setCampaignDetailTab('analytics')">Analytics</div>
-    <div class="seq-tab ${tab==='insights'?'active':''}" onclick="setCampaignDetailTab('insights')">AI Insights</div>
+    ${CAMPAIGN_DETAIL_TABS.map(([key,label]) => `<div class="seq-tab ${tab===key?'active':''}" onclick="setCampaignDetailTab('${key}')">${label}</div>`).join('')}
   </div>
-  ${tab==='sequence' ? renderCampaignSequenceTab(campaign) : ''}
-  ${tab==='contacts' ? renderCampaignContactsTab(campaign) : ''}
+  ${tab==='intelligence' ? renderCampaignIntelligenceTab(campaign) : ''}
+  ${tab==='grid' ? renderCampaignGridTab(campaign) : ''}
+  ${tab==='roadmap' ? renderCampaignRoadmapTab(campaign) : ''}
   ${tab==='strategy' ? renderCampaignStrategyTab(campaign) : ''}
   ${tab==='analytics' ? renderCampaignAnalyticsTab(campaign) : ''}
-  ${tab==='insights' ? renderCampaignInsightsTab(campaign) : ''}
+  ${tab==='sales' ? renderCampaignSalesTab(campaign) : ''}
   `;
 }
 
-/* ---- Sequence tab ---- */
+/* ---- Intelligence tab ---- */
+// Identical widgets to the top-level Intelligence > Context sub-tab (touch
+// point logger, upload context, historical upload) - same renderContext(),
+// just with window.__ctxCampaignTag set so every save tags the record with
+// this campaign's id/name too (see saveContextTouchPoint/
+// submitContextLogContent/submitContextHistoricalUpload).
 
-function renderCampaignSequenceTab(campaign){
+function renderCampaignIntelligenceTab(campaign){
+  window.__ctxCampaignTag = { id: campaign.id, name: campaign.name };
+  return renderContext();
+}
+
+/* ---- Grid tab ---- */
+// Grids are never duplicated - a campaign just holds a list of grid ids
+// that already live in state.grids, same grids Home lists. Creating a grid
+// here also links it immediately, so it shows up on Home labelled with
+// this campaign's name (see campaignsForGrid, used on Home and the Grid page).
+
+function campaignsForGrid(gridId){
+  return state.campaigns.filter(c => (c.gridIds||[]).includes(gridId));
+}
+
+function renderCampaignGridTab(campaign){
+  const grids = (campaign.gridIds||[]).map(id => state.grids.find(g=>g.id===id)).filter(Boolean);
   return `
   <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-grid-dots"></i> Contact grids</div>
+      <div style="display:flex;gap:10px;">
+        <button class="btn btn-secondary btn-sm" onclick="openImportGridModal('${campaign.id}')"><i class="ti ti-link"></i> Import existing grid</button>
+        <button class="btn btn-primary btn-sm" onclick="createGridForCampaign('${campaign.id}')"><i class="ti ti-plus"></i> New grid</button>
+      </div>
+    </div>
+    ${grids.length ? `
+    <div class="perf-table-wrap">
+      <table class="perf-table">
+        <thead><tr><th>Name</th><th>Companies</th><th>Contacts</th><th>Last updated</th><th></th></tr></thead>
+        <tbody>
+          ${grids.map(g => `
+            <tr class="home-grid-row" onclick="openGridFromCampaign('${g.id}','${campaign.id}')">
+              <td class="perf-name">${esc(g.name)}</td>
+              <td>${g.companies.length}</td>
+              <td>${gridContacts(g.id).length}</td>
+              <td>${fmtDate(g.updatedAt)}</td>
+              <td style="text-align:right;"><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();unlinkGridFromCampaign('${campaign.id}','${g.id}')" title="Unlink from campaign"><i class="ti ti-unlink"></i></button></td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>` : '<div class="empty-state">No grids linked yet - import one from Home or create a new one.</div>'}
+  </div>
+  `;
+}
+
+function createGridForCampaign(campaignId){
+  const campaign = state.campaigns.find(c => c.id === campaignId);
+  if(!campaign) return;
+  const name = (prompt('New grid name:') || '').trim();
+  if(!name) return;
+  const grid = createGrid(name);
+  if(!campaign.gridIds) campaign.gridIds = [];
+  campaign.gridIds.push(grid.id);
+  toast('Grid "'+name+'" created and linked to '+campaign.name, 'success');
+  openGridFromCampaign(grid.id, campaign.id);
+}
+
+function openImportGridModal(campaignId){
+  window.__importGridCampaignId = campaignId;
+  const campaign = state.campaigns.find(c => c.id === campaignId);
+  const linked = new Set(campaign.gridIds || []);
+  const available = state.grids.filter(g => !linked.has(g.id));
+  const body = available.length ? `
+    <div id="importGridList">
+      ${available.map(g => `
+        <label class="checkbox-item" style="display:flex;align-items:center;padding:6px 0;">
+          <input type="checkbox" value="${g.id}" class="import-grid-checkbox">
+          <span style="margin-left:8px;">${esc(g.name)} <span class="muted">— ${g.companies.length} companies, ${gridContacts(g.id).length} contacts</span></span>
+        </label>
+      `).join('')}
+    </div>
+  ` : '<div class="empty-state">Every grid on Home is already linked to this campaign.</div>';
+  const footer = `
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="confirmImportGrids()" ${available.length?'':'disabled'}><i class="ti ti-check"></i> Link selected</button>
+  `;
+  openModal('Import existing grid', body, footer);
+}
+
+function confirmImportGrids(){
+  const campaign = state.campaigns.find(c => c.id === window.__importGridCampaignId);
+  if(!campaign) return;
+  const checked = Array.from(document.querySelectorAll('.import-grid-checkbox:checked')).map(el => el.value);
+  if(!checked.length){ toast('No grids selected', 'warn'); return; }
+  if(!campaign.gridIds) campaign.gridIds = [];
+  checked.forEach(id => { if(!campaign.gridIds.includes(id)) campaign.gridIds.push(id); });
+  closeModal();
+  renderPage();
+  toast(`${checked.length} grid${checked.length===1?'':'s'} linked to ${campaign.name}`, 'success');
+}
+
+function unlinkGridFromCampaign(campaignId, gridId){
+  const campaign = state.campaigns.find(c => c.id === campaignId);
+  if(!campaign || !campaign.gridIds) return;
+  campaign.gridIds = campaign.gridIds.filter(id => id !== gridId);
+  renderPage();
+  toast('Grid unlinked from campaign', 'success');
+}
+
+/* ---- Roadmap tab ---- */
+
+function renderCampaignRoadmapTab(campaign){
+  return `
+  <div style="display:flex;justify-content:flex-end;margin-bottom:10px;">
+    <button class="btn btn-secondary btn-sm" onclick="openAddCampaignContactsModal('${campaign.id}')"><i class="ti ti-user-plus"></i> Add contacts</button>
+  </div>
+  ${renderRoadmap(campaignContacts(campaign))}
+  `;
+}
+
+/* ---- Strategy tab: messaging templates (formerly the Sequence tab) ---- */
+// Replaces the old top-level Sequences page for this campaign's messaging:
+// the sequence step editor below plus the campaign brief section further
+// down (goal/ICP/pitch/objections/CTAs) together are now "Strategy" - the
+// controller for messaging templates, sales scripts and CTAs for this
+// campaign specifically, rather than the two global sequences (Senior
+// Leaders / Digital and Tech) the old Sequences page edited.
+
+function renderCampaignMessagingSection(campaign){
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title"><i class="ti ti-git-branch"></i> Messaging templates</div>
     <div class="flow flow-3">
       ${CAMPAIGN_STAGE_META.map(([key,label]) => {
         const stage = (campaign.sequence||{})[key] || {};
@@ -3977,66 +4080,6 @@ Rewrite this message. UK English, no em dashes, peer to peer tone, one observati
   if(statusEl) statusEl.textContent = 'Redraft ready — review and Save to keep it.';
 }
 
-/* ---- Contacts tab ---- */
-
-function renderCampaignContactsTab(campaign){
-  window.__campaignContactsCampaignId = campaign.id;
-  const filter = window.__campaignContactsFilter || { search:'', status:'all' };
-  return `
-  <div class="card">
-    <div class="toolbar" style="margin-bottom:14px;">
-      <div class="field"><label>Search</label><input id="campContactsSearch" value="${esc(filter.search)}" placeholder="Search name, company, role" oninput="filterCampaignContactsTable()"></div>
-      <div class="field"><label>Status</label>
-        <select id="campContactsStatusFilter" onchange="filterCampaignContactsTable()">
-          ${['all','Active','Replied','Booked','Unresponsive'].map(s=>`<option value="${s}" ${filter.status===s?'selected':''}>${s==='all'?'All statuses':s}</option>`).join('')}
-        </select>
-      </div>
-      <button class="btn btn-primary" onclick="openAddCampaignContactsModal('${campaign.id}')"><i class="ti ti-user-plus"></i> Add contacts</button>
-    </div>
-    <div class="perf-table-wrap">
-      <table class="perf-table">
-        <thead><tr><th>Name</th><th>Company</th><th>Role</th><th>Journey stage</th><th>Touch points</th><th>Last contact</th><th>Status</th></tr></thead>
-        <tbody id="campContactsTableBody">${renderCampaignContactsRows(campaign, filter)}</tbody>
-      </table>
-    </div>
-  </div>
-  `;
-}
-
-function renderCampaignContactsRows(campaign, filter){
-  let contacts = state.contacts.filter(c => (campaign.contactIds||[]).includes(c.id));
-  if(filter.search){
-    const s = filter.search.toLowerCase();
-    contacts = contacts.filter(c => c.name.toLowerCase().includes(s) || c.company.toLowerCase().includes(s) || c.role.toLowerCase().includes(s));
-  }
-  if(filter.status !== 'all'){
-    contacts = contacts.filter(c => campaignContactStatus(c) === filter.status);
-  }
-  if(!contacts.length) return `<tr><td colspan="7"><span class="muted">No contacts match.</span></td></tr>`;
-  return contacts.map(c => {
-    const lastTouch = lastTouchPointDate(c);
-    return `
-    <tr>
-      <td class="perf-name">${esc(c.name)}</td>
-      <td>${esc(c.company)}</td>
-      <td>${esc(c.role)}</td>
-      <td><span class="tag tag-${c.state}">${esc(c.state)}</span></td>
-      <td>${(c.touchPoints||[]).length}</td>
-      <td>${lastTouch ? fmtDate(lastTouch) : '—'}</td>
-      <td>${campaignContactStatus(c)}</td>
-    </tr>`;
-  }).join('');
-}
-
-function filterCampaignContactsTable(){
-  const search = document.getElementById('campContactsSearch').value.trim();
-  const status = document.getElementById('campContactsStatusFilter').value;
-  window.__campaignContactsFilter = { search, status };
-  const campaign = state.campaigns.find(c => c.id === window.__campaignContactsCampaignId);
-  const tbody = document.getElementById('campContactsTableBody');
-  if(campaign && tbody) tbody.innerHTML = renderCampaignContactsRows(campaign, window.__campaignContactsFilter);
-}
-
 function openAddCampaignContactsModal(campaignId){
   window.__addContactsCampaignId = campaignId;
   const body = `
@@ -4083,11 +4126,15 @@ function confirmAddCampaignContacts(){
   toast(`${checked.length} contact${checked.length===1?'':'s'} added to campaign`, 'success');
 }
 
-/* ---- Strategy tab ---- */
+/* ---- Strategy tab: brief + CTAs ---- */
+// This is the full "Strategy" tab dispatched from renderCampaignDetail -
+// campaign brief/CTAs first, then the messaging templates section defined
+// above, so this one tab is the complete controller for messaging
+// templates, sales scripts and CTAs for this campaign.
 
 function renderCampaignStrategyTab(campaign){
   return `
-  <div class="card">
+  <div class="card" style="margin-bottom:16px;">
     <div class="section-title"><i class="ti ti-target"></i> Campaign brief</div>
     <div class="field"><label>Goal</label><textarea id="stratGoal" rows="2">${esc(campaign.goal||'')}</textarea></div>
     <div class="field"><label>Target ICP</label><textarea id="stratIcp" rows="2">${esc(campaign.targetSegmentSummary||'')}</textarea></div>
@@ -4101,7 +4148,9 @@ function renderCampaignStrategyTab(campaign){
     </div>
   </div>
 
-  <div class="card" style="margin-top:16px;">
+  ${renderCampaignMessagingSection(campaign)}
+
+  <div class="card">
     <div class="section-title"><i class="ti ti-message-circle"></i> Original conversation</div>
     <div class="campaign-chat">
       ${(campaign.conversationHistory||[]).length ? campaign.conversationHistory.map(m => `<div class="campaign-chat-msg ${m.role==='assistant'?'assistant':'user'}">${esc(m.content)}</div>`).join('') : '<span class="muted">No conversation on file for this campaign.</span>'}
@@ -4126,6 +4175,79 @@ function saveCampaignStrategy(campaignId){
 }
 
 /* ---- Analytics tab ---- */
+// Campaign-specific only, never account-wide: everything here is computed
+// from campaignContacts(campaign) and campaign.deals, not state.contacts as
+// a whole. Charts render via Chart.js once the canvases exist in the DOM -
+// see initCampaignAnalyticsCharts(), called from afterRender.
+
+const CAMPAIGN_PERIOD_OPTIONS = [ ['thisWeek','This week'], ['lastWeek','Last week'], ['30d','Last 30 days'], ['60d','Last 60 days'], ['quarter','This quarter'] ];
+const LEAD_STATUS_META = [ ['connected','Connected','#0084C5'], ['messaging','Messaging','#FFD05D'], ['warm','Warm','#FF834C'], ['booked','Booked','#44A574'], ['lost','Lost','#c44a2a'] ];
+
+function startOfWeek(d){
+  const date = new Date(d); const day = date.getDay();
+  date.setDate(date.getDate() + ((day===0?-6:1)-day));
+  date.setHours(0,0,0,0);
+  return date;
+}
+
+function campaignPeriodBounds(periodKey){
+  const today = new Date(TODAY); today.setHours(0,0,0,0);
+  let start, end;
+  if(periodKey === 'thisWeek'){ start = startOfWeek(today); end = today; }
+  else if(periodKey === 'lastWeek'){ const ws = startOfWeek(today); end = new Date(ws); end.setDate(end.getDate()-1); start = new Date(ws); start.setDate(start.getDate()-7); }
+  else if(periodKey === '30d'){ start = new Date(today); start.setDate(start.getDate()-29); end = today; }
+  else if(periodKey === '60d'){ start = new Date(today); start.setDate(start.getDate()-59); end = today; }
+  else { const q = Math.floor(today.getMonth()/3); start = new Date(today.getFullYear(), q*3, 1); end = today; }
+  end = new Date(end); end.setHours(23,59,59,999);
+  const spanMs = end - start;
+  const prevEnd = new Date(start); prevEnd.setDate(prevEnd.getDate()-1); prevEnd.setHours(23,59,59,999);
+  const prevStart = new Date(prevEnd.getTime() - spanMs);
+  return { start, end, prevStart, prevEnd };
+}
+
+function inDateRange(dateStr, start, end){
+  if(!dateStr) return false;
+  const d = new Date(dateStr+'T12:00:00');
+  return d >= start && d <= end;
+}
+
+function campaignLeadStatus(c){
+  if(c.thread.booked) return 'booked';
+  if(campaignContactStatus(c) === 'Unresponsive') return 'lost';
+  if(c.state === 'messaging'){
+    const replied = (c.thread.m1 && c.thread.m1.replied) || (c.thread.m2 && c.thread.m2.replied);
+    return replied ? 'warm' : 'messaging';
+  }
+  if(c.state === 'connected') return 'connected';
+  return null;
+}
+
+function buildCampaignSeries(campaign, periodKey){
+  const { start, end } = campaignPeriodBounds(periodKey);
+  const contacts = campaignContacts(campaign);
+  const deals = campaign.deals || [];
+  const totalDays = Math.round((end-start)/86400000)+1;
+  const useDaily = totalDays <= 14;
+  const bucketDays = useDaily ? 1 : 7;
+  const buckets = [];
+  let cursor = new Date(start);
+  while(cursor <= end){
+    const bEnd = new Date(cursor); bEnd.setDate(bEnd.getDate()+bucketDays-1); bEnd.setHours(23,59,59,999);
+    buckets.push({ start:new Date(cursor), end: bEnd > end ? end : bEnd });
+    cursor = new Date(cursor); cursor.setDate(cursor.getDate()+bucketDays);
+  }
+  const labels = buckets.map(b => useDaily ? fmtDateShort(isoDate(b.start)) : `${fmtDateShort(isoDate(b.start))}–${fmtDateShort(isoDate(b.end))}`);
+  const contactIds = new Set(contacts.map(c=>c.id));
+  const leads = buckets.map(b => contacts.filter(c => inDateRange(c.foundDate, b.start, b.end)).length);
+  const meetings = buckets.map(b => state.bookings.filter(bk => contactIds.has(bk.contactId) && inDateRange(bk.date, b.start, b.end)).length);
+  const won = buckets.map(b => deals.filter(d => d.outcome === 'won' && inDateRange(d.date, b.start, b.end)).length);
+  return { labels, leads, meetings, won };
+}
+
+function setCampaignAnalyticsPeriod(period){
+  window.__campaignAnalyticsPeriod = period;
+  renderPage();
+}
 
 async function runCampaignAnalytics(){
   const campaign = state.campaigns.find(c => c.id === window.__campaignDetailId);
@@ -4141,53 +4263,6 @@ async function runCampaignAnalytics(){
   if(window.__campaignDetailTab === 'analytics') renderPage();
 }
 
-function renderActivityLineChart(weeks){
-  if(!weeks || !weeks.length) return '<div class="muted" style="font-size:12px;">No activity data yet.</div>';
-  const w = 560, h = 140, pad = 24;
-  const max = Math.max(1, ...weeks.map(p=>p.touchPoints));
-  const stepX = weeks.length > 1 ? (w - pad*2) / (weeks.length - 1) : 0;
-  const coords = weeks.map((p,i) => ({
-    x: pad + i*stepX,
-    y: h - pad - (p.touchPoints/max)*(h-pad*2)
-  }));
-  const points = coords.map(c => `${c.x},${c.y}`).join(' ');
-  const dots = coords.map(c => `<circle cx="${c.x}" cy="${c.y}" r="3" fill="var(--accent)"></circle>`).join('');
-  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:140px;">
-    <polyline points="${points}" fill="none" stroke="var(--accent)" stroke-width="2"></polyline>
-    ${dots}
-  </svg>`;
-}
-
-function renderCampaignAnalyticsTab(campaign){
-  const data = window.__campaignAnalytics;
-  return `
-  <div class="card">
-    ${!data ? '<div class="muted"><i class="ti ti-loader-2"></i> Loading analytics...</div>' :
-      data.error ? `<div class="muted">Could not load analytics: ${esc(data.error)}</div>` : `
-      <div class="mini-cards analytics-stat-grid" style="margin-bottom:0;">
-        <div class="mini-card"><div class="num">${data.contactsTargeted}</div><div class="label">Contacts targeted</div></div>
-        <div class="mini-card"><div class="num">${data.touchPointsSentThisWeek}</div><div class="label">Touch points this week</div></div>
-        <div class="mini-card"><div class="num">${data.replyRate}%</div><div class="label">Reply rate</div></div>
-        <div class="mini-card"><div class="num">${data.bookingRate}%</div><div class="label">Booking rate</div></div>
-        <div class="mini-card"><div class="num">${data.conversionRate}%</div><div class="label">Conversion rate</div></div>
-        <div class="mini-card"><div class="num">${data.avgTouchPointsToConvert ?? '—'}</div><div class="label">Avg touches to convert</div></div>
-      </div>
-      <div style="margin-top:18px;">
-        <div style="font-weight:700;font-size:12px;margin-bottom:8px;">Activity over time (touch points/week, last 8 weeks)</div>
-        ${renderActivityLineChart(data.activityOverTime)}
-      </div>
-      <div class="card" style="margin-top:16px;background:#e2f2fa;border-color:#bfe0f0;">
-        <div style="font-weight:700;font-size:12px;margin-bottom:6px;">Vs. T2C historical average for other campaigns</div>
-        <p style="font-size:12.5px;">Conversion rate: this campaign ${data.conversionRate}% vs ${data.historicalComparison.avgConversionRate ?? '—'}% average.</p>
-        <p style="font-size:12.5px;margin-top:4px;">Touch points to convert: this campaign ${data.avgTouchPointsToConvert ?? '—'} vs ${data.historicalComparison.avgTouchPointsToConvert ?? '—'} average.</p>
-      </div>
-    `}
-  </div>
-  `;
-}
-
-/* ---- AI Insights tab ---- */
-
 async function runCampaignInsights(){
   const campaign = state.campaigns.find(c => c.id === window.__campaignDetailId);
   if(!campaign) return;
@@ -4201,7 +4276,7 @@ async function runCampaignInsights(){
     window.__campaignInsights = null;
     window.__campaignInsightsError = err.message;
   }
-  if(window.__campaignDetailTab === 'insights') renderPage();
+  if(window.__campaignDetailTab === 'analytics') renderPage();
 }
 
 function refreshCampaignInsights(){
@@ -4211,21 +4286,337 @@ function refreshCampaignInsights(){
   runCampaignInsights();
 }
 
-function renderCampaignInsightsTab(campaign){
+function renderCampaignAnalyticsTab(campaign){
+  const period = window.__campaignAnalyticsPeriod || 'thisWeek';
+  const data = window.__campaignAnalytics;
   const insights = window.__campaignInsights;
-  const err = window.__campaignInsightsError;
+  const insightsErr = window.__campaignInsightsError;
   return `
+  <div class="card" style="margin-bottom:16px;">
+    <div class="toolbar" style="margin-bottom:6px;">
+      <div class="field" style="max-width:220px;"><label>Time range</label>
+        <select onchange="setCampaignAnalyticsPeriod(this.value)">
+          ${CAMPAIGN_PERIOD_OPTIONS.map(([k,l])=>`<option value="${k}" ${period===k?'selected':''}>${l}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="two-col">
+      <div class="card">
+        <div class="section-title" style="margin-bottom:10px;"><i class="ti ti-chart-line"></i> Leads, meetings &amp; sales won over time</div>
+        <div style="position:relative;height:260px;"><canvas id="campLineChart"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="section-title" style="margin-bottom:10px;"><i class="ti ti-chart-pie"></i> Lead status breakdown</div>
+        <div style="position:relative;height:260px;"><canvas id="campPieChart"></canvas></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title" style="margin-bottom:10px;"><i class="ti ti-database"></i> Campaign overview (all time, from Airtable)</div>
+    ${!data ? '<div class="muted"><i class="ti ti-loader-2"></i> Loading...</div>' :
+      data.error ? `<div class="muted">Could not load: ${esc(data.error)}</div>` : `
+      <div class="mini-cards analytics-stat-grid" style="margin-bottom:0;">
+        <div class="mini-card"><div class="num">${data.contactsTargeted}</div><div class="label">Contacts targeted</div></div>
+        <div class="mini-card"><div class="num">${data.touchPointsSentThisWeek}</div><div class="label">Touch points this week</div></div>
+        <div class="mini-card"><div class="num">${data.replyRate}%</div><div class="label">Reply rate</div></div>
+        <div class="mini-card"><div class="num">${data.bookingRate}%</div><div class="label">Booking rate</div></div>
+        <div class="mini-card"><div class="num">${data.conversionRate}%</div><div class="label">Conversion rate</div></div>
+        <div class="mini-card"><div class="num">${data.avgTouchPointsToConvert ?? '—'}</div><div class="label">Avg touches to convert</div></div>
+      </div>
+      <p style="font-size:12.5px;margin-top:14px;">Vs. T2C historical average: conversion rate ${data.conversionRate}% vs ${data.historicalComparison.avgConversionRate ?? '—'}% average, ${data.avgTouchPointsToConvert ?? '—'} vs ${data.historicalComparison.avgTouchPointsToConvert ?? '—'} touch points to convert.</p>
+    `}
+  </div>
+
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-bulb-filled"></i> AI Insights</div>
       <button class="btn btn-secondary btn-sm" onclick="refreshCampaignInsights()"><i class="ti ti-refresh"></i> Refresh insights</button>
     </div>
-    ${insights === null && !err ? '<div class="muted"><i class="ti ti-loader-2"></i> Loading insights...</div>' :
-      err ? `<div class="muted">Could not load insights: ${esc(err)}</div>` :
+    ${insights === null && !insightsErr ? '<div class="muted"><i class="ti ti-loader-2"></i> Loading insights...</div>' :
+      insightsErr ? `<div class="muted">Could not load insights: ${esc(insightsErr)}</div>` :
       insights.length ? `<ul style="padding-left:18px;font-size:12.5px;line-height:1.7;">${insights.map(i=>`<li>${esc(i)}</li>`).join('')}</ul>` :
       '<div class="empty-state">No insights yet for this campaign.</div>'}
   </div>
   `;
+}
+
+function initCampaignAnalyticsCharts(campaign){
+  if(typeof Chart === 'undefined') return;
+  window.__campCharts = window.__campCharts || {};
+  if(window.__campCharts.line) window.__campCharts.line.destroy();
+  if(window.__campCharts.pie) window.__campCharts.pie.destroy();
+
+  const period = window.__campaignAnalyticsPeriod || 'thisWeek';
+  const series = buildCampaignSeries(campaign, period);
+  const lineEl = document.getElementById('campLineChart');
+  if(lineEl){
+    window.__campCharts.line = new Chart(lineEl, {
+      type: 'line',
+      data: {
+        labels: series.labels,
+        datasets: [
+          { label:'Leads', data: series.leads, borderColor:'#0084C5', backgroundColor:'#0084C5', tension:0.3 },
+          { label:'Meetings booked', data: series.meetings, borderColor:'#FF834C', backgroundColor:'#FF834C', tension:0.3 },
+          { label:'Sales won', data: series.won, borderColor:'#44A574', backgroundColor:'#44A574', tension:0.3 }
+        ]
+      },
+      options: { responsive:true, maintainAspectRatio:false, scales:{ y:{ beginAtZero:true, ticks:{ precision:0 } } }, plugins:{ legend:{ position:'bottom', labels:{ boxWidth:10, font:{ size:11 } } } } }
+    });
+  }
+
+  const contacts = campaignContacts(campaign);
+  const counts = {};
+  LEAD_STATUS_META.forEach(([key]) => counts[key] = 0);
+  contacts.forEach(c => { const s = campaignLeadStatus(c); if(s) counts[s]++; });
+  const pieEl = document.getElementById('campPieChart');
+  if(pieEl){
+    window.__campCharts.pie = new Chart(pieEl, {
+      type: 'pie',
+      data: {
+        labels: LEAD_STATUS_META.map(([,label])=>label),
+        datasets: [{ data: LEAD_STATUS_META.map(([key])=>counts[key]), backgroundColor: LEAD_STATUS_META.map(([,,color])=>color) }]
+      },
+      options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:'bottom', labels:{ boxWidth:10, font:{ size:11 } } } } }
+    });
+  }
+}
+
+/* ---- Sales tab ---- */
+// Scorecards + deal log + transcript scoring, all scoped to this campaign
+// and the selected time period (shares CAMPAIGN_PERIOD_OPTIONS/
+// campaignPeriodBounds with the Analytics tab).
+
+function dealOutcomeTagClass(outcome){
+  if(outcome === 'won') return 'tag-connected';
+  if(outcome === 'lost') return 'tag-opened';
+  return 'tag-messaging';
+}
+
+function setSalesPeriod(period){
+  window.__salesPeriod = period;
+  renderPage();
+}
+
+function renderCampaignSalesTab(campaign){
+  const period = window.__salesPeriod || 'thisWeek';
+  const { start, end, prevStart, prevEnd } = campaignPeriodBounds(period);
+  const contacts = campaignContacts(campaign);
+  const contactIds = new Set(contacts.map(c=>c.id));
+  const deals = campaign.deals || [];
+
+  const scorecardFor = (s,e) => ({
+    leads: contacts.filter(c => inDateRange(c.foundDate, s, e)).length,
+    meetings: state.bookings.filter(b => contactIds.has(b.contactId) && inDateRange(b.date, s, e)).length,
+    won: deals.filter(d => d.outcome==='won' && inDateRange(d.date, s, e)).length,
+    lost: deals.filter(d => d.outcome==='lost' && inDateRange(d.date, s, e)).length
+  });
+  const current = scorecardFor(start, end);
+  const previous = scorecardFor(prevStart, prevEnd);
+  const deltaLabel = (a,b) => { const d = a-b; return d===0 ? 'No change vs last period' : (d>0 ? `+${d} vs last period` : `${d} vs last period`); };
+
+  const periodDeals = deals.filter(d => inDateRange(d.date, start, end)).slice().sort((a,b)=>new Date(b.date)-new Date(a.date));
+
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div class="toolbar" style="margin-bottom:6px;">
+      <div class="field" style="max-width:220px;"><label>Time period</label>
+        <select onchange="setSalesPeriod(this.value)">
+          ${CAMPAIGN_PERIOD_OPTIONS.map(([k,l])=>`<option value="${k}" ${period===k?'selected':''}>${l}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="mini-cards" style="margin-bottom:0;">
+      <div class="mini-card"><div class="num">${current.leads}</div><div class="label">Leads captured</div><div class="muted" style="font-size:11px;margin-top:4px;">${deltaLabel(current.leads,previous.leads)}</div></div>
+      <div class="mini-card"><div class="num">${current.meetings}</div><div class="label">Meetings booked</div><div class="muted" style="font-size:11px;margin-top:4px;">${deltaLabel(current.meetings,previous.meetings)}</div></div>
+      <div class="mini-card"><div class="num">${current.won}</div><div class="label">Deals closed</div><div class="muted" style="font-size:11px;margin-top:4px;">${deltaLabel(current.won,previous.won)}</div></div>
+      <div class="mini-card"><div class="num">${current.lost}</div><div class="label">Deals lost</div><div class="muted" style="font-size:11px;margin-top:4px;">${deltaLabel(current.lost,previous.lost)}</div></div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-notes"></i> Sales log</div>
+      <button class="btn btn-primary btn-sm" onclick="openAddDealModal('${campaign.id}')"><i class="ti ti-plus"></i> Log a deal</button>
+    </div>
+    <div class="perf-table-wrap">
+      <table class="perf-table">
+        <thead><tr><th>Date</th><th>Contact</th><th>Company</th><th>Outcome</th><th>Deal value</th><th>Notes</th></tr></thead>
+        <tbody>
+          ${periodDeals.length ? periodDeals.map(d => `
+            <tr>
+              <td>${fmtDate(d.date)}</td>
+              <td class="perf-name">${esc(d.contactName)}</td>
+              <td>${esc(d.company)}</td>
+              <td><span class="tag ${dealOutcomeTagClass(d.outcome)}">${esc(d.outcome)}</span></td>
+              <td>${d.value ? '$'+Number(d.value).toLocaleString() : '—'}</td>
+              <td>${esc((d.notes||'').slice(0,80))}${(d.notes||'').length>80?'…':''}</td>
+            </tr>
+          `).join('') : `<tr><td colspan="6"><span class="muted">No deals logged for this period.</span></td></tr>`}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="section-title"><i class="ti ti-file-text"></i> Sales conversation transcripts</div>
+    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Paste a transcript or upload a file. Claude scores it against this campaign's Strategy (script adherence, CTAs used, objections raised) and saves the analysis to Airtable, tagged to this campaign so it feeds account-level intelligence.</p>
+    <input type="file" id="salesTranscriptFile" accept=".txt,.pdf,text/plain,application/pdf" style="display:none;" onchange="handleSalesTranscriptFile(event)">
+    <button class="btn btn-secondary btn-sm" onclick="document.getElementById('salesTranscriptFile').click()"><i class="ti ti-upload"></i> Upload file</button>
+    <div id="salesTranscriptFilePreview" style="font-size:11.5px;margin-top:8px;"></div>
+    <div class="field" style="margin-top:10px;"><label>Or paste transcript</label><textarea id="salesTranscriptText" rows="6" placeholder="Paste the sales call transcript..."></textarea></div>
+    <button class="btn btn-primary btn-sm" style="margin-top:10px;" id="analyzeTranscriptBtn" onclick="analyzeSalesTranscript('${campaign.id}')"><i class="ti ti-sparkles"></i> Score against Strategy</button>
+    <div id="salesTranscriptResult" class="learning-result"></div>
+
+    ${(campaign.transcriptAnalyses||[]).length ? `
+    <div style="margin-top:18px;">
+      <div style="font-weight:700;font-size:12px;margin-bottom:8px;">Past analyses</div>
+      ${campaign.transcriptAnalyses.slice().reverse().map(a => `
+        <div class="intel-draft">
+          <div class="intel-draft-head"><div class="intel-draft-name">${fmtDate(a.date)} &middot; Script adherence: ${esc(a.scriptAdherence||'—')}</div></div>
+          <div class="intel-draft-text">${esc(a.summary||'')}</div>
+          ${(a.ctasUsed&&a.ctasUsed.length) ? `<div style="margin-top:6px;font-size:11.5px;"><strong>CTAs used:</strong> ${a.ctasUsed.map(t=>esc(t)).join(', ')}</div>` : ''}
+          ${(a.objectionsRaised&&a.objectionsRaised.length) ? `<div style="margin-top:4px;font-size:11.5px;"><strong>Objections:</strong> ${a.objectionsRaised.map(t=>esc(t)).join(', ')}</div>` : ''}
+        </div>
+      `).join('')}
+    </div>` : ''}
+  </div>
+  `;
+}
+
+function openAddDealModal(campaignId){
+  window.__addDealCampaignId = campaignId;
+  const body = `
+    <div class="field"><label>Contact name</label><input id="dealContactName" placeholder="e.g. Stuart Williams"></div>
+    <div class="field"><label>Company</label><input id="dealCompany" placeholder="e.g. Woodside Energy"></div>
+    <div class="row">
+      <div class="field"><label>Outcome</label>
+        <select id="dealOutcome">
+          <option value="won">Won</option>
+          <option value="lost">Lost</option>
+          <option value="in progress" selected>In progress</option>
+        </select>
+      </div>
+      <div class="field"><label>Deal value ($)</label><input type="number" id="dealValue" min="0" placeholder="0"></div>
+    </div>
+    <div class="field"><label>Date</label><input type="date" id="dealDate" value="${isoDate(TODAY)}"></div>
+    <div class="field"><label>Notes</label><textarea id="dealNotes" rows="3"></textarea></div>
+  `;
+  const footer = `
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="confirmAddDeal()"><i class="ti ti-check"></i> Save deal</button>
+  `;
+  openModal('Log a deal', body, footer);
+}
+
+function confirmAddDeal(){
+  const campaign = state.campaigns.find(c => c.id === window.__addDealCampaignId);
+  if(!campaign) return;
+  const contactName = document.getElementById('dealContactName').value.trim();
+  const company = document.getElementById('dealCompany').value.trim();
+  const outcome = document.getElementById('dealOutcome').value;
+  const value = document.getElementById('dealValue').value;
+  const date = document.getElementById('dealDate').value || isoDate(TODAY);
+  const notes = document.getElementById('dealNotes').value.trim();
+  if(!contactName){ toast('Add a contact name', 'warn'); return; }
+
+  if(!campaign.deals) campaign.deals = [];
+  const deal = { id: uid('deal'), contactName, company, outcome, value: value ? parseFloat(value) : 0, notes, date };
+  campaign.deals.push(deal);
+  campaign.updatedAt = isoDate(TODAY);
+  closeModal();
+  renderPage();
+  toast('Deal logged', 'success');
+
+  fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/sales/deal`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(Object.assign({ campaignId: campaign.id, campaignName: campaign.name }, deal))
+  }).catch(err => console.warn('Sales log Airtable sync failed:', err.message));
+}
+
+function handleSalesTranscriptFile(event){
+  const file = event.target.files && event.target.files[0];
+  event.target.value = '';
+  if(!file) return;
+  if(file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')){
+    const reader = new FileReader();
+    reader.onload = () => {
+      const match = String(reader.result).match(/^data:([^;]+);base64,(.*)$/);
+      if(match){
+        window.__salesTranscriptFile = { mediaType:'application/pdf', base64: match[2], name:file.name };
+        const el = document.getElementById('salesTranscriptFilePreview');
+        if(el) el.innerHTML = `<span class="tag tag-connected">${esc(file.name)} attached</span> <button class="btn btn-ghost btn-sm" onclick="clearSalesTranscriptFile()"><i class="ti ti-x"></i></button>`;
+      }
+    };
+    reader.readAsDataURL(file);
+  } else {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const textEl = document.getElementById('salesTranscriptText');
+      if(textEl) textEl.value = String(reader.result);
+      window.__salesTranscriptFile = null;
+      const el = document.getElementById('salesTranscriptFilePreview');
+      if(el) el.innerHTML = `<span class="muted">${esc(file.name)} loaded into the text field</span>`;
+    };
+    reader.readAsText(file);
+  }
+}
+function clearSalesTranscriptFile(){
+  window.__salesTranscriptFile = null;
+  const el = document.getElementById('salesTranscriptFilePreview');
+  if(el) el.innerHTML = '';
+}
+
+async function analyzeSalesTranscript(campaignId){
+  const campaign = state.campaigns.find(c => c.id === campaignId);
+  if(!campaign) return;
+  const text = (document.getElementById('salesTranscriptText')?.value || '').trim();
+  const file = window.__salesTranscriptFile;
+  if(!text && !file){ toast('Paste a transcript or upload a file first', 'warn'); return; }
+
+  const btn = document.getElementById('analyzeTranscriptBtn');
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<i class="ti ti-loader-2"></i> Scoring against Strategy...';
+
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/sales/analyze-transcript`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        campaignId: campaign.id,
+        transcript: file ? undefined : text,
+        fileBase64: file ? file.base64 : undefined,
+        fileMediaType: file ? file.mediaType : undefined,
+        strategy: {
+          goal: campaign.goal,
+          targetSegmentSummary: campaign.targetSegmentSummary,
+          pitchAngle: campaign.pitchAngle,
+          objectionHandling: campaign.objectionHandling,
+          sequence: campaign.sequence
+        }
+      })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+
+    const analysis = { id: uid('ta'), date: isoDate(TODAY), summary: data.summary||'', scriptAdherence: data.scriptAdherence||'', ctasUsed: data.ctasUsed||[], objectionsRaised: data.objectionsRaised||[] };
+    if(!campaign.transcriptAnalyses) campaign.transcriptAnalyses = [];
+    campaign.transcriptAnalyses.push(analysis);
+
+    toast('Transcript scored and saved to Airtable', 'success');
+    const textEl = document.getElementById('salesTranscriptText');
+    if(textEl) textEl.value = '';
+    clearSalesTranscriptFile();
+    renderPage();
+  } catch(err){
+    const resultEl = document.getElementById('salesTranscriptResult');
+    if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;">Could not analyse: ${esc(err.message)}</p>`;
+    toast('Could not analyse transcript: ' + err.message, 'warn');
+    btn.disabled = false;
+    btn.innerHTML = original;
+  }
 }
 
 /* ---- Status transitions + Airtable sync ---- */
@@ -4534,6 +4925,31 @@ async function runAnalysis(){
 }
 
 /* ===================== INTELLIGENCE PAGE ===================== */
+// Top-level page with 3 sub-tabs. "Intelligence" (default, the original
+// Intelligence page content below) plus "Analytics" and "Context", which
+// are the former top-level Analytics and Context pages nested in unchanged -
+// same renderAnalytics()/renderContext() functions, just no longer reachable
+// as their own nav items.
+
+const INTEL_SUBTABS = [ ['intelligence','Intelligence'], ['analytics','Analytics'], ['context','Context'] ];
+
+function renderIntelligencePage(){
+  const tab = window.__intelSubTab || 'intelligence';
+  if(tab === 'context') window.__ctxCampaignTag = null;
+  return `
+  <div class="seq-tabs">
+    ${INTEL_SUBTABS.map(([key,label]) => `<div class="seq-tab ${tab===key?'active':''}" onclick="setIntelSubTab('${key}')">${label}</div>`).join('')}
+  </div>
+  ${tab==='intelligence' ? renderIntelligence() : ''}
+  ${tab==='analytics' ? renderAnalytics() : ''}
+  ${tab==='context' ? renderContext() : ''}
+  `;
+}
+
+function setIntelSubTab(tab){
+  window.__intelSubTab = tab;
+  renderPage();
+}
 
 function renderIntelligence(){
   return `

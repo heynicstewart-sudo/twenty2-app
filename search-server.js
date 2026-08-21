@@ -404,10 +404,17 @@ app.patch('/api/campaign/status', async (req, res) => {
 // derived from Outcome === "Replied" everywhere it's read, which is what
 // this field was always set from anyway, so nothing is lost by not storing
 // it a second time as a separate boolean.
+// campaignId/campaignName (optional) come from the Campaign > Intelligence
+// tab, which reuses this exact endpoint so saves there work identically to
+// the top-level Context tab - just tagged with the campaign too. The real
+// Touch Points table has no confirmed "Campaign" field, so the tag is
+// written into Summary (guaranteed to work) and a best-effort "Campaign"
+// field write is also attempted, swallowed silently if that field doesn't
+// exist, so it never breaks the primary save either way.
 app.post('/api/airtable/touchpoint', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
-  const { contactName, contactNames, contactRecordIds, date, type, notes, outcome, communicationMethod, aiBrief } = req.body;
+  const { contactName, contactNames, contactRecordIds, date, type, notes, outcome, communicationMethod, aiBrief, campaignId, campaignName } = req.body;
   if (!type) return res.status(400).json({ error: 'type is required' });
 
   try {
@@ -421,10 +428,11 @@ app.post('/api/airtable/touchpoint', async (req, res) => {
       contactIds = records.filter(Boolean).map(r => r.id);
     }
 
+    const summary = campaignName ? `[Campaign: ${campaignName}] ${notes || ''}`.trim() : (notes || '');
     const fields = {
       'Date': date || new Date().toISOString().slice(0, 10),
       'Type': type,
-      'Summary': notes || '',
+      'Summary': summary,
       'Outcome': outcome || 'No reply',
       'Direction': 'Outbound'
     };
@@ -433,7 +441,17 @@ app.post('/api/airtable/touchpoint', async (req, res) => {
     if (contactIds.length) fields['Contact'] = contactIds;
 
     const data = await airtableRequest('POST', 'Touch Points', { records: [{ fields }] });
-    res.json({ success: true, recordId: data.records[0].id });
+    const recordId = data.records[0].id;
+
+    if (campaignName) {
+      try {
+        await airtableRequest('PATCH', 'Touch Points', { records: [{ id: recordId, fields: { 'Campaign': campaignName } }] });
+      } catch (tagErr) {
+        console.warn('Best-effort Campaign field write on Touch Points failed (field may not exist):', tagErr.message);
+      }
+    }
+
+    res.json({ success: true, recordId });
   } catch (err) {
     console.error('Airtable touch point error:', err.message);
     res.status(500).json({ error: err.message });
@@ -1717,6 +1735,128 @@ If there isn't enough data yet for a confident insight, return fewer than 5 rath
   }
 });
 
+// ===================== CAMPAIGN > SALES TAB =====================
+// Deal log entries and transcript scoring both write to a "Sales Log"
+// table, mirroring the Learning Data pattern elsewhere in this file - the
+// table is app-specific and may not exist in every base yet, so failures
+// are caught and logged rather than treated as fatal. The client keeps
+// campaign.deals/transcriptAnalyses locally regardless, same as bookings
+// and touch points elsewhere in the app (local state is the source of
+// truth, Airtable is a best-effort mirror).
+
+// Records one entry from the Sales tab's deal log against the Sales Log
+// table, tagged with the campaign name/id so it rolls up into account-level
+// intelligence alongside everything else that table feeds.
+app.post('/api/campaign/:id/sales/deal', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const campaignName = decodeURIComponent(req.params.id);
+  const { campaignId, contactName, company, outcome, value, notes, date } = req.body;
+  if (!contactName) return res.status(400).json({ error: 'contactName is required' });
+
+  try {
+    await airtableRequest('POST', 'Sales Log', {
+      records: [{
+        fields: {
+          'Campaign': campaignName,
+          'Campaign ID': campaignId || '',
+          'Contact Name': contactName,
+          'Company': company || '',
+          'Outcome': outcome || 'in progress',
+          'Deal Value': value || 0,
+          'Notes': notes || '',
+          'Date': date || new Date().toISOString().slice(0, 10)
+        }
+      }],
+      typecast: true
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.warn('Sales Log write failed (table may not exist yet):', err.message);
+    // Non-fatal - the deal is already saved in the app's own local state,
+    // which is what the Sales tab actually reads from.
+    res.json({ success: false, reason: err.message });
+  }
+});
+
+// Scores a pasted/uploaded sales call transcript against this campaign's
+// Strategy (goal, ICP, pitch angle, objection handling, sequence
+// templates): did the call follow the script, which CTAs came up, what
+// objections were raised. Saves the analysis to the Sales Log table,
+// tagged with the campaign, so it feeds account-level intelligence the
+// same way every other Learning Data-style upload in this app does.
+app.post('/api/campaign/:id/sales/analyze-transcript', async (req, res) => {
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  const campaignName = decodeURIComponent(req.params.id);
+  const { campaignId, transcript, fileBase64, fileMediaType, strategy } = req.body;
+  if (!transcript && !fileBase64) return res.status(400).json({ error: 'transcript or fileBase64 is required' });
+
+  try {
+    const s = strategy || {};
+    const sequenceText = s.sequence ? JSON.stringify(s.sequence) : 'not specified';
+
+    const analyzePrompt = `You are scoring a sales conversation transcript for the campaign "${campaignName}" at Twenty2 Collective, a Perth-based Agile and change consultancy, against that campaign's Strategy.
+
+Campaign goal: ${s.goal || 'not specified'}
+Target ICP: ${s.targetSegmentSummary || 'not specified'}
+Pitch angle: ${s.pitchAngle || 'not specified'}
+Objection handling playbook: ${s.objectionHandling || 'not specified'}
+Sequence/message templates: ${sequenceText}
+
+${transcript ? `Transcript:\n${transcript}` : 'Read the attached transcript document.'}
+
+Score how closely the conversation followed the campaign's script and strategy, which CTAs from the strategy were actually used, and what objections came up. Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "scriptAdherence": string, "summary": string, "ctasUsed": string[], "objectionsRaised": string[], "recommendations": string[] }
+
+"scriptAdherence" should be a short label like "High", "Medium", "Low" followed by a one-line reason. "summary" is 2-3 sentences on how the call went overall.`;
+
+    const content = fileBase64
+      ? [
+          { type: 'document', source: { type: 'base64', media_type: fileMediaType || 'application/pdf', data: fileBase64 } },
+          { type: 'text', text: analyzePrompt }
+        ]
+      : analyzePrompt;
+
+    const parsed = await callClaudeJson(content, 1200);
+    const dateLabel = new Date().toISOString().slice(0, 10);
+
+    if (AIRTABLE_API_KEY) {
+      try {
+        await airtableRequest('POST', 'Sales Log', {
+          records: [{
+            fields: {
+              'Campaign': campaignName,
+              'Campaign ID': campaignId || '',
+              'Type': 'Transcript Analysis',
+              'Script Adherence': parsed.scriptAdherence || '',
+              'Notes': parsed.summary || '',
+              'CTAs Used': (parsed.ctasUsed || []).join(', '),
+              'Objections Raised': (parsed.objectionsRaised || []).join(', '),
+              'Date': dateLabel
+            }
+          }],
+          typecast: true
+        });
+      } catch (writeErr) {
+        console.warn('Sales Log transcript analysis write failed (table may not exist yet):', writeErr.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      scriptAdherence: parsed.scriptAdherence || '',
+      summary: parsed.summary || '',
+      ctasUsed: parsed.ctasUsed || [],
+      objectionsRaised: parsed.objectionsRaised || [],
+      recommendations: parsed.recommendations || []
+    });
+  } catch (err) {
+    console.error('Transcript analysis error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ===================== CONTEXT TAB =====================
 // Marcus's primary data input hub. Fields referenced below that don't exist
 // yet on Contacts/Companies need to be created in Airtable (unconfirmed
@@ -2039,7 +2179,7 @@ app.post('/api/context/log-content', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
 
-  const { content, targetType, targetName } = req.body;
+  const { content, targetType, targetName, campaignId, campaignName } = req.body;
   if (!content || !targetType || !targetName) return res.status(400).json({ error: 'content, targetType and targetName are required' });
   if (targetType !== 'Company' && targetType !== 'Contact') return res.status(400).json({ error: 'targetType must be Company or Contact' });
 
@@ -2056,7 +2196,12 @@ ${content}
 
 Return ONLY the single summary line, in this exact style: "[${new Date().toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })}] <summary>. Source: <inferred source type, e.g. LinkedIn post, news article, personal note>." Nothing else.`;
 
-    const signalLine = await callClaudeText(prompt, 200);
+    let signalLine = await callClaudeText(prompt, 200);
+    // Tagged when saved from a campaign's Intelligence tab (see the
+    // matching note on POST /api/airtable/touchpoint above) - kept in the
+    // summary text itself since there's no confirmed "Campaign" field on
+    // Companies/Contacts to write to instead.
+    if (campaignName) signalLine += ` Campaign: ${campaignName}.`;
 
     const existingSummary = record.fields['AI Summary'] || '';
     const newSummary = existingSummary ? existingSummary + '\n' + signalLine : signalLine;
@@ -2074,7 +2219,7 @@ app.post('/api/context/historical-upload', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
 
-  const { content, fileBase64, fileMediaType, tag, targetType, targetName } = req.body;
+  const { content, fileBase64, fileMediaType, tag, targetType, targetName, campaignId, campaignName } = req.body;
   if (!content && !fileBase64) return res.status(400).json({ error: 'content or fileBase64 is required' });
   if (!tag || !targetType || !targetName) return res.status(400).json({ error: 'tag, targetType and targetName are required' });
   if (targetType !== 'Company' && targetType !== 'Contact') return res.status(400).json({ error: 'targetType must be Company or Contact' });
@@ -2107,7 +2252,8 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
     const parsed = await callClaudeJson(content_, 1500);
 
     const dateLabel = new Date().toISOString().slice(0, 10);
-    const historicalBlock = `\n\n[Historical context - ${tag} - added ${dateLabel}]\n${parsed.summaryForRecord || ''}`;
+    const campaignTag = campaignName ? ` - campaign: ${campaignName}` : '';
+    const historicalBlock = `\n\n[Historical context - ${tag} - added ${dateLabel}${campaignTag}]\n${parsed.summaryForRecord || ''}`;
     const newSummary = (record.fields['AI Summary'] || '') + historicalBlock;
 
     await airtableRequest('PATCH', table, { records: [{ id: record.id, fields: { 'AI Summary': newSummary } }] });
