@@ -364,6 +364,14 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .heatmap-grid .hm-head{font-weight:700;text-align:center;color:var(--muted);padding:4px 2px;}
 .heatmap-grid .hm-row-label{font-weight:700;padding:6px 4px;display:flex;align-items:center;}
 .heatmap-cell{border-radius:6px;padding:6px 2px;text-align:center;font-weight:700;color:var(--primary);min-height:26px;display:flex;align-items:center;justify-content:center;}
+
+/* Content system: signal cards + format colour-coding */
+.signal-card{border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:10px;}
+.signal-card:last-child{margin-bottom:0;}
+.format-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:middle;}
+.format-linkedin{background:#0084C5;}
+.format-blog{background:#44A574;}
+.format-newsletter{background:#8b5cf6;}
 .cta-row{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--border);}
 .cta-row:last-child{border-bottom:none;}
 .count-pill{background:var(--border);color:var(--muted);border-radius:20px;padding:2px 10px;font-size:11.5px;font-weight:800;}
@@ -842,6 +850,7 @@ const NAV = [
   { id:'campaigns', label:'Campaigns', icon:'ti-rocket' },
   { id:'calendar', label:'Sales Calendar', icon:'ti-calendar' },
   { id:'intelligence', label:'Intelligence', icon:'ti-brain' },
+  { id:'content', label:'Content', icon:'ti-news' },
   { id:'settings', label:'Settings', icon:'ti-settings' },
   { id:'howitworks', label:'How it works', icon:'ti-help-circle' },
   { id:'grid', label:'Grid', icon:'ti-grid-dots', hidden:true }
@@ -865,7 +874,7 @@ function navigate(page){
 
 function renderPage(){
   const el = document.getElementById('pageContent');
-  const renderers = { home: renderHome, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderCalendar, intelligence: renderIntelligencePage, settings: renderSettings };
+  const renderers = { home: renderHome, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderCalendar, intelligence: renderIntelligencePage, content: renderContent, settings: renderSettings };
   el.innerHTML = renderers[state.currentPage]();
   afterRender(state.currentPage);
 }
@@ -902,12 +911,23 @@ function afterRender(page){
       if(window.__salesConversionIntel === undefined) loadConversionIntelligence(campaign);
       if(window.__salesData && window.__salesConversionIntel) initSalesConversionCharts(window.__salesConversionIntel);
     }
+    if(tab === 'content' && campaign){
+      if(window.__campaignContentSignals === undefined) loadCampaignContentSignals(campaign);
+      if(window.__campaignContentDrafts === undefined) loadCampaignContentDrafts(campaign);
+    }
   }
   if(page === 'intelligence' && (window.__intelSubTab||'intelligence') === 'context') ensureContextDataLoaded();
   if(page === 'calendar'){
     if(window.__calendarEvents === undefined) loadCalendarEvents();
     if(window.__repsCache === undefined) loadRepsCache();
   }
+  if(page === 'content'){
+    const tab = window.__contentSubTab || 'signals';
+    if(tab === 'signals' && window.__contentSignals === undefined) loadContentSignals();
+    if((tab === 'drafts' || tab === 'calendar') && window.__contentDrafts === undefined) loadContentDrafts();
+    if(tab === 'settings' && window.__contentSettings === undefined) loadContentSettings();
+  }
+  if(page === 'home' && window.__homeContentSignals === undefined) loadHomeContentSignals();
 }
 
 /* ===================== HOME ===================== */
@@ -917,6 +937,7 @@ function renderHome(){
   <div class="section-title" style="font-size:22px;margin-bottom:2px;">Hey Marcus, ready to get started?</div>
   <div class="muted" style="margin-bottom:20px;">Your WA market intelligence engine.</div>
 
+  ${renderContentSignalsStrip()}
   ${renderTodaysActions()}
 
   <div class="home-actions">
@@ -3849,7 +3870,7 @@ function editCampaign(campaignId){
 
 /* ---- Detail view ---- */
 
-const CAMPAIGN_DETAIL_TABS = [['intelligence','Intelligence'],['grid','Grid'],['roadmap','Roadmap'],['strategy','Strategy'],['analytics','Analytics'],['sales','Sales']];
+const CAMPAIGN_DETAIL_TABS = [['intelligence','Intelligence'],['grid','Grid'],['roadmap','Roadmap'],['strategy','Strategy'],['analytics','Analytics'],['sales','Sales'],['content','Content']];
 
 // tab param lets callers (e.g. the Grid page's back button) land on a
 // specific tab instead of always resetting to the first one.
@@ -3870,6 +3891,9 @@ function openCampaignDetail(campaignId, tab){
   window.__salesPeriod = window.__salesPeriod || 'thisWeek';
   window.__salesData = undefined;
   window.__salesConversionIntel = undefined;
+  window.__campaignContentSignals = undefined;
+  window.__campaignContentDrafts = undefined;
+  window.__contentEditorId = null;
   window.__ctxCampaignTag = campaign ? { id: campaign.id, name: campaign.name } : null;
   renderPage();
 }
@@ -3882,6 +3906,7 @@ function backToCampaignList(){
 
 function setCampaignDetailTab(tab){
   window.__campaignDetailTab = tab;
+  window.__contentEditorId = null;
   renderPage();
   if(tab === 'analytics' && !window.__campaignAnalytics) runCampaignAnalytics();
   if(tab === 'analytics' && window.__campaignInsights === null && !window.__campaignInsightsError) runCampaignInsights();
@@ -3931,6 +3956,7 @@ function renderCampaignDetail(){
   ${tab==='strategy' ? renderCampaignStrategyTab(campaign) : ''}
   ${tab==='analytics' ? renderCampaignAnalyticsTab(campaign) : ''}
   ${tab==='sales' ? renderCampaignSalesTab(campaign) : ''}
+  ${tab==='content' ? renderCampaignContentTab(campaign) : ''}
   `;
 }
 
@@ -6066,6 +6092,714 @@ function renderLearningResult(kind, data, recordCount){
   }
   html += `<div class="learning-meta muted">Based on ${recordCount} uploaded rows &middot; saved to Airtable Learning Data</div>`;
   el.innerHTML = html;
+}
+
+/* ===================== CONTENT SYSTEM ===================== */
+// Data-driven content engine: Signals (recurring themes detected server-
+// side from touch points/DM parses/meeting notes/logged signals - see
+// detectContentSignals() in search-server.js), Draft Centre (AI-drafted
+// content against the account voice profile), Calendar (by Target Publish
+// Date), Settings (the voice profile itself). Mirrors the Sales tab's
+// "fetch-once-per-tab-open-into-window.__X" lifecycle throughout, and its
+// campaign-name-not-id scoping convention (the backend resolves a campaign
+// name to its Airtable record id itself, same as sales-overview/deals).
+
+const CONTENT_SUBTABS = [['signals','Signals'],['drafts','Draft Centre'],['calendar','Calendar'],['settings','Settings']];
+const CONTENT_FORMATS = ['LinkedIn Post','Blog','Newsletter'];
+const CONTENT_FORMAT_META = {
+  'LinkedIn Post': { dotClass:'format-linkedin', label:'LinkedIn' },
+  'Blog': { dotClass:'format-blog', label:'Blog' },
+  'Newsletter': { dotClass:'format-newsletter', label:'Newsletter' }
+};
+const CONTENT_STATUS_TAG_CLASS = { Draft:'tag-pending', Ready:'tag-started', Scheduled:'tag-messaging', Sent:'tag-won' };
+
+function setContentSubTab(tab){
+  window.__contentEditorId = null;
+  window.__contentSubTab = tab;
+  renderPage();
+}
+
+function renderContent(){
+  const tab = window.__contentSubTab || 'signals';
+  return `
+  <div class="seq-tabs">
+    ${CONTENT_SUBTABS.map(([key,label]) => `<div class="seq-tab ${tab===key?'active':''}" onclick="setContentSubTab('${key}')">${label}</div>`).join('')}
+  </div>
+  ${tab==='signals' ? renderContentSignalsTab() : ''}
+  ${tab==='drafts' ? renderContentDraftsTab() : ''}
+  ${tab==='calendar' ? renderContentCalendarTab() : ''}
+  ${tab==='settings' ? renderContentSettingsTab() : ''}
+  `;
+}
+
+/* ---- Data loading ---- */
+
+async function loadContentSignals(){
+  try {
+    const res = await fetch('/api/content/signals');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__contentSignals = data.signals || [];
+  } catch(err){
+    window.__contentSignals = { error: err.message };
+  }
+  if(state.currentPage === 'content' && (window.__contentSubTab||'signals') === 'signals') renderPage();
+}
+
+async function loadContentDrafts(){
+  try {
+    const res = await fetch('/api/content/drafts');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__contentDrafts = data.drafts || [];
+  } catch(err){
+    window.__contentDrafts = { error: err.message };
+  }
+  if(state.currentPage === 'content' && ['drafts','calendar'].includes(window.__contentSubTab||'')) renderPage();
+}
+
+async function loadContentSettings(){
+  try {
+    const res = await fetch('/api/content/settings');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__contentSettings = data;
+  } catch(err){
+    window.__contentSettings = { error: err.message };
+  }
+  if(state.currentPage === 'content' && window.__contentSubTab === 'settings') renderPage();
+}
+
+async function loadHomeContentSignals(){
+  try {
+    const res = await fetch('/api/content/signals');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__homeContentSignals = data.signals || [];
+  } catch(err){
+    window.__homeContentSignals = [];
+  }
+  if(state.currentPage === 'home') renderPage();
+}
+
+async function loadCampaignContentSignals(campaign){
+  try {
+    const res = await fetch(`/api/content/signals?campaignName=${encodeURIComponent(campaign.name)}`);
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__campaignContentSignals = data.signals || [];
+  } catch(err){
+    window.__campaignContentSignals = { error: err.message };
+  }
+  if(window.__campaignDetailTab === 'content') renderPage();
+}
+
+async function loadCampaignContentDrafts(campaign){
+  try {
+    const res = await fetch(`/api/content/drafts?campaignName=${encodeURIComponent(campaign.name)}`);
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__campaignContentDrafts = data.drafts || [];
+  } catch(err){
+    window.__campaignContentDrafts = { error: err.message };
+  }
+  if(window.__campaignDetailTab === 'content') renderPage();
+}
+
+/* ---- Signals ---- */
+
+function renderContentSignalsList(signals, opts){
+  opts = opts || {};
+  if(!signals) return '<div class="muted"><i class="ti ti-loader-2"></i> Loading signals...</div>';
+  if(signals.error) return `<div class="muted">Could not load signals: ${esc(signals.error)}</div>`;
+  if(!signals.length) return '<div class="empty-state">No new content signals. Keep logging touch points and the system will surface ideas automatically.</div>';
+  return signals.map(s => `
+    <div class="signal-card">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">
+        <div style="flex:1;min-width:220px;">
+          <div style="font-weight:700;font-size:13.5px;margin-bottom:4px;">${esc(s.theme)}</div>
+          <div class="muted" style="font-size:11.5px;">
+            <span class="format-dot ${CONTENT_FORMAT_META[s.suggestedFormat] ? CONTENT_FORMAT_META[s.suggestedFormat].dotClass : ''}"></span>
+            Suggested: ${esc(s.suggestedFormat || '—')} &middot; Mentioned by ${s.frequency || (s.relatedContactNames.length + s.relatedCompanyNames.length)} contact${(s.frequency||0)===1?'':'s'}/compan${(s.frequency||0)===1?'y':'ies'}
+          </div>
+          ${s.relatedContactNames.length || s.relatedCompanyNames.length ? `<div style="margin-top:6px;">
+            ${s.relatedContactNames.map(n=>`<span class="pill" style="margin:2px 4px 0 0;">${esc(n)}</span>`).join('')}
+            ${s.relatedCompanyNames.map(n=>`<span class="pill" style="background:#fdf4e6;color:#8a6a1f;margin:2px 4px 0 0;">${esc(n)}</span>`).join('')}
+          </div>` : ''}
+          ${s.suggestedIcpTargets ? `<div class="muted" style="font-size:11px;margin-top:6px;">ICP: ${esc(s.suggestedIcpTargets)}</div>` : ''}
+        </div>
+        <div style="display:flex;gap:6px;flex-shrink:0;">
+          <button class="btn btn-primary btn-sm" onclick="draftFromSignal('${s.id}', ${opts.campaignName ? `'${esc(opts.campaignName)}'` : 'null'})"><i class="ti ti-sparkles"></i> Draft this</button>
+          <button class="btn btn-ghost btn-sm" onclick="dismissContentSignal('${s.id}')"><i class="ti ti-x"></i> Dismiss</button>
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderContentSignalsTab(){
+  return `
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-bulb"></i> Content signals</div>
+      <button class="btn btn-secondary btn-sm" onclick="runDetectContentSignals()" id="detectSignalsBtn"><i class="ti ti-refresh"></i> Scan now</button>
+    </div>
+    ${renderContentSignalsList(window.__contentSignals)}
+  </div>
+  `;
+}
+
+async function runDetectContentSignals(){
+  const btn = document.getElementById('detectSignalsBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Scanning...'; }
+  try {
+    const res = await fetch('/api/content/detect-signals', { method:'POST' });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    toast(data.created ? `${data.created} new signal${data.created===1?'':'s'} found` : 'No new signals right now', 'success');
+    window.__contentSignals = undefined;
+    window.__homeContentSignals = undefined;
+    loadContentSignals();
+  } catch(err){
+    toast('Could not scan for signals: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-refresh"></i> Scan now'; }
+  }
+}
+
+function dismissContentSignal(signalId){
+  fetch(`/api/content/signals/${signalId}`, {
+    method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ status:'Dismissed' })
+  }).then(res=>res.json()).then(data=>{
+    if(!data.success){ toast('Could not dismiss signal', 'warn'); return; }
+    [window.__contentSignals, window.__homeContentSignals, window.__campaignContentSignals].forEach(list=>{
+      if(Array.isArray(list)){ const i = list.findIndex(s=>s.id===signalId); if(i>-1) list.splice(i,1); }
+    });
+    renderPage();
+  }).catch(err=>toast('Could not dismiss signal: '+err.message,'warn'));
+}
+
+function draftFromSignal(signalId, campaignName){
+  const allLists = [window.__contentSignals, window.__homeContentSignals, window.__campaignContentSignals].filter(Array.isArray);
+  let signal = null;
+  for(const list of allLists){ signal = list.find(s=>s.id===signalId); if(signal) break; }
+  // Only re-navigates the top-level Content page's sub-tab - if this was
+  // called from a campaign's Content sub-tab, campaignView/detailTab are
+  // untouched, so the modal opens right where the user already is.
+  if(state.currentPage !== 'campaigns'){
+    state.currentPage = 'content';
+    window.__contentSubTab = 'drafts';
+  }
+  openNewContentDraftModal({ signalId, signalTheme: signal ? signal.theme : '', suggestedFormat: signal ? signal.suggestedFormat : '', campaignName: campaignName || null });
+}
+
+/* ---- Draft Centre ---- */
+
+function contentStatusTag(status){
+  return `<span class="tag ${CONTENT_STATUS_TAG_CLASS[status]||'tag-pending'}">${esc(status||'Draft')}</span>`;
+}
+
+function renderContentDraftsList(drafts, opts){
+  opts = opts || {};
+  if(!drafts) return '<div class="muted"><i class="ti ti-loader-2"></i> Loading drafts...</div>';
+  if(drafts.error) return `<div class="muted">Could not load drafts: ${esc(drafts.error)}</div>`;
+  if(!drafts.length) return '<div class="empty-state">No content drafted yet.</div>';
+  return `<div class="mini-cards" style="grid-template-columns:repeat(auto-fill,minmax(260px,1fr));">
+    ${drafts.map(d => `
+      <div class="card" style="text-align:left;cursor:pointer;padding:14px;" onclick="openContentEditor('${d.id}')">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+          <div style="font-weight:700;font-size:13px;flex:1;">${esc(d.title||'Untitled')}</div>
+          ${contentStatusTag(d.status)}
+        </div>
+        <div class="muted" style="font-size:11.5px;margin-top:6px;">
+          <span class="format-dot ${CONTENT_FORMAT_META[d.format] ? CONTENT_FORMAT_META[d.format].dotClass : ''}"></span>
+          ${esc(CONTENT_FORMAT_META[d.format] ? CONTENT_FORMAT_META[d.format].label : d.format)}
+          ${d.campaignName ? ` &middot; ${esc(d.campaignName)}` : ''}
+        </div>
+        ${d.targetIcp ? `<div class="muted" style="font-size:11px;margin-top:6px;">ICP: ${esc(d.targetIcp.slice(0,60))}${d.targetIcp.length>60?'…':''}</div>` : ''}
+        ${d.targetCompanyNames.length ? `<div style="margin-top:6px;">${d.targetCompanyNames.slice(0,3).map(n=>`<span class="pill" style="margin:2px 4px 0 0;">${esc(n)}</span>`).join('')}</div>` : ''}
+      </div>
+    `).join('')}
+  </div>`;
+}
+
+function renderContentDraftsTab(){
+  if(window.__contentEditorId) return renderContentEditorView(window.__contentDrafts);
+  const drafts = window.__contentDrafts;
+  const filterFormat = window.__contentDraftFilterFormat || '';
+  const filterStatus = window.__contentDraftFilterStatus || '';
+  const filtered = Array.isArray(drafts) ? drafts.filter(d => (!filterFormat || d.format===filterFormat) && (!filterStatus || d.status===filterStatus)) : drafts;
+  return `
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-notes"></i> Draft Centre</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <select onchange="window.__contentDraftFilterFormat=this.value;renderPage();" style="width:auto;">
+          <option value="">All formats</option>
+          ${CONTENT_FORMATS.map(f=>`<option value="${f}" ${filterFormat===f?'selected':''}>${CONTENT_FORMAT_META[f].label}</option>`).join('')}
+        </select>
+        <select onchange="window.__contentDraftFilterStatus=this.value;renderPage();" style="width:auto;">
+          <option value="">All statuses</option>
+          ${['Draft','Ready','Scheduled','Sent'].map(s=>`<option value="${s}" ${filterStatus===s?'selected':''}>${s}</option>`).join('')}
+        </select>
+        <button class="btn btn-primary btn-sm" onclick="openNewContentDraftModal({})"><i class="ti ti-plus"></i> New draft</button>
+      </div>
+    </div>
+    ${renderContentDraftsList(filtered)}
+  </div>
+  `;
+}
+
+function openNewContentDraftModal(prefill){
+  prefill = prefill || {};
+  const campaignOptions = state.campaigns.map(c => `<option value="${esc(c.name)}" ${prefill.campaignName===c.name?'selected':''}>${esc(c.name)}</option>`).join('');
+  const body = `
+    ${prefill.signalTheme ? `<div class="muted" style="font-size:12px;margin-bottom:10px;"><i class="ti ti-bulb"></i> Drafting from signal: <strong>${esc(prefill.signalTheme)}</strong></div>` : ''}
+    <div class="field"><label>Format</label>
+      <select id="newDraftFormat">
+        ${CONTENT_FORMATS.map(f=>`<option value="${f}" ${(prefill.suggestedFormat||'LinkedIn Post')===f?'selected':''}>${CONTENT_FORMAT_META[f].label}</option>`).join('')}
+      </select>
+    </div>
+    ${!prefill.signalId ? `<div class="field"><label>Topic</label><input id="newDraftTopic" placeholder="What should this be about?"></div>` : `<input type="hidden" id="newDraftTopic" value="">`}
+    <div class="field"><label>Campaign (optional)</label>
+      <select id="newDraftCampaign"><option value="">— None —</option>${campaignOptions}</select>
+    </div>
+    <div class="field"><label>Length preference</label>
+      <select id="newDraftLength"><option value="">Use account default</option><option value="Short">Short</option><option value="Medium">Medium</option><option value="Long">Long</option></select>
+    </div>
+  `;
+  const footer = `
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" id="createDraftBtn" onclick="createContentDraft('${prefill.signalId||''}')"><i class="ti ti-sparkles"></i> Draft it</button>
+  `;
+  openModal('New draft', body, footer);
+}
+
+async function createContentDraft(signalId){
+  const btn = document.getElementById('createDraftBtn');
+  const format = document.getElementById('newDraftFormat').value;
+  const topic = document.getElementById('newDraftTopic').value.trim();
+  const campaignName = document.getElementById('newDraftCampaign').value;
+  const lengthPreference = document.getElementById('newDraftLength').value;
+  if(!signalId && !topic){ toast('Enter a topic', 'warn'); return; }
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Drafting...'; }
+  try {
+    const res = await fetch('/api/content/draft', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ format, topic: topic||undefined, signalId: signalId||undefined, campaignName: campaignName||undefined, lengthPreference: lengthPreference||undefined, mode:'new' })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || data.reason || 'Draft failed');
+    closeModal();
+    toast('Draft created', 'success');
+    window.__contentDrafts = undefined;
+    window.__campaignContentDrafts = undefined;
+    window.__contentSignals = undefined;
+    window.__homeContentSignals = undefined;
+    window.__campaignContentSignals = undefined;
+    await loadContentDrafts();
+    openContentEditor(data.contentId);
+  } catch(err){
+    toast('Could not create draft: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-sparkles"></i> Draft it'; }
+  }
+}
+
+/* ---- Editor view ---- */
+
+function openContentEditor(contentId){
+  window.__contentEditorId = contentId;
+  window.__contentSendToContacts = null;
+  renderPage();
+}
+function closeContentEditor(){
+  window.__contentEditorId = null;
+  renderPage();
+}
+
+function findContentDraftById(drafts, id){
+  return Array.isArray(drafts) ? drafts.find(d=>d.id===id) : null;
+}
+
+function renderContentEditorView(draftsList){
+  const draft = findContentDraftById(draftsList, window.__contentEditorId) || findContentDraftById(window.__campaignContentDrafts, window.__contentEditorId);
+  if(!draft) return `<div class="card"><div class="muted">Draft not found.</div><button class="btn btn-secondary btn-sm" style="margin-top:10px;" onclick="closeContentEditor()">Back</button></div>`;
+
+  const signalsPool = [window.__contentSignals, window.__homeContentSignals, window.__campaignContentSignals].find(l => Array.isArray(l) && l.some(s=>s.id===draft.signalId));
+  const signal = signalsPool ? signalsPool.find(s=>s.id===draft.signalId) : null;
+
+  if(window.__contentSendToContacts === null){
+    const suggested = new Set();
+    if(signal) signal.relatedContactNames.forEach(n=>suggested.add(n));
+    if(draft.campaignName){
+      const campaign = state.campaigns.find(c=>c.name===draft.campaignName);
+      if(campaign) campaignContacts(campaign).forEach(c=>suggested.add(c.name));
+    }
+    window.__contentSendToContacts = [...suggested];
+  }
+
+  const voiceNotesEntries = (draft.voiceNotes||'').split('\n\n').filter(Boolean);
+
+  return `
+  <div style="margin-bottom:14px;">
+    <button class="btn btn-ghost btn-sm" onclick="closeContentEditor()"><i class="ti ti-arrow-left"></i> Back to drafts</button>
+  </div>
+  <div class="two-col">
+    <div class="card">
+      <div class="field"><label>Title</label><input id="editorTitle" value="${esc(draft.title)}"></div>
+      <div class="field"><label>Body</label><textarea id="editorBody" rows="16">${esc(draft.body)}</textarea></div>
+      <div class="field"><label>Target ICP</label><textarea id="editorTargetIcp" rows="2">${esc(draft.targetIcp)}</textarea></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <button class="btn btn-secondary btn-sm" onclick="saveContentEditorFields('${draft.id}')"><i class="ti ti-device-floppy"></i> Save changes</button>
+        <button class="btn btn-secondary btn-sm" onclick="regenerateContentDraft('${draft.id}')" id="regenBtn"><i class="ti ti-refresh"></i> Regenerate</button>
+        <button class="btn btn-primary btn-sm" onclick="markContentReady('${draft.id}')" id="readyBtn" ${draft.status==='Ready'?'disabled':''}><i class="ti ti-check"></i> ${draft.status==='Ready'?'Ready':'Mark as Ready'}</button>
+      </div>
+      <div class="field" style="margin-top:14px;"><label>Refine with instructions</label>
+        <textarea id="editorRefineInstructions" rows="2" placeholder="e.g. make it shorter, more direct, focus on energy sector"></textarea>
+        <button class="btn btn-secondary btn-sm" style="margin-top:8px;" onclick="refineContentDraft('${draft.id}')" id="refineBtn"><i class="ti ti-wand"></i> Refine</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="section-title" style="font-size:13px;margin-bottom:10px;"><i class="ti ti-info-circle"></i> Informed by</div>
+      <div style="font-size:12.5px;margin-bottom:10px;">
+        <span class="format-dot ${CONTENT_FORMAT_META[draft.format] ? CONTENT_FORMAT_META[draft.format].dotClass : ''}"></span>
+        ${esc(CONTENT_FORMAT_META[draft.format] ? CONTENT_FORMAT_META[draft.format].label : draft.format)}
+        ${contentStatusTag(draft.status)}
+      </div>
+      ${draft.campaignName ? `<div style="margin-bottom:8px;"><span class="pill" style="background:#e2f2fa;color:#0d6a96;"><i class="ti ti-rocket" style="font-size:11px;"></i> ${esc(draft.campaignName)}</span></div>` : ''}
+      ${signal ? `
+        <div class="muted" style="font-size:11.5px;margin-bottom:4px;font-weight:700;">Detected signal</div>
+        <div style="font-size:12.5px;margin-bottom:4px;">${esc(signal.theme)}</div>
+        <div class="muted" style="font-size:11px;margin-bottom:10px;">Mentioned by ${signal.relatedContactNames.length} contact(s), ${signal.relatedCompanyNames.length} compan${signal.relatedCompanyNames.length===1?'y':'ies'}</div>
+      ` : ''}
+      ${draft.targetCompanyNames.length ? `<div class="muted" style="font-size:11.5px;margin-bottom:4px;font-weight:700;">Relevant companies</div><div style="margin-bottom:10px;">${draft.targetCompanyNames.map(n=>`<span class="pill" style="margin:2px 4px 0 0;">${esc(n)}</span>`).join('')}</div>` : ''}
+
+      <div class="muted" style="font-size:11.5px;margin-top:14px;margin-bottom:4px;font-weight:700;">Refinement history</div>
+      ${voiceNotesEntries.length ? voiceNotesEntries.map(v=>`<div style="font-size:11.5px;padding:6px 0;border-bottom:1px solid var(--border);">${esc(v)}</div>`).join('') : '<div class="muted" style="font-size:11.5px;">No refinements yet.</div>'}
+
+      <div class="muted" style="font-size:11.5px;margin-top:16px;margin-bottom:6px;font-weight:700;">Send to contacts</div>
+      <div id="sendToContactsList">${renderSendToContactsList()}</div>
+      <div style="display:flex;gap:6px;margin-top:8px;">
+        <input id="sendToContactInput" placeholder="Add a contact name" style="flex:1;">
+        <button class="btn btn-secondary btn-sm" onclick="addSendToContact()"><i class="ti ti-plus"></i></button>
+      </div>
+      <button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="copySendToContacts()"><i class="ti ti-copy"></i> Copy list</button>
+    </div>
+  </div>
+  `;
+}
+
+function renderSendToContactsList(){
+  const list = window.__contentSendToContacts || [];
+  if(!list.length) return '<div class="muted" style="font-size:11.5px;">No suggested contacts yet - add some below.</div>';
+  return list.map((n,i) => `<span class="pill" style="margin:2px 4px 4px 0;">${esc(n)} <i class="ti ti-x" style="cursor:pointer;margin-left:4px;" onclick="removeSendToContact(${i})"></i></span>`).join('');
+}
+function addSendToContact(){
+  const input = document.getElementById('sendToContactInput');
+  const val = input.value.trim();
+  if(!val) return;
+  window.__contentSendToContacts = window.__contentSendToContacts || [];
+  window.__contentSendToContacts.push(val);
+  input.value = '';
+  document.getElementById('sendToContactsList').innerHTML = renderSendToContactsList();
+}
+function removeSendToContact(i){
+  window.__contentSendToContacts.splice(i,1);
+  document.getElementById('sendToContactsList').innerHTML = renderSendToContactsList();
+}
+function copySendToContacts(){
+  const text = (window.__contentSendToContacts||[]).join(', ');
+  if(navigator.clipboard) navigator.clipboard.writeText(text).then(()=>toast('Copied', 'success')).catch(()=>toast('Could not copy', 'warn'));
+}
+
+function updateCachedDraft(contentId, patch){
+  [window.__contentDrafts, window.__campaignContentDrafts].forEach(list => {
+    if(!Array.isArray(list)) return;
+    const d = list.find(x=>x.id===contentId);
+    if(d) Object.assign(d, patch);
+  });
+}
+
+async function saveContentEditorFields(contentId){
+  const title = document.getElementById('editorTitle').value.trim();
+  const body = document.getElementById('editorBody').value;
+  const targetIcp = document.getElementById('editorTargetIcp').value.trim();
+  try {
+    const res = await fetch('/api/content/draft', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ mode:'save', contentId, title, body, targetIcp })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Save failed');
+    updateCachedDraft(contentId, { title, body, targetIcp });
+    toast('Saved', 'success');
+    renderPage();
+  } catch(err){
+    toast('Could not save: ' + err.message, 'warn');
+  }
+}
+
+async function regenerateContentDraft(contentId){
+  const btn = document.getElementById('regenBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Regenerating...'; }
+  try {
+    const res = await fetch('/api/content/draft', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ mode:'regenerate', contentId })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Regenerate failed');
+    updateCachedDraft(contentId, { title:data.title, body:data.body, status:data.status });
+    toast('Regenerated', 'success');
+    renderPage();
+  } catch(err){
+    toast('Could not regenerate: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-refresh"></i> Regenerate'; }
+  }
+}
+
+async function refineContentDraft(contentId){
+  const instructions = document.getElementById('editorRefineInstructions').value.trim();
+  if(!instructions){ toast('Enter refinement instructions', 'warn'); return; }
+  const btn = document.getElementById('refineBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Refining...'; }
+  try {
+    const res = await fetch('/api/content/draft', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ mode:'refine', contentId, refineInstructions: instructions })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Refine failed');
+    const timestamp = new Date().toISOString().slice(0,16).replace('T',' ');
+    const logLine = `[${timestamp}] (Refine) Refine with instructions: "${instructions}"`;
+    [window.__contentDrafts, window.__campaignContentDrafts].forEach(list => {
+      if(!Array.isArray(list)) return;
+      const d = list.find(x=>x.id===contentId);
+      if(d){ d.title = data.title; d.body = data.body; d.voiceNotes = d.voiceNotes ? d.voiceNotes+'\n\n'+logLine : logLine; }
+    });
+    document.getElementById('editorRefineInstructions').value = '';
+    toast('Refined', 'success');
+    renderPage();
+  } catch(err){
+    toast('Could not refine: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-wand"></i> Refine'; }
+  }
+}
+
+async function markContentReady(contentId){
+  const btn = document.getElementById('readyBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Saving...'; }
+  try {
+    const res = await fetch('/api/content/draft', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ mode:'save', contentId, setStatus:'Ready' })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Failed');
+    updateCachedDraft(contentId, { status:'Ready' });
+    toast('Marked as Ready', 'success');
+    renderPage();
+  } catch(err){
+    toast('Could not mark Ready: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-check"></i> Mark as Ready'; }
+  }
+}
+
+/* ---- Calendar ---- */
+
+function contentCalNav(dir){
+  window.__contentCalMonth += dir;
+  if(window.__contentCalMonth < 0){ window.__contentCalMonth = 11; window.__contentCalYear--; }
+  if(window.__contentCalMonth > 11){ window.__contentCalMonth = 0; window.__contentCalYear++; }
+  renderPage();
+}
+function contentCalToday(){ window.__contentCalMonth = TODAY.getMonth(); window.__contentCalYear = TODAY.getFullYear(); renderPage(); }
+
+function renderContentCalendarTab(){
+  if(window.__contentCalYear === undefined){ window.__contentCalYear = TODAY.getFullYear(); window.__contentCalMonth = TODAY.getMonth(); }
+  const y = window.__contentCalYear, m = window.__contentCalMonth;
+  const first = new Date(y, m, 1);
+  const startDow = first.getDay();
+  const daysInMonth = new Date(y, m+1, 0).getDate();
+  const monthLabel = first.toLocaleDateString('en-AU',{month:'long', year:'numeric'});
+  const cells = [];
+  for(let i=0;i<startDow;i++) cells.push(null);
+  for(let d=1; d<=daysInMonth; d++) cells.push(d);
+
+  const drafts = Array.isArray(window.__contentDrafts) ? window.__contentDrafts.filter(d=>d.targetPublishDate) : [];
+  const cadence = window.__contentSettings && !window.__contentSettings.error ? window.__contentSettings.recommendedCadence : '';
+
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+      <div style="font-size:12.5px;"><i class="ti ti-bulb"></i> ${cadence ? esc(cadence) : 'No posting cadence recommendation yet.'}</div>
+      <button class="btn btn-secondary btn-sm" onclick="refreshContentCadence()" id="cadenceBtn"><i class="ti ti-refresh"></i> Refresh recommendation</button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="cal-header">
+      <div style="font-size:16px;font-weight:800;">${monthLabel}</div>
+      <div class="cal-nav">
+        <button class="btn btn-secondary btn-sm" onclick="contentCalNav(-1)"><i class="ti ti-chevron-left"></i></button>
+        <button class="btn btn-secondary btn-sm" onclick="contentCalToday()">Today</button>
+        <button class="btn btn-secondary btn-sm" onclick="contentCalNav(1)"><i class="ti ti-chevron-right"></i></button>
+      </div>
+    </div>
+    <div class="cal-grid">
+      ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d=>`<div class="cal-dow">${d}</div>`).join('')}
+      ${cells.map(d => {
+        if(d===null) return '<div class="cal-cell empty"></div>';
+        const dateStr = `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+        const isToday = dateStr === isoDate(TODAY);
+        const events = drafts.filter(dr=>dr.targetPublishDate === dateStr);
+        return `<div class="cal-cell ${isToday?'today':''}">
+          <div class="cal-date">${d}</div>
+          ${events.map(ev => `<div class="event-chip" style="background:transparent;border-left:3px solid ${ev.format==='Blog'?'#44A574':(ev.format==='Newsletter'?'#8b5cf6':'#0084C5')};padding-left:4px;cursor:pointer;" onclick="setContentSubTab('drafts');openContentEditor('${ev.id}')">${esc(ev.title||'Untitled')}
+            <div class="event-tooltip">${esc(ev.title)} — ${esc(CONTENT_FORMAT_META[ev.format]?CONTENT_FORMAT_META[ev.format].label:ev.format)}</div>
+          </div>`).join('')}
+        </div>`;
+      }).join('')}
+    </div>
+  </div>
+  `;
+}
+
+async function refreshContentCadence(){
+  const btn = document.getElementById('cadenceBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Thinking...'; }
+  try {
+    const res = await fetch('/api/content/cadence', { method:'POST' });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Failed');
+    window.__contentSettings = window.__contentSettings || {};
+    window.__contentSettings.recommendedCadence = data.cadence;
+    toast('Cadence updated', 'success');
+    renderPage();
+  } catch(err){
+    toast('Could not refresh cadence: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-refresh"></i> Refresh recommendation'; }
+  }
+}
+
+/* ---- Settings (voice profile) ---- */
+
+function renderContentSettingsTab(){
+  const s = window.__contentSettings;
+  if(!s) return '<div class="card"><div class="muted"><i class="ti ti-loader-2"></i> Loading...</div></div>';
+  if(s.error) return `<div class="card"><div class="muted">Could not load settings: ${esc(s.error)}</div></div>`;
+  return `
+  <div class="card">
+    <div class="section-title"><i class="ti ti-microphone-2"></i> Voice profile</div>
+    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Filled in once at account level. Passed to Claude on every content draft.</p>
+    <div class="field"><label>Writing style</label><textarea id="csVoiceStyle" rows="3">${esc(s.voiceStyle)}</textarea></div>
+    <div class="row">
+      <div class="field"><label>Tone</label>
+        <select id="csTone">
+          <option value="">— Select —</option>
+          ${['Authoritative','Conversational','Storytelling','Educational'].map(t=>`<option value="${t}" ${s.tone===t?'selected':''}>${t}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="field"><label>Topics to be known for</label><textarea id="csTopicsToCover" rows="2">${esc(s.topicsToCover)}</textarea></div>
+    <div class="field"><label>Topics to avoid</label><textarea id="csTopicsToAvoid" rows="2">${esc(s.topicsToAvoid)}</textarea></div>
+    <div class="field"><label>Example LinkedIn posts (paste up to 3)</label><textarea id="csExamplePosts" rows="4">${esc(s.examplePosts)}</textarea></div>
+    <div class="field"><label>Example blog excerpts (paste up to 2)</label><textarea id="csExampleBlogs" rows="4">${esc(s.exampleBlogs)}</textarea></div>
+    <div class="row">
+      <div class="field"><label>Preferred LinkedIn post length</label>
+        <select id="csLinkedinLength">
+          <option value="">— Select —</option>
+          <option value="Short" ${s.linkedinLengthPreference==='Short'?'selected':''}>Short (under 150 words)</option>
+          <option value="Medium" ${s.linkedinLengthPreference==='Medium'?'selected':''}>Medium (150–300 words)</option>
+          <option value="Long" ${s.linkedinLengthPreference==='Long'?'selected':''}>Long (300+ words)</option>
+        </select>
+      </div>
+      <div class="field"><label>Preferred blog length</label>
+        <select id="csBlogLength">
+          <option value="">— Select —</option>
+          <option value="Short" ${s.blogLengthPreference==='Short'?'selected':''}>Short (~500 words)</option>
+          <option value="Medium" ${s.blogLengthPreference==='Medium'?'selected':''}>Medium (800–1200 words)</option>
+          <option value="Long" ${s.blogLengthPreference==='Long'?'selected':''}>Long (1500+ words)</option>
+        </select>
+      </div>
+    </div>
+    <div class="field"><label>Newsletter format notes</label><textarea id="csNewsletterNotes" rows="3">${esc(s.newsletterNotes)}</textarea></div>
+    <button class="btn btn-primary btn-sm" onclick="saveContentSettings()"><i class="ti ti-device-floppy"></i> Save voice profile</button>
+  </div>
+  `;
+}
+
+function saveContentSettings(){
+  const payload = {
+    voiceStyle: document.getElementById('csVoiceStyle').value.trim(),
+    tone: document.getElementById('csTone').value,
+    topicsToCover: document.getElementById('csTopicsToCover').value.trim(),
+    topicsToAvoid: document.getElementById('csTopicsToAvoid').value.trim(),
+    examplePosts: document.getElementById('csExamplePosts').value.trim(),
+    exampleBlogs: document.getElementById('csExampleBlogs').value.trim(),
+    linkedinLengthPreference: document.getElementById('csLinkedinLength').value,
+    blogLengthPreference: document.getElementById('csBlogLength').value,
+    newsletterNotes: document.getElementById('csNewsletterNotes').value.trim()
+  };
+  fetch('/api/content/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) })
+    .then(res=>res.json())
+    .then(data=>{
+      if(!data.success){ toast('Could not save voice profile', 'warn'); return; }
+      window.__contentSettings = Object.assign({}, payload, { recommendedCadence: (window.__contentSettings||{}).recommendedCadence || '' });
+      toast('Voice profile saved', 'success');
+      renderPage();
+    })
+    .catch(err=>toast('Could not save voice profile: '+err.message,'warn'));
+}
+
+/* ---- Home page signal strip ---- */
+
+function renderContentSignalsStrip(){
+  const signals = window.__homeContentSignals;
+  const count = Array.isArray(signals) ? signals.length : 0;
+  return `
+  <div class="card" style="margin-bottom:22px;">
+    <div class="section-title"><i class="ti ti-bulb"></i> Content signals ${count ? `<span class="count-pill has" style="margin-left:6px;">${count}</span>` : ''}</div>
+    ${renderContentSignalsList(signals)}
+  </div>`;
+}
+
+/* ---- Per-campaign Content sub-tab ---- */
+// Same Signals/Draft Centre renderers as the top-level Content page, just
+// fed campaign-scoped data (window.__campaignContentSignals/Drafts,
+// loaded once per campaign-detail-open by loadCampaignContentSignals/
+// loadCampaignContentDrafts) plus the Content Context notes field.
+
+function renderCampaignContentTab(campaign){
+  if(window.__contentEditorId) return renderContentEditorView(window.__campaignContentDrafts);
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title"><i class="ti ti-note"></i> Campaign content context</div>
+    <p class="muted" style="font-size:12.5px;margin-bottom:10px;">Reshapes but does not override the account voice profile in Content &gt; Settings.</p>
+    <div class="field"><textarea id="campaignContentContext" rows="3" placeholder="Notes specific to this campaign's content angle...">${esc(campaign.contentContext||'')}</textarea></div>
+    <button class="btn btn-primary btn-sm" onclick="saveCampaignContentContext('${campaign.id}')"><i class="ti ti-device-floppy"></i> Save</button>
+  </div>
+
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title"><i class="ti ti-bulb"></i> Content signals</div>
+    ${renderContentSignalsList(window.__campaignContentSignals, { campaignName: campaign.name })}
+  </div>
+
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-notes"></i> Draft Centre</div>
+      <button class="btn btn-primary btn-sm" onclick="openNewContentDraftModal({campaignName:'${esc(campaign.name)}'})"><i class="ti ti-plus"></i> New draft</button>
+    </div>
+    ${renderContentDraftsList(window.__campaignContentDrafts)}
+  </div>
+  `;
+}
+
+function saveCampaignContentContext(campaignId){
+  const campaign = state.campaigns.find(c => c.id === campaignId);
+  if(!campaign) return;
+  campaign.contentContext = document.getElementById('campaignContentContext').value.trim();
+  campaign.updatedAt = isoDate(TODAY);
+  syncCampaignToAirtable(campaign);
+  toast('Content context saved', 'success');
 }
 
 /* ===================== SETTINGS PAGE ===================== */

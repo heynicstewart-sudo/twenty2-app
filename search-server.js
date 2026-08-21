@@ -335,16 +335,11 @@ app.post('/api/airtable/campaign', async (req, res) => {
   // so they're folded into the existing "Strategy Notes" field as
   // labelled sections rather than dropped - that field already exists and
   // is semantically the right home for them.
-  const { name, goal, product, targetIcp, contactIds, sequenceTemplates, strategyNotes, pitchAngle, objectionHandling, successMetric, startDate, status, ctas } = req.body;
+  const { name, goal, product, targetIcp, contactIds, sequenceTemplates, strategyNotes, pitchAngle, objectionHandling, successMetric, startDate, status, ctas, contentContext } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
 
   try {
-    const searchRes = await fetch(
-      `${AIRTABLE_URL}/Campaigns?filterByFormula=${encodeURIComponent(`{Name}="${name}"`)}`,
-      { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
-    );
-    const searchData = await searchRes.json();
-    const existing = searchData.records && searchData.records[0];
+    const existing = await findCampaignRecordByName(name);
 
     const strategyNotesParts = [strategyNotes || ''];
     if (pitchAngle) strategyNotesParts.push(`Pitch angle: ${pitchAngle}`);
@@ -361,7 +356,8 @@ app.post('/api/airtable/campaign', async (req, res) => {
       'Success Metric': successMetric || '',
       'Start Date': startDate || '',
       'Status': status || 'Draft',
-      'CTAs': ctas || ''
+      'CTAs': ctas || '',
+      'Content Context': contentContext || ''
     };
 
     if (existing) {
@@ -491,6 +487,7 @@ app.post('/api/airtable/touchpoint', async (req, res) => {
     }
 
     res.json({ success: true, recordId });
+    detectContentSignals().catch(err => console.warn('Content signal detection trigger failed:', err.message));
   } catch (err) {
     console.error('Airtable touch point error:', err.message);
     res.status(500).json({ error: err.message });
@@ -2292,6 +2289,7 @@ app.post('/api/deals/:dealId/notes', async (req, res) => {
       refreshContactAndCompanySummaries(contactId, companyId, `${phaseLabel} note on a deal: ${noteText}`)
         .catch(err => console.warn('Background summary refresh error:', err.message));
     }
+    detectContentSignals().catch(err => console.warn('Content signal detection trigger failed:', err.message));
   } catch (err) {
     console.error('Deal notes error:', err.message);
     if (!res.headersSent) res.status(500).json({ error: err.message });
@@ -2392,6 +2390,552 @@ app.get('/api/calendar/events', async (req, res) => {
     res.json({ events });
   } catch (err) {
     console.error('Calendar events error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===================== CONTENT SYSTEM =====================
+// Data-driven content engine: watches touch points, DM screenshot parses,
+// meeting notes, and logged company/contact signals for recurring themes,
+// surfaces them as Content Signals, and drafts LinkedIn/Blog/Newsletter
+// copy in Marcus's documented voice (Content Settings, the account-level
+// singleton) informed by real account data. The Content/Content Settings/
+// Content Signals tables already existed in the base before this feature -
+// the Content table's old Content Type/Pain Point Tag/Scheduled Date/
+// Linked Contacts/Delivery Rate (%) fields belong to a different, never-
+// built legacy content feature and are never read or written by anything
+// below - only the newer Body/Format/Target ICP/Campaign/Target Companies/
+// Detected From Signal/Content Settings/Content Signals fields are used.
+
+const CONTENT_TABLE = 'Content';
+const CONTENT_SIGNALS_TABLE = 'Content Signals';
+const CONTENT_SETTINGS_TABLE = 'Content Settings';
+
+function daysAgoDate(n) {
+  return new Date(Date.now() - n * 86400000);
+}
+
+// Deals.Notes and Content.Voice Notes both use the same append-log
+// convention this app already established for Deals.Notes: "[YYYY-MM-DD
+// HH:mm] (Label) text", blocks separated by a blank line. This parses just
+// the date portion, which is all detectContentSignals needs for cutoff
+// filtering.
+function parseTimestampedBlocks(text) {
+  if (!text) return [];
+  return text.split('\n\n').map(block => {
+    const m = block.match(/^\[(\d{4}-\d{2}-\d{2})[^\]]*\]\s*\(([^)]+)\)\s*([\s\S]*)$/);
+    return m ? { date: m[1], label: m[2], text: m[3] } : null;
+  }).filter(Boolean);
+}
+
+// Content Settings is a singleton - one row is the account-wide voice
+// profile. Get-or-default: never creates a row itself, so every route that
+// only *reads* the profile (draft, signals) degrades gracefully to "no
+// profile yet" instead of silently creating empty rows. Only
+// getOrCreateContentSettingsRecord() (used by the settings-save and
+// cadence routes, the two legitimate write paths) creates one.
+async function getContentSettingsRecord() {
+  const data = await airtableRequest('GET', CONTENT_SETTINGS_TABLE);
+  return (data.records && data.records[0]) || null;
+}
+
+async function getOrCreateContentSettingsRecord() {
+  const existing = await getContentSettingsRecord();
+  if (existing) return existing;
+  const data = await airtableRequest('POST', CONTENT_SETTINGS_TABLE, { records: [{ fields: {} }] });
+  return data.records[0];
+}
+
+// Word-count targets straight from the brief. Newsletter has no Length
+// Preference field on Content Settings (unlike LinkedIn/Blog), so it gets
+// one fixed target regardless of the (currently unused) lengthKey - guided
+// instead by the free-text Newsletter Notes field in the prompt itself.
+const CONTENT_LENGTH_TARGETS = {
+  'LinkedIn Post': { Short: 'under 150 words', Medium: '150-300 words', Long: '300+ words' },
+  'Blog': { Short: 'around 500 words', Medium: '800-1200 words', Long: '1500+ words' },
+  'Newsletter': { Short: '400-600 words', Medium: '400-600 words', Long: '400-600 words' }
+};
+
+// Scans the last 30 days of Touch Points and Deals.Notes for recurring
+// themes and writes any new, non-duplicate ones to Content Signals. Never
+// throws - every trigger call site fires this unawaited after its own
+// res.json(), and the explicit POST /api/content/detect-signals route
+// awaits it purely to report a count, not to surface errors, so an
+// internal failure here must never become a 500 for either caller.
+async function detectContentSignals() {
+  try {
+    const cutoff = daysAgoDate(30);
+    const recentCutoff = daysAgoDate(7);
+
+    const [tpData, dealsData, contactsData, companiesData, existingSignalsData] = await Promise.all([
+      airtableRequest('GET', 'Touch Points'),
+      airtableRequest('GET', 'Deals'),
+      airtableRequest('GET', 'Contacts'),
+      airtableRequest('GET', 'Companies'),
+      airtableRequest('GET', CONTENT_SIGNALS_TABLE)
+    ]);
+
+    const contactsById = {};
+    (contactsData.records || []).forEach(r => { contactsById[r.id] = r; });
+    const companiesById = {};
+    (companiesData.records || []).forEach(r => { companiesById[r.id] = r; });
+
+    const recentTouchPoints = (tpData.records || [])
+      .filter(r => r.fields['Date'] && new Date(r.fields['Date']) >= cutoff)
+      .map(r => {
+        const contactId = (r.fields['Contact'] || [])[0] || null;
+        const contact = contactId ? contactsById[contactId] : null;
+        const companyId = contact ? (contact.fields['Company'] || [])[0] || null : null;
+        const company = companyId ? companiesById[companyId] : null;
+        return {
+          contactName: contact ? contact.fields['Full Name'] : null,
+          companyName: company ? company.fields['Company Name'] : null,
+          date: r.fields['Date'],
+          summary: r.fields['Summary'] || ''
+        };
+      })
+      .filter(tp => tp.summary && tp.contactName);
+
+    const recentDealNotes = [];
+    (dealsData.records || []).forEach(r => {
+      const contactId = (r.fields['Contact'] || [])[0] || null;
+      const companyId = (r.fields['Company'] || [])[0] || null;
+      const contact = contactId ? contactsById[contactId] : null;
+      const company = companyId ? companiesById[companyId] : null;
+      parseTimestampedBlocks(r.fields['Notes']).forEach(block => {
+        if (new Date(block.date) >= cutoff) {
+          recentDealNotes.push({
+            contactName: contact ? contact.fields['Full Name'] : null,
+            companyName: company ? company.fields['Company Name'] : null,
+            date: block.date,
+            summary: block.text
+          });
+        }
+      });
+    });
+
+    if (recentTouchPoints.length + recentDealNotes.length < 2) return { created: 0 };
+
+    const recentSignalThemes = (existingSignalsData.records || [])
+      .filter(r => r.fields['Detected Date'] && new Date(r.fields['Detected Date']) >= recentCutoff)
+      .map(r => r.fields['Theme'] || '')
+      .filter(Boolean);
+
+    const prompt = `You are identifying recurring content themes for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM, from real logged activity over the last 30 days.
+
+TOUCH POINTS (${recentTouchPoints.length}):
+${JSON.stringify(recentTouchPoints, null, 2)}
+
+DEAL NOTES (${recentDealNotes.length}):
+${JSON.stringify(recentDealNotes, null, 2)}
+
+THEMES ALREADY SURFACED IN THE LAST 7 DAYS (do not resurface these, even worded differently):
+${JSON.stringify(recentSignalThemes)}
+
+Identify recurring themes worth turning into content (a LinkedIn post, blog, or newsletter). A theme only qualifies if it is mentioned by at least 2 different contacts or companies (not the same person twice). For each qualifying theme, judge whether it is really the same idea as one already listed above (isDuplicateOfExisting) - only flag it true if you are confident it's a repeat.
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "signals": [ { "theme": string, "frequency": number, "relatedContactNames": string[], "relatedCompanyNames": string[], "suggestedFormat": "LinkedIn Post"|"Blog"|"Newsletter", "suggestedIcpTargets": string, "isDuplicateOfExisting": boolean } ] }`;
+
+    const parsed = await callClaudeJson(prompt, 1800);
+    const candidates = (parsed.signals || []).filter(s => s.theme && s.frequency >= 2 && !s.isDuplicateOfExisting);
+    if (!candidates.length) return { created: 0 };
+
+    // Backstop substring dedup, in case the model's own judgement missed a
+    // near-exact repeat of a recently-surfaced theme.
+    const recentThemesNormalized = recentSignalThemes.map(t => t.toLowerCase().trim());
+    const toWrite = candidates.filter(c => {
+      const norm = c.theme.toLowerCase().trim();
+      return !recentThemesNormalized.some(existing => existing.includes(norm) || norm.includes(existing));
+    });
+    if (!toWrite.length) return { created: 0 };
+
+    const campaignContactRows = await fetchCampaignContactsRows();
+    const contactsByName = {};
+    (contactsData.records || []).forEach(r => { if (r.fields['Full Name']) contactsByName[r.fields['Full Name']] = r; });
+    const companiesByName = {};
+    (companiesData.records || []).forEach(r => { if (r.fields['Company Name']) companiesByName[r.fields['Company Name']] = r; });
+
+    const today = new Date().toISOString().slice(0, 10);
+    const records = toWrite.map(c => {
+      const relatedContactRecords = (c.relatedContactNames || []).map(n => contactsByName[n]).filter(Boolean);
+      const relatedCompanyRecords = (c.relatedCompanyNames || []).map(n => companiesByName[n]).filter(Boolean);
+
+      // Campaign-tagging heuristic: only tag a signal to a campaign when
+      // every related contact (directly, or via a related company's own
+      // contacts) maps to exactly one campaign - otherwise it's an
+      // account-wide signal and Campaign is left blank, shown only at the
+      // top level and on Home.
+      const campaignIds = new Set();
+      const contactIdsInvolved = new Set(relatedContactRecords.map(r => r.id));
+      relatedCompanyRecords.forEach(co => (co.fields['Contacts'] || []).forEach(cid => contactIdsInvolved.add(cid)));
+      contactIdsInvolved.forEach(cid => {
+        campaignContactRows
+          .filter(row => (row.fields['Contact'] || []).includes(cid))
+          .forEach(row => (row.fields['Campaign'] || []).forEach(campId => campaignIds.add(campId)));
+      });
+
+      const fields = {
+        'Theme': c.theme,
+        'Frequency': c.frequency,
+        'Suggested Format': c.suggestedFormat || 'LinkedIn Post',
+        'Suggested ICP Targets': c.suggestedIcpTargets || '',
+        'Status': 'New',
+        'Detected Date': today
+      };
+      if (relatedContactRecords.length) fields['Related Contacts'] = relatedContactRecords.map(r => r.id);
+      if (relatedCompanyRecords.length) fields['Related Companies'] = relatedCompanyRecords.map(r => r.id);
+      if (campaignIds.size === 1) fields['Campaign'] = [...campaignIds];
+      return { fields };
+    });
+
+    for (let i = 0; i < records.length; i += 10) {
+      await airtableRequest('POST', CONTENT_SIGNALS_TABLE, { records: records.slice(i, i + 10), typecast: true });
+    }
+    return { created: records.length };
+  } catch (err) {
+    console.warn('Content signal detection failed (non-fatal):', err.message);
+    return { created: 0, error: err.message };
+  }
+}
+
+// Manual/explicit trigger - awaits purely to report a count, since
+// detectContentSignals() above never throws.
+app.post('/api/content/detect-signals', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  const result = await detectContentSignals();
+  res.json({ success: true, created: result.created });
+});
+
+app.get('/api/content/signals', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const campaignName = (req.query.campaignName || '').trim();
+  try {
+    const [data, contactsData, companiesData, campaignRecord] = await Promise.all([
+      airtableRequest('GET', CONTENT_SIGNALS_TABLE),
+      airtableRequest('GET', 'Contacts'),
+      airtableRequest('GET', 'Companies'),
+      campaignName ? findCampaignRecordByName(campaignName) : Promise.resolve(null)
+    ]);
+    const contactsById = {}; (contactsData.records || []).forEach(r => { contactsById[r.id] = r.fields['Full Name'] || ''; });
+    const companiesById = {}; (companiesData.records || []).forEach(r => { companiesById[r.id] = r.fields['Company Name'] || ''; });
+
+    let records = (data.records || []).filter(r => (r.fields['Status'] || 'New') !== 'Dismissed');
+    if (campaignName) records = records.filter(r => campaignRecord && (r.fields['Campaign'] || []).includes(campaignRecord.id));
+
+    const signals = records
+      .sort((a, b) => new Date(b.fields['Detected Date'] || 0) - new Date(a.fields['Detected Date'] || 0))
+      .map(r => ({
+        id: r.id,
+        theme: r.fields['Theme'] || '',
+        frequency: r.fields['Frequency'] || 0,
+        relatedContactNames: (r.fields['Related Contacts'] || []).map(id => contactsById[id]).filter(Boolean),
+        relatedCompanyNames: (r.fields['Related Companies'] || []).map(id => companiesById[id]).filter(Boolean),
+        suggestedFormat: r.fields['Suggested Format'] || '',
+        suggestedIcpTargets: r.fields['Suggested ICP Targets'] || '',
+        status: r.fields['Status'] || 'New',
+        detectedDate: r.fields['Detected Date'] || ''
+      }));
+
+    res.json({ signals });
+  } catch (err) {
+    console.error('List content signals error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/content/signals/:id', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { status } = req.body;
+  if (!status) return res.status(400).json({ error: 'status is required' });
+  try {
+    await airtableRequest('PATCH', CONTENT_SIGNALS_TABLE, { records: [{ id: req.params.id, fields: { 'Status': status } }], typecast: true });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Update content signal error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/content/drafts', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { campaignName, format, status } = req.query;
+  try {
+    const [data, companiesData, campaignsData, campaignRecord] = await Promise.all([
+      airtableRequest('GET', CONTENT_TABLE),
+      airtableRequest('GET', 'Companies'),
+      airtableRequest('GET', 'Campaigns'),
+      campaignName ? findCampaignRecordByName(campaignName) : Promise.resolve(null)
+    ]);
+    const companiesById = {}; (companiesData.records || []).forEach(r => { companiesById[r.id] = r.fields['Company Name'] || ''; });
+    const campaignsById = {}; (campaignsData.records || []).forEach(r => { campaignsById[r.id] = r.fields['Name'] || ''; });
+
+    // Rows from the old, dead legacy content feature never have a Format
+    // (they use the unrelated Content Type field instead) - filtering on
+    // Format truthy is how this Draft Centre stays clear of them.
+    let records = (data.records || []).filter(r => r.fields['Format']);
+    if (campaignName) records = records.filter(r => campaignRecord && (r.fields['Campaign'] || []).includes(campaignRecord.id));
+    if (format) records = records.filter(r => r.fields['Format'] === format);
+    if (status) records = records.filter(r => r.fields['Status'] === status);
+
+    const drafts = records
+      .sort((a, b) => new Date(b.fields['Target Publish Date'] || 0) - new Date(a.fields['Target Publish Date'] || 0))
+      .map(r => {
+        const campId = (r.fields['Campaign'] || [])[0] || null;
+        return {
+          id: r.id,
+          title: r.fields['Title'] || '',
+          body: r.fields['Body'] || '',
+          format: r.fields['Format'] || '',
+          status: r.fields['Status'] || 'Draft',
+          campaignId: campId,
+          campaignName: campId ? (campaignsById[campId] || '') : '',
+          targetIcp: r.fields['Target ICP'] || '',
+          targetCompanyIds: r.fields['Target Companies'] || [],
+          targetCompanyNames: (r.fields['Target Companies'] || []).map(id => companiesById[id]).filter(Boolean),
+          voiceNotes: r.fields['Voice Notes'] || '',
+          signalId: (r.fields['Detected From Signal'] || [])[0] || null,
+          targetPublishDate: r.fields['Target Publish Date'] || ''
+        };
+      });
+
+    res.json({ drafts });
+  } catch (err) {
+    console.error('List content drafts error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/content/draft', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const { format, lengthPreference, topic, signalId, campaignId, campaignName, campaignContentContext, mode, contentId, refineInstructions, setStatus, title, body, targetIcp } = req.body;
+  const draftMode = mode || 'new';
+
+  try {
+    // Direct save, no Claude call - the editor's "Save changes" (title/body/
+    // targetIcp) and "Mark as Ready" (setStatus) both use this, since
+    // neither needs a re-draft.
+    if (draftMode === 'save') {
+      if (!contentId) return res.status(400).json({ error: 'contentId is required' });
+      const fields = {};
+      if (title !== undefined) fields['Title'] = title;
+      if (body !== undefined) fields['Body'] = body;
+      if (targetIcp !== undefined) fields['Target ICP'] = targetIcp;
+      if (setStatus) fields['Status'] = setStatus;
+      if (!Object.keys(fields).length) return res.status(400).json({ error: 'Nothing to save' });
+      await airtableRequest('PATCH', CONTENT_TABLE, { records: [{ id: contentId, fields }], typecast: true });
+      return res.json({ success: true, contentId, ...fields, status: fields['Status'] });
+    }
+
+    if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+    if ((draftMode === 'regenerate' || draftMode === 'refine') && !contentId) {
+      return res.status(400).json({ error: 'contentId is required for regenerate/refine' });
+    }
+    if (draftMode === 'refine' && !refineInstructions) {
+      return res.status(400).json({ error: 'refineInstructions is required for refine' });
+    }
+
+    let existingContent = null;
+    if (contentId) existingContent = await airtableGetRecord(CONTENT_TABLE, contentId);
+
+    const resolvedFormat = format || (existingContent && existingContent.fields['Format']) || 'LinkedIn Post';
+    const settings = await getContentSettingsRecord();
+    const sf = settings ? settings.fields : {};
+
+    let signalRecord = null;
+    if (signalId) signalRecord = await airtableGetRecord(CONTENT_SIGNALS_TABLE, signalId);
+    else if (existingContent && (existingContent.fields['Detected From Signal'] || [])[0]) {
+      signalRecord = await airtableGetRecord(CONTENT_SIGNALS_TABLE, existingContent.fields['Detected From Signal'][0]);
+    }
+
+    let resolvedCampaignId = campaignId || (existingContent && (existingContent.fields['Campaign'] || [])[0]) || null;
+    if (!resolvedCampaignId && campaignName) {
+      const resolvedCampaign = await findCampaignRecordByName(campaignName);
+      resolvedCampaignId = resolvedCampaign ? resolvedCampaign.id : null;
+    }
+    let contentContext = campaignContentContext;
+    if (resolvedCampaignId && contentContext === undefined) {
+      const campaignRecord = await airtableGetRecord('Campaigns', resolvedCampaignId);
+      contentContext = campaignRecord ? (campaignRecord.fields['Content Context'] || '') : '';
+    }
+
+    const lengthKey = lengthPreference || (resolvedFormat === 'Blog' ? sf['Blog Length Preference'] : sf['LinkedIn Length Preference']) || 'Medium';
+    const lengthTarget = (CONTENT_LENGTH_TARGETS[resolvedFormat] || CONTENT_LENGTH_TARGETS['LinkedIn Post'])[lengthKey] || CONTENT_LENGTH_TARGETS['LinkedIn Post'].Medium;
+    const exampleText = resolvedFormat === 'Blog' ? (sf['Example Blogs'] || '') : (sf['Example Posts'] || '');
+
+    const resolvedTopic = topic || (existingContent && existingContent.fields['Title']) || (signalRecord && signalRecord.fields['Theme']) || '';
+    if (!resolvedTopic && draftMode === 'new') return res.status(400).json({ error: 'topic or signalId is required' });
+
+    let targetCompanies = [];
+    if (signalRecord) targetCompanies = signalRecord.fields['Related Companies'] || [];
+    else if (existingContent) targetCompanies = existingContent.fields['Target Companies'] || [];
+
+    let prompt;
+    if (draftMode === 'refine') {
+      prompt = `You are Marcus, writing for T2C Outreach, Twenty2 Collective. You previously drafted this ${resolvedFormat}:
+
+---
+${existingContent.fields['Body'] || ''}
+---
+
+Refine it per this instruction: "${refineInstructions}"
+
+Stay in the same voice and keep the same core message unless the instruction says otherwise. Target length: ${lengthTarget}.
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "title": string, "body": string }`;
+    } else {
+      prompt = `You are Marcus, writing in first person for T2C Outreach, Twenty2 Collective, a Perth-based Agile and change consultancy.
+
+VOICE PROFILE:
+Writing style: ${sf['Voice Style'] || 'not documented yet - write in a natural, professional consultant voice'}
+Tone: ${sf['Tone'] || 'Conversational'}
+Topics to be known for: ${sf['Topics To Cover'] || 'not documented yet'}
+Topics to avoid: ${sf['Topics To Avoid'] || 'none documented'}
+${exampleText ? `Example ${resolvedFormat === 'Blog' ? 'blog excerpts' : 'LinkedIn posts'} to match the pattern of:\n${exampleText}` : ''}
+${resolvedFormat === 'Newsletter' && sf['Newsletter Notes'] ? `Newsletter format notes: ${sf['Newsletter Notes']}` : ''}
+${contentContext ? `\nCAMPAIGN CONTENT CONTEXT (reshapes but does not override the voice profile above):\n${contentContext}` : ''}
+
+TOPIC: ${resolvedTopic}
+${signalRecord ? `This is informed by a real recurring theme detected from account activity: "${signalRecord.fields['Theme'] || ''}". Suggested ICP targets: ${signalRecord.fields['Suggested ICP Targets'] || 'not specified'}.` : ''}
+
+Write a ${resolvedFormat} of target length ${lengthTarget}. UK English, no em dashes, first person as Marcus.
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "title": string, "body": string }`;
+    }
+
+    const drafted = await callClaudeJson(prompt, 3500);
+
+    if (draftMode === 'new') {
+      const fields = {
+        'Title': drafted.title || resolvedTopic,
+        'Body': drafted.body || '',
+        'Format': resolvedFormat,
+        'Target ICP': (signalRecord && signalRecord.fields['Suggested ICP Targets']) || '',
+        'Status': 'Draft'
+      };
+      if (settings) fields['Content Settings'] = [settings.id];
+      if (resolvedCampaignId) fields['Campaign'] = [resolvedCampaignId];
+      if (targetCompanies.length) fields['Target Companies'] = targetCompanies;
+      if (signalId) {
+        // Written defensively on both link fields - unclear from the
+        // schema alone whether either auto-mirrors the other.
+        fields['Detected From Signal'] = [signalId];
+        fields['Content Signals'] = [signalId];
+      }
+
+      const data = await airtableRequest('POST', CONTENT_TABLE, { records: [{ fields }], typecast: true });
+      const record = data.records[0];
+
+      if (signalId) {
+        airtableRequest('PATCH', CONTENT_SIGNALS_TABLE, { records: [{ id: signalId, fields: { 'Status': 'Actioned' } }] })
+          .catch(err => console.warn('Could not mark content signal Actioned:', err.message));
+      }
+
+      return res.json({ success: true, contentId: record.id, title: fields['Title'], body: fields['Body'], format: resolvedFormat, targetIcp: fields['Target ICP'], status: 'Draft' });
+    }
+
+    // regenerate / refine
+    const timestamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
+    const logLine = draftMode === 'refine'
+      ? `[${timestamp}] (Refine) Refine with instructions: "${refineInstructions}"`
+      : `[${timestamp}] (Regenerate) Regenerated using the same brief`;
+    const existingVoiceNotes = existingContent.fields['Voice Notes'] || '';
+    const updateFields = {
+      'Body': drafted.body || '',
+      'Voice Notes': existingVoiceNotes ? existingVoiceNotes + '\n\n' + logLine : logLine
+    };
+    if (drafted.title) updateFields['Title'] = drafted.title;
+    if (setStatus) updateFields['Status'] = setStatus;
+
+    await airtableRequest('PATCH', CONTENT_TABLE, { records: [{ id: contentId, fields: updateFields }], typecast: true });
+    res.json({
+      success: true,
+      contentId,
+      title: updateFields['Title'] || existingContent.fields['Title'],
+      body: updateFields['Body'],
+      format: resolvedFormat,
+      status: setStatus || existingContent.fields['Status']
+    });
+  } catch (err) {
+    console.error('Content draft error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/content/settings', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const record = await getContentSettingsRecord();
+    const f = record ? record.fields : {};
+    res.json({
+      voiceStyle: f['Voice Style'] || '',
+      tone: f['Tone'] || '',
+      topicsToCover: f['Topics To Cover'] || '',
+      topicsToAvoid: f['Topics To Avoid'] || '',
+      examplePosts: f['Example Posts'] || '',
+      exampleBlogs: f['Example Blogs'] || '',
+      linkedinLengthPreference: f['LinkedIn Length Preference'] || '',
+      blogLengthPreference: f['Blog Length Preference'] || '',
+      newsletterNotes: f['Newsletter Notes'] || '',
+      recommendedCadence: f['Recommended Cadence'] || ''
+    });
+  } catch (err) {
+    console.error('Get content settings error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/content/settings', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { voiceStyle, tone, topicsToCover, topicsToAvoid, examplePosts, exampleBlogs, linkedinLengthPreference, blogLengthPreference, newsletterNotes } = req.body;
+  try {
+    const record = await getOrCreateContentSettingsRecord();
+    await airtableRequest('PATCH', CONTENT_SETTINGS_TABLE, {
+      records: [{
+        id: record.id,
+        fields: {
+          'Voice Style': voiceStyle || '',
+          'Tone': tone || '',
+          'Topics To Cover': topicsToCover || '',
+          'Topics To Avoid': topicsToAvoid || '',
+          'Example Posts': examplePosts || '',
+          'Example Blogs': exampleBlogs || '',
+          'LinkedIn Length Preference': linkedinLengthPreference || '',
+          'Blog Length Preference': blogLengthPreference || '',
+          'Newsletter Notes': newsletterNotes || ''
+        }
+      }],
+      typecast: true
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Save content settings error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/content/cadence', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  try {
+    const [campaigns, contactsData] = await Promise.all([fetchCampaigns(), airtableRequest('GET', 'Contacts')]);
+    const activeCampaigns = campaigns.filter(c => c.status === 'Live');
+    const prompt = `T2C Outreach has ${activeCampaigns.length} active (Live) campaign(s) out of ${campaigns.length} total, and ${(contactsData.records || []).length} contacts in the pipeline.
+
+Active campaigns: ${activeCampaigns.map(c => c.name).join(', ') || 'none'}.
+
+Recommend a realistic content posting cadence across LinkedIn, Blog, and Newsletter for one person (Marcus) to sustain. Return ONLY the recommendation as a single sentence, in this exact style: "Based on your active campaigns and contact pipeline, we suggest 2 LinkedIn posts per week, 1 blog per month, 1 newsletter per month." Nothing else.`;
+    const cadence = await callClaudeText(prompt, 150);
+    const record = await getOrCreateContentSettingsRecord();
+    await airtableRequest('PATCH', CONTENT_SETTINGS_TABLE, { records: [{ id: record.id, fields: { 'Recommended Cadence': cadence } }] });
+    res.json({ success: true, cadence });
+  } catch (err) {
+    console.error('Content cadence error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -3005,6 +3549,7 @@ Write the next message in the conversation, following on naturally from what the
       draft,
       campaignScoped: !!campaignName
     });
+    detectContentSignals().catch(err => console.warn('Content signal detection trigger failed:', err.message));
   } catch (err) {
     console.error('Parse screenshot error:', err.message);
     res.status(500).json({ error: err.message });
@@ -3045,6 +3590,7 @@ Return ONLY the single summary line, in this exact style: "[${new Date().toLocal
     await airtableRequest('PATCH', table, { records: [{ id: record.id, fields: { 'AI Summary': newSummary } }] });
 
     res.json({ success: true, targetId: record.id, appendedLine: signalLine });
+    detectContentSignals().catch(err => console.warn('Content signal detection trigger failed:', err.message));
   } catch (err) {
     console.error('Log content error:', err.message);
     res.status(500).json({ error: err.message });
