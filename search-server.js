@@ -235,10 +235,16 @@ app.patch('/api/airtable/company/linkedin', async (req, res) => {
 });
 
 // Create a campaign in Airtable, skipping if one with that name already exists
+// Campaigns are wholly authored by this app (unlike Contacts/Companies,
+// which are protected from being overwritten by design) - so this is an
+// upsert by Name: update the existing record if found, else create one.
+// This changed from the previous create-only-skip behaviour because the
+// campaign detail view now edits strategy/sequence/contacts after creation
+// and those edits need to actually reach Airtable.
 app.post('/api/airtable/campaign', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
-  const { name, goal, product, targetIcp, contactIds, sequenceTemplates, strategyNotes, successMetric, startDate, status } = req.body;
+  const { name, goal, product, targetIcp, contactIds, sequenceTemplates, strategyNotes, pitchAngle, objectionHandling, successMetric, startDate, status } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
 
   try {
@@ -248,29 +254,31 @@ app.post('/api/airtable/campaign', async (req, res) => {
     );
     const searchData = await searchRes.json();
     const existing = searchData.records && searchData.records[0];
+
+    const fields = {
+      'Name': name,
+      'Goal': goal || '',
+      'Product': product || '',
+      'Target ICP': targetIcp || '',
+      'Contact IDs': (contactIds || []).join(', '),
+      'Sequence Templates': sequenceTemplates || '',
+      'Strategy Notes': strategyNotes || '',
+      'Pitch Angle': pitchAngle || '',
+      'Objection Handling': objectionHandling || '',
+      'Success Metric': successMetric || '',
+      'Start Date': startDate || '',
+      'Status': status || 'Draft'
+    };
+
     if (existing) {
-      return res.json({ success: true, skipped: true, recordId: existing.id });
+      await airtableRequest('PATCH', 'Campaigns', { records: [{ id: existing.id, fields }] });
+      return res.json({ success: true, updated: true, recordId: existing.id });
     }
 
-    const data = await airtableRequest('POST', 'Campaigns', {
-      records: [{
-        fields: {
-          'Name': name,
-          'Goal': goal || '',
-          'Product': product || '',
-          'Target ICP': targetIcp || '',
-          'Contact IDs': (contactIds || []).join(', '),
-          'Sequence Templates': sequenceTemplates || '',
-          'Strategy Notes': strategyNotes || '',
-          'Success Metric': successMetric || '',
-          'Start Date': startDate || '',
-          'Status': status || 'Draft'
-        }
-      }]
-    });
-    res.json({ success: true, skipped: false, recordId: data.records[0].id });
+    const data = await airtableRequest('POST', 'Campaigns', { records: [{ fields }] });
+    res.json({ success: true, updated: false, recordId: data.records[0].id });
   } catch (err) {
-    console.error('Airtable campaign create error:', err.message);
+    console.error('Airtable campaign upsert error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1331,11 +1339,15 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
   "campaignName": string,
   "goal": string,
   "targetSegmentSummary": string,
+  "product": string,
+  "pitchAngle": string,
+  "objectionHandling": string,
+  "successMetric": string,
   "matchedContactNames": string[],
   "sequence": {
-    "message1": { "content": string, "timing": string },
-    "followUp1": { "content": string, "timing": string },
-    "followUp2": { "content": string, "timing": string }
+    "message1": { "type": string, "content": string, "timing": string },
+    "followUp1": { "type": string, "content": string, "timing": string },
+    "followUp2": { "type": string, "content": string, "timing": string }
   },
   "strategyBrief": string,
   "estimatedConversions": string
@@ -1343,8 +1355,12 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 
 Guidance:
 - goal: one short sentence summarising the campaign's goal, drawn from the conversation.
+- product: the product or service being promoted, drawn from the conversation.
+- pitchAngle: 2-3 sentences on the specific angle/hook this campaign leads with and why it should land with this audience.
+- objectionHandling: 2-3 sentences on the most likely objection this audience will raise and how to handle it.
+- successMetric: one short phrase for what counts as success (e.g. "Booked discovery calls", "Workshop bookings").
 - matchedContactNames: full names of contacts from the list above whose role, company or notes plausibly match the audience described in the conversation. Only include contacts that actually appear in the list above. Return an empty array if nothing matches rather than inventing names.
-- sequence: three outreach stages. If an existing strategy/script was mentioned in the conversation, adapt it rather than starting from scratch. Otherwise write fresh copy. UK English, no em dashes, peer to peer tone, one observation and one question per message, 3-4 sentences, signed off "Marcus". "timing" is when to send relative to the previous step, e.g. "Day 0", "3 days after message 1", "7 days after follow-up 1".
+- sequence: three outreach stages. "type" is one of "LinkedIn message", "Email", "Call" - pick whatever fits the conversation, default to "LinkedIn message" if nothing was specified. If an existing strategy/script was mentioned in the conversation, adapt it rather than starting from scratch. Otherwise write fresh copy. UK English, no em dashes, peer to peer tone, one observation and one question per message, 3-4 sentences, signed off "Marcus". "timing" is when to send relative to the previous step, e.g. "Day 0", "3 days after message 1", "7 days after follow-up 1".
 - strategyBrief: 3-5 sentences summarising the angle and why it should work for this audience.
 - estimatedConversions: one or two sentences estimating likely bookings, grounded in the historical conversion rate above and the number of matched contacts. Be honest if the sample is too small to be confident.`;
 
@@ -1383,6 +1399,10 @@ Guidance:
       campaignName: campaign.campaignName || 'Untitled campaign',
       goal: campaign.goal || '',
       targetSegmentSummary: campaign.targetSegmentSummary || '',
+      product: campaign.product || '',
+      pitchAngle: campaign.pitchAngle || '',
+      objectionHandling: campaign.objectionHandling || '',
+      successMetric: campaign.successMetric || '',
       matchedContactNames: campaign.matchedContactNames || [],
       sequence: campaign.sequence || {},
       strategyBrief: campaign.strategyBrief || '',
@@ -1391,6 +1411,220 @@ Guidance:
     });
   } catch (err) {
     console.error('Campaign build error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===================== CAMPAIGN DETAIL: ANALYTICS + AI INSIGHTS =====================
+// :id in both routes below is the campaign's NAME, URL-encoded - there is no
+// separate stable Airtable record id tracked client-side, and every other
+// campaign route (PATCH /api/campaign/status) already resolves by Name, so
+// this matches the existing lookup convention rather than inventing a new one.
+
+function computeCampaignAnalytics(campaign, contacts, touchPoints, conversions) {
+  const nameToId = {};
+  contacts.forEach(c => { if (c.name) nameToId[c.name] = c.id; });
+
+  const targetNames = (campaign.contactNamesRaw || '').split(',').map(s => s.trim()).filter(Boolean);
+  const targetRecordIds = targetNames.map(n => nameToId[n]).filter(Boolean);
+
+  const campaignTouchPoints = touchPoints.filter(tp =>
+    tp.contact && targetRecordIds.includes(tp.contact) &&
+    (!campaign.startDate || !tp.date || tp.date >= campaign.startDate)
+  );
+
+  const oneWeekAgo = new Date();
+  oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+  const touchPointsSentThisWeek = campaignTouchPoints.filter(tp => tp.date && new Date(tp.date) >= oneWeekAgo).length;
+
+  const replies = campaignTouchPoints.filter(tp => tp.replied || tp.outcome === 'Replied').length;
+  const replyRate = campaignTouchPoints.length ? Math.round((replies / campaignTouchPoints.length) * 100) : 0;
+
+  const campaignConversions = conversions.filter(cv => cv.campaign === campaign.name);
+  const bookings = campaignConversions.length;
+  const contactsTargeted = targetNames.length;
+  const bookingRate = contactsTargeted ? Math.round((bookings / contactsTargeted) * 100) : 0;
+
+  const touchCounts = campaignConversions.map(cv => cv.touchPointCount).filter(n => typeof n === 'number' && n > 0);
+  const avgTouchPointsToConvert = touchCounts.length
+    ? Math.round((touchCounts.reduce((s, n) => s + n, 0) / touchCounts.length) * 10) / 10
+    : null;
+
+  const activityOverTime = [];
+  for (let i = 7; i >= 0; i--) {
+    const weekStart = new Date();
+    weekStart.setHours(0, 0, 0, 0);
+    weekStart.setDate(weekStart.getDate() - (i * 7));
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekEnd.getDate() + 7);
+    const count = campaignTouchPoints.filter(tp => tp.date && new Date(tp.date) >= weekStart && new Date(tp.date) < weekEnd).length;
+    activityOverTime.push({ weekStart: weekStart.toISOString().slice(0, 10), touchPoints: count });
+  }
+
+  return {
+    contactsTargeted,
+    touchPointsSentThisWeek,
+    replyRate,
+    bookingRate,
+    conversionRate: bookingRate,
+    avgTouchPointsToConvert,
+    activityOverTime
+  };
+}
+
+function computeHistoricalCampaignAverage(campaigns, contacts, touchPoints, conversions, excludeName) {
+  const others = campaigns.filter(c => c.name !== excludeName && c.status !== 'Draft');
+  const perf = computeCampaignPerformance(others, contacts, touchPoints, conversions);
+  const rates = perf.map(p => p.conversionRate);
+  const avgConversionRate = rates.length ? Math.round(rates.reduce((s, n) => s + n, 0) / rates.length) : null;
+
+  const touchCounts = conversions.filter(cv => cv.campaign !== excludeName).map(cv => cv.touchPointCount).filter(n => typeof n === 'number' && n > 0);
+  const avgTouchPointsToConvert = touchCounts.length
+    ? Math.round((touchCounts.reduce((s, n) => s + n, 0) / touchCounts.length) * 10) / 10
+    : null;
+
+  return { avgConversionRate, avgTouchPointsToConvert };
+}
+
+app.get('/api/campaign/:id/analytics', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const campaignName = decodeURIComponent(req.params.id);
+
+  try {
+    const [contactsData, touchPointsData, conversions, campaigns] = await Promise.all([
+      airtableRequest('GET', 'Contacts'),
+      airtableRequest('GET', 'Touch Points'),
+      fetchConversions(),
+      fetchCampaigns()
+    ]);
+
+    const campaign = campaigns.find(c => c.name === campaignName);
+    if (!campaign) return res.status(404).json({ error: 'Campaign not found in Airtable' });
+
+    const contacts = (contactsData.records || []).map(r => ({ id: r.id, name: r.fields['Full Name'] || '' }));
+    const touchPoints = (touchPointsData.records || []).map(r => ({
+      contact: (r.fields['Contact'] || [])[0] || null,
+      date: r.fields['Date'] || '',
+      outcome: r.fields['Outcome'] || '',
+      replied: !!r.fields['Replied']
+    }));
+
+    const analytics = computeCampaignAnalytics(campaign, contacts, touchPoints, conversions);
+    const historicalComparison = computeHistoricalCampaignAverage(campaigns, contacts, touchPoints, conversions, campaignName);
+
+    res.json({ ...analytics, historicalComparison, generatedAt: new Date().toISOString() });
+  } catch (err) {
+    console.error('Campaign analytics error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/campaign/:id/insights', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  const campaignName = decodeURIComponent(req.params.id);
+
+  try {
+    const [contactsData, touchPointsData, conversions, campaigns, learningData] = await Promise.all([
+      airtableRequest('GET', 'Contacts'),
+      airtableRequest('GET', 'Touch Points'),
+      fetchConversions(),
+      fetchCampaigns(),
+      fetchLearningData()
+    ]);
+
+    const campaign = campaigns.find(c => c.name === campaignName);
+    if (!campaign) return res.status(404).json({ error: 'Campaign not found in Airtable' });
+
+    const contacts = (contactsData.records || []).map(r => ({
+      id: r.id,
+      name: r.fields['Full Name'] || '',
+      role: r.fields['Job Title'] || '',
+      company: r.fields['Company'] || '',
+      journeyStage: r.fields['Journey Stage'] || ''
+    }));
+    const touchPoints = (touchPointsData.records || []).map(r => ({
+      contact: (r.fields['Contact'] || [])[0] || null,
+      date: r.fields['Date'] || '',
+      type: r.fields['Type'] || '',
+      outcome: r.fields['Outcome'] || '',
+      replied: !!r.fields['Replied']
+    }));
+
+    const nameToId = {};
+    contacts.forEach(c => { if (c.name) nameToId[c.name] = c.id; });
+    const targetNames = (campaign.contactNamesRaw || '').split(',').map(s => s.trim()).filter(Boolean);
+    const targetRecordIds = targetNames.map(n => nameToId[n]).filter(Boolean);
+
+    const campaignContacts = contacts.filter(c => targetRecordIds.includes(c.id));
+    const campaignTouchPoints = touchPoints.filter(tp => tp.contact && targetRecordIds.includes(tp.contact));
+    const campaignConversions = conversions.filter(cv => cv.campaign === campaignName);
+
+    const prompt = `You are the campaign intelligence layer for T2C Outreach, analysing one specific campaign, "${campaignName}", for Twenty2 Collective, a Perth-based Agile and change consultancy.
+
+CAMPAIGN CONTACTS (${campaignContacts.length}):
+${JSON.stringify(campaignContacts, null, 2)}
+
+CAMPAIGN TOUCH POINTS (${campaignTouchPoints.length}):
+${JSON.stringify(campaignTouchPoints, null, 2)}
+
+CAMPAIGN CONVERSIONS/BOOKINGS (${campaignConversions.length}):
+${JSON.stringify(campaignConversions, null, 2)}
+
+T2C-WIDE HISTORICAL CONVERSION DATA for comparison (${conversions.length} conversions across all campaigns - use this to sharpen insights, e.g. spotting when this campaign under/over-performs the norm):
+${conversionsContext(conversions)}
+
+LEARNING DATA on file (${learningData.length} analyses):
+${learningDataContext(learningData)}
+
+Surface 3-5 specific, numbers-backed insights about THIS campaign only, in the style of: "8 contacts in this campaign haven't been touched in 14 days", "Your reply rate is 2x higher when messaging on Tuesday", "3 contacts have reached 5 touch points and are campaign-ready for a direct pitch." Every number must be counted from the actual data above, never invented or estimated. Compare against the T2C-wide historical data where it sharpens the insight.
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "insights": string[] }
+
+If there isn't enough data yet for a confident insight, return fewer than 5 rather than padding with generic advice.`;
+
+    const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'claude-opus-4-6',
+        max_tokens: 1200,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+
+    if (!aiRes.ok) {
+      const errText = await aiRes.text();
+      throw new Error(`Claude API error ${aiRes.status}: ${errText}`);
+    }
+
+    const aiData = await aiRes.json();
+    const block = (aiData.content || []).find(b => b.type === 'text');
+    if (!block) throw new Error('No text content in Claude response');
+
+    let parsed;
+    try {
+      const jsonMatch = block.text.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(jsonMatch ? jsonMatch[0] : block.text);
+    } catch (parseErr) {
+      throw new Error('Could not parse Claude response as JSON');
+    }
+
+    res.json({
+      insights: parsed.insights || [],
+      contactCount: campaignContacts.length,
+      touchPointCount: campaignTouchPoints.length,
+      generatedAt: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Campaign insights error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
