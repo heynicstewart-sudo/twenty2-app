@@ -2130,7 +2130,11 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
       if (targetType === 'Company') learningFields['Related Company'] = [record.id];
       else learningFields['Related Contact'] = [record.id];
 
-      await airtableRequest('POST', 'Learning Data', { records: [{ fields: learningFields }] });
+      // typecast lets Airtable add "Past Customer"/"Past Deal" as new
+      // choices on the Type field automatically - it currently only has
+      // "Customer Analysis"/"Deal Analysis", and without this the write
+      // would be rejected outright since Type is a single select field.
+      await airtableRequest('POST', 'Learning Data', { records: [{ fields: learningFields }], typecast: true });
       learningDataWritten = true;
     }
 
