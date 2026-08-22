@@ -3504,27 +3504,47 @@ Respond with only a valid JSON array. No preamble, no explanation, no markdown f
       analysed = analysed.concat(batchAnalysed);
     }
 
-    const records = analysed.map(p => ({
-      fields: {
-        'Post Text': p.post_text || '',
-        'Date': p.date || '',
-        'Likes': p.likes || 0,
-        'Comments': p.comments || 0,
-        'Engagement Score': p.engagement_score ?? ((p.likes || 0) + (p.comments || 0)),
-        'Topic': p.topic || '',
-        'Format': p.format || '',
-        'CTA Used': p.cta_used || '',
-        'What Worked': p.what_worked || '',
-        'Source': 'Trigify'
-      }
-    }));
+    const fieldsForPost = p => ({
+      'Post Text': p.post_text || '',
+      'Date': p.date || '',
+      'Likes': p.likes || 0,
+      'Comments': p.comments || 0,
+      'Engagement Score': p.engagement_score ?? ((p.likes || 0) + (p.comments || 0)),
+      'Topic': p.topic || '',
+      'Format': p.format || '',
+      'CTA Used': p.cta_used || '',
+      'What Worked': p.what_worked || '',
+      'Source': 'Trigify'
+    });
 
-    for (let i = 0; i < records.length; i += 10) {
-      await airtableRequest('POST', CONTENT_PERFORMANCE_TABLE, { records: records.slice(i, i + 10), typecast: true });
-      marcusAnalysisJob.savedCount = Math.min(i + 10, records.length);
+    // Upsert by Post Text so re-running the analysis (or a forceRefresh)
+    // updates already-saved posts instead of duplicating them - matched in
+    // memory against a fresh fetch rather than findRecordByFieldName's
+    // filterByFormula, since post text routinely contains quotes/newlines
+    // that would break that formula.
+    const existingByText = new Map(
+      (await airtableFetchAllRecords(CONTENT_PERFORMANCE_TABLE)).map(r => [r.fields['Post Text'] || '', r.id])
+    );
+
+    const toUpdate = [];
+    const toCreate = [];
+    analysed.forEach(p => {
+      const fields = fieldsForPost(p);
+      const existingId = existingByText.get(fields['Post Text']);
+      if (existingId) toUpdate.push({ id: existingId, fields });
+      else toCreate.push({ fields });
+    });
+
+    for (let i = 0; i < toUpdate.length; i += 10) {
+      await airtableRequest('PATCH', CONTENT_PERFORMANCE_TABLE, { records: toUpdate.slice(i, i + 10), typecast: true });
+      marcusAnalysisJob.savedCount = Math.min(i + 10, toUpdate.length);
+    }
+    for (let i = 0; i < toCreate.length; i += 10) {
+      await airtableRequest('POST', CONTENT_PERFORMANCE_TABLE, { records: toCreate.slice(i, i + 10), typecast: true });
+      marcusAnalysisJob.savedCount = toUpdate.length + Math.min(i + 10, toCreate.length);
     }
 
-    marcusAnalysisJob = { status: 'complete', savedCount: records.length, error: null, startedAt: marcusAnalysisJob.startedAt, finishedAt: Date.now() };
+    marcusAnalysisJob = { status: 'complete', savedCount: toUpdate.length + toCreate.length, error: null, startedAt: marcusAnalysisJob.startedAt, finishedAt: Date.now() };
   } catch (err) {
     console.error('Marcus content analysis job failed:', err.message);
     marcusAnalysisJob = { status: 'error', savedCount: marcusAnalysisJob.savedCount, error: err.message, startedAt: marcusAnalysisJob.startedAt, finishedAt: Date.now() };
