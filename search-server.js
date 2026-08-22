@@ -296,6 +296,73 @@ app.post('/api/airtable/contact', async (req, res) => {
   }
 });
 
+// Create a Contact from a website lead webhook (e.g. an AI profile/scorecard
+// tool). Always creates a new record - unlike POST /api/airtable/contact,
+// there's no skip-if-existing check here since each webhook payload
+// represents a fresh lead submission.
+app.post('/api/leads/website', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const {
+    client_first_name, client_company, email,
+    profile_archetype, profile_archetype_desc,
+    profile_overall_score, profile_people_score, profile_productivity_score, profile_performance_score,
+    profile_primary_leak, profile_secondary_leak,
+    profile_insight1_title, profile_insight1_body,
+    profile_insight2_title, profile_insight2_body,
+    profile_insight3_title, profile_insight3_body,
+    profile_strength, profile_recommendation, profile_cta_reason
+  } = req.body;
+
+  if (!client_first_name || !client_company) {
+    return res.status(400).json({ error: 'client_first_name and client_company are required' });
+  }
+
+  try {
+    const fields = {
+      'Full Name': client_first_name,
+      'Journey Stage': 'Website Lead',
+      'AI Summary': JSON.stringify({
+        archetype: profile_archetype,
+        archetypeDesc: profile_archetype_desc,
+        overallScore: profile_overall_score,
+        peopleScore: profile_people_score,
+        productivityScore: profile_productivity_score,
+        performanceScore: profile_performance_score,
+        primaryLeak: profile_primary_leak,
+        secondaryLeak: profile_secondary_leak,
+        insights: [
+          { title: profile_insight1_title, body: profile_insight1_body },
+          { title: profile_insight2_title, body: profile_insight2_body },
+          { title: profile_insight3_title, body: profile_insight3_body }
+        ],
+        strength: profile_strength,
+        recommendation: profile_recommendation,
+        ctaReason: profile_cta_reason
+      })
+    };
+    if (email) fields['Email'] = email;
+
+    const companySearchRes = await fetch(
+      `${AIRTABLE_URL}/Companies?filterByFormula=${encodeURIComponent(`{Company Name}="${client_company}"`)}`,
+      { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
+    );
+    const companySearchData = await companySearchRes.json();
+    const companyRecord = companySearchData.records && companySearchData.records[0];
+    if (companyRecord) fields['Company'] = [companyRecord.id];
+
+    const data = await airtableRequest('POST', 'Contacts', {
+      records: [{ fields }],
+      typecast: true
+    });
+
+    res.json({ success: true, recordId: data.records[0].id });
+  } catch (err) {
+    console.error('Website lead create error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Create a company in Airtable, skipping if one with that name already exists
 app.post('/api/airtable/company', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
