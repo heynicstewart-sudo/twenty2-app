@@ -1010,6 +1010,7 @@ const NAV = [
   { id:'calendar', label:'Sales Calendar', icon:'ti-calendar' },
   { id:'intelligence', label:'Engine', icon:'ti-brain' },
   { id:'content', label:'Content', icon:'ti-news' },
+  { id:'research', label:'Research', icon:'ti-microscope' },
   { id:'settings', label:'Settings', icon:'ti-settings' },
   { id:'grid', label:'Grid', icon:'ti-grid-dots', hidden:true }
 ];
@@ -1032,7 +1033,7 @@ function navigate(page){
 
 function renderPage(){
   const el = document.getElementById('pageContent');
-  const renderers = { home: renderHome, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderCalendar, intelligence: renderIntelligencePage, content: renderContent, settings: renderSettings };
+  const renderers = { home: renderHome, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderCalendar, intelligence: renderIntelligencePage, content: renderContent, research: renderResearch, settings: renderSettings };
   el.innerHTML = renderers[state.currentPage]();
   afterRender(state.currentPage);
 }
@@ -1089,6 +1090,14 @@ function afterRender(page){
     if(tab === 'settings' && window.__contentSettings === undefined) loadContentSettings();
   }
   if(page === 'home' && window.__homeContentSignals === undefined) loadHomeContentSignals();
+  if(page === 'research'){
+    const tab = window.__researchSubTab || 'market';
+    if(tab === 'market'){
+      if(window.__researchEvents === undefined) loadResearchEvents();
+      if(window.__marketPulse === undefined) loadMarketPulse();
+    }
+    if(tab === 'profiles' && window.__websiteLeads === undefined) loadWebsiteLeads();
+  }
 }
 
 /* ===================== HOME ===================== */
@@ -3932,6 +3941,11 @@ function renderContactEnrichmentSection(c, fresh){
 
 function renderContactDrawerContent(data, campaignName){
   const c = data.contact;
+  let cvc = null;
+  if(c.journeyStage === 'Website Lead'){
+    try { cvc = JSON.parse(c.aiSummary || ''); } catch(e){ cvc = null; }
+    if(cvc && !cvc.archetype) cvc = null;
+  }
   const myTps = (data.touchPoints||[]).filter(tp => campaignName ? tp.campaignName === campaignName : true);
   const otherTps = campaignName ? (data.touchPoints||[]).filter(tp => tp.campaignName && tp.campaignName !== campaignName) : [];
   const otherSurfaced = otherTps.filter(tp => tp.relevantToCurrentCampaign);
@@ -3949,9 +3963,10 @@ function renderContactDrawerContent(data, campaignName){
         ${c.linkedinUrl ? `<a href="${esc(c.linkedinUrl)}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm"><i class="ti ti-brand-linkedin"></i></a>` : ''}
         <button class="btn btn-secondary btn-sm" id="enrichContactBtn" onclick="enrichContactDrawer()"><i class="ti ti-sparkles"></i> Enrich</button>
       </div>
-      <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
+      <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
         ${c.journeyStage ? `<span class="tag tag-connected">${esc(c.journeyStage)}</span>` : ''}
         ${data.sequenceStage ? `<span class="tag tag-messaging">${esc(data.sequenceStage)}</span>` : ''}
+        ${cvc ? `<span class="tag tag-booked"><i class="ti ti-report"></i> Change Value Check</span> <a href="#" onclick="event.preventDefault();openCvcModalFromDrawer();" style="font-size:11.5px;font-weight:700;">View results</a>` : ''}
       </div>
     </div>
   </div>
@@ -8072,6 +8087,343 @@ function saveCampaignContentContext(campaignId){
   campaign.updatedAt = isoDate(TODAY);
   syncCampaignToAirtable(campaign);
   toast('Content context saved', 'success');
+}
+
+/* ===================== RESEARCH PAGE ===================== */
+
+const RESEARCH_SUBTABS = [['market','Market Intelligence'],['profiles','Profiles']];
+const RESEARCH_EVENT_TYPES = ['Leaders Connect','Community Connect','Other'];
+
+function setResearchSubTab(tab){
+  window.__researchSubTab = tab;
+  renderPage();
+}
+
+function renderResearch(){
+  const tab = window.__researchSubTab || 'market';
+  return `
+  <div class="seq-tabs">
+    ${RESEARCH_SUBTABS.map(([key,label]) => `<div class="seq-tab ${tab===key?'active':''}" onclick="setResearchSubTab('${key}')">${label}</div>`).join('')}
+  </div>
+  ${tab==='market' ? renderResearchMarketTab() : ''}
+  ${tab==='profiles' ? renderResearchProfilesTab() : ''}
+  `;
+}
+
+/* ---- Data loading ---- */
+
+async function loadResearchEvents(){
+  try {
+    const res = await fetch('/api/research/events');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__researchEvents = data.events || [];
+  } catch(err){
+    window.__researchEvents = { error: err.message };
+  }
+  if(state.currentPage === 'research' && (window.__researchSubTab||'market') === 'market') renderPage();
+}
+
+async function loadMarketPulse(){
+  window.__marketPulse = 'loading';
+  try {
+    const res = await fetch('/api/research/market-pulse');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__marketPulse = data;
+  } catch(err){
+    window.__marketPulse = { error: err.message };
+  }
+  if(state.currentPage === 'research' && (window.__researchSubTab||'market') === 'market') renderPage();
+}
+
+async function loadWebsiteLeads(){
+  try {
+    const res = await fetch('/api/leads/website');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__websiteLeads = data.leads || [];
+  } catch(err){
+    window.__websiteLeads = { error: err.message };
+  }
+  if(state.currentPage === 'research' && window.__researchSubTab === 'profiles') renderPage();
+}
+
+/* ---- Market Intelligence tab ---- */
+
+function renderResearchUploadCard(){
+  return `
+  <div class="card">
+    <div class="section-title"><i class="ti ti-upload"></i> Upload event transcript</div>
+    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Upload a transcript from a Leaders Connect, Community Connect or other market research event. Claude extracts key themes, pain points, hot topics, industries represented and sentiment, and saves it all to the Research Events table.</p>
+    <div class="toolbar">
+      <div class="field"><label>Event Name</label><input id="researchEventName" placeholder="e.g. Leaders Connect - August"></div>
+      <div class="field"><label>Event Type</label>
+        <select id="researchEventType">
+          ${RESEARCH_EVENT_TYPES.map(t=>`<option>${t}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field"><label>Date</label><input type="date" id="researchEventDate" value="${isoDate(TODAY)}"></div>
+      <div class="field"><label>Participant Count (optional)</label><input type="number" id="researchParticipantCount" min="0" placeholder="e.g. 24"></div>
+    </div>
+    <div class="dropzone-upload" id="researchDropZone" ${dropZoneAttrs('researchTranscriptFile')} onclick="document.getElementById('researchTranscriptFile').click()" style="cursor:pointer;">
+      <input type="file" id="researchTranscriptFile" accept=".txt,.pdf,.docx,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" style="display:none;" onchange="handleResearchTranscriptFile(event)">
+      <i class="ti ti-file-upload" style="font-size:22px;"></i>
+      <div style="margin-top:6px;font-weight:700;font-size:12.5px;">Drag and drop a transcript here, or click to upload</div>
+      <div class="muted" style="font-size:11.5px;margin-top:2px;">.txt, .pdf or .docx</div>
+    </div>
+    <div id="researchTranscriptFilePreview" style="font-size:11.5px;margin-top:8px;"></div>
+    <div class="field" style="margin-top:10px;"><label>Or paste transcript</label><textarea id="researchTranscriptText" rows="5" placeholder="Paste the event transcript..."></textarea></div>
+    <button class="btn btn-primary btn-sm" style="margin-top:10px;" id="researchUploadBtn" onclick="submitResearchTranscript()"><i class="ti ti-sparkles"></i> Extract and save</button>
+    <div id="researchUploadResult" class="learning-result"></div>
+  </div>
+  `;
+}
+
+function handleResearchTranscriptFile(event){
+  const file = event.target.files && event.target.files[0];
+  event.target.value = '';
+  if(!file) return;
+  const isTextFile = file.type === 'text/plain' || file.name.toLowerCase().endsWith('.txt');
+  if(isTextFile){
+    const reader = new FileReader();
+    reader.onload = () => {
+      const textEl = document.getElementById('researchTranscriptText');
+      if(textEl) textEl.value = String(reader.result);
+      window.__researchTranscriptFile = null;
+      renderResearchFilePreview(file.name + ' loaded into the text field');
+    };
+    reader.onerror = () => toast('Could not read that file', 'warn');
+    reader.readAsText(file);
+    return;
+  }
+  const mediaType = (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf'))
+    ? 'application/pdf'
+    : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  const reader = new FileReader();
+  reader.onload = () => {
+    const match = String(reader.result).match(/^data:([^;]+);base64,(.*)$/);
+    if(match){
+      window.__researchTranscriptFile = { mediaType, base64: match[2], name: file.name };
+      renderResearchFilePreview();
+    }
+  };
+  reader.onerror = () => toast('Could not read that file', 'warn');
+  reader.readAsDataURL(file);
+}
+function renderResearchFilePreview(label){
+  const el = document.getElementById('researchTranscriptFilePreview');
+  if(!el) return;
+  const file = window.__researchTranscriptFile;
+  if(label){ el.innerHTML = `<span class="muted">${esc(label)}</span>`; return; }
+  el.innerHTML = file ? `<span class="tag tag-connected">${esc(file.name)} attached</span> <button class="btn btn-ghost btn-sm" onclick="clearResearchTranscriptFile()"><i class="ti ti-x"></i></button>` : '';
+}
+function clearResearchTranscriptFile(){
+  window.__researchTranscriptFile = null;
+  renderResearchFilePreview();
+}
+
+async function submitResearchTranscript(){
+  const eventName = (document.getElementById('researchEventName')?.value || '').trim();
+  const eventType = document.getElementById('researchEventType')?.value;
+  const date = document.getElementById('researchEventDate')?.value;
+  const participantCountRaw = (document.getElementById('researchParticipantCount')?.value || '').trim();
+  const text = (document.getElementById('researchTranscriptText')?.value || '').trim();
+  const file = window.__researchTranscriptFile;
+
+  if(!eventName){ toast('Add an event name', 'warn'); return; }
+  if(!date){ toast('Add a date', 'warn'); return; }
+  if(!text && !file){ toast('Paste a transcript or upload a file first', 'warn'); return; }
+
+  const btn = document.getElementById('researchUploadBtn');
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<i class="ti ti-loader-2"></i> Extracting with Claude...';
+  const resultEl = document.getElementById('researchUploadResult');
+  if(resultEl) resultEl.innerHTML = '';
+
+  try {
+    const res = await fetch('/api/research/upload-transcript', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        eventName, eventType, date,
+        participantCount: participantCountRaw ? Number(participantCountRaw) : undefined,
+        transcript: file ? undefined : text,
+        fileBase64: file ? file.base64 : undefined,
+        fileMediaType: file ? file.mediaType : undefined,
+        fileName: file ? file.name : undefined
+      })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+
+    toast('Transcript analysed and saved', 'success');
+    document.getElementById('researchEventName').value = '';
+    document.getElementById('researchParticipantCount').value = '';
+    document.getElementById('researchTranscriptText').value = '';
+    clearResearchTranscriptFile();
+    window.__researchEvents = undefined;
+    window.__marketPulse = undefined;
+    loadResearchEvents();
+    loadMarketPulse();
+  } catch(err){
+    if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;color:#b3413a;">Could not save: ${esc(err.message)}</p>`;
+    toast('Could not save transcript: ' + err.message, 'warn');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = original;
+  }
+}
+
+function renderMarketPulseCard(){
+  return `
+  <div class="card" style="margin-top:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-activity"></i> Market Pulse</div>
+      <button class="btn btn-secondary btn-sm" onclick="loadMarketPulse()"><i class="ti ti-refresh"></i> Refresh</button>
+    </div>
+    ${renderMarketPulseBody(window.__marketPulse)}
+  </div>
+  `;
+}
+
+function renderMarketPulseBody(pulse){
+  if(pulse === undefined || pulse === 'loading') return '<div class="muted"><i class="ti ti-loader-2"></i> Analysing across all research events...</div>';
+  if(pulse.error) return `<div class="muted">Could not load Market Pulse: ${esc(pulse.error)}</div>`;
+  if(!pulse.eventCount) return '<div class="empty-state">Upload a research event transcript above to start building Market Pulse.</div>';
+  return `
+  <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Aggregated across ${pulse.eventCount} research event${pulse.eventCount===1?'':'s'}.</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;">
+    <div>
+      <h5>Top recurring pain points</h5>
+      ${(pulse.topPainPoints||[]).length ? `<ul>${pulse.topPainPoints.map(p=>`<li>${esc(p)}</li>`).join('')}</ul>` : '<div class="muted" style="font-size:12px;">None yet.</div>'}
+    </div>
+    <div>
+      <h5>Trending topics</h5>
+      ${(pulse.trendingTopics||[]).length ? `<ul>${pulse.trendingTopics.map(p=>`<li>${esc(p)}</li>`).join('')}</ul>` : '<div class="muted" style="font-size:12px;">None yet.</div>'}
+    </div>
+    <div>
+      <h5>Content opportunities</h5>
+      ${(pulse.contentOpportunities||[]).length ? `<ul>${pulse.contentOpportunities.map(p=>`<li>${esc(p)}</li>`).join('')}</ul>` : '<div class="muted" style="font-size:12px;">None yet.</div>'}
+    </div>
+  </div>
+  `;
+}
+
+function renderResearchEventCard(e){
+  const themesPreview = (e.themes||'').split('\n').filter(Boolean).slice(0,3).join(' · ');
+  return `
+  <div class="card" style="text-align:left;padding:14px;">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+      <div style="font-weight:700;font-size:13px;flex:1;">${esc(e.eventName||'Untitled event')}</div>
+      <span class="tag tag-messaging">${esc(e.eventType||'—')}</span>
+    </div>
+    <div class="muted" style="font-size:11.5px;margin-top:6px;">${fmtDate(e.date)}${e.participantCount ? ` &middot; ${e.participantCount} participants` : ''}</div>
+    ${themesPreview ? `<div style="font-size:12px;margin-top:8px;">${esc(themesPreview)}</div>` : ''}
+  </div>
+  `;
+}
+
+function renderResearchEventsSection(){
+  const events = window.__researchEvents;
+  let body;
+  if(events === undefined) body = '<div class="muted"><i class="ti ti-loader-2"></i> Loading research events...</div>';
+  else if(events.error) body = `<div class="muted">Could not load research events: ${esc(events.error)}</div>`;
+  else if(!events.length) body = '<div class="empty-state">No research events logged yet. Upload a transcript above to get started.</div>';
+  else body = `<div class="mini-cards" style="grid-template-columns:repeat(auto-fill,minmax(260px,1fr));">${events.map(renderResearchEventCard).join('')}</div>`;
+
+  return `
+  <div class="card" style="margin-top:16px;">
+    <div class="section-title"><i class="ti ti-notes"></i> Past research events</div>
+    ${body}
+  </div>
+  `;
+}
+
+function renderResearchMarketTab(){
+  return `
+  ${renderResearchUploadCard()}
+  ${renderMarketPulseCard()}
+  ${renderResearchEventsSection()}
+  `;
+}
+
+/* ---- Profiles tab ---- */
+
+function renderWebsiteLeadCard(lead){
+  const cvc = lead.cvc;
+  return `
+  <div class="card" style="text-align:left;padding:14px;">
+    <div style="font-weight:700;font-size:13px;">${esc(lead.fullName||'Unknown')}</div>
+    <div class="muted" style="font-size:11.5px;margin-top:4px;">${esc(lead.companyName||'—')}</div>
+    <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+      <span class="tag tag-booked">${esc(cvc && cvc.archetype ? cvc.archetype : 'Unscored')}</span>
+      ${cvc && cvc.overallScore != null ? `<span class="pill">${esc(String(cvc.overallScore))}/100</span>` : ''}
+    </div>
+    ${cvc ? `<button class="btn btn-secondary btn-sm" style="margin-top:10px;" onclick="openCvcModalForLead('${esc(lead.id)}')"><i class="ti ti-report"></i> View results</button>` : '<div class="muted" style="font-size:11.5px;margin-top:10px;">No CVC report on file.</div>'}
+  </div>
+  `;
+}
+
+function renderResearchProfilesTab(){
+  const leads = window.__websiteLeads;
+  let body;
+  if(leads === undefined) body = '<div class="muted"><i class="ti ti-loader-2"></i> Loading website leads...</div>';
+  else if(leads.error) body = `<div class="muted">Could not load website leads: ${esc(leads.error)}</div>`;
+  else if(!leads.length) body = '<div class="empty-state">No Website Lead contacts yet.</div>';
+  else body = `<div class="mini-cards" style="grid-template-columns:repeat(auto-fill,minmax(240px,1fr));">${leads.map(renderWebsiteLeadCard).join('')}</div>`;
+
+  return `
+  <div class="card">
+    <div class="section-title"><i class="ti ti-users"></i> Website Leads</div>
+    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Contacts who came in via the website's Change Value Check tool, with their full scorecard.</p>
+    ${body}
+  </div>
+  `;
+}
+
+/* ---- CVC report modal (shared with Profiles cards and the contact drawer) ---- */
+
+function openCvcModalForLead(leadId){
+  const lead = (Array.isArray(window.__websiteLeads) ? window.__websiteLeads : []).find(l => l.id === leadId);
+  if(!lead || !lead.cvc){ toast('No CVC report on file for this contact', 'warn'); return; }
+  openCvcModal(lead.cvc, lead.fullName);
+}
+
+function openCvcModalFromDrawer(){
+  const profile = window.__drawerContactProfile;
+  if(!profile) return;
+  let cvc = null;
+  try { cvc = JSON.parse(profile.contact.aiSummary || ''); } catch(e){ cvc = null; }
+  if(!cvc || !cvc.archetype){ toast('No CVC report on file for this contact', 'warn'); return; }
+  openCvcModal(cvc, profile.contact.fullName);
+}
+
+function openCvcModal(cvc, name){
+  const scoreRow = (label, val) => `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);"><span class="muted" style="font-size:12px;">${esc(label)}</span><strong style="font-size:13px;">${val != null && val !== '' ? esc(String(val)) + '/100' : '—'}</strong></div>`;
+  const renderInsight = (ins) => (ins && (ins.title || ins.body)) ? `<div style="margin-bottom:10px;"><div style="font-weight:700;font-size:12.5px;">${esc(ins.title||'')}</div><div class="muted" style="font-size:12px;margin-top:2px;">${esc(ins.body||'')}</div></div>` : '';
+  const body = `
+    <div style="margin-bottom:14px;">
+      <div style="font-weight:800;font-size:15px;">${esc(cvc.archetype||'Unscored')}</div>
+      <div class="muted" style="font-size:12.5px;margin-top:4px;">${esc(cvc.archetypeDesc||'')}</div>
+    </div>
+    <div style="border:1px solid var(--border);border-radius:var(--radius-card);padding:12px;margin-bottom:14px;">
+      ${scoreRow('Overall', cvc.overallScore)}
+      ${scoreRow('People', cvc.peopleScore)}
+      ${scoreRow('Productivity', cvc.productivityScore)}
+      ${scoreRow('Performance', cvc.performanceScore)}
+    </div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px;">
+      <div style="flex:1;min-width:180px;"><div class="muted" style="font-size:11px;font-weight:700;">PRIMARY LEAK</div><div style="font-size:13px;margin-top:2px;">${esc(cvc.primaryLeak||'—')}</div></div>
+      <div style="flex:1;min-width:180px;"><div class="muted" style="font-size:11px;font-weight:700;">SECONDARY LEAK</div><div style="font-size:13px;margin-top:2px;">${esc(cvc.secondaryLeak||'—')}</div></div>
+    </div>
+    ${(cvc.insights||[]).length ? `<div class="muted" style="font-size:11px;font-weight:700;margin-bottom:6px;">INSIGHTS</div>${cvc.insights.map(renderInsight).join('')}` : ''}
+    <div style="margin-top:14px;"><div class="muted" style="font-size:11px;font-weight:700;">STRENGTH</div><div style="font-size:13px;margin-top:2px;">${esc(cvc.strength||'—')}</div></div>
+    <div style="margin-top:10px;"><div class="muted" style="font-size:11px;font-weight:700;">RECOMMENDATION</div><div style="font-size:13px;margin-top:2px;">${esc(cvc.recommendation||'—')}</div></div>
+    <div style="margin-top:10px;"><div class="muted" style="font-size:11px;font-weight:700;">CTA REASON</div><div style="font-size:13px;margin-top:2px;">${esc(cvc.ctaReason||'—')}</div></div>
+  `;
+  openModal(`Change Value Check — ${esc(name||'')}`, body);
 }
 
 /* ===================== SETTINGS PAGE ===================== */

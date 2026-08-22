@@ -3,6 +3,8 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const cron = require('node-cron');
+const { PDFParse } = require('pdf-parse');
+const mammoth = require('mammoth');
 
 const app = express();
 app.use(cors());
@@ -359,6 +361,205 @@ app.post('/api/leads/website', async (req, res) => {
     res.json({ success: true, recordId: data.records[0].id });
   } catch (err) {
     console.error('Website lead create error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// List Contacts whose Journey Stage is "Website Lead" for the Research >
+// Profiles tab, with each contact's Change Value Check report (saved as a
+// JSON string in AI Summary by POST /api/leads/website above) parsed out
+// server-side so the frontend doesn't need to guess at its shape.
+app.get('/api/leads/website', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  try {
+    const [contactsData, companiesData] = await Promise.all([
+      airtableRequest('GET', 'Contacts'),
+      airtableRequest('GET', 'Companies')
+    ]);
+    const companiesById = {};
+    (companiesData.records || []).forEach(r => { companiesById[r.id] = r; });
+
+    const leads = (contactsData.records || [])
+      .filter(r => r.fields['Journey Stage'] === 'Website Lead')
+      .map(r => {
+        const cf = r.fields || {};
+        const companyId = (cf['Company'] || [])[0] || null;
+        let cvc = null;
+        try { cvc = JSON.parse(cf['AI Summary'] || ''); } catch (e) { cvc = null; }
+        return {
+          id: r.id,
+          fullName: cf['Full Name'] || '',
+          companyName: companyId && companiesById[companyId] ? (companiesById[companyId].fields['Company Name'] || '') : '',
+          email: cf['Email'] || '',
+          cvc
+        };
+      });
+
+    res.json({ leads });
+  } catch (err) {
+    console.error('Website leads list error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===================== RESEARCH: EVENT TRANSCRIPTS =====================
+// Market Intelligence tab. Uploaded files are read client-side and sent
+// here as base64 (same convention as the Sales tab transcript analyzer
+// and the Context tab's historical-file upload) - text is always
+// extracted server-side first (via pdf-parse/mammoth for .pdf/.docx, or
+// used as-is for .txt/pasted text) rather than handed to Claude as a raw
+// document, because the Research Events table has a "Raw Transcript"
+// field that needs the actual text saved regardless of source format.
+
+async function extractTranscriptText(fileBase64, fileMediaType) {
+  const buffer = Buffer.from(fileBase64, 'base64');
+  if (fileMediaType === 'application/pdf') {
+    const parser = new PDFParse({ data: buffer });
+    try {
+      const result = await parser.getText();
+      return result.text || '';
+    } finally {
+      await parser.destroy();
+    }
+  }
+  if (fileMediaType && fileMediaType.includes('wordprocessingml')) {
+    const result = await mammoth.extractRawText({ buffer });
+    return result.value || '';
+  }
+  return buffer.toString('utf8');
+}
+
+app.post('/api/research/upload-transcript', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  const { eventName, eventType, date, participantCount, transcript, fileBase64, fileMediaType, fileName } = req.body;
+  if (!eventName || !eventType || !date) return res.status(400).json({ error: 'eventName, eventType and date are required' });
+  if (!transcript && !fileBase64) return res.status(400).json({ error: 'transcript text or a file is required' });
+
+  try {
+    const transcriptText = fileBase64 ? await extractTranscriptText(fileBase64, fileMediaType) : transcript;
+    if (!transcriptText || !transcriptText.trim()) return res.status(400).json({ error: 'Could not read any text from that file' });
+
+    const prompt = `You are analysing a transcript from a Twenty2 Collective market research event for T2C Outreach, a LinkedIn outreach CRM for a Perth-based Agile and change consultancy.
+
+Event: "${eventName}" (${eventType}, ${date})
+
+Transcript:
+${transcriptText}
+
+Extract from this transcript. Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "themes": string[], "painPoints": string[], "hotTopics": string[], "industries": string[], "sentiment": string }
+
+- themes: 3-6 key themes discussed, each a short phrase.
+- painPoints: specific pain points or frustrations participants raised.
+- hotTopics: topics that generated the most discussion or interest in the room.
+- industries: industries/sectors represented among participants, inferred from context.
+- sentiment: one or two sentences on the overall mood/sentiment of the room.
+
+Base everything only on what's actually in the transcript - never invent details. If a category genuinely isn't present, return an empty array for it.`;
+
+    const parsed = await callClaudeJson(prompt, 2000);
+
+    const fields = {
+      'Event Name': eventName,
+      'Event Type': eventType,
+      'Date': date,
+      'Raw Transcript': transcriptText,
+      'Extracted Themes': (parsed.themes || []).join('\n') + (parsed.sentiment ? `\n\nSentiment: ${parsed.sentiment}` : ''),
+      'Key Pain Points': (parsed.painPoints || []).join('\n'),
+      'Hot Topics': (parsed.hotTopics || []).join('\n'),
+      'Industries Represented': (parsed.industries || []).join('\n'),
+      'Source': fileName || 'Pasted transcript'
+    };
+    if (participantCount) fields['Participant Count'] = participantCount;
+
+    const data = await airtableRequest('POST', 'Research Events', {
+      records: [{ fields }],
+      typecast: true
+    });
+
+    res.json({ success: true, recordId: data.records[0].id, extracted: parsed });
+  } catch (err) {
+    console.error('Research transcript upload error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/research/events', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  try {
+    const records = await airtableFetchAllRecords('Research Events');
+    const events = records
+      .map(r => {
+        const f = r.fields || {};
+        return {
+          id: r.id,
+          eventName: f['Event Name'] || '',
+          eventType: f['Event Type'] || '',
+          date: f['Date'] || '',
+          themes: f['Extracted Themes'] || '',
+          painPoints: f['Key Pain Points'] || '',
+          hotTopics: f['Hot Topics'] || '',
+          industries: f['Industries Represented'] || '',
+          participantCount: f['Participant Count'] || null,
+          source: f['Source'] || ''
+        };
+      })
+      .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    res.json({ events });
+  } catch (err) {
+    console.error('Research events list error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Aggregates every Research Events record on file and asks Claude to find
+// what's recurring across the whole dataset, rather than any one event.
+app.get('/api/research/market-pulse', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  try {
+    const records = await airtableFetchAllRecords('Research Events');
+    if (!records.length) return res.json({ topPainPoints: [], trendingTopics: [], contentOpportunities: [], eventCount: 0 });
+
+    const eventsContext = records.map(r => {
+      const f = r.fields || {};
+      return `- "${f['Event Name'] || 'Untitled'}" (${f['Event Type'] || ''}, ${f['Date'] || ''}, ${f['Participant Count'] || '?'} participants)
+  Themes: ${f['Extracted Themes'] || 'none'}
+  Pain points: ${f['Key Pain Points'] || 'none'}
+  Hot topics: ${f['Hot Topics'] || 'none'}
+  Industries: ${f['Industries Represented'] || 'none'}`;
+    }).join('\n\n');
+
+    const prompt = `You are the market intelligence layer for T2C Outreach, a LinkedIn outreach CRM for Twenty2 Collective, a Perth-based Agile and change consultancy. Below is every market research event logged so far, each already analysed individually.
+
+${eventsContext}
+
+Look across ALL of these events together (not any single one) and return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "topPainPoints": string[], "trendingTopics": string[], "contentOpportunities": string[] }
+
+- topPainPoints: the pain points that recur most across multiple events, ranked by how often/consistently they show up.
+- trendingTopics: topics/themes that keep coming up across events, signalling what the WA market is currently focused on.
+- contentOpportunities: 3-5 concrete content or campaign ideas Twenty2 Collective could produce, each grounded in a specific recurring pain point or topic from the data above.
+
+Only surface things that genuinely recur across more than one event where possible - call out clearly if something is only from a single event but still notable.`;
+
+    const parsed = await callClaudeJson(prompt, 1800);
+
+    res.json({
+      topPainPoints: parsed.topPainPoints || [],
+      trendingTopics: parsed.trendingTopics || [],
+      contentOpportunities: parsed.contentOpportunities || [],
+      eventCount: records.length,
+      generatedAt: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Market pulse error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -780,6 +981,24 @@ function learningDataContext(learningData) {
   return learningData.map(l => `- [${l.type}, ${l.date}, ${l.recordCount} records]: ${l.analysis}`).join('\n');
 }
 
+// Website Lead contacts (see POST /api/leads/website) carry a Change Value
+// Check report as a JSON string in AI Summary instead of free-text notes.
+// Pulls those out and renders a short calibration line per contact so the
+// intelligence prompt can pitch message drafts/suggestions at their actual
+// archetype and leak rather than generic outreach.
+function cvcProfilesContext(contactsData) {
+  const lines = (contactsData.records || [])
+    .filter(r => r.fields['Journey Stage'] === 'Website Lead')
+    .map(r => {
+      let cvc;
+      try { cvc = JSON.parse(r.fields['AI Summary'] || ''); } catch (e) { return null; }
+      if (!cvc || !cvc.archetype) return null;
+      return `- ${r.fields['Full Name'] || 'Unknown'}: archetype "${cvc.archetype}", overall score ${cvc.overallScore}/100, primary leak "${cvc.primaryLeak}", secondary leak "${cvc.secondaryLeak}".`;
+    })
+    .filter(Boolean);
+  return lines.length ? lines.join('\n') : 'No Website Lead contacts with a Change Value Check report on file yet.';
+}
+
 // ===================== CONVERSION TRACKING =====================
 // Every "Meeting Booked" touch point outcome writes a Conversion record
 // here from the client. The Conversions table (field names given exactly
@@ -1052,6 +1271,9 @@ ${learningDataContext(learningData)}
 
 CONVERSIONS - actual meetings booked, logged with what led to them (${conversions.length} on file - this is ground truth for what's actually working, weight it heavily):
 ${conversionsContext(conversions)}
+
+WEBSITE LEAD PROFILES - Change Value Check reports for contacts who came in via the website (use these to calibrate campaignSuggestions and messageDrafts for these specific contacts to their archetype and primary leak, rather than generic messaging):
+${cvcProfilesContext(contactsData)}
 
 CAMPAIGN PERFORMANCE (already calculated, ranked best to worst by conversion rate):
 ${campaignPerformance.length ? campaignPerformance.map(c => `- ${c.campaignName}: ${c.contactsTargeted} contacts targeted, ${c.touchPointsSent} touch points sent, ${c.replies} replies, ${c.bookings} bookings, ${c.conversionRate}% conversion rate`).join('\n') : 'No live campaigns to report on.'}
