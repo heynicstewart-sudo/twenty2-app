@@ -4178,5 +4178,73 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
   }
 });
 
+// ===================== WIPE DATA (Settings > Danger zone) =====================
+// Tables cleared by "Reset all data": the per-contact working data the app
+// generates during outreach. Campaigns, Reps, Content Settings and Content
+// are deliberately excluded - those are configuration/deliverables the user
+// set up on purpose, not data a local-state reset should also destroy.
+const WIPE_DATA_TABLES = ['Contacts', 'Companies', 'Touch Points', CAMPAIGN_CONTACTS_TABLE, 'Deals', CONTENT_SIGNALS_TABLE, 'Learning Data'];
+
+// Fetches every record id in a table, following Airtable's `offset` pagination
+// cursor. The plain `airtableRequest('GET', table)` used elsewhere in this
+// file only returns the first page (<=100 records) - fine for routes that
+// display or search records, but not safe for a delete-everything operation.
+async function airtableFetchAllRecordIds(table) {
+  const ids = [];
+  let offset;
+  do {
+    const qs = new URLSearchParams({ pageSize: '100' });
+    if (offset) qs.set('offset', offset);
+    const res = await fetch(`${AIRTABLE_URL}/${encodeURIComponent(table)}?${qs.toString()}`, {
+      headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` }
+    });
+    if (!res.ok) { const err = await res.text(); throw new Error(`Airtable error ${res.status}: ${err}`); }
+    const data = await res.json();
+    (data.records || []).forEach(r => ids.push(r.id));
+    offset = data.offset;
+  } while (offset);
+  return ids;
+}
+
+// Airtable caps DELETE at 10 record ids per request, same limit as the
+// batch writes in airtableBatchPatch above.
+async function airtableBatchDelete(table, recordIds) {
+  for (let i = 0; i < recordIds.length; i += 10) {
+    const batch = recordIds.slice(i, i + 10);
+    const qs = batch.map(id => `records[]=${encodeURIComponent(id)}`).join('&');
+    const res = await fetch(`${AIRTABLE_URL}/${encodeURIComponent(table)}?${qs}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` }
+    });
+    if (!res.ok) { const err = await res.text(); throw new Error(`Airtable error ${res.status}: ${err}`); }
+  }
+}
+
+async function wipeAirtableTable(table) {
+  const ids = await airtableFetchAllRecordIds(table);
+  await airtableBatchDelete(table, ids);
+  return ids.length;
+}
+
+// Deletes every record from WIPE_DATA_TABLES. Each table is wiped
+// independently and failures are swallowed per-table (same convention as
+// fetchCampaignContactsRows/Learning Data elsewhere) - a table that doesn't
+// exist in a given base, or one Airtable call that fails, shouldn't stop the
+// rest of the wipe from completing.
+app.post('/api/wipe-data', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const results = {};
+  for (const table of WIPE_DATA_TABLES) {
+    try {
+      results[table] = { deleted: await wipeAirtableTable(table) };
+    } catch (err) {
+      console.warn(`Wipe data: could not clear "${table}" (table may not exist yet):`, err.message);
+      results[table] = { error: err.message };
+    }
+  }
+  res.json({ success: true, results });
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Search server listening on port ${PORT}`));
