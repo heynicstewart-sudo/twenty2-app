@@ -3284,13 +3284,36 @@ app.get('/api/trigify/backfill-contacts', async (req, res) => {
     for (let i = 0; i < targets.length; i++) {
       const contact = targets[i];
       const name = contact.fields['Full Name'] || contact.id;
+      const normalizedUrl = normalizeLinkedInUrl(contact.fields['LinkedIn URL']);
       try {
-        await trigifyCreateContactSearch(contact.id, name, normalizeLinkedInUrl(contact.fields['LinkedIn URL']));
+        await trigifyCreateContactSearch(contact.id, name, normalizedUrl);
         registered++;
         console.log(`Trigify backfill (${i + 1}/${targets.length}): registered ${name}`);
       } catch (err) {
-        errors.push(`${name}: ${err.message}`);
-        console.warn(`Trigify backfill (${i + 1}/${targets.length}): failed for ${name} - ${err.message}`);
+        // Trigify 409s "This profile is already being monitored" when a
+        // search for this profile already exists (e.g. from an earlier,
+        // partially-failed backfill run) - look up the existing search id
+        // instead of leaving the contact unregistered, same fallback
+        // trigifyEnsureMarcusSearch uses for Marcus's own search.
+        if (err.status === 409 && /already being monitored/i.test(err.body || '')) {
+          try {
+            const existingId = await trigifyFindExistingSearch(normalizedUrl, `T2C — ${name}`);
+            if (existingId) {
+              await airtableRequest('PATCH', 'Contacts', { records: [{ id: contact.id, fields: { 'Trigify Search ID': existingId } }] });
+              registered++;
+              console.log(`Trigify backfill (${i + 1}/${targets.length}): already monitored, linked existing search for ${name}`);
+            } else {
+              errors.push(`${name}: already monitored, but no matching search was found in GET /v1/searches`);
+              console.warn(`Trigify backfill (${i + 1}/${targets.length}): already monitored but no matching search found for ${name}`);
+            }
+          } catch (lookupErr) {
+            errors.push(`${name}: ${lookupErr.message}`);
+            console.warn(`Trigify backfill (${i + 1}/${targets.length}): failed to look up existing search for ${name} - ${lookupErr.message}`);
+          }
+        } else {
+          errors.push(`${name}: ${err.message}`);
+          console.warn(`Trigify backfill (${i + 1}/${targets.length}): failed for ${name} - ${err.message}`);
+        }
       }
     }
 
