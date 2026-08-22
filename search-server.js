@@ -3556,6 +3556,20 @@ function formatRecentPosts(posts) {
   }).join('\n\n');
 }
 
+// Shared 7-day recency guard for job-change detection - both the
+// per-profile Claude-based check and the keyword monitor below should only
+// ever consider posts from the last week, so a job change flagged from a
+// months-old post (Trigify's own frequency/time_frame settings don't
+// guarantee freshness on every result) never gets written to Job Change
+// Signal even if its text matches the language being looked for.
+function isWithinLastDays(dateStr, days) {
+  if (!dateStr) return false;
+  const parsed = new Date(dateStr);
+  if (isNaN(parsed)) return false;
+  const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
+  return parsed.getTime() >= cutoffMs;
+}
+
 // One Claude call per contact covering all of their (up to 3) fetched
 // posts together, rather than one call per individual post - cheaper and
 // no less accurate, since a job change only needs to be caught once.
@@ -3602,7 +3616,10 @@ async function syncTrigifyContactPosts() {
     const top3 = posts.slice(0, 3);
     const fields = { 'Recent Posts': formatRecentPosts(top3) };
 
-    const jobChange = await detectJobChangeFromPosts(top3);
+    // Recent Posts above still shows all 3 regardless of age - only what
+    // feeds job-change detection is restricted to the last 7 days.
+    const recentEnough = top3.filter(p => isWithinLastDays(p.date, 7));
+    const jobChange = await detectJobChangeFromPosts(recentEnough);
     if (jobChange) {
       fields['Job Change Signal'] = `${jobChange.newCompanyOrRole || 'Possible job change'}${jobChange.date ? ' — ' + jobChange.date : ''}`;
     }
@@ -4025,7 +4042,7 @@ async function syncJobChangeMonitorSignals() {
       text: String(extractPostValue((r.content && r.content.text) || r.text || '')).trim(),
       date: r.published_at || r.date || ''
     };
-  }).filter(r => r.text);
+  }).filter(r => r.text && isWithinLastDays(r.date, 7));
 
   const contacts = await airtableFetchAllRecords('Contacts');
   const contactByUrl = {};
