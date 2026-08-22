@@ -3036,8 +3036,11 @@ async function trigifyRequest(method, path, body) {
     body: body ? JSON.stringify(body) : undefined
   });
   if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Trigify error ${res.status}: ${err}`);
+    const errBody = await res.text();
+    const trigifyErr = new Error(`Trigify error ${res.status}: ${errBody}`);
+    trigifyErr.status = res.status;
+    trigifyErr.body = errBody;
+    throw trigifyErr;
   }
   return res.json();
 }
@@ -3326,6 +3329,17 @@ app.post('/api/contacts/check-job-changes', async (req, res) => {
 
 // ---- Part 3: Marcus's content performance analysis ----
 
+// Looks up an existing Trigify search by profile URL or name - used when
+// creating a search 409s because the profile is already monitored (e.g.
+// a leftover search from a previous run/account) instead of a new
+// Trigify Marcus Search ID ever getting saved.
+async function trigifyFindExistingSearch(profileUrl, name) {
+  const data = await trigifyRequest('GET', '/v1/searches');
+  const list = data.searches || data.data || data.results || [];
+  const match = list.find(s => (s.profile_url && s.profile_url === profileUrl) || (s.name && s.name === name));
+  return match ? (match.id || (match.search && match.search.id)) : null;
+}
+
 async function trigifyEnsureMarcusSearch() {
   const settingsRecord = await getOrCreateSettingsRecord();
   const marcusUrl = settingsRecord.fields['My LinkedIn URL'];
@@ -3334,13 +3348,24 @@ async function trigifyEnsureMarcusSearch() {
   let searchId = settingsRecord.fields['Trigify Marcus Search ID'] || null;
   if (searchId) return searchId;
 
-  // 3 months isn't a single time_frame option - past-month is the closest
-  // supported value, and the search re-runs weekly regardless.
-  searchId = await trigifyCreateProfileMonitor(TRIGIFY_MARCUS_SEARCH_NAME, marcusUrl, {
-    maxResults: 25,
-    frequency: 'WEEKLY',
-    timeFrame: 'past-month'
-  });
+  try {
+    // 3 months isn't a single time_frame option - past-month is the closest
+    // supported value, and the search re-runs weekly regardless.
+    searchId = await trigifyCreateProfileMonitor(TRIGIFY_MARCUS_SEARCH_NAME, marcusUrl, {
+      maxResults: 25,
+      frequency: 'WEEKLY',
+      timeFrame: 'past-month'
+    });
+  } catch (err) {
+    // Trigify 409s "This profile is already being monitored" when a search
+    // for this profile already exists - look it up instead of failing.
+    if (err.status === 409 && /already being monitored/i.test(err.body || '')) {
+      searchId = await trigifyFindExistingSearch(marcusUrl, TRIGIFY_MARCUS_SEARCH_NAME);
+      if (!searchId) throw new Error('Trigify reported this profile is already monitored, but no matching search was found in GET /v1/searches');
+    } else {
+      throw err;
+    }
+  }
 
   await airtableRequest('PATCH', SETTINGS_TABLE, {
     records: [{ id: settingsRecord.id, fields: { 'Trigify Marcus Search ID': searchId } }]
