@@ -3088,7 +3088,11 @@ app.post('/api/settings/linkedin-url', async (req, res) => {
 // rejects. Leaves anything already on the linkedin.com domain untouched.
 function normalizeLinkedInUrl(url) {
   if (!url) return url;
-  const trimmed = url.trim();
+  let trimmed = url.trim();
+  // Regional LinkedIn subdomains (au., uk., my., ca., or any other
+  // two-letter country code) are the same site as far as Trigify is
+  // concerned - it only accepts www.linkedin.com.
+  trimmed = trimmed.replace(/^https:\/\/[a-z]{2}\.linkedin\.com/i, 'https://www.linkedin.com');
   if (trimmed.startsWith('https://www.linkedin.com')) return trimmed;
   const slug = trimmed.replace(/^\/?(in\/)?/i, '');
   return `https://www.linkedin.com/in/${slug}`;
