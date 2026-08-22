@@ -4362,7 +4362,7 @@ app.patch('/api/context/contact-fields', async (req, res) => {
 
   try {
     if (journeyStage) {
-      await airtableRequest('PATCH', 'Contacts', { records: [{ id: contactId, fields: { 'Journey Stage': journeyStage } }] });
+      await airtableRequest('PATCH', 'Contacts', { records: [{ id: contactId, fields: { 'Journey Stage': journeyStage } }], typecast: true });
     }
 
     let campaignContactRowsSynced = 0;

@@ -1858,6 +1858,13 @@ function getContactAction(c){
   }
   if(campaign){
     const lastTouch = lastTouchPointDate(c);
+    // Journey Stage "Identified" (pre-connection, c.state 'found'/'opened') -
+    // this contact needs a connection request sent, not a drafted message.
+    // Connection Pending and beyond fall through to the normal message-
+    // based recommendation below, unchanged.
+    if(c.state === 'found' || c.state === 'opened'){
+      return { type:'Send connection', stage:'connect', daysSinceTouch: lastTouch ? daysBetween(lastTouch) : null, campaignName: campaign.name };
+    }
     const nextStage = c.thread.m2 ? 'cta' : (c.thread.m1 ? 'm2' : (c.connDate ? 'm1' : 'connect'));
     return { type:'Campaign outreach', stage: nextStage, daysSinceTouch: lastTouch ? daysBetween(lastTouch) : null, campaignName: campaign.name };
   }
@@ -1938,6 +1945,7 @@ function renderTodaysActions(){
 
 function recommendedMethodForAction(a){
   const map = {
+    'Send connection': 'LinkedIn connection request',
     'Send first message': 'LinkedIn message',
     'Follow up': 'Email or Call',
     'Reply back': 'LinkedIn message',
@@ -1962,13 +1970,15 @@ function renderTodaysActionItem(a){
         ${a.campaignName ? `<div style="margin-top:4px;"><span class="pill" style="background:#e2f2fa;color:#0d6a96;"><i class="ti ti-rocket" style="font-size:11px;"></i> ${esc(a.campaignName)}</span></div>` : ''}
       </div>
       <div style="text-align:right;">
-        <span class="pill">${esc(a.type)}</span>
+        <span class="pill" id="actionPill-${c.id}">${esc(a.type)}</span>
         <div class="muted" style="font-size:11px;margin-top:4px;">${a.daysSinceTouch===null?'—':a.daysSinceTouch+'d since last touch'}</div>
         <div class="muted" style="font-size:11px;margin-top:2px;">Recommended: ${esc(method)}</div>
       </div>
     </div>
     <div class="todo-item-actions">
-      <button class="btn btn-secondary btn-sm" onclick="openGenerateModal('${c.id}','${a.stage}', ()=>renderPage())"><i class="ti ti-copy"></i> Draft message</button>
+      ${a.type === 'Send connection'
+        ? `<a class="btn btn-primary btn-sm" href="${esc(c.url||'#')}" target="_blank" rel="noopener" onclick="handleSendConnectionClick('${c.id}')"><i class="ti ti-brand-linkedin"></i> Send connection</a>`
+        : `<button class="btn btn-secondary btn-sm" onclick="openGenerateModal('${c.id}','${a.stage}', ()=>renderPage())"><i class="ti ti-copy"></i> Draft message</button>`}
       <button class="btn btn-ghost btn-sm" onclick="toggleQuickTouchPoint('${c.id}')"><i class="ti ti-target-arrow"></i> Log touch point</button>
       <button class="btn btn-accent btn-sm" id="briefBtn-${c.id}" onclick="generateContactBrief('${c.id}')"><i class="ti ti-sparkles"></i> Generate brief</button>
     </div>
@@ -1985,6 +1995,33 @@ function toggleQuickTouchPoint(cid){
   const el = document.getElementById('quicktp-'+cid);
   if(!el) return;
   el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+// Fires when the "Send connection" link on a Today's Actions card is
+// clicked - the href already opens the contact's LinkedIn profile in a new
+// tab natively, this just advances their Journey Stage in Airtable and
+// recolours this card's pill in place once that's confirmed (a full
+// renderPage() would also work, but would re-run every other card's
+// pending network calls along with it for no reason).
+async function handleSendConnectionClick(cid){
+  try {
+    const res = await fetch('/api/context/contact-fields', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contactId: cid, journeyStage: 'Connection Pending' })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+
+    const c = state.contacts.find(x => x.id === cid);
+    if(c) c.state = 'connectionPending';
+
+    const pill = document.getElementById('actionPill-' + cid);
+    if(pill){ pill.textContent = 'Connection Pending'; pill.style.background = '#e2f2fa'; pill.style.color = '#0d6a96'; }
+  } catch(err){
+    console.warn('Could not update Journey Stage to Connection Pending:', err.message);
+    toast('LinkedIn opened, but could not update Journey Stage: ' + err.message, 'warn');
+  }
 }
 
 async function generateContactBrief(cid){
@@ -2925,7 +2962,7 @@ async function syncAllContactsToAirtable(){
   toast(`${syncedCount} contacts and ${companySyncedCount} companies synced to Airtable`, allSynced ? 'success' : 'warn');
 }
 
-const JOURNEY_STAGE_TO_STATE = { 'Identified':'found', 'Connected':'connected', 'Messaging':'messaging', 'Booked':'booked' };
+const JOURNEY_STAGE_TO_STATE = { 'Identified':'found', 'Connection Pending':'connectionPending', 'Connected':'connected', 'Messaging':'messaging', 'Booked':'booked' };
 
 async function hydrateContactsFromAirtable(){
   try {
