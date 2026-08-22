@@ -1004,7 +1004,7 @@ const NAV = [
   { id:'home', label:'Home', icon:'ti-home' },
   { id:'campaigns', label:'Campaigns', icon:'ti-rocket' },
   { id:'calendar', label:'Sales Calendar', icon:'ti-calendar' },
-  { id:'intelligence', label:'Intelligence', icon:'ti-brain' },
+  { id:'intelligence', label:'Engine', icon:'ti-brain' },
   { id:'content', label:'Content', icon:'ti-news' },
   { id:'settings', label:'Settings', icon:'ti-settings' },
   { id:'howitworks', label:'How it works', icon:'ti-help-circle' },
@@ -2128,9 +2128,9 @@ function renderHowItWorks(){
       <ul><li>Hover any event chip for the full contact, company and date</li></ul>
     </div>
     <div class="howto-item">
-      <div class="howto-item-head"><div class="howto-num">5</div><h4><i class="ti ti-brain"></i> Intelligence — account-level view</h4></div>
-      <p>Intelligence has three sub-tabs. <strong>Intelligence</strong> pulls every contact, touch point, campaign and conversion for campaign ideas, cold contacts and ready-to-send drafts. <strong>Analytics</strong> is the account-wide numbers - strategy tally, CTA performance, bookings by service, connection speed. <strong>Context</strong> is the same touch-point logger and upload tools as a campaign's Intelligence tab, just untagged.</p>
-      <ul><li>Click <strong>Analyse strategy</strong> at the bottom of Analytics for a plain-English read on what's converting and what isn't</li></ul>
+      <div class="howto-item-head"><div class="howto-num">5</div><h4><i class="ti ti-brain"></i> Engine — account-level view</h4></div>
+      <p>Engine has two sub-tabs. <strong>Context</strong> (first) is the same touch-point logger and upload tools as a campaign's Intelligence tab, just untagged. <strong>Intelligence</strong> pulls every contact, touch point, campaign and conversion for campaign ideas, cold contacts and ready-to-send drafts, plus the account-wide numbers - strategy tally, CTA performance, bookings by service, connection speed.</p>
+      <ul><li>Click <strong>Analyse strategy</strong> further down the Intelligence tab for a plain-English read on what's converting and what isn't</li></ul>
     </div>
   </div>
 
@@ -6477,13 +6477,14 @@ async function runAnalysis(){
 }
 
 /* ===================== INTELLIGENCE PAGE ===================== */
-// Top-level page with 3 sub-tabs. "Intelligence" (default, the original
-// Intelligence page content below) plus "Analytics" and "Context", which
-// are the former top-level Analytics and Context pages nested in unchanged -
-// same renderAnalytics()/renderContext() functions, just no longer reachable
-// as their own nav items.
+// Top-level page (nav label "Engine") with 2 sub-tabs. "Context" comes
+// first, then "Intelligence", which now also includes the former
+// standalone "Analytics" sub-tab's content inline (both renderIntelligence()
+// and renderAnalytics() render together under the one tab) - same
+// renderAnalytics()/renderContext() functions, just no longer reachable
+// as their own nav items or their own sub-tab.
 
-const INTEL_SUBTABS = [ ['intelligence','Intelligence'], ['analytics','Analytics'], ['context','Context'] ];
+const INTEL_SUBTABS = [ ['context','Context'], ['intelligence','Intelligence'] ];
 
 function renderIntelligencePage(){
   const tab = window.__intelSubTab || 'intelligence';
@@ -6492,8 +6493,7 @@ function renderIntelligencePage(){
   <div class="seq-tabs">
     ${INTEL_SUBTABS.map(([key,label]) => `<div class="seq-tab ${tab===key?'active':''}" onclick="setIntelSubTab('${key}')">${label}</div>`).join('')}
   </div>
-  ${tab==='intelligence' ? renderIntelligence() : ''}
-  ${tab==='analytics' ? renderAnalytics() : ''}
+  ${tab==='intelligence' ? renderIntelligence() + renderAnalytics() : ''}
   ${tab==='context' ? renderContext() : ''}
   `;
 }
