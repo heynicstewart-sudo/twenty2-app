@@ -3249,6 +3249,43 @@ app.post('/api/trigify/setup-contact-search', async (req, res) => {
   }
 });
 
+// One-time backfill for contacts found before automatic Trigify
+// registration existed on contact creation (POST /api/airtable/contact) -
+// registers everyone with a LinkedIn URL but no Trigify Search ID yet via
+// the same trigifyCreateContactSearch() that on-create hook uses, so
+// there's one registration implementation instead of two.
+app.post('/api/trigify/backfill-contacts', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!TRIGIFY_API_KEY) return res.status(500).json({ error: 'TRIGIFY_API_KEY not configured' });
+
+  try {
+    const contacts = await airtableFetchAllRecords('Contacts');
+    const targets = contacts.filter(c => c.fields['LinkedIn URL'] && !c.fields['Trigify Search ID']);
+    console.log(`Trigify backfill: ${targets.length} contact(s) need a Trigify search out of ${contacts.length} total.`);
+
+    let registered = 0;
+    const errors = [];
+    for (let i = 0; i < targets.length; i++) {
+      const contact = targets[i];
+      const name = contact.fields['Full Name'] || contact.id;
+      try {
+        await trigifyCreateContactSearch(contact.id, name, contact.fields['LinkedIn URL']);
+        registered++;
+        console.log(`Trigify backfill (${i + 1}/${targets.length}): registered ${name}`);
+      } catch (err) {
+        errors.push(`${name}: ${err.message}`);
+        console.warn(`Trigify backfill (${i + 1}/${targets.length}): failed for ${name} - ${err.message}`);
+      }
+    }
+
+    console.log(`Trigify backfill complete: ${registered} registered, ${errors.length} failed.`);
+    res.json({ success: true, checked: contacts.length, targeted: targets.length, registered, errors });
+  } catch (err) {
+    console.error('Trigify backfill-contacts error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/trigify/sync-contact-posts', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   if (!TRIGIFY_API_KEY) return res.status(500).json({ error: 'TRIGIFY_API_KEY not configured' });
