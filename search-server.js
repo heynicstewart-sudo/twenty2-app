@@ -3430,11 +3430,20 @@ ${JSON.stringify(posts)}
 
 For EACH post, analyse and return: post_text, date, likes, comments, engagement_score (likes + comments), topic (3-5 words describing what the post is about), format (one of: short, long, question, story, insight), cta_used (the call to action used, or empty string if none), what_worked (one sentence on why this post performed well or didn't).
 
-Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
-{ "posts": [ { "post_text": string, "date": string, "likes": number, "comments": number, "engagement_score": number, "topic": string, "format": string, "cta_used": string, "what_worked": string } ] }`;
+Return each post as an object with keys: post_text, date, likes, comments, engagement_score, topic, format, cta_used, what_worked.
 
-    const parsed = await callClaudeJson(prompt, 8000);
-    const analysed = parsed.posts || [];
+Respond with only a valid JSON array. No preamble, no explanation, no markdown formatting. Start your response with [ and end with ].`;
+
+    const rawText = await callClaudeText(prompt, 8000);
+    const stripped = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
+    const arrayMatch = stripped.match(/\[[\s\S]*\]/);
+    let analysed;
+    try {
+      analysed = JSON.parse(arrayMatch ? arrayMatch[0] : stripped);
+    } catch (parseErr) {
+      throw new Error('Could not parse Claude response as JSON');
+    }
+    if (!Array.isArray(analysed)) analysed = [];
 
     const records = analysed.map(p => ({
       fields: {
