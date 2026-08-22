@@ -3724,6 +3724,66 @@ app.get('/api/trigify/sync-contact-posts', async (req, res) => {
   }
 });
 
+// Parses one contact's Recent Posts field (written by formatRecentPosts, see
+// above - "[date] text | Likes: N Comments: N" blocks joined by blank
+// lines) back into individual post objects for the Home page's Contact
+// signals strip.
+function parseRecentPosts(recentPostsText) {
+  if (!recentPostsText) return [];
+  return recentPostsText.split('\n\n').map(block => {
+    const m = block.match(/^\[(\d{4}-\d{2}-\d{2})\]\s*([\s\S]*?)\s*\|\s*Likes:\s*(-?\d+)\s*Comments:\s*(-?\d+)\s*$/);
+    if (!m) return null;
+    const [, date, text, likes, comments] = m;
+    if (!text.trim()) return null;
+    return { date, text: text.trim(), likes: parseInt(likes, 10) || 0, comments: parseInt(comments, 10) || 0 };
+  }).filter(Boolean);
+}
+
+// Home page "Contact signals" strip - one card per post from contacts who
+// are (a) in a Live campaign and (b) have a non-empty Recent Posts field
+// (populated by GET /api/trigify/sync-contact-posts), newest post first.
+app.get('/api/contacts/recent-posts-signals', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  try {
+    const [contactsData, campaignsData, companiesData, campaignContactRows] = await Promise.all([
+      airtableRequest('GET', 'Contacts'),
+      airtableRequest('GET', 'Campaigns'),
+      airtableRequest('GET', 'Companies'),
+      fetchCampaignContactsRows()
+    ]);
+
+    const liveCampaignIds = new Set(
+      (campaignsData.records || []).filter(c => c.fields['Status'] === 'Live').map(c => c.id)
+    );
+    const activeContactIds = new Set();
+    campaignContactRows.forEach(row => {
+      const inLiveCampaign = (row.fields['Campaign'] || []).some(id => liveCampaignIds.has(id));
+      if (inLiveCampaign) (row.fields['Contact'] || []).forEach(cid => activeContactIds.add(cid));
+    });
+
+    const companyNameById = {};
+    (companiesData.records || []).forEach(c => { companyNameById[c.id] = c.fields['Company Name'] || ''; });
+
+    const signals = [];
+    (contactsData.records || []).forEach(r => {
+      if (!activeContactIds.has(r.id)) return;
+      const posts = parseRecentPosts(r.fields['Recent Posts']);
+      if (!posts.length) return;
+      const contactName = r.fields['Full Name'] || 'Unknown';
+      const company = (r.fields['Company'] || []).map(id => companyNameById[id]).filter(Boolean).join(', ');
+      posts.forEach(p => signals.push({ contactId: r.id, contactName, company, ...p }));
+    });
+
+    signals.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    res.json({ signals });
+  } catch (err) {
+    console.error('Contact signals error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---- Part 2: Serper job title drift detection ----
 
 // Pulls the headline/title portion out of a Google result title for a

@@ -449,6 +449,8 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 /* Content system: signal cards + format colour-coding */
 .signal-card{border:1px solid var(--border);border-radius:var(--radius-card);padding:14px;margin-bottom:10px;}
 .signal-card:last-child{margin-bottom:0;}
+.contact-signal-text{font-size:12.5px;line-height:1.5;white-space:pre-wrap;}
+.contact-signal-text.clamped{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
 .format-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:middle;}
 .format-linkedin{background:#0084C5;}
 .format-blog{background:#44A574;}
@@ -1089,7 +1091,7 @@ function afterRender(page){
     if(tab === 'performance' && window.__marcusJobStatus === undefined) checkMarcusJobStatus();
     if(tab === 'settings' && window.__contentSettings === undefined) loadContentSettings();
   }
-  if(page === 'home' && window.__homeContentSignals === undefined) loadHomeContentSignals();
+  if(page === 'home' && window.__homeContactSignals === undefined) loadHomeContactSignals();
   if(page === 'research'){
     const tab = window.__researchSubTab || 'market';
     if(tab === 'market'){
@@ -1107,7 +1109,7 @@ function renderHome(){
   <div class="section-title" style="font-size:22px;margin-bottom:2px;">Hey Marcus, ready to get started?</div>
   <div class="muted" style="margin-bottom:20px;">Your WA market intelligence engine.</div>
 
-  ${renderContentSignalsStrip()}
+  ${renderContactSignalsStrip()}
   ${renderTodaysActions()}
 
   <div class="home-actions">
@@ -7362,14 +7364,14 @@ async function loadContentPerformance(){
   if(state.currentPage === 'content' && window.__contentSubTab === 'performance') renderPage();
 }
 
-async function loadHomeContentSignals(){
+async function loadHomeContactSignals(){
   try {
-    const res = await fetch('/api/content/signals');
+    const res = await fetch('/api/contacts/recent-posts-signals');
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
-    window.__homeContentSignals = data.signals || [];
+    window.__homeContactSignals = data.signals || [];
   } catch(err){
-    window.__homeContentSignals = [];
+    window.__homeContactSignals = { error: err.message };
   }
   if(state.currentPage === 'home') renderPage();
 }
@@ -7450,7 +7452,6 @@ async function runDetectContentSignals(){
     if(!res.ok) throw new Error(data.error || 'Request failed');
     toast(data.created ? `${data.created} new signal${data.created===1?'':'s'} found` : 'No new signals right now', 'success');
     window.__contentSignals = undefined;
-    window.__homeContentSignals = undefined;
     loadContentSignals();
   } catch(err){
     toast('Could not scan for signals: ' + err.message, 'warn');
@@ -7463,7 +7464,7 @@ function dismissContentSignal(signalId){
     method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ status:'Dismissed' })
   }).then(res=>res.json()).then(data=>{
     if(!data.success){ toast('Could not dismiss signal', 'warn'); return; }
-    [window.__contentSignals, window.__homeContentSignals, window.__campaignContentSignals].forEach(list=>{
+    [window.__contentSignals, window.__campaignContentSignals].forEach(list=>{
       if(Array.isArray(list)){ const i = list.findIndex(s=>s.id===signalId); if(i>-1) list.splice(i,1); }
     });
     renderPage();
@@ -7471,7 +7472,7 @@ function dismissContentSignal(signalId){
 }
 
 function draftFromSignal(signalId, campaignName){
-  const allLists = [window.__contentSignals, window.__homeContentSignals, window.__campaignContentSignals].filter(Array.isArray);
+  const allLists = [window.__contentSignals, window.__campaignContentSignals].filter(Array.isArray);
   let signal = null;
   for(const list of allLists){ signal = list.find(s=>s.id===signalId); if(signal) break; }
   // Only re-navigates the top-level Content page's sub-tab - if this was
@@ -7586,7 +7587,6 @@ async function createContentDraft(signalId){
     window.__contentDrafts = undefined;
     window.__campaignContentDrafts = undefined;
     window.__contentSignals = undefined;
-    window.__homeContentSignals = undefined;
     window.__campaignContentSignals = undefined;
     await loadContentDrafts();
     openContentEditor(data.contentId);
@@ -7616,7 +7616,7 @@ function renderContentEditorView(draftsList){
   const draft = findContentDraftById(draftsList, window.__contentEditorId) || findContentDraftById(window.__campaignContentDrafts, window.__contentEditorId);
   if(!draft) return `<div class="card"><div class="muted">Draft not found.</div><button class="btn btn-secondary btn-sm" style="margin-top:10px;" onclick="closeContentEditor()">Back</button></div>`;
 
-  const signalsPool = [window.__contentSignals, window.__homeContentSignals, window.__campaignContentSignals].find(l => Array.isArray(l) && l.some(s=>s.id===draft.signalId));
+  const signalsPool = [window.__contentSignals, window.__campaignContentSignals].find(l => Array.isArray(l) && l.some(s=>s.id===draft.signalId));
   const signal = signalsPool ? signalsPool.find(s=>s.id===draft.signalId) : null;
 
   if(window.__contentSendToContacts === null){
@@ -8145,15 +8145,47 @@ function saveContentSettings(){
 }
 
 /* ---- Home page signal strip ---- */
+// Contact signals: one card per LinkedIn post from contacts in a Live
+// campaign whose Recent Posts field (from GET /api/trigify/sync-contact-posts)
+// has activity, newest first (see GET /api/contacts/recent-posts-signals).
+// Distinct from the Content Signals feature (renderContentSignalsTab/
+// renderCampaignContentTab) - that one surfaces content-marketing theme
+// ideas from the Content Signals Airtable table, this one surfaces raw
+// contact post activity. Unrelated data, kept separate on purpose.
 
-function renderContentSignalsStrip(){
-  const signals = window.__homeContentSignals;
+function renderContactSignalsStrip(){
+  const signals = window.__homeContactSignals;
   const count = Array.isArray(signals) ? signals.length : 0;
   return `
   <div class="card" style="margin-bottom:22px;">
-    <div class="section-title"><i class="ti ti-bulb"></i> Content signals ${count ? `<span class="count-pill has" style="margin-left:6px;">${count}</span>` : ''}</div>
-    ${renderContentSignalsList(signals)}
+    <div class="section-title"><i class="ti ti-bulb"></i> Contact signals ${count ? `<span class="count-pill has" style="margin-left:6px;">${count}</span>` : ''}</div>
+    ${renderContactSignalCards(signals)}
   </div>`;
+}
+
+function renderContactSignalCards(signals){
+  if(!signals) return '<div class="muted"><i class="ti ti-loader-2"></i> Loading signals...</div>';
+  if(signals.error) return `<div class="muted">Could not load signals: ${esc(signals.error)}</div>`;
+  if(!signals.length) return '<div class="empty-state">No new contact signals. Sync LinkedIn posts for contacts in active campaigns and new activity will surface here automatically.</div>';
+  return signals.map((s, i) => `
+    <div class="signal-card">
+      <div style="flex:1;min-width:220px;">
+        <div style="font-weight:700;font-size:13.5px;margin-bottom:2px;">${esc(s.contactName)}${s.company ? ` <span class="muted" style="font-weight:400;">&middot; ${esc(s.company)}</span>` : ''}</div>
+        <div class="muted" style="font-size:11px;margin-bottom:6px;">${esc(s.date || '')}${(s.likes || s.comments) ? ` &middot; ${s.likes||0} likes, ${s.comments||0} comments` : ''}</div>
+        <div class="contact-signal-text clamped" id="contactSignalText-${i}">${esc(s.text)}</div>
+        <button class="btn btn-ghost btn-sm" style="margin-top:6px;" onclick="toggleContactSignalExpand(${i})" id="contactSignalToggle-${i}">View</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function toggleContactSignalExpand(i){
+  const textEl = document.getElementById('contactSignalText-' + i);
+  const btn = document.getElementById('contactSignalToggle-' + i);
+  if(!textEl || !btn) return;
+  const wasClamped = textEl.classList.contains('clamped');
+  textEl.classList.toggle('clamped', !wasClamped);
+  btn.textContent = wasClamped ? 'Collapse' : 'View';
 }
 
 /* ---- Per-campaign Content sub-tab ---- */
