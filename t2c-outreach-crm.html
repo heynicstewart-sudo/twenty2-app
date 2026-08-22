@@ -7573,7 +7573,7 @@ function renderContentPerformanceTable(posts){
     <thead><tr>${cols.map(([key,label])=>`<th style="cursor:pointer;" onclick="sortContentPerformance('${key}')">${label}${sort.key===key?(sort.dir==='asc'?' &#9650;':' &#9660;'):''}</th>`).join('')}</tr></thead>
     <tbody>
       ${sorted.map(p=>`
-        <tr>
+        <tr style="cursor:pointer;" onclick="showContentPerformanceDetail('${p.id}')">
           <td>${p.date ? esc(new Date(p.date).toLocaleDateString('en-AU')) : '—'}</td>
           <td>${esc(p.topic||'—')}</td>
           <td>${esc(p.format||'—')}</td>
@@ -7593,6 +7593,30 @@ function sortContentPerformance(key){
   const current = window.__contentPerfSort || CONTENT_PERF_SORT_DEFAULT;
   window.__contentPerfSort = { key, dir: (current.key===key && current.dir==='desc') ? 'asc' : 'desc' };
   renderPage();
+}
+
+function showContentPerformanceDetail(id){
+  const posts = window.__contentPerformance || [];
+  const p = posts.find(x=>x.id===id);
+  if(!p) return;
+  const body = `
+    <div class="field"><label>Post text</label><div style="white-space:pre-wrap;font-size:13.5px;">${esc(p.postText||'—')}</div></div>
+    <div class="row" style="margin-top:14px;">
+      <div class="field"><label>Date</label><div>${p.date ? esc(new Date(p.date).toLocaleDateString('en-AU')) : '—'}</div></div>
+      <div class="field"><label>Topic</label><div>${esc(p.topic||'—')}</div></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Format</label><div>${esc(p.format||'—')}</div></div>
+      <div class="field"><label>CTA used</label><div>${esc(p.ctaUsed||'—')}</div></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Likes</label><div>${p.likes ?? 0}</div></div>
+      <div class="field"><label>Comments</label><div>${p.comments ?? 0}</div></div>
+      <div class="field"><label>Engagement score</label><div>${p.engagementScore ?? 0}</div></div>
+    </div>
+    <div class="field" style="margin-top:14px;"><label>What worked</label><div style="white-space:pre-wrap;font-size:13.5px;">${esc(p.whatWorked||'—')}</div></div>
+  `;
+  openModal('Post details', body, '<button class="btn btn-secondary" onclick="closeModal()">Close</button>');
 }
 
 // The analysis itself runs server-side as a fire-and-forget background job
