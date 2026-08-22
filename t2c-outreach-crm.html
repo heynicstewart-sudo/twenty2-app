@@ -2146,6 +2146,11 @@ async function handleGenerateFastMessage(cid){
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
 
+    // Cache the original AI draft so "Copy & mark sent" can diff the
+    // textarea against it later to work out Draft Outcome.
+    window.__fastActionOriginalDraft = window.__fastActionOriginalDraft || {};
+    window.__fastActionOriginalDraft[cid] = data.message;
+
     area.innerHTML = `
       <textarea id="fastActionDraft-${cid}" rows="4" style="width:100%;margin-bottom:8px;">${esc(data.message)}</textarea>
       <button class="btn btn-primary btn-sm" onclick="handleCopyAndMarkSent('${cid}')"><i class="ti ti-check"></i> Copy &amp; mark sent</button>
@@ -2167,7 +2172,27 @@ async function handleCopyAndMarkSent(cid){
   const action = (window.__todaysActions || {})[cid];
   const textarea = document.getElementById('fastActionDraft-' + cid);
   const message = textarea ? textarea.value : '';
-  if(!action || !action.campaignName || !message) return;
+  if(!action || !action.campaignName) return;
+
+  const originalDraft = (window.__fastActionOriginalDraft || {})[cid] || '';
+
+  // Discarded - the draft was cleared rather than sent. Record that as
+  // feedback on the Campaign Contacts row (PATCH .../draft) without
+  // advancing the sequence or logging a Touch Point, since nothing was
+  // actually sent.
+  if(!message.trim()){
+    try {
+      await fetch(`/api/campaign/${encodeURIComponent(action.campaignName)}/contacts/${cid}/draft`, {
+        method: 'PATCH',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ draftOutcome: 'Discarded' })
+      });
+    } catch(err){
+      console.warn('Could not log discarded draft:', err.message);
+    }
+    toast('Draft cleared - nothing to send', 'warn');
+    return;
+  }
 
   try {
     await navigator.clipboard.writeText(message);
@@ -2180,11 +2205,16 @@ async function handleCopyAndMarkSent(cid){
   const area = document.getElementById('fastActionArea-' + cid);
   if(area) area.innerHTML = '<span class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Logging and advancing stage...</span>';
 
+  // Diff against the original AI draft cached when it was generated -
+  // 'Sent verbatim' if untouched, 'Sent edited' if Marcus rewrote it. Real
+  // feedback signal on how good the draft actually was.
+  const draftOutcome = message === originalDraft ? 'Sent verbatim' : 'Sent edited';
+
   try {
     const res = await fetch(`/api/campaign/${encodeURIComponent(action.campaignName)}/contacts/${cid}/mark-sent`, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ message })
+      body: JSON.stringify({ message, draftOutcome })
     });
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
@@ -4230,7 +4260,7 @@ function openBookingModal(cid){
   const footer = `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="confirmBooking('${cid}')"><i class="ti ti-check"></i> Confirm booking</button>`;
   openModal('Mark as meeting booked', body, footer);
 }
-function confirmBooking(cid){
+async function confirmBooking(cid){
   const c = state.contacts.find(x=>x.id===cid);
   const service = document.getElementById('bkService').value;
   const date = document.getElementById('bkDate').value;
@@ -4249,6 +4279,43 @@ function confirmBooking(cid){
   closeModal();
   toast(c.name+' booked for '+service, 'success');
   renderPage();
+
+  // Same Deals + Touch Point writes the Sales tab's "Log a deal" flow makes
+  // (POST /api/campaign/:name/deals, POST /api/airtable/touchpoint) - a
+  // booking is a won deal, tagged to whichever campaign this contact's
+  // Roadmap card belongs to.
+  const campaign = state.campaigns.find(x => x.id === window.__roadmapCampaignId) || activeCampaignForContact(c);
+  if(!campaign){
+    console.warn('Could not sync booking to Airtable: no active campaign found for this contact.');
+    return;
+  }
+  const dealNotes = [notes, cta ? `CTA: ${cta}` : ''].filter(Boolean).join(' — ');
+  try {
+    const dealRes = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/deals`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ contactId: cid, outcome: 'Won', dealValue: 0, notes: dealNotes, date })
+    });
+    const dealData = await dealRes.json();
+    if(!dealRes.ok || !dealData.success) throw new Error(dealData.error || 'Deal save failed');
+
+    const tpRes = await fetch('/api/airtable/touchpoint', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        contactRecordIds: [cid],
+        date, type: 'Meeting',
+        notes: `${service} booked${cta ? ' via ' + cta : ''}`,
+        outcome: 'Meeting Booked',
+        campaignName: campaign.name
+      })
+    });
+    const tpData = await tpRes.json();
+    if(!tpRes.ok || !tpData.success) throw new Error(tpData.error || 'Touch point save failed');
+  } catch(err){
+    console.warn('Could not sync booking to Airtable:', err.message);
+    toast('Booked locally, but could not sync to Airtable: ' + err.message, 'warn');
+  }
 }
 
 /* ===================== SEQUENCES PAGE ===================== */
@@ -4600,7 +4667,7 @@ async function copyGeneratedMessage(){
   }
   toast('Message copied to clipboard', 'success');
 }
-function saveGeneratedMessage(cid, stageKey){
+async function saveGeneratedMessage(cid, stageKey){
   const c = state.contacts.find(x=>x.id===cid);
   const output = document.getElementById('genOutput').value;
   c.generated[stageKey] = output;
@@ -4614,6 +4681,26 @@ function saveGeneratedMessage(cid, stageKey){
   toast('Message saved for '+c.name, 'success');
   if(window.__genCtx && window.__genCtx.onDone) window.__genCtx.onDone();
   else renderPage();
+
+  // Save the drafted text onto this contact's Campaign Contacts row
+  // (PATCH /api/campaign/:name/contacts/:id/draft) - this client-side
+  // callAI() generator has no server-side equivalent write, unlike the
+  // Today's Actions fast-action's generate-message endpoint which already
+  // writes to Next Message Draft on its own.
+  const campaign = state.campaigns.find(x => x.id === window.__roadmapCampaignId) || activeCampaignForContact(c);
+  if(!campaign) return;
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/contacts/${cid}/draft`, {
+      method: 'PATCH',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ message: output })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
+  } catch(err){
+    console.warn('Could not sync draft to Airtable:', err.message);
+    toast('Saved locally, but could not sync draft to Airtable: ' + err.message, 'warn');
+  }
 }
 
 /* ===================== CAMPAIGNS PAGE ===================== */
@@ -6718,14 +6805,34 @@ async function runAnalysis(){
   if(!resultEl) return;
   resultEl.innerHTML = '<div class="empty-state">Crunching pipeline data...</div>';
 
-  const contacts = state.contacts;
-  const stageDist = {};
-  contacts.forEach(c => { const k = getRoadmapColumn(c); stageDist[k] = (stageDist[k]||0)+1; });
-  const strategyBreakdown = state.sequences.map(s => `${s.name}: ${contacts.filter(c=>c.seqId===s.id).length} contacts, voice "${s.voice}"`).join('; ');
-  const serviceCounts = {};
-  state.settings.services.forEach(s => serviceCounts[s] = state.bookings.filter(b=>b.service===s).length);
+  // Same live Airtable-backed data the other three Run Engine steps use -
+  // GET /api/intelligence/health (runEngineHealth) and GET /api/track/insights
+  // (runTrackInsights) - rather than reading local browser state, which can
+  // silently diverge from what's actually in Airtable (see Roadmap tab notes
+  // elsewhere in this file on markSent/confirmBooking).
+  let engineHealth, insights;
+  try {
+    const [healthRes, insightsRes] = await Promise.all([
+      fetch('/api/intelligence/health'),
+      fetch('/api/track/insights')
+    ]);
+    engineHealth = await healthRes.json();
+    if(!healthRes.ok) throw new Error(engineHealth.error || 'Could not load engine health');
+    insights = await insightsRes.json();
+    if(!insightsRes.ok) throw new Error(insights.error || 'Could not load insights');
+  } catch(err){
+    console.warn('Could not load live data for strategy analysis:', err.message);
+    resultEl.innerHTML = `<div class="empty-state">Could not run analysis: ${esc(err.message)}</div>`;
+    toast('Could not run analysis: ' + err.message, 'warn');
+    return;
+  }
 
-  const prompt = `Analyse this LinkedIn outreach pipeline for a Perth Agile/change consultancy.\n\nNumeric data: ${contacts.length} contacts found, ${contacts.filter(c=>c.connDate).length} connected, ${state.bookings.length} booked, ${state.deadContacts.length} dropped.\nStage distribution: ${JSON.stringify(stageDist)}.\nStrategy breakdown: ${strategyBreakdown}.\nBookings by service: ${JSON.stringify(serviceCounts)}.\nConversion notes from booked contacts: ${state.bookings.map(b=>`"${b.notes}" (${b.cta})`).join(' | ') || 'none yet'}.\n\nReturn ONLY valid JSON in this exact shape: {"wins": string[], "gaps": string[], "losses": string[], "recommendations": string[]}. 2-4 items per array, each a single short sentence, no markdown.`;
+  const stageBreakdown = (engineHealth.contactsByStage || []).map(s => `${s.stage}: ${s.count}`).join(', ') || 'none on file';
+  const topRoles = (insights.topIcpRoles || []).join('; ') || 'none logged yet';
+  const topProducts = (insights.topProducts || []).join('; ') || 'none logged yet';
+  const topMethods = (insights.topMethods || []).join('; ') || 'none logged yet';
+
+  const prompt = `Analyse this LinkedIn outreach pipeline for a Perth Agile/change consultancy, using live data synced from Airtable.\n\nNumeric data: ${engineHealth.totalContacts ?? 0} total contacts, ${engineHealth.touchPointsThisWeek ?? 0} touch points logged this week, ${engineHealth.activeCampaigns ?? 0} active campaigns, ${engineHealth.overallConversionRate ?? 0}% overall conversion rate, ${insights.conversionCount ?? 0} conversions logged.\nContacts by journey stage: ${stageBreakdown}.\nTop converting ICP roles: ${topRoles}.\nTop converting products: ${topProducts}.\nTop converting communication methods: ${topMethods}.\nAverage touch points to convert: ${insights.avgTouchPoints ?? 'not enough data'}.\n\nReturn ONLY valid JSON in this exact shape: {"wins": string[], "gaps": string[], "losses": string[], "recommendations": string[]}. 2-4 items per array, each a single short sentence, no markdown.`;
 
   const fallback = () => ({
     wins: [
@@ -6760,7 +6867,7 @@ async function runAnalysis(){
   if(!parsed) parsed = fallback();
 
   parsed.runAt = TODAY.toLocaleString('en-AU',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
-  parsed.notesCount = state.bookings.filter(b=>b.notes).length;
+  parsed.notesCount = insights.conversionCount ?? 0;
   state.lastAnalysis = parsed;
 
   resultEl.innerHTML = renderAnalysisBlocks(parsed);

@@ -1211,17 +1211,88 @@ function computeCampaignPerformance(campaigns, contacts, touchPoints, conversion
 // Pulls the full contact + touch point picture from Airtable, hands it to
 // Claude, and asks for four sections of outreach intelligence back as JSON.
 
+// Real sales call feedback (script adherence, objections, CTAs actually
+// used), written by POST /api/campaign/:id/sales/analyze-transcript. Table
+// may not exist in every base yet, so failures are swallowed like Learning
+// Data/Conversions.
+async function fetchSalesLog() {
+  try {
+    const data = await airtableRequest('GET', 'Sales Log');
+    return (data.records || []).map(r => ({
+      campaign: r.fields['Campaign'] || '',
+      type: r.fields['Type'] || '',
+      scriptAdherence: r.fields['Script Adherence'] || '',
+      notes: r.fields['Notes'] || '',
+      ctasUsed: r.fields['CTAs Used'] || '',
+      objectionsRaised: r.fields['Objections Raised'] || '',
+      date: r.fields['Date'] || ''
+    }));
+  } catch (err) {
+    console.warn('Could not fetch Sales Log (table may not exist yet):', err.message);
+    return [];
+  }
+}
+
+// Real LinkedIn post engagement data, synced from Trigify by the "Marcus
+// content analysis" job and written to the Content Performance table.
+async function fetchContentPerformance() {
+  try {
+    const data = await airtableRequest('GET', 'Content Performance');
+    return (data.records || []).map(r => ({
+      date: r.fields['Date'] || '',
+      likes: r.fields['Likes'] || 0,
+      comments: r.fields['Comments'] || 0,
+      engagementScore: r.fields['Engagement Score'] || 0,
+      topic: r.fields['Topic'] || '',
+      format: r.fields['Format'] || '',
+      ctaUsed: r.fields['CTA Used'] || '',
+      whatWorked: r.fields['What Worked'] || ''
+    }));
+  } catch (err) {
+    console.warn('Could not fetch Content Performance (table may not exist yet):', err.message);
+    return [];
+  }
+}
+
+function salesLogContext(salesLog) {
+  if (!salesLog.length) return 'No sales call transcripts analysed yet.';
+  const objectionCounts = rankCounts(
+    salesLog.flatMap(s => (s.objectionsRaised || '').split(',').map(o => o.trim()).filter(Boolean)),
+    o => o
+  ).slice(0, 5).map(([o, count]) => `${o} (${count}x)`);
+  const calls = salesLog.map(s => `- [${s.date}, ${s.campaign || 'no campaign'}] Script adherence: ${s.scriptAdherence || 'not scored'}. CTAs used: ${s.ctasUsed || 'none recorded'}. Objections: ${s.objectionsRaised || 'none recorded'}.`).join('\n');
+  return calls + (objectionCounts.length ? `\n\nMost common objections raised across all calls: ${objectionCounts.join(', ')}.` : '');
+}
+
+function contentPerformanceContext(contentPerformance) {
+  if (!contentPerformance.length) return 'No LinkedIn post performance data on file yet.';
+  const byFormat = {};
+  contentPerformance.forEach(p => {
+    const key = p.format || 'Unknown format';
+    if (!byFormat[key]) byFormat[key] = [];
+    byFormat[key].push(p.engagementScore || 0);
+  });
+  const topFormats = Object.entries(byFormat)
+    .map(([format, scores]) => [format, Math.round((scores.reduce((s, n) => s + n, 0) / scores.length) * 10) / 10, scores.length])
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([format, avg, count]) => `${format}: avg engagement score ${avg} across ${count} post${count === 1 ? '' : 's'}`);
+  return `Top performing post formats by average engagement score (likes + comments): ${topFormats.join('; ') || 'not enough data'}.`;
+}
+
 app.post('/api/intelligence', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
 
   try {
-    const [contactsData, touchPointsData, learningData, conversions, campaigns] = await Promise.all([
+    const [contactsData, touchPointsData, learningData, conversions, campaigns, salesLog, contentPerformance] = await Promise.all([
       airtableRequest('GET', 'Contacts'),
       airtableRequest('GET', 'Touch Points'),
       fetchLearningData(),
       fetchConversions(),
-      fetchCampaigns()
+      fetchCampaigns(),
+      fetchSalesLog(),
+      fetchContentPerformance()
     ]);
     // Note: there is no "Signals" table or concept anywhere in this app's
     // schema yet, so there is nothing to fetch for it - not fabricating one.
@@ -1271,6 +1342,12 @@ ${conversionsContext(conversions)}
 
 WEBSITE LEAD PROFILES - Change Value Check reports for contacts who came in via the website (use these to calibrate campaignSuggestions and messageDrafts for these specific contacts to their archetype and primary leak, rather than generic messaging):
 ${cvcProfilesContext(contactsData)}
+
+SALES CALL FEEDBACK - script adherence, objections raised and CTAs actually used, scored from real call transcripts (${salesLog.length} on file - use this to sharpen objection-handling and pitch-angle suggestions with what's actually happening on calls, not theory):
+${salesLogContext(salesLog)}
+
+CONTENT PERFORMANCE - real engagement data from Marcus's LinkedIn posts (${contentPerformance.length} posts analysed - use this to inform which angles and formats are resonating when suggesting message angles or content-driven campaigns):
+${contentPerformanceContext(contentPerformance)}
 
 CAMPAIGN PERFORMANCE (already calculated, ranked best to worst by conversion rate):
 ${campaignPerformance.length ? campaignPerformance.map(c => `- ${c.campaignName}: ${c.contactsTargeted} contacts targeted, ${c.touchPointsSent} touch points sent, ${c.replies} replies, ${c.bookings} bookings, ${c.conversionRate}% conversion rate`).join('\n') : 'No live campaigns to report on.'}
@@ -4700,7 +4777,7 @@ app.post('/api/campaign/:id/contacts/:contactId/mark-sent', async (req, res) => 
 
   const campaignName = decodeURIComponent(req.params.id);
   const contactId = req.params.contactId;
-  const { message } = req.body;
+  const { message, draftOutcome } = req.body;
   if (!message) return res.status(400).json({ error: 'message is required' });
 
   try {
@@ -4719,14 +4796,20 @@ app.post('/api/campaign/:id/contacts/:contactId/mark-sent', async (req, res) => 
     }
 
     const today = new Date().toISOString().slice(0, 10);
+    const stageFields = {
+      'Sequence Stage': nextStage,
+      'Stage History': appendStageHistory(row.fields['Stage History'], nextStage, today),
+      'Next Message Draft': ''
+    };
+    // draftOutcome ('Sent verbatim'/'Sent edited') tells us whether Marcus sent
+    // the AI draft as-is or rewrote it - feedback signal for how good the
+    // draft actually was, diffed client-side against the draft this row held
+    // before this send.
+    if (draftOutcome) stageFields['Draft Outcome'] = draftOutcome;
     await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, {
       records: [{
         id: row.id,
-        fields: {
-          'Sequence Stage': nextStage,
-          'Stage History': appendStageHistory(row.fields['Stage History'], nextStage, today),
-          'Next Message Draft': ''
-        }
+        fields: stageFields
       }],
       typecast: true
     });
@@ -4748,6 +4831,47 @@ app.post('/api/campaign/:id/contacts/:contactId/mark-sent', async (req, res) => 
     res.json({ success: true, newStage: nextStage });
   } catch (err) {
     console.error('Mark sent error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Necessary supporting infrastructure, not itself one of the requested
+// changes: the only existing way to write Next Message Draft onto a
+// Campaign Contacts row was buried inside the server-side generate-message
+// endpoint. saveGeneratedMessage's drafts come from the client-side callAI()
+// flow instead, so it needs its own write path here. Also doubles as the
+// "Discarded" case for Draft Outcome - when a fast-action draft is cleared
+// rather than sent, there's no message to log as a Touch Point and no stage
+// to advance, just this one field to record on the row.
+app.patch('/api/campaign/:id/contacts/:contactId/draft', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const campaignName = decodeURIComponent(req.params.id);
+  const contactId = req.params.contactId;
+  const { message, draftOutcome } = req.body;
+  if (message === undefined && !draftOutcome) {
+    return res.status(400).json({ error: 'message or draftOutcome is required' });
+  }
+
+  try {
+    const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
+    if (!campaignRecord) return res.status(404).json({ error: `Campaign "${campaignName}" not found` });
+
+    const contactRecord = await airtableGetRecord('Contacts', contactId);
+    if (!contactRecord) return res.status(404).json({ error: 'Contact not found' });
+
+    const rows = await fetchCampaignContactsRows();
+    const row = await getOrCreateCampaignContactRow(contactId, (contactRecord.fields || {})['Full Name'] || contactId, campaignRecord.id, campaignName, rows);
+
+    const fields = {};
+    if (message !== undefined) fields['Next Message Draft'] = message;
+    if (draftOutcome) fields['Draft Outcome'] = draftOutcome;
+
+    await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, { records: [{ id: row.id, fields }], typecast: true });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Campaign contact draft update error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
