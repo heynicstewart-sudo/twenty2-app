@@ -254,7 +254,8 @@ app.post('/api/airtable/contact', async (req, res) => {
     if (existing) {
       if (icpRoleCategory) {
         await airtableRequest('PATCH', 'Contacts', {
-          records: [{ id: existing.id, fields: { 'ICP Role Category': icpRoleCategory } }]
+          records: [{ id: existing.id, fields: { 'ICP Role Category': icpRoleCategory } }],
+          typecast: true
         });
       }
       return res.json({ success: true, skipped: true, recordId: existing.id });
@@ -279,7 +280,8 @@ app.post('/api/airtable/contact', async (req, res) => {
     if (companyRecord) fields['Company'] = [companyRecord.id];
 
     const data = await airtableRequest('POST', 'Contacts', {
-      records: [{ fields }]
+      records: [{ fields }],
+      typecast: true
     });
 
     if (linkedinUrl) {
@@ -3097,7 +3099,7 @@ async function trigifyCreateProfileMonitor(name, profileUrl, { maxResults, frequ
 // contact save itself must never fail because of this.
 async function trigifyCreateContactSearch(contactId, contactName, linkedinUrl) {
   if (!TRIGIFY_API_KEY || !AIRTABLE_API_KEY) return;
-  const searchId = await trigifyCreateProfileMonitor(`T2C — ${contactName}`, linkedinUrl, { maxResults: 3, frequency: 'WEEKLY' });
+  const searchId = await trigifyCreateProfileMonitor(`T2C — ${contactName}`, linkedinUrl, { maxResults: 10, frequency: 'WEEKLY' });
   await airtableRequest('PATCH', 'Contacts', { records: [{ id: contactId, fields: { 'Trigify Search ID': searchId } }] });
 }
 
@@ -3219,7 +3221,7 @@ app.post('/api/trigify/setup-contact-search', async (req, res) => {
         const searchId = await trigifyCreateProfileMonitor(
           `T2C — ${contact.fields['Full Name']}`,
           contact.fields['LinkedIn URL'],
-          { maxResults: 3, frequency: 'WEEKLY' }
+          { maxResults: 10, frequency: 'WEEKLY' }
         );
         await airtableRequest('PATCH', 'Contacts', { records: [{ id: contact.id, fields: { 'Trigify Search ID': searchId } }] });
         created++;
