@@ -3,7 +3,6 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const cron = require('node-cron');
-const { PDFParse } = require('pdf-parse');
 const mammoth = require('mammoth');
 
 const app = express();
@@ -406,23 +405,21 @@ app.get('/api/leads/website', async (req, res) => {
 // ===================== RESEARCH: EVENT TRANSCRIPTS =====================
 // Market Intelligence tab. Uploaded files are read client-side and sent
 // here as base64 (same convention as the Sales tab transcript analyzer
-// and the Context tab's historical-file upload) - text is always
-// extracted server-side first (via pdf-parse/mammoth for .pdf/.docx, or
-// used as-is for .txt/pasted text) rather than handed to Claude as a raw
-// document, because the Research Events table has a "Raw Transcript"
-// field that needs the actual text saved regardless of source format.
+// and the Context tab's historical-file upload) - text is extracted
+// server-side first (mammoth for .docx, or used as-is for .txt/pasted
+// text/.pdf) rather than handed to Claude as a raw document, because the
+// Research Events table has a "Raw Transcript" field that needs the
+// actual text saved regardless of source format.
+//
+// PDF text extraction previously went through pdf-parse, but that
+// package crashed the Railway deployment on startup, so .pdf uploads now
+// fall through to the same plain UTF-8 buffer read as .txt - this reads
+// raw PDF bytes rather than real extracted text, so .pdf transcripts will
+// come through noisy/unusable until a working PDF text extractor is
+// reintroduced.
 
 async function extractTranscriptText(fileBase64, fileMediaType) {
   const buffer = Buffer.from(fileBase64, 'base64');
-  if (fileMediaType === 'application/pdf') {
-    const parser = new PDFParse({ data: buffer });
-    try {
-      const result = await parser.getText();
-      return result.text || '';
-    } finally {
-      await parser.destroy();
-    }
-  }
   if (fileMediaType && fileMediaType.includes('wordprocessingml')) {
     const result = await mammoth.extractRawText({ buffer });
     return result.value || '';
