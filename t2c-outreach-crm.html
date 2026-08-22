@@ -2146,7 +2146,7 @@ function renderHowItWorks(){
     <div class="howto-item">
       <div class="howto-item-head"><div class="howto-num">5</div><h4><i class="ti ti-brain"></i> Engine — account-level view</h4></div>
       <p>Engine has two sub-tabs. <strong>Context</strong> (first) is the same touch-point logger and upload tools as a campaign's Intelligence tab, just untagged. <strong>Intelligence</strong> pulls every contact, touch point, campaign and conversion for campaign ideas, cold contacts and ready-to-send drafts, plus the account-wide numbers - strategy tally, CTA performance, bookings by service, connection speed.</p>
-      <ul><li>Click <strong>Analyse strategy</strong> further down the Intelligence tab for a plain-English read on what's converting and what isn't</li></ul>
+      <ul><li>Click <strong>Run Engine</strong> at the top of the Intelligence tab to run intelligence, insights, health and a plain-English strategy read all in one go</li></ul>
     </div>
   </div>
 
@@ -6415,8 +6415,7 @@ function renderAnalytics(){
 
   <div class="card">
     <div class="section-title"><i class="ti ti-bulb"></i> Strategy insights</div>
-    <button class="btn btn-primary" onclick="runAnalysis()" id="analyseBtn"><i class="ti ti-sparkles"></i> Analyse strategy</button>
-    <div id="analysisResult" style="margin-top:16px;">${state.lastAnalysis ? renderAnalysisBlocks(state.lastAnalysis) : ''}</div>
+    <div id="analysisResult" style="margin-top:16px;">${state.lastAnalysis ? renderAnalysisBlocks(state.lastAnalysis) : '<span class="muted" style="font-size:12.5px;">Run Engine above to see strategy insights.</span>'}</div>
   </div>
   `;
 }
@@ -6434,11 +6433,8 @@ function renderAnalysisBlocks(a){
 }
 
 async function runAnalysis(){
-  const btn = document.getElementById('analyseBtn');
   const resultEl = document.getElementById('analysisResult');
-  if(!btn || !resultEl) return;
-  btn.disabled = true;
-  btn.innerHTML = '<i class="ti ti-loader-2"></i> Analysing...';
+  if(!resultEl) return;
   resultEl.innerHTML = '<div class="empty-state">Crunching pipeline data...</div>';
 
   const contacts = state.contacts;
@@ -6487,8 +6483,6 @@ async function runAnalysis(){
   state.lastAnalysis = parsed;
 
   resultEl.innerHTML = renderAnalysisBlocks(parsed);
-  btn.disabled = false;
-  btn.innerHTML = '<i class="ti ti-sparkles"></i> Analyse strategy';
   toast('Strategy analysis complete', 'success');
 }
 
@@ -6522,16 +6516,21 @@ function setIntelSubTab(tab){
 function renderIntelligence(){
   return `
   <div class="card" style="margin-bottom:16px;">
+    <div class="section-title"><i class="ti ti-bolt"></i> Run Engine</div>
+    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Runs intelligence, insights, health and strategy analysis in sequence - one click for the full picture below.</p>
+    <button class="btn btn-primary" id="runEngineBtn" onclick="runEngine()"><i class="ti ti-sparkles"></i> Run Engine</button>
+    <div id="engineMeta" class="muted" style="font-size:11.5px;margin-top:10px;"></div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px;">
     <div class="section-title"><i class="ti ti-brain"></i> Intelligence</div>
     <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Pulls every contact, touch point, campaign, conversion and learning record synced to Airtable and asks Claude for campaign ideas, contacts going cold, relationship health, ready-to-send drafts, and specific data-backed insights and optimisation suggestions.</p>
-    <button class="btn btn-primary" id="runIntelBtn" onclick="runIntelligence()"><i class="ti ti-sparkles"></i> Run intelligence</button>
     <div id="intelMeta" class="muted" style="font-size:11.5px;margin-top:10px;"></div>
   </div>
 
   <div class="card" style="margin-bottom:16px;">
     <div class="section-title"><i class="ti ti-target-arrow"></i> What's working</div>
     <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Calculated live from every logged conversion in Airtable - which ICP roles, products, industries and methods actually turn into booked meetings.</p>
-    <button class="btn btn-primary" id="runInsightsBtn" onclick="runTrackInsights()"><i class="ti ti-chart-bar"></i> Run insights</button>
     <div id="insightsMeta" class="muted" style="font-size:11.5px;margin-top:10px;"></div>
     <div class="analysis-grid" style="margin-top:14px;">
       <div class="analysis-block wins">
@@ -6560,7 +6559,6 @@ function renderIntelligence(){
   <div class="card" style="margin-bottom:16px;">
     <div class="section-title"><i class="ti ti-activity-heartbeat"></i> Engine health</div>
     <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Raw database stats straight from Airtable - no AI, just counts.</p>
-    <button class="btn btn-primary" id="runHealthBtn" onclick="runEngineHealth()"><i class="ti ti-refresh"></i> Refresh health</button>
     <div id="healthMeta" class="muted" style="font-size:11.5px;margin-top:10px;"></div>
     <div class="mini-cards health-stat-grid" id="healthStats" style="margin-top:14px;margin-bottom:0;">
       <div class="mini-card"><div class="num" id="healthTotalContacts">—</div><div class="label">Total contacts</div></div>
@@ -6639,10 +6637,6 @@ function renderIntelligence(){
 }
 
 async function runIntelligence(){
-  const btn = document.getElementById('runIntelBtn');
-  const original = btn.innerHTML;
-  btn.disabled = true;
-  btn.innerHTML = '<i class="ti ti-loader-2"></i> Running...';
   document.getElementById('intelMeta').textContent = '';
 
   try {
@@ -6665,9 +6659,6 @@ async function runIntelligence(){
     console.warn('Intelligence request failed:', err.message);
     document.getElementById('intelMeta').textContent = 'Could not run intelligence: ' + err.message;
     toast('Could not run intelligence: ' + err.message, 'warn');
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = original;
   }
 }
 
@@ -6705,10 +6696,6 @@ function renderCampaignPerformance(rows){
 }
 
 async function runTrackInsights(){
-  const btn = document.getElementById('runInsightsBtn');
-  const original = btn.innerHTML;
-  btn.disabled = true;
-  btn.innerHTML = '<i class="ti ti-loader-2"></i> Running...';
   document.getElementById('insightsMeta').textContent = '';
 
   try {
@@ -6730,17 +6717,10 @@ async function runTrackInsights(){
     console.warn('Track insights request failed:', err.message);
     document.getElementById('insightsMeta').textContent = 'Could not run insights: ' + err.message;
     toast('Could not run insights: ' + err.message, 'warn');
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = original;
   }
 }
 
 async function runEngineHealth(){
-  const btn = document.getElementById('runHealthBtn');
-  const original = btn.innerHTML;
-  btn.disabled = true;
-  btn.innerHTML = '<i class="ti ti-loader-2"></i> Refreshing...';
   document.getElementById('healthMeta').textContent = '';
 
   try {
@@ -6764,10 +6744,34 @@ async function runEngineHealth(){
     console.warn('Engine health request failed:', err.message);
     document.getElementById('healthMeta').textContent = 'Could not refresh health: ' + err.message;
     toast('Could not refresh health: ' + err.message, 'warn');
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = original;
   }
+}
+
+// Single entry point replacing the four individual run buttons this page
+// used to have (Run intelligence, Run insights, Refresh health, Analyse
+// strategy) - each of those functions is unchanged otherwise and still
+// updates its own section in place, just no longer has its own button to
+// manage the disabled/spinner state of.
+async function runEngine(){
+  const btn = document.getElementById('runEngineBtn');
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  document.getElementById('engineMeta').textContent = '';
+
+  const steps = [
+    ['Running intelligence...', runIntelligence],
+    ['Running insights...', runTrackInsights],
+    ['Refreshing health...', runEngineHealth],
+    ['Analysing strategy...', runAnalysis]
+  ];
+  for(const [label, fn] of steps){
+    btn.innerHTML = `<i class="ti ti-loader-2"></i> ${label}`;
+    try { await fn(); } catch(err){ console.warn('Run Engine step failed:', err.message); }
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = original;
+  document.getElementById('engineMeta').textContent = `Full run complete · ${new Date().toLocaleString('en-AU')}`;
 }
 
 function renderIntelDrafts(drafts){
