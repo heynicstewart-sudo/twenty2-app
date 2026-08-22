@@ -980,9 +980,10 @@ function learningDataContext(learningData) {
 
 // Website Lead contacts (see POST /api/leads/website) carry a Change Value
 // Check report as a JSON string in AI Summary instead of free-text notes.
-// Pulls those out and renders a short calibration line per contact so the
+// Pulls those out and renders a full per-contact breakdown - archetype, all
+// four pillar scores, both leaks and the three insight titles - so the
 // intelligence prompt can pitch message drafts/suggestions at their actual
-// archetype and leak rather than generic outreach.
+// CVC report rather than generic outreach.
 function cvcProfilesContext(contactsData) {
   const lines = (contactsData.records || [])
     .filter(r => r.fields['Journey Stage'] === 'Website Lead')
@@ -990,7 +991,8 @@ function cvcProfilesContext(contactsData) {
       let cvc;
       try { cvc = JSON.parse(r.fields['AI Summary'] || ''); } catch (e) { return null; }
       if (!cvc || !cvc.archetype) return null;
-      return `- ${r.fields['Full Name'] || 'Unknown'}: archetype "${cvc.archetype}", overall score ${cvc.overallScore}/100, primary leak "${cvc.primaryLeak}", secondary leak "${cvc.secondaryLeak}".`;
+      const insightTitles = (cvc.insights || []).map(i => i && i.title).filter(Boolean);
+      return `- ${r.fields['Full Name'] || 'Unknown'}: archetype "${cvc.archetype}". Pillar scores - overall ${cvc.overallScore}/100, people ${cvc.peopleScore}/100, productivity ${cvc.productivityScore}/100, performance ${cvc.performanceScore}/100. Primary leak "${cvc.primaryLeak}", secondary leak "${cvc.secondaryLeak}". Report insights: ${insightTitles.length ? insightTitles.map(t => `"${t}"`).join(', ') : 'none recorded'}.`;
     })
     .filter(Boolean);
   return lines.length ? lines.join('\n') : 'No Website Lead contacts with a Change Value Check report on file yet.';
@@ -1340,7 +1342,7 @@ ${learningDataContext(learningData)}
 CONVERSIONS - actual meetings booked, logged with what led to them (${conversions.length} on file - this is ground truth for what's actually working, weight it heavily):
 ${conversionsContext(conversions)}
 
-WEBSITE LEAD PROFILES - Change Value Check reports for contacts who came in via the website (use these to calibrate campaignSuggestions and messageDrafts for these specific contacts to their archetype and primary leak, rather than generic messaging):
+WEBSITE LEAD PROFILES - Change Value Check reports for contacts who came in via the website (use the full breakdown - archetype, all four pillar scores, both leaks and the report's insight titles - to calibrate campaignSuggestions and messageDrafts for these specific contacts, rather than generic messaging). Primary leak maps to T2C's service offerings: a people leak maps to People Capability, a productivity leak maps to Operational Excellence, and a performance leak maps to Strategy and Governance - use this mapping to recommend the most relevant T2C product for each contact and tailor their message draft's outreach angle around that specific service and leak, not a generic pitch:
 ${cvcProfilesContext(contactsData)}
 
 SALES CALL FEEDBACK - script adherence, objections raised and CTAs actually used, scored from real call transcripts (${salesLog.length} on file - use this to sharpen objection-handling and pitch-angle suggestions with what's actually happening on calls, not theory):
@@ -1368,7 +1370,7 @@ Guidance for each section:
 - campaignSuggestions: 3-5 concrete outreach campaign or angle ideas based on real patterns in the data (shared roles, industries, company clusters, recurring themes in notes) and, where relevant, the learning data and conversion patterns above (ICP profiles, products and communication methods that have actually converted).
 - coldContacts: contacts with no recent touch points or who have gone quiet after early engagement, each as one sentence naming the contact and why they're worth a nudge.
 - relationshipHealth: a short read on which relationships are warm and which are at risk, each as one sentence naming the contact and the reasoning.
-- messageDrafts: 2-4 ready-to-send message drafts for specific contacts who look due for a follow-up. UK English, no em dashes, peer to peer tone, one observation and one question, 3-4 sentences, signed off "Marcus".
+- messageDrafts: 2-4 ready-to-send message drafts for specific contacts who look due for a follow-up. UK English, no em dashes, peer to peer tone, one observation and one question, 3-4 sentences, signed off "Marcus". For a Website Lead contact with a CVC report, use their primary leak's mapped T2C product (per the mapping above) to pick the outreach angle and reference their specific archetype/leak rather than writing a generic message.
 - learningInsights: 3-5 specific, numbers-backed observations pulled directly from the data above, in the style of "You haven't contacted 34 Transformation leads in 21+ days" or "Mining sector contacts convert after 3 touch points vs 6 for government". Every number must be real, counted from the data given, never estimated or invented.
 - optimisationSuggestions: 3-5 specific, actionable improvements - which contacts to prioritise this week, which campaign needs attention (use the campaign performance data above), which ICP segment is underperforming, what message angle to try next. Each one grounded in something specific from the data, not generic sales advice.
 
