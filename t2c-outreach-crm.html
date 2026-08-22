@@ -467,7 +467,8 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .analysis-block ul{padding-left:18px;font-size:12.5px;line-height:1.6;}
 .learning-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;}
 .context-upload-grid{grid-template-columns:repeat(3,1fr);}
-.learning-panel{border-radius:var(--radius-card);padding:16px;background:var(--surface-2);border:1px solid var(--border);}
+.learning-panel{border-radius:var(--radius-card);padding:16px;background:var(--surface-2);border:1px solid var(--border);transition:border-color .15s,background .15s;}
+.learning-panel.dragover{border-color:var(--accent);background:var(--accent-dim);}
 .learning-panel h4{display:flex;align-items:center;gap:7px;font-size:13px;margin-bottom:6px;}
 .learning-result{margin-top:14px;font-size:12.5px;line-height:1.6;}
 .learning-result h5{font-size:11px;text-transform:uppercase;letter-spacing:.03em;color:var(--muted);margin:10px 0 4px;}
@@ -1439,14 +1440,29 @@ function renderContextUploadSection(){
 
 function renderContextConnectionsCard(){
   return `
-  <div class="learning-panel">
+  <div class="learning-panel" ${dropZoneAttrs('ctxConnectionsInput')}>
     <h4><i class="ti ti-brand-linkedin"></i> LinkedIn Connections</h4>
-    <p class="muted" style="font-size:12px;margin-bottom:12px;">Upload your LinkedIn connections CSV export. Matches First + Last name against Contacts and advances anyone in "Connection Requested" to "Connected".</p>
+    <p class="muted" style="font-size:12px;margin-bottom:12px;">Upload your LinkedIn connections CSV export, or drag and drop it here. Matches First + Last name against Contacts and advances anyone in "Connection Requested" to "Connected".</p>
     <input type="file" id="ctxConnectionsInput" accept=".csv" style="display:none;" onchange="handleContextConnectionsCsv(event)">
     <button class="btn btn-secondary btn-sm" onclick="document.getElementById('ctxConnectionsInput').click()"><i class="ti ti-upload"></i> Upload CSV</button>
     <div id="ctxConnectionsResult" class="learning-result"></div>
   </div>
   `;
+}
+
+// Shared drag-and-drop wiring for the Context tab upload panels below.
+// Dropping a file onto the panel puts it into the panel's real hidden
+// <input type=file> via DataTransfer and fires 'change' on it, so it goes
+// through the exact same handler as clicking "Upload" - no separate
+// drop-specific logic to keep in sync with the click-to-upload path.
+function dropZoneAttrs(inputId){
+  return `ondragover="event.preventDefault();this.classList.add('dragover');" ondragleave="this.classList.remove('dragover');" ondrop="event.preventDefault();this.classList.remove('dragover');handleContextDropZoneFiles('${inputId}',event.dataTransfer);"`;
+}
+function handleContextDropZoneFiles(inputId, dataTransfer){
+  const input = document.getElementById(inputId);
+  if(!input || !dataTransfer || !dataTransfer.files || !dataTransfer.files.length) return;
+  input.files = dataTransfer.files;
+  input.dispatchEvent(new Event('change', { bubbles:true }));
 }
 
 function handleContextConnectionsCsv(event){
@@ -1534,9 +1550,9 @@ async function runContextConnectionsImport(rows){
 
 function renderContextScreenshotCard(){
   return `
-  <div class="learning-panel">
+  <div class="learning-panel" ${dropZoneAttrs('ctxScreenshotInput')}>
     <h4><i class="ti ti-message-circle"></i> DM / Email Screenshot or Paste</h4>
-    <p class="muted" style="font-size:12px;margin-bottom:12px;">Upload a screenshot, or paste the raw text of a DM or email exchange.</p>
+    <p class="muted" style="font-size:12px;margin-bottom:12px;">Upload a screenshot, drag and drop it here, or paste the raw text of a DM or email exchange.</p>
     <input type="file" id="ctxScreenshotInput" accept="image/*" style="display:none;" onchange="handleContextScreenshotUpload(event)">
     <button class="btn btn-secondary btn-sm" onclick="document.getElementById('ctxScreenshotInput').click()"><i class="ti ti-upload"></i> Upload screenshot</button>
     <div id="ctxScreenshotPreview" style="font-size:11.5px;margin-top:8px;"></div>
