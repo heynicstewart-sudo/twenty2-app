@@ -1081,6 +1081,7 @@ function afterRender(page){
     if(tab === 'signals' && window.__contentSignals === undefined) loadContentSignals();
     if((tab === 'drafts' || tab === 'calendar') && window.__contentDrafts === undefined) loadContentDrafts();
     if(tab === 'performance' && window.__contentPerformance === undefined) loadContentPerformance();
+    if(tab === 'performance' && window.__marcusJobStatus === undefined) checkMarcusJobStatus();
     if(tab === 'settings' && window.__contentSettings === undefined) loadContentSettings();
   }
   if(page === 'home' && window.__homeContentSignals === undefined) loadHomeContentSignals();
@@ -7480,13 +7481,17 @@ const CONTENT_PERF_SORT_DEFAULT = { key:'date', dir:'desc' };
 
 function renderContentPerformanceTab(){
   const posts = window.__contentPerformance;
+  const job = window.__marcusJobStatus;
+  const isRunning = job && job.status === 'running';
   return `
   <div class="card" style="margin-bottom:16px;">
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-chart-bar"></i> My Performance</div>
-      <button class="btn btn-primary btn-sm" id="analysePostsBtn" onclick="runMarcusContentAnalysis()"><i class="ti ti-sparkles"></i> Analyse my LinkedIn posts</button>
+      <button class="btn btn-primary btn-sm" id="analysePostsBtn" onclick="runMarcusContentAnalysis()" ${isRunning?'disabled':''}><i class="ti ${isRunning?'ti-loader-2':'ti-sparkles'}"></i> ${isRunning?'Analysing...':'Analyse my LinkedIn posts'}</button>
     </div>
-    <p class="muted" style="font-size:12.5px;margin-top:6px;margin-bottom:0;">Pulls Marcus's last 3 months of LinkedIn posts via Trigify, scores them with Claude, and saves the results to Airtable.</p>
+    <p class="muted" style="font-size:12.5px;margin-top:6px;margin-bottom:0;">Pulls Marcus's last month of LinkedIn posts via Trigify, scores them with Claude, and saves the results to Airtable. Runs in the background - safe to navigate away.</p>
+    ${isRunning ? `<div class="muted" style="font-size:12px;margin-top:8px;"><i class="ti ti-loader-2"></i> Running - ${job.savedCount || 0} post${job.savedCount===1?'':'s'} saved so far.</div>` : ''}
+    ${job && job.status==='error' ? `<div style="font-size:12px;margin-top:8px;color:var(--danger,#b42318);">Last run failed: ${esc(job.error||'unknown error')}</div>` : ''}
   </div>
   ${renderContentPerformanceSummary(posts)}
   <div class="card">
@@ -7542,7 +7547,7 @@ function renderContentPerformanceSummary(posts){
 function renderContentPerformanceTable(posts){
   if(!posts) return '<div class="muted"><i class="ti ti-loader-2"></i> Loading...</div>';
   if(posts.error) return `<div class="muted">Could not load performance data: ${esc(posts.error)}</div>`;
-  if(!posts.length) return '<div class="empty-state">No analysed posts yet. Click "Analyse my LinkedIn posts" to pull and score the last 3 months.</div>';
+  if(!posts.length) return '<div class="empty-state">No analysed posts yet. Click "Analyse my LinkedIn posts" to pull and score the last month.</div>';
 
   const sort = window.__contentPerfSort || CONTENT_PERF_SORT_DEFAULT;
   const sorted = posts.slice().sort((a,b)=>{
@@ -7587,24 +7592,57 @@ function sortContentPerformance(key){
   renderPage();
 }
 
+// The analysis itself runs server-side as a fire-and-forget background job
+// (see runMarcusContentAnalysisJob in search-server.js) so it keeps going
+// even if this tab is closed - the POST below just kicks it off and
+// returns immediately. Progress is picked up by polling
+// /api/trigify/marcus-content-status every 5s until it's no longer running.
 async function runMarcusContentAnalysis(){
-  const btn = document.getElementById('analysePostsBtn');
-  const original = btn.innerHTML;
-  btn.disabled = true;
-  btn.innerHTML = '<i class="ti ti-loader-2"></i> Analysing...';
   try {
     const res = await fetch('/api/trigify/marcus-content-analysis', { method:'POST' });
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
-    toast(data.saved ? `Analysed and saved ${data.saved} post${data.saved===1?'':'s'}` : (data.message || 'No posts found'), 'success');
-    window.__contentPerformance = undefined;
-    loadContentPerformance();
+    toast(data.message || 'Analysis started', 'success');
+    startMarcusJobPoll();
   } catch(err){
-    toast('Could not analyse posts: ' + err.message, 'warn');
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = original;
+    toast('Could not start analysis: ' + err.message, 'warn');
   }
+}
+
+async function checkMarcusJobStatus(){
+  try {
+    const res = await fetch('/api/trigify/marcus-content-status');
+    const data = await res.json();
+    window.__marcusJobStatus = data;
+    if(data.status === 'running') startMarcusJobPoll();
+    else if(state.currentPage === 'content' && window.__contentSubTab === 'performance') renderPage();
+  } catch(err){
+    console.warn('Could not check Marcus content analysis status:', err.message);
+  }
+}
+
+function startMarcusJobPoll(){
+  if(window.__marcusJobPollTimer) return;
+  const tick = async () => {
+    try {
+      const res = await fetch('/api/trigify/marcus-content-status');
+      const data = await res.json();
+      window.__marcusJobStatus = data;
+      if(state.currentPage === 'content' && window.__contentSubTab === 'performance') renderPage();
+      if(data.status !== 'running'){
+        clearInterval(window.__marcusJobPollTimer);
+        window.__marcusJobPollTimer = null;
+        if(data.status === 'complete') toast(`Analysis complete - ${data.savedCount||0} post${data.savedCount===1?'':'s'} saved`, 'success');
+        if(data.status === 'error') toast('Analysis failed: ' + (data.error||'unknown error'), 'warn');
+        window.__contentPerformance = undefined;
+        loadContentPerformance();
+      }
+    } catch(err){
+      console.warn('Could not poll Marcus content analysis status:', err.message);
+    }
+  };
+  tick();
+  window.__marcusJobPollTimer = setInterval(tick, 5000);
 }
 
 function renderContentSettingsTab(){

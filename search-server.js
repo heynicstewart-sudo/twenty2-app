@@ -3392,16 +3392,26 @@ async function getContentPerformanceSummaryForPrompt() {
   }
 }
 
-app.post('/api/trigify/marcus-content-analysis', async (req, res) => {
-  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
-  if (!TRIGIFY_API_KEY) return res.status(500).json({ error: 'TRIGIFY_API_KEY not configured' });
-  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+// In-memory status for the background job below - single job at a time
+// (there's only one Marcus), overwritten on every new run. Not persisted:
+// a server restart mid-run just drops back to idle, which is fine since
+// the saved-so-far records are already durably in Airtable regardless.
+let marcusAnalysisJob = { status: 'idle', savedCount: 0, error: null, startedAt: null, finishedAt: null };
 
+// Does the actual Trigify fetch + Claude scoring + Airtable writes, kicked
+// off fire-and-forget by the POST route below so it keeps running even if
+// the frontend that triggered it navigates away or disconnects. Updates
+// marcusAnalysisJob as it goes so GET /api/trigify/marcus-content-status
+// can report live progress to the My Performance tab's poll.
+async function runMarcusContentAnalysisJob() {
   try {
     const searchId = await trigifyEnsureMarcusSearch();
     const posts = normalizeTrigifyResults(await trigifyGetSearchResults(searchId));
 
-    if (!posts.length) return res.json({ success: true, posts: [], saved: 0, message: 'No posts found in the past month' });
+    if (!posts.length) {
+      marcusAnalysisJob = { status: 'complete', savedCount: 0, error: null, startedAt: marcusAnalysisJob.startedAt, finishedAt: Date.now(), message: 'No posts found in the past month' };
+      return;
+    }
 
     const prompt = `You are analysing Marcus's own LinkedIn posts from the past month for T2C Outreach, Twenty2 Collective, to learn what content performs well.
 
@@ -3433,13 +3443,42 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 
     for (let i = 0; i < records.length; i += 10) {
       await airtableRequest('POST', CONTENT_PERFORMANCE_TABLE, { records: records.slice(i, i + 10), typecast: true });
+      marcusAnalysisJob.savedCount = Math.min(i + 10, records.length);
     }
 
-    res.json({ success: true, posts: analysed, saved: records.length });
+    marcusAnalysisJob = { status: 'complete', savedCount: records.length, error: null, startedAt: marcusAnalysisJob.startedAt, finishedAt: Date.now() };
   } catch (err) {
-    console.error('Marcus content analysis error:', err.message);
-    res.status(500).json({ error: err.message });
+    console.error('Marcus content analysis job failed:', err.message);
+    marcusAnalysisJob = { status: 'error', savedCount: marcusAnalysisJob.savedCount, error: err.message, startedAt: marcusAnalysisJob.startedAt, finishedAt: Date.now() };
   }
+}
+
+// Fire-and-forget: responds immediately so the frontend button isn't stuck
+// waiting on a request that can take minutes, then keeps running server-
+// side regardless of whether that request is still connected.
+app.post('/api/trigify/marcus-content-analysis', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!TRIGIFY_API_KEY) return res.status(500).json({ error: 'TRIGIFY_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  if (marcusAnalysisJob.status === 'running') {
+    return res.json({ success: true, alreadyRunning: true, message: 'Analysis already running, results will appear in Airtable shortly.' });
+  }
+
+  marcusAnalysisJob = { status: 'running', savedCount: 0, error: null, startedAt: Date.now(), finishedAt: null };
+  runMarcusContentAnalysisJob();
+
+  res.json({ success: true, message: 'Analysis started, results will appear in Airtable shortly.' });
+});
+
+app.get('/api/trigify/marcus-content-status', (req, res) => {
+  res.json({
+    status: marcusAnalysisJob.status,
+    savedCount: marcusAnalysisJob.savedCount,
+    error: marcusAnalysisJob.error,
+    startedAt: marcusAnalysisJob.startedAt,
+    finishedAt: marcusAnalysisJob.finishedAt
+  });
 });
 
 app.get('/api/content/performance', async (req, res) => {
