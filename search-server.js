@@ -3082,8 +3082,20 @@ app.post('/api/settings/linkedin-url', async (req, res) => {
 
 // One profile per search - the only shape POST /v1/searches/linkedin/
 // profile supports. Returns the new search id.
+// Trigify expects a full LinkedIn profile URL - contacts are sometimes
+// saved with just a slug or path (e.g. "jane-doe" or "in/jane-doe")
+// rather than the full https://www.linkedin.com/in/... URL, which Trigify
+// rejects. Leaves anything already on the linkedin.com domain untouched.
+function normalizeLinkedInUrl(url) {
+  if (!url) return url;
+  const trimmed = url.trim();
+  if (trimmed.startsWith('https://www.linkedin.com')) return trimmed;
+  const slug = trimmed.replace(/^\/?(in\/)?/i, '');
+  return `https://www.linkedin.com/in/${slug}`;
+}
+
 async function trigifyCreateProfileMonitor(name, profileUrl, { maxResults, frequency, timeFrame } = {}) {
-  const payload = { name, profile_url: profileUrl };
+  const payload = { name, profile_url: normalizeLinkedInUrl(profileUrl) };
   if (maxResults) payload.max_results = maxResults;
   if (frequency) payload.frequency = frequency;
   if (timeFrame) payload.time_frame = timeFrame;
@@ -3269,7 +3281,7 @@ app.get('/api/trigify/backfill-contacts', async (req, res) => {
       const contact = targets[i];
       const name = contact.fields['Full Name'] || contact.id;
       try {
-        await trigifyCreateContactSearch(contact.id, name, contact.fields['LinkedIn URL']);
+        await trigifyCreateContactSearch(contact.id, name, normalizeLinkedInUrl(contact.fields['LinkedIn URL']));
         registered++;
         console.log(`Trigify backfill (${i + 1}/${targets.length}): registered ${name}`);
       } catch (err) {
