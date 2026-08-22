@@ -3784,6 +3784,22 @@ app.get('/api/contacts/recent-posts-signals', async (req, res) => {
   }
 });
 
+// One contact's Recent Posts field, parsed - used by the "Recent posts"
+// section of the contact enrichment profile panel, which needs raw
+// Airtable data rather than anything from the AI enrichment call.
+app.get('/api/contacts/:id/recent-posts', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const contactRecord = await airtableGetRecord('Contacts', req.params.id);
+    if (!contactRecord) return res.status(404).json({ error: 'Contact not found' });
+    const posts = parseRecentPosts((contactRecord.fields || {})['Recent Posts']);
+    res.json({ posts });
+  } catch (err) {
+    console.error('Contact recent posts error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---- Part 2: Serper job title drift detection ----
 
 // Pulls the headline/title portion out of a Google result title for a

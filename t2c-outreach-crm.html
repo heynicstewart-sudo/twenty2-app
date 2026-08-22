@@ -3496,6 +3496,8 @@ const ENRICHMENT_FIELDS = [
 ];
 
 function renderEnrichmentPanelHtml(cid, profile){
+  if(!window.__contactRecentPosts || window.__contactRecentPosts[cid] === undefined) loadContactRecentPosts(cid);
+  const recentPosts = window.__contactRecentPosts && window.__contactRecentPosts[cid];
   return `
     <div class="intel-draft">
       <div class="intel-draft-head">
@@ -3507,8 +3509,45 @@ function renderEnrichmentPanelHtml(cid, profile){
           <div style="font-weight:700;font-size:11.5px;">${esc(label)}</div>
           <div class="intel-draft-text" style="margin-top:2px;">${esc(profile[key] || '—')}</div>
         </div>
+        ${key === 'recentActivity' ? renderEnrichmentRecentPosts(recentPosts) : ''}
       `).join('')}
     </div>`;
+}
+
+// "Recent posts" section of the enrichment panel - raw Recent Posts field
+// from this contact's Airtable record (populated by
+// GET /api/trigify/sync-contact-posts), not part of the AI enrichment call,
+// so it's fetched and cached separately in window.__contactRecentPosts.
+function renderEnrichmentRecentPosts(posts){
+  let body;
+  if(!posts) body = '<span class="muted" style="font-size:11.5px;"><i class="ti ti-loader-2"></i> Loading...</span>';
+  else if(posts.error) body = `<span class="muted" style="font-size:11.5px;">Could not load recent posts: ${esc(posts.error)}</span>`;
+  else if(!posts.length) body = '<span class="muted" style="font-size:11.5px;">No recent posts found</span>';
+  else body = posts.map(p => `
+    <div style="margin-top:6px;padding:8px;border:1px solid var(--border);border-radius:6px;">
+      <div class="muted" style="font-size:11px;">${esc(p.date || '')} &middot; ${p.likes||0} likes, ${p.comments||0} comments</div>
+      <div style="font-size:12px;margin-top:2px;">${esc(p.text)}</div>
+    </div>
+  `).join('');
+  return `
+        <div style="margin-top:8px;">
+          <div style="font-weight:700;font-size:11.5px;">Recent posts</div>
+          <div style="margin-top:2px;">${body}</div>
+        </div>`;
+}
+
+async function loadContactRecentPosts(cid){
+  window.__contactRecentPosts = window.__contactRecentPosts || {};
+  window.__contactRecentPosts[cid] = null;
+  try {
+    const res = await fetch(`/api/contacts/${cid}/recent-posts`);
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__contactRecentPosts[cid] = data.posts || [];
+  } catch(err){
+    window.__contactRecentPosts[cid] = { error: err.message };
+  }
+  renderPage();
 }
 
 async function copyEnrichmentProfile(cid){
