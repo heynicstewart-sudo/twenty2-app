@@ -3054,6 +3054,26 @@ async function getOrCreateSettingsRecord() {
   return data.records[0];
 }
 
+// Called from the Settings page's LinkedIn accounts save/add/delete flow
+// (see saveLinkedInAccounts() in t2c-outreach-crm.html) to keep the
+// account marked Primary (or the first account, if none is marked) mirrored
+// to Settings.My LinkedIn URL - the field the Trigify Marcus content search
+// (trigifyEnsureMarcusSearch, below) reads from.
+app.post('/api/settings/linkedin-url', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { url } = req.body;
+  try {
+    const settingsRecord = await getOrCreateSettingsRecord();
+    await airtableRequest('PATCH', SETTINGS_TABLE, {
+      records: [{ id: settingsRecord.id, fields: { 'My LinkedIn URL': url || '' } }]
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Save primary LinkedIn URL error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 async function trigifyUpsertContactSearch(linkedinUrls, existingSearchId) {
   const payload = {
     name: TRIGIFY_CONTACT_SEARCH_NAME,

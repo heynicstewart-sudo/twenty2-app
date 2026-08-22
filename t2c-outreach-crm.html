@@ -7903,13 +7903,29 @@ function toggleAccountColumn(i, col){
   const idx = acc.columns.indexOf(col);
   if(idx>-1) acc.columns.splice(idx,1); else acc.columns.push(col);
 }
-function removeAccount(i){ state.settings.accounts.splice(i,1); renderPage(); }
+function removeAccount(i){ state.settings.accounts.splice(i,1); renderPage(); syncPrimaryLinkedInUrl(); }
 function addAccount(){
   const name = prompt('LinkedIn account name:');
   if(!name) return;
   const url = prompt('LinkedIn profile URL:', 'https://linkedin.com/in/') || '';
   state.settings.accounts.push({ name, url, columns:[], primary:false });
   renderPage();
+  syncPrimaryLinkedInUrl();
+}
+
+// Mirrors the Primary LinkedIn account's URL (or the first account, if none
+// is marked Primary) to Settings.My LinkedIn URL in Airtable, so the Trigify
+// Marcus content search always points at the right profile. Fires on every
+// add/delete of a LinkedIn account above - those are the only two places
+// the accounts list changes. Silent/non-blocking, same as every other
+// background Airtable sync in this app.
+function syncPrimaryLinkedInUrl(){
+  const accounts = state.settings.accounts || [];
+  if(!accounts.length) return;
+  const primary = accounts.find(a => a.primary) || accounts[0];
+  fetch('/api/settings/linkedin-url', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ url: primary.url || '' })
+  }).catch(err => console.warn('Could not sync primary LinkedIn URL to Airtable:', err.message));
 }
 function removeService(i){ state.settings.services.splice(i,1); renderPage(); }
 function addService(){
