@@ -3527,11 +3527,32 @@ async function trigifyGetSearchResults(searchId) {
   return data.results || data.data || [];
 }
 
+// Trigify's raw post fields can arrive nested (e.g. { text: { value: '...' } })
+// rather than as plain strings/numbers - normalizeTrigifyPost's field-name
+// fallback chain (p.text || p.content || p.body) picks the first truthy one
+// but doesn't unwrap it further, so a nested object was landing in
+// formatRecentPosts's output as the literal string "[object Object]" once
+// written to the Recent Posts field. Unwraps one level of common nested
+// shapes before stringifying.
+function extractPostValue(value) {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string' || typeof value === 'number') return value;
+  if (typeof value === 'object') {
+    const nested = value.text ?? value.value ?? value.content ?? value.body ?? value.plain ?? value.raw;
+    return nested !== undefined ? extractPostValue(nested) : '';
+  }
+  return value;
+}
+
 function formatRecentPosts(posts) {
   return posts.map(p => {
-    const date = p.date ? new Date(p.date).toISOString().slice(0, 10) : '';
-    const text = String(p.text || '').replace(/\s+/g, ' ').trim();
-    return `[${date}] ${text} | Likes: ${p.likes ?? 0} Comments: ${p.comments ?? 0}`;
+    const rawDate = extractPostValue(p.date);
+    const parsedDate = rawDate ? new Date(rawDate) : null;
+    const date = parsedDate && !isNaN(parsedDate) ? parsedDate.toISOString().slice(0, 10) : '';
+    const text = String(extractPostValue(p.text)).replace(/\s+/g, ' ').trim();
+    const likes = extractPostValue(p.likes);
+    const comments = extractPostValue(p.comments);
+    return `[${date}] ${text} | Likes: ${likes === '' ? 0 : likes} Comments: ${comments === '' ? 0 : comments}`;
   }).join('\n\n');
 }
 
