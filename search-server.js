@@ -3415,8 +3415,24 @@ async function runMarcusContentAnalysisJob(forceRefresh = false) {
       }
     }
 
-    const searchId = await trigifyEnsureMarcusSearch();
-    const posts = normalizeTrigifyResults(await trigifyGetSearchResults(searchId));
+    let searchId, rawResults;
+    try {
+      searchId = await trigifyEnsureMarcusSearch();
+      rawResults = await trigifyGetSearchResults(searchId);
+      console.log('Marcus content analysis - Trigify fetch complete. searchId:', searchId, 'raw result count:', Array.isArray(rawResults) ? rawResults.length : typeof rawResults, 'sample raw result:', JSON.stringify((rawResults || [])[0]));
+    } catch (err) {
+      console.error('Marcus content analysis - Trigify fetch failed:', err.message);
+      throw err;
+    }
+
+    let posts;
+    try {
+      posts = normalizeTrigifyResults(rawResults);
+      console.log('Marcus content analysis - extracted post text. post count:', posts.length, 'sample post:', JSON.stringify(posts[0]));
+    } catch (err) {
+      console.error('Marcus content analysis - extracting post text failed:', err.message);
+      throw err;
+    }
 
     if (!posts.length) {
       marcusAnalysisJob = { status: 'complete', savedCount: 0, error: null, startedAt: marcusAnalysisJob.startedAt, finishedAt: Date.now(), message: 'No posts found in the past month' };
@@ -3434,19 +3450,28 @@ Return each post as an object with keys: post_text, date, likes, comments, engag
 
 Respond with only a valid JSON array. No preamble, no explanation, no markdown formatting. Start your response with [ and end with ].`;
 
-    const rawText = await callClaudeText(prompt, 8000);
+    let rawText;
+    try {
+      console.log('Marcus content analysis - calling Claude. prompt length:', prompt.length, 'post count:', posts.length);
+      rawText = await callClaudeText(prompt, 8000);
+      console.log('Marcus content analysis - raw Claude text:', rawText);
+    } catch (err) {
+      console.error('Marcus content analysis - Claude call failed:', err.message);
+      throw err;
+    }
+
     const stripped = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
     const arrayMatch = stripped.match(/\[[\s\S]*\]/);
     let analysed;
     try {
       analysed = JSON.parse(arrayMatch ? arrayMatch[0] : stripped);
     } catch (parseErr) {
+      console.error('Marcus content analysis - JSON parse failed. stripped text:', stripped);
       throw new Error('Could not parse Claude response as JSON');
     }
     if (!Array.isArray(analysed)) analysed = [];
 
-    console.log('Marcus content analysis - raw Claude text:', rawText);
-    console.log('Marcus content analysis - sample parsed object:', analysed[0]);
+    console.log('Marcus content analysis - sample parsed object:', JSON.stringify(analysed[0]));
 
     const records = analysed.map(p => ({
       fields: {
