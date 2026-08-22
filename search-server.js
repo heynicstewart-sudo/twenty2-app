@@ -3439,10 +3439,21 @@ async function runMarcusContentAnalysisJob(forceRefresh = false) {
       return;
     }
 
-    const prompt = `You are analysing Marcus's own LinkedIn posts from the past month for T2C Outreach, Twenty2 Collective, to learn what content performs well.
+    const BATCH_SIZE = 10;
+    const batches = [];
+    for (let i = 0; i < posts.length; i += BATCH_SIZE) {
+      batches.push(posts.slice(i, i + BATCH_SIZE));
+    }
 
-POSTS (${posts.length}):
-${JSON.stringify(posts)}
+    let analysed = [];
+    for (let b = 0; b < batches.length; b++) {
+      const batch = batches[b];
+      const batchLabel = `batch ${b + 1}/${batches.length}`;
+
+      const prompt = `You are analysing Marcus's own LinkedIn posts from the past month for T2C Outreach, Twenty2 Collective, to learn what content performs well.
+
+POSTS (${batch.length}):
+${JSON.stringify(batch)}
 
 For EACH post, analyse and return: post_text, date, likes, comments, engagement_score (likes + comments), topic (3-5 words describing what the post is about), format (one of: short, long, question, story, insight), cta_used (the call to action used, or empty string if none), what_worked (one sentence on why this post performed well or didn't).
 
@@ -3450,28 +3461,30 @@ Return each post as an object with keys: post_text, date, likes, comments, engag
 
 Respond with only a valid JSON array. No preamble, no explanation, no markdown formatting. Start your response with [ and end with ].`;
 
-    let rawText;
-    try {
-      console.log('Marcus content analysis - calling Claude. prompt length:', prompt.length, 'post count:', posts.length);
-      rawText = await callClaudeText(prompt, 8000);
-      console.log('Marcus content analysis - raw Claude text:', rawText);
-    } catch (err) {
-      console.error('Marcus content analysis - Claude call failed:', err.message);
-      throw err;
-    }
+      let rawText;
+      try {
+        console.log(`Marcus content analysis - calling Claude for ${batchLabel}. prompt length:`, prompt.length, 'post count:', batch.length);
+        rawText = await callClaudeText(prompt, 4000);
+        console.log(`Marcus content analysis - raw Claude text for ${batchLabel}:`, rawText);
+      } catch (err) {
+        console.error(`Marcus content analysis - Claude call failed for ${batchLabel}:`, err.message);
+        throw err;
+      }
 
-    const stripped = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
-    const arrayMatch = stripped.match(/\[[\s\S]*\]/);
-    let analysed;
-    try {
-      analysed = JSON.parse(arrayMatch ? arrayMatch[0] : stripped);
-    } catch (parseErr) {
-      console.error('Marcus content analysis - JSON parse failed. stripped text:', stripped);
-      throw new Error('Could not parse Claude response as JSON');
-    }
-    if (!Array.isArray(analysed)) analysed = [];
+      const stripped = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
+      const arrayMatch = stripped.match(/\[[\s\S]*\]/);
+      let batchAnalysed;
+      try {
+        batchAnalysed = JSON.parse(arrayMatch ? arrayMatch[0] : stripped);
+      } catch (parseErr) {
+        console.error(`Marcus content analysis - JSON parse failed for ${batchLabel}. stripped text:`, stripped);
+        throw new Error('Could not parse Claude response as JSON');
+      }
+      if (!Array.isArray(batchAnalysed)) batchAnalysed = [];
 
-    console.log('Marcus content analysis - sample parsed object:', JSON.stringify(analysed[0]));
+      console.log(`Marcus content analysis - sample parsed object for ${batchLabel}:`, JSON.stringify(batchAnalysed[0]));
+      analysed = analysed.concat(batchAnalysed);
+    }
 
     const records = analysed.map(p => ({
       fields: {
