@@ -1075,6 +1075,7 @@ function afterRender(page){
     }
   }
   if(page === 'intelligence' && (window.__intelSubTab||'intelligence') === 'context') ensureContextDataLoaded();
+  if(page === 'home') ensureTodaysActionsSequenceStagesLoaded();
   if(page === 'calendar'){
     if(window.__calendarEvents === undefined) loadCalendarEvents();
     if(window.__repsCache === undefined) loadRepsCache();
@@ -1897,22 +1898,42 @@ function activeCampaignForContact(c){
 
 function getContactAction(c){
   const campaign = activeCampaignForContact(c);
+  // A live campaign fully owns this contact's Today's Actions card while
+  // their Sequence Stage is still in the fast-action range (Found through
+  // Message 2 Sent) - the account-level "natural" actions below (Reply
+  // back, Follow up, Re-engage...) only apply once that campaign sequence
+  // is exhausted (Message 3 Sent) or there's no active campaign at all.
+  if(campaign){
+    const fastAction = getFastActionForCampaignContact(c, campaign);
+    if(fastAction) return fastAction;
+  }
   const natural = getNaturalContactAction(c);
   if(natural){
     if(campaign) natural.campaignName = campaign.name;
     return natural;
   }
-  if(campaign){
-    const lastTouch = lastTouchPointDate(c);
-    // Journey Stage "Identified" (pre-connection, c.state 'found'/'opened') -
-    // this contact needs a connection request sent, not a drafted message.
-    // Connection Pending and beyond fall through to the normal message-
-    // based recommendation below, unchanged.
-    if(c.state === 'found' || c.state === 'opened'){
-      return { type:'Send connection', stage:'connect', daysSinceTouch: lastTouch ? daysBetween(lastTouch) : null, campaignName: campaign.name };
-    }
-    const nextStage = c.thread.m2 ? 'cta' : (c.thread.m1 ? 'm2' : (c.connDate ? 'm1' : 'connect'));
-    return { type:'Campaign outreach', stage: nextStage, daysSinceTouch: lastTouch ? daysBetween(lastTouch) : null, campaignName: campaign.name };
+  return null;
+}
+
+const SEQUENCE_STAGE_MESSAGE_NUMBER = { 'Connection Pending': 1, 'Message 1 Sent': 2, 'Message 2 Sent': 3 };
+
+// Today's Actions "fast action" card for a contact in a live campaign,
+// driven entirely by their per-campaign Sequence Stage (window.
+// __campaignSequenceStages, loaded by ensureTodaysActionsSequenceStagesLoaded).
+// Returns null if the stage map hasn't loaded yet (afterRender() kicks off
+// the load and re-renders once it lands) or once the sequence is exhausted
+// (Message 3 Sent), letting the caller fall through to a natural action.
+function getFastActionForCampaignContact(c, campaign){
+  const stages = window.__campaignSequenceStages && window.__campaignSequenceStages[campaign.id];
+  if(!stages) return null;
+  const stage = stages[c.name.trim().toLowerCase()] || 'Found';
+
+  if(stage === 'Found'){
+    return { type:'Send connection', stageLabel: stage, campaignName: campaign.name, daysSinceTouch: null, isFastAction: true };
+  }
+  const messageNumber = SEQUENCE_STAGE_MESSAGE_NUMBER[stage];
+  if(messageNumber){
+    return { type:'Generate message', stageLabel: stage, messageNumber, campaignName: campaign.name, daysSinceTouch: null, isFastAction: true };
   }
   return null;
 }
@@ -1991,7 +2012,6 @@ function renderTodaysActions(){
 
 function recommendedMethodForAction(a){
   const map = {
-    'Send connection': 'LinkedIn connection request',
     'Send first message': 'LinkedIn message',
     'Follow up': 'Email or Call',
     'Reply back': 'LinkedIn message',
@@ -2002,10 +2022,12 @@ function recommendedMethodForAction(a){
 }
 
 function renderTodaysActionItem(a){
+  window.__todaysActions = window.__todaysActions || {};
+  window.__todaysActions[a.contact.id] = a;
+  if(a.isFastAction) return renderFastActionCard(a);
+
   const c = a.contact;
   const method = recommendedMethodForAction(a);
-  window.__todaysActions = window.__todaysActions || {};
-  window.__todaysActions[c.id] = a;
   const cachedBrief = window.__contactBriefs && window.__contactBriefs[c.id];
   return `
   <div class="todo-item">
@@ -2022,9 +2044,7 @@ function renderTodaysActionItem(a){
       </div>
     </div>
     <div class="todo-item-actions">
-      ${a.type === 'Send connection'
-        ? `<a class="btn btn-primary btn-sm" href="${esc(c.url||'#')}" target="_blank" rel="noopener" onclick="handleSendConnectionClick('${c.id}')"><i class="ti ti-brand-linkedin"></i> Send connection</a>`
-        : `<button class="btn btn-secondary btn-sm" onclick="openGenerateModal('${c.id}','${a.stage}', ()=>renderPage())"><i class="ti ti-copy"></i> Draft message</button>`}
+      <button class="btn btn-secondary btn-sm" onclick="openGenerateModal('${c.id}','${a.stage}', ()=>renderPage())"><i class="ti ti-copy"></i> Draft message</button>
       <button class="btn btn-ghost btn-sm" onclick="toggleQuickTouchPoint('${c.id}')"><i class="ti ti-target-arrow"></i> Log touch point</button>
       <button class="btn btn-accent btn-sm" id="briefBtn-${c.id}" onclick="generateContactBrief('${c.id}')"><i class="ti ti-sparkles"></i> Generate brief</button>
     </div>
@@ -2037,36 +2057,137 @@ function renderTodaysActionItem(a){
   </div>`;
 }
 
+// Minimal Today's Actions card for a contact whose live campaign Sequence
+// Stage drives one specific action - exactly one button, no touch-point
+// logger or brief generator clutter, per stage:
+//   Found              -> Send connection (opens LinkedIn, advances stage)
+//   Connection Pending -> Generate message (message 1)
+//   Message 1 Sent     -> Generate message (message 2, a follow-up)
+//   Message 2 Sent     -> Generate message (message 3)
+// "Generate message" swaps itself for the drafted text plus a single
+// "Copy & mark sent" button once clicked (handleGenerateFastMessage).
+function renderFastActionCard(a){
+  const c = a.contact;
+  return `
+  <div class="todo-item">
+    <div class="todo-item-main">
+      <div>
+        <div class="todo-item-name">${esc(c.name)}</div>
+        <div class="muted" style="font-size:12px;">${esc(c.role)} · ${esc(c.company)}</div>
+        <div style="margin-top:4px;"><span class="pill" style="background:#e2f2fa;color:#0d6a96;"><i class="ti ti-rocket" style="font-size:11px;"></i> ${esc(a.campaignName)}</span></div>
+      </div>
+      <div style="text-align:right;">
+        <span class="pill" id="actionPill-${c.id}">${esc(a.stageLabel)}</span>
+      </div>
+    </div>
+    <div class="todo-item-actions" id="fastActionArea-${c.id}">
+      ${a.type === 'Send connection'
+        ? `<a class="btn btn-primary btn-sm" href="${esc(c.url||'#')}" target="_blank" rel="noopener" onclick="handleSendConnectionClick('${c.id}')"><i class="ti ti-brand-linkedin"></i> Send connection</a>`
+        : `<button class="btn btn-primary btn-sm" onclick="handleGenerateFastMessage('${c.id}')"><i class="ti ti-sparkles"></i> Generate message</button>`}
+    </div>
+  </div>`;
+}
+
 function toggleQuickTouchPoint(cid){
   const el = document.getElementById('quicktp-'+cid);
   if(!el) return;
   el.style.display = el.style.display === 'none' ? 'block' : 'none';
 }
 
-// Fires when the "Send connection" link on a Today's Actions card is
-// clicked - the href already opens the contact's LinkedIn profile in a new
-// tab natively, this just advances their Journey Stage in Airtable and
-// recolours this card's pill in place once that's confirmed (a full
-// renderPage() would also work, but would re-run every other card's
-// pending network calls along with it for no reason).
+// Fires when the "Send connection" link on a fast-action card is clicked -
+// the href already opens the contact's LinkedIn profile in a new tab
+// natively, this advances both their account-level Journey Stage and
+// (via the sequenceStage branch in PATCH /api/context/contact-fields)
+// every campaign they're pending a connection in to "Connection Pending",
+// then reloads this campaign's Sequence Stage map and re-renders so the
+// card immediately swaps to "Generate message".
 async function handleSendConnectionClick(cid){
   try {
     const res = await fetch('/api/context/contact-fields', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contactId: cid, journeyStage: 'Connection Pending' })
+      body: JSON.stringify({ contactId: cid, journeyStage: 'Connection Pending', sequenceStage: 'Connection Pending' })
     });
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
 
     const c = state.contacts.find(x => x.id === cid);
     if(c) c.state = 'connectionPending';
-
-    const pill = document.getElementById('actionPill-' + cid);
-    if(pill){ pill.textContent = 'Connection Pending'; pill.style.background = '#e2f2fa'; pill.style.color = '#0d6a96'; }
+    const campaign = c ? activeCampaignForContact(c) : null;
+    if(campaign) await loadCampaignSequenceStages(campaign);
+    renderPage();
   } catch(err){
-    console.warn('Could not update Journey Stage to Connection Pending:', err.message);
-    toast('LinkedIn opened, but could not update Journey Stage: ' + err.message, 'warn');
+    console.warn('Could not update stage to Connection Pending:', err.message);
+    toast('LinkedIn opened, but could not update stage: ' + err.message, 'warn');
+  }
+}
+
+// "Generate message" on a fast-action card - drafts the next message in
+// this contact's specific campaign sequence (not an account-level
+// template) via POST /api/campaign/:name/contacts/:id/generate-message,
+// then swaps the button area for the draft plus "Copy & mark sent".
+async function handleGenerateFastMessage(cid){
+  const action = (window.__todaysActions || {})[cid];
+  const area = document.getElementById('fastActionArea-' + cid);
+  if(!action || !action.campaignName || !area) return;
+  area.innerHTML = '<span class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Generating message...</span>';
+
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(action.campaignName)}/contacts/${cid}/generate-message`, { method: 'POST' });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+
+    area.innerHTML = `
+      <textarea id="fastActionDraft-${cid}" rows="4" style="width:100%;margin-bottom:8px;">${esc(data.message)}</textarea>
+      <button class="btn btn-primary btn-sm" onclick="handleCopyAndMarkSent('${cid}')"><i class="ti ti-check"></i> Copy &amp; mark sent</button>
+    `;
+  } catch(err){
+    console.warn('Could not generate message:', err.message);
+    toast('Could not generate message: ' + err.message, 'warn');
+    area.innerHTML = `<button class="btn btn-primary btn-sm" onclick="handleGenerateFastMessage('${cid}')"><i class="ti ti-sparkles"></i> Generate message</button>`;
+  }
+}
+
+// "Copy & mark sent" - copies the drafted message to the clipboard, then
+// POSTs it to /api/campaign/:name/contacts/:id/mark-sent which logs a
+// Touch Point, advances Sequence Stage to the next stage, and clears the
+// now-stale Next Message Draft. Refreshes the Sequence Stage map and
+// re-renders so the card updates to the next stage's action (or
+// disappears if the sequence is now exhausted).
+async function handleCopyAndMarkSent(cid){
+  const action = (window.__todaysActions || {})[cid];
+  const textarea = document.getElementById('fastActionDraft-' + cid);
+  const message = textarea ? textarea.value : '';
+  if(!action || !action.campaignName || !message) return;
+
+  try {
+    await navigator.clipboard.writeText(message);
+  } catch(err){
+    textarea.focus();
+    textarea.select();
+    document.execCommand('copy');
+  }
+
+  const area = document.getElementById('fastActionArea-' + cid);
+  if(area) area.innerHTML = '<span class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Logging and advancing stage...</span>';
+
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(action.campaignName)}/contacts/${cid}/mark-sent`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ message })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+
+    toast('Message copied and logged - moved to ' + data.newStage, 'success');
+    const c = state.contacts.find(x => x.id === cid);
+    const campaign = c ? activeCampaignForContact(c) : null;
+    if(campaign) await loadCampaignSequenceStages(campaign);
+    renderPage();
+  } catch(err){
+    console.warn('Could not mark message sent:', err.message);
+    toast('Message copied, but could not log it: ' + err.message, 'warn');
   }
 }
 
@@ -4959,6 +5080,18 @@ async function loadCampaignSequenceStages(campaign){
   }
   if(window.__campaignView === 'detail' && window.__campaignDetailId === campaign.id && window.__campaignDetailTab === 'roadmap') renderPage();
   if(state.currentPage === 'grid' && gridViewMode(currentGrid().id) === 'table') renderPage();
+  if(state.currentPage === 'home') renderPage();
+}
+
+// Today's Actions fast-action cards (see getFastActionForCampaignContact)
+// need every live campaign's Sequence Stage map loaded up front, since a
+// contact's card depends on it - loads once per campaign per session,
+// same "ensure" pattern as ensureContextDataLoaded.
+function ensureTodaysActionsSequenceStagesLoaded(){
+  window.__campaignSequenceStages = window.__campaignSequenceStages || {};
+  state.campaigns.filter(c => c.status === 'Live').forEach(campaign => {
+    if(window.__campaignSequenceStages[campaign.id] === undefined) loadCampaignSequenceStages(campaign);
+  });
 }
 
 function campaignSequenceStageFor(contactName){

@@ -4217,7 +4217,7 @@ function findCampaignContactRow(rows, contactId, campaignRecordId) {
 
 // Looks for an existing junction row for this (contact, campaign) pair in
 // the already-fetched `rows`, creating one at the default first stage
-// ("Connection Requested") if none exists yet.
+// ("Found") if none exists yet.
 async function getOrCreateCampaignContactRow(contactId, contactName, campaignRecordId, campaignName, rows) {
   const existing = findCampaignContactRow(rows, contactId, campaignRecordId);
   if (existing) return existing;
@@ -4228,14 +4228,46 @@ async function getOrCreateCampaignContactRow(contactId, contactName, campaignRec
         'Name': `${contactName} — ${campaignName}`,
         'Contact': [contactId],
         'Campaign': [campaignRecordId],
-        'Sequence Stage': 'Connection Requested',
-        'Stage History': appendStageHistory('', 'Connection Requested', addedDate),
+        'Sequence Stage': 'Found',
+        'Stage History': appendStageHistory('', 'Found', addedDate),
         'Added Date': addedDate
       }
     }]
   });
   return data.records[0];
 }
+
+// Sequence Stage vocabulary was simplified to a single linear flow for the
+// Today's Actions fast-action cards: Found -> Connection Pending ->
+// Message 1 Sent -> Message 2 Sent -> Message 3 Sent. Older rows (or ones
+// still written by the DM-screenshot reply-tracking flow) may carry the
+// previous "Connection Requested"/"Connected" labels - normalise those to
+// the new ones wherever Sequence Stage is read, so both old and new rows
+// drive the same card.
+function normalizeSequenceStage(stage) {
+  if (stage === 'Connection Requested') return 'Found';
+  if (stage === 'Connected') return 'Connection Pending';
+  return stage || 'Found';
+}
+
+// Straight-line advance for the Today's Actions "Copy & mark sent" flow -
+// no reply-gating (no "Pending Reply"/"Ready for Message N" in between),
+// unlike the DM-screenshot flow's SEQUENCE_STAGE_ADVANCE. Message 3 Sent
+// is terminal: no further fast-action card shows for that contact.
+const SEQUENCE_STAGE_NEXT = {
+  'Found': 'Connection Pending',
+  'Connection Pending': 'Message 1 Sent',
+  'Message 1 Sent': 'Message 2 Sent',
+  'Message 2 Sent': 'Message 3 Sent'
+};
+
+// Which message number a "Generate message" click should draft, given the
+// contact's current (normalised) Sequence Stage.
+const MESSAGE_NUMBER_FOR_STAGE = {
+  'Connection Pending': 1,
+  'Message 1 Sent': 2,
+  'Message 2 Sent': 3
+};
 
 // Airtable caps batch writes at 10 records per request.
 async function airtableBatchPatch(table, records) {
@@ -4309,7 +4341,7 @@ app.get('/api/campaign/:id/campaign-contacts', async (req, res) => {
           campaignContactId: r.id,
           contactId,
           contactName: contactId ? (nameById[contactId] || '') : '',
-          sequenceStage: r.fields['Sequence Stage'] || '',
+          sequenceStage: normalizeSequenceStage(r.fields['Sequence Stage']),
           nextMessageDraft: r.fields['Next Message Draft'] || ''
         };
       })
@@ -4318,6 +4350,118 @@ app.get('/api/campaign/:id/campaign-contacts', async (req, res) => {
     res.json({ rows: result });
   } catch (err) {
     console.error('Campaign contacts fetch error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Drafts the next outreach message for a contact's Today's Actions "fast
+// action" card, scoped to their specific campaign - not the account-level
+// template/voice-profile flow used elsewhere (openGenerateModal), which
+// has no concept of an individual campaign's goal/strategy. Only valid
+// once the contact has actually been asked to connect (Connection Pending
+// or later); "Found" gets a "Send connection" action instead, handled by
+// the existing PATCH /api/context/contact-fields.
+app.post('/api/campaign/:id/contacts/:contactId/generate-message', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  const campaignName = decodeURIComponent(req.params.id);
+  const contactId = req.params.contactId;
+
+  try {
+    const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
+    if (!campaignRecord) return res.status(404).json({ error: `Campaign "${campaignName}" not found` });
+
+    const contactRecord = await airtableGetRecord('Contacts', contactId);
+    if (!contactRecord) return res.status(404).json({ error: 'Contact not found' });
+    const cf = contactRecord.fields || {};
+
+    const rows = await fetchCampaignContactsRows();
+    const row = await getOrCreateCampaignContactRow(contactId, cf['Full Name'] || contactId, campaignRecord.id, campaignName, rows);
+    const stage = normalizeSequenceStage(row.fields['Sequence Stage']);
+    const messageNumber = MESSAGE_NUMBER_FOR_STAGE[stage];
+    if (!messageNumber) {
+      return res.status(400).json({ error: `Contact is at Sequence Stage "${stage}" - not a stage this card generates a message for.` });
+    }
+
+    const camp = campaignRecord.fields || {};
+    const prompt = `You are drafting LinkedIn outreach message ${messageNumber} of 3 for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM.
+
+Campaign: "${campaignName}". Goal: ${camp['Goal'] || 'not recorded'}. Product: ${camp['Product'] || 'not recorded'}. Target ICP: ${camp['Target ICP'] || 'not recorded'}. Strategy notes: ${camp['Strategy Notes'] || 'none recorded'}.
+
+Contact: ${cf['Full Name'] || 'Unknown'}, ${cf['Job Title'] || ''}. AI summary: ${cf['AI Summary'] || 'none yet'}. Conversation so far: ${cf['Conversation Context'] || 'none yet - this is the first message'}.
+
+Write only message ${messageNumber} in this contact's sequence for this specific campaign, following on naturally from the conversation so far (if any). UK English, no em dashes, peer to peer tone, 3-4 sentences, signed off "Marcus". Return only the message text, no preamble.`;
+
+    const message = await callClaudeText(prompt, 400);
+    await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, { records: [{ id: row.id, fields: { 'Next Message Draft': message } }] });
+
+    res.json({ success: true, message, messageNumber, stage });
+  } catch (err) {
+    console.error('Generate message error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// "Copy & mark sent" on a Today's Actions fast-action card: logs the sent
+// message as a Touch Point tagged to this contact and campaign, advances
+// Sequence Stage to the next stage in the linear Found -> Connection
+// Pending -> Message 1/2/3 Sent flow (no reply-gating - unlike the DM-
+// screenshot flow, there's no "Pending Reply"/"Ready for Message N" step
+// in between), and clears the now-stale drafted message.
+app.post('/api/campaign/:id/contacts/:contactId/mark-sent', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const campaignName = decodeURIComponent(req.params.id);
+  const contactId = req.params.contactId;
+  const { message } = req.body;
+  if (!message) return res.status(400).json({ error: 'message is required' });
+
+  try {
+    const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
+    if (!campaignRecord) return res.status(404).json({ error: `Campaign "${campaignName}" not found` });
+
+    const contactRecord = await airtableGetRecord('Contacts', contactId);
+    if (!contactRecord) return res.status(404).json({ error: 'Contact not found' });
+
+    const rows = await fetchCampaignContactsRows();
+    const row = await getOrCreateCampaignContactRow(contactId, (contactRecord.fields || {})['Full Name'] || contactId, campaignRecord.id, campaignName, rows);
+    const stage = normalizeSequenceStage(row.fields['Sequence Stage']);
+    const nextStage = SEQUENCE_STAGE_NEXT[stage];
+    if (!nextStage) {
+      return res.status(400).json({ error: `Contact is already at the final stage ("${stage}") - nothing further to advance to.` });
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, {
+      records: [{
+        id: row.id,
+        fields: {
+          'Sequence Stage': nextStage,
+          'Stage History': appendStageHistory(row.fields['Stage History'], nextStage, today),
+          'Next Message Draft': ''
+        }
+      }],
+      typecast: true
+    });
+
+    await airtableRequest('POST', 'Touch Points', {
+      records: [{
+        fields: {
+          'Date': today,
+          'Type': 'LinkedIn Message',
+          'Direction': 'Outbound',
+          'Summary': message,
+          'Contact': [contactId],
+          'Campaign': [campaignRecord.id]
+        }
+      }],
+      typecast: true
+    });
+
+    res.json({ success: true, newStage: nextStage });
+  } catch (err) {
+    console.error('Mark sent error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -4378,12 +4522,12 @@ app.get('/api/context/data', async (req, res) => {
           .slice(0, 3);
 
         const myCampaignRows = campaignRowsByContact[r.id] || [];
-        const hasPendingConnection = myCampaignRows.some(cr => (cr.fields['Sequence Stage'] || '') === 'Connection Requested');
+        const hasPendingConnection = myCampaignRows.some(cr => ['Connection Requested', 'Found'].includes(cr.fields['Sequence Stage'] || ''));
         let sequenceStage = '', nextMessageDraft = '', campaignContactId = null;
         if (campaignRecord) {
           const myRow = myCampaignRows.find(cr => (cr.fields['Campaign'] || []).includes(campaignRecord.id));
           if (myRow) {
-            sequenceStage = myRow.fields['Sequence Stage'] || '';
+            sequenceStage = normalizeSequenceStage(myRow.fields['Sequence Stage']);
             nextMessageDraft = myRow.fields['Next Message Draft'] || '';
             campaignContactId = myRow.id;
           }
@@ -4432,8 +4576,8 @@ app.patch('/api/context/contact-fields', async (req, res) => {
 
   const { contactId, journeyStage, sequenceStage } = req.body;
   if (!contactId) return res.status(400).json({ error: 'contactId is required' });
-  if (!journeyStage && sequenceStage !== 'Connected') {
-    return res.status(400).json({ error: 'journeyStage is required, or sequenceStage must be "Connected"' });
+  if (!journeyStage && sequenceStage !== 'Connection Pending') {
+    return res.status(400).json({ error: 'journeyStage is required, or sequenceStage must be "Connection Pending"' });
   }
 
   try {
@@ -4442,14 +4586,14 @@ app.patch('/api/context/contact-fields', async (req, res) => {
     }
 
     let campaignContactRowsSynced = 0;
-    if (sequenceStage === 'Connected') {
+    if (sequenceStage === 'Connection Pending') {
       const rows = await fetchCampaignContactsRows();
-      const pendingRows = rows.filter(r => (r.fields['Contact'] || []).includes(contactId) && (r.fields['Sequence Stage'] || '') === 'Connection Requested');
+      const pendingRows = rows.filter(r => (r.fields['Contact'] || []).includes(contactId) && ['Connection Requested', 'Found'].includes(r.fields['Sequence Stage'] || ''));
       if (pendingRows.length) {
         const today = new Date().toISOString().slice(0, 10);
         await airtableBatchPatch(CAMPAIGN_CONTACTS_TABLE, pendingRows.map(r => ({
           id: r.id,
-          fields: { 'Sequence Stage': 'Connected', 'Stage History': appendStageHistory(r.fields['Stage History'], 'Connected', today) }
+          fields: { 'Sequence Stage': 'Connection Pending', 'Stage History': appendStageHistory(r.fields['Stage History'], 'Connection Pending', today) }
         })));
         campaignContactRowsSynced = pendingRows.length;
       }
