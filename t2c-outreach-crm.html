@@ -3680,7 +3680,7 @@ function renderRecommendedProducts(c){
   </div>`;
 }
 
-function markSent(cid, key){
+async function markSent(cid, key){
   const c = state.contacts.find(x=>x.id===cid);
   c.thread[key] = { sent: isoDate(TODAY), replied:false };
   if(c.state !== 'messaging') c.state = 'messaging';
@@ -3688,6 +3688,30 @@ function markSent(cid, key){
   notifyWebhook(c);
   toast('Marked as sent', 'success');
   renderPage();
+
+  // Same Airtable writes as the Today's Actions "Copy & mark sent" fast-action
+  // (POST /api/campaign/:name/contacts/:id/mark-sent): logs a Touch Point tagged
+  // to this contact and campaign, advances Sequence Stage on the Campaign
+  // Contacts row, and clears its stale Next Message Draft. This button has no
+  // drafted message text to log (it exists for messages sent outside the app's
+  // generator) so it falls back to whatever was last generated for this stage,
+  // or a placeholder noting there's no draft on file.
+  const campaign = state.campaigns.find(x => x.id === window.__roadmapCampaignId) || activeCampaignForContact(c);
+  if(!campaign) return;
+  const message = (c.generated && c.generated[key]) || `${key==='m1'?'Message 1':'Message 2'} to ${c.name} — marked as sent manually, no draft on file.`;
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/contacts/${cid}/mark-sent`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ message })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    if(window.__roadmapCampaignId === campaign.id) await loadCampaignSequenceStages(campaign);
+  } catch(err){
+    console.warn('Could not sync sent message to Airtable:', err.message);
+    toast('Marked as sent locally, but could not sync to Airtable: ' + err.message, 'warn');
+  }
 }
 function setReply(cid, key, val){
   const c = state.contacts.find(x=>x.id===cid);
@@ -3715,13 +3739,37 @@ function initRoadmapDrag(){}
 function onCardDragStart(e, id){ dragCardId = id; e.target.classList.add('dragging'); e.dataTransfer.effectAllowed='move'; }
 function onCardDragEnd(e){ e.target.classList.remove('dragging'); }
 function onColDragOver(e){ e.preventDefault(); }
-function onColDrop(e, colKey){
+// Column key -> Airtable Journey Stage value, matching the single-select
+// values the rest of the app writes (see mapStateToStage in search-server.js
+// and JOURNEY_STAGE_TO_STATE above). There's no "pending" column that maps
+// to Identified/found - the board starts at "Connection pending", so that's
+// the value synced when a card lands back in that column.
+const ROADMAP_COL_TO_JOURNEY_STAGE = { pending:'Connection Pending', made:'Connected', messaging:'Messaging', booked:'Booked' };
+
+async function syncJourneyStageForColumn(contactId, colKey){
+  const journeyStage = ROADMAP_COL_TO_JOURNEY_STAGE[colKey];
+  if(!journeyStage) return;
+  try {
+    const res = await fetch('/api/context/contact-fields', {
+      method: 'PATCH',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ contactId, journeyStage })
+    });
+    if(!res.ok){ const data = await res.json().catch(()=>({})); throw new Error(data.error || 'Request failed'); }
+  } catch(err){
+    console.warn('Could not sync Journey Stage to Airtable:', err.message);
+    toast('Moved locally, but could not sync stage to Airtable: ' + err.message, 'warn');
+  }
+}
+
+async function onColDrop(e, colKey){
   e.preventDefault();
   if(!dragCardId) return;
   const c = state.contacts.find(x=>x.id===dragCardId);
   if(!c) return;
   const fromCol = getRoadmapColumn(c);
   if(fromCol === colKey){ dragCardId=null; return; }
+  syncJourneyStageForColumn(c.id, colKey);
   const order = ['pending','made','messaging','booked'];
   const forward = order.indexOf(colKey) > order.indexOf(fromCol);
 
