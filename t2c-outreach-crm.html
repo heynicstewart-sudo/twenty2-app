@@ -217,6 +217,8 @@ label{font-size:var(--label-size);font-weight:700;color:var(--muted);display:blo
 .home-action-desc{font-size:12px;color:var(--muted);}
 .home-grid-row{cursor:pointer;}
 .home-grid-row:hover{background:var(--surface-2);}
+.home-grid-row .grid-delete-btn{opacity:0;transition:opacity .15s;}
+.home-grid-row:hover .grid-delete-btn{opacity:1;}
 .quick-actions{display:flex;gap:12px;flex-wrap:wrap;}
 
 /* Tags / badges */
@@ -942,6 +944,49 @@ function gridStatus(grid){
   return gridContacts(grid.id).length ? 'Active' : 'Setup';
 }
 
+function confirmDeleteGrid(gridId){
+  const grid = state.grids.find(g => g.id === gridId);
+  if(!grid) return;
+  const body = `<p style="font-size:13px;">Delete "${esc(grid.name)}"? This will remove the grid and all its data from the app. This cannot be undone.</p>`;
+  const footer = `
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" id="confirmDeleteGridBtn" style="background:var(--danger);border-color:var(--danger);" onclick="deleteGridConfirmed('${gridId}')"><i class="ti ti-trash"></i> Delete</button>
+  `;
+  openModal(`Delete "${esc(grid.name)}"`, body, footer);
+}
+
+async function deleteGridConfirmed(gridId){
+  const grid = state.grids.find(g => g.id === gridId);
+  if(!grid) return;
+  const btn = document.getElementById('confirmDeleteGridBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Deleting...'; }
+  try {
+    const contactNames = gridContacts(gridId).map(c => c.name);
+    // Only delete Companies not shared with another grid - Airtable has no
+    // per-grid concept, so this is the only place that knows the answer.
+    const otherGridCompanies = new Set();
+    state.grids.forEach(g => { if(g.id !== gridId) g.companies.forEach(c => otherGridCompanies.add(c)); });
+    const companyNames = grid.companies.filter(c => !otherGridCompanies.has(c));
+
+    const res = await fetch('/api/grid', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contactNames, companyNames })
+    });
+    const json = await res.json();
+    if(!res.ok || !json.success) throw new Error(json.error || 'Delete failed');
+
+    state.contacts = state.contacts.filter(c => c.gridId !== gridId);
+    state.grids = state.grids.filter(g => g.id !== gridId);
+    closeModal();
+    toast(`Grid "${grid.name}" deleted`, 'success');
+    renderPage();
+  } catch(err){
+    toast('Could not delete grid: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-trash"></i> Delete'; }
+  }
+}
+
 function goToNewCampaign(){
   navigate('campaigns');
   openNewCampaignChat();
@@ -1080,7 +1125,7 @@ function renderHome(){
     </div>
     <div class="perf-table-wrap">
       <table class="perf-table">
-        <thead><tr><th>Name</th><th>Companies</th><th>Contacts</th><th>Last updated</th><th>Status</th></tr></thead>
+        <thead><tr><th>Name</th><th>Companies</th><th>Contacts</th><th>Last updated</th><th>Status</th><th></th></tr></thead>
         <tbody>
           ${state.grids.map(g => `
             <tr class="home-grid-row" onclick="openGrid('${g.id}')">
@@ -1089,6 +1134,7 @@ function renderHome(){
               <td>${gridContacts(g.id).length}</td>
               <td>${fmtDate(g.updatedAt)}</td>
               <td><span class="tag ${gridStatus(g)==='Active'?'tag-connected':'tag-found'}">${gridStatus(g)}</span></td>
+              <td style="text-align:right;"><button class="btn btn-ghost btn-sm grid-delete-btn" onclick="event.stopPropagation();confirmDeleteGrid('${g.id}')" title="Delete grid"><i class="ti ti-trash"></i></button></td>
             </tr>
           `).join('')}
         </tbody>

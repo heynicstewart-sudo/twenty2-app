@@ -229,6 +229,11 @@ app.post('/api/airtable/contact', async (req, res) => {
     const searchData = await searchRes.json();
     const existing = searchData.records && searchData.records[0];
     if (existing) {
+      if (icpRoleCategory) {
+        await airtableRequest('PATCH', 'Contacts', {
+          records: [{ id: existing.id, fields: { 'ICP Role Category': icpRoleCategory } }]
+        });
+      }
       return res.json({ success: true, skipped: true, recordId: existing.id });
     }
 
@@ -237,7 +242,8 @@ app.post('/api/airtable/contact', async (req, res) => {
       'Job Title': role || '',
       'LinkedIn URL': linkedinUrl || '',
       'Journey Stage': mapStateToStage(contactState),
-      'Notes': notes || ''
+      'Notes': notes || '',
+      'ICP Role Category': icpRoleCategory || ''
     };
     if (companyLinkedinUrl) fields['Company LinkedIn URL'] = companyLinkedinUrl;
 
@@ -4244,6 +4250,37 @@ app.post('/api/wipe-data', async (req, res) => {
     }
   }
   res.json({ success: true, results });
+});
+
+// ===================== DELETE GRID (Home page) =====================
+// Grids only exist client-side (see the "gridName"/"Grid Name" notes above),
+// so the client tells us which Contact/Company names belonged to the grid
+// being deleted - each name is looked up in Airtable and, if found, its
+// record is removed. Companies shared with another grid are the client's
+// responsibility to exclude from companyNames before calling this (it has
+// no way to know about other grids).
+app.delete('/api/grid', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const { contactNames = [], companyNames = [] } = req.body || {};
+
+  try {
+    const contactIds = (await Promise.all(
+      contactNames.map(name => findRecordByFieldName('Contacts', 'Full Name', name))
+    )).filter(Boolean).map(r => r.id);
+
+    const companyIds = (await Promise.all(
+      companyNames.map(name => findRecordByFieldName('Companies', 'Company Name', name))
+    )).filter(Boolean).map(r => r.id);
+
+    if (contactIds.length) await airtableBatchDelete('Contacts', contactIds);
+    if (companyIds.length) await airtableBatchDelete('Companies', companyIds);
+
+    res.json({ success: true, deletedContacts: contactIds.length, deletedCompanies: companyIds.length });
+  } catch (err) {
+    console.error('Grid delete error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 const PORT = process.env.PORT || 3000;
