@@ -3690,7 +3690,7 @@ app.get('/api/trigify/backfill-contacts', async (req, res) => {
   }
 });
 
-app.post('/api/trigify/sync-contact-posts', async (req, res) => {
+app.get('/api/trigify/sync-contact-posts', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   if (!TRIGIFY_API_KEY) return res.status(500).json({ error: 'TRIGIFY_API_KEY not configured' });
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
