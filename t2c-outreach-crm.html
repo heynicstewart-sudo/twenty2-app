@@ -1080,6 +1080,7 @@ function afterRender(page){
     const tab = window.__contentSubTab || 'signals';
     if(tab === 'signals' && window.__contentSignals === undefined) loadContentSignals();
     if((tab === 'drafts' || tab === 'calendar') && window.__contentDrafts === undefined) loadContentDrafts();
+    if(tab === 'performance' && window.__contentPerformance === undefined) loadContentPerformance();
     if(tab === 'settings' && window.__contentSettings === undefined) loadContentSettings();
   }
   if(page === 'home' && window.__homeContentSignals === undefined) loadHomeContentSignals();
@@ -6882,7 +6883,7 @@ function renderLearningResult(kind, data, recordCount){
 // campaign-name-not-id scoping convention (the backend resolves a campaign
 // name to its Airtable record id itself, same as sales-overview/deals).
 
-const CONTENT_SUBTABS = [['signals','Signals'],['drafts','Draft Centre'],['calendar','Calendar'],['settings','Settings']];
+const CONTENT_SUBTABS = [['signals','Signals'],['drafts','Draft Centre'],['calendar','Calendar'],['performance','My Performance'],['settings','Settings']];
 const CONTENT_FORMATS = ['LinkedIn Post','Blog','Newsletter'];
 const CONTENT_FORMAT_META = {
   'LinkedIn Post': { dotClass:'format-linkedin', label:'LinkedIn' },
@@ -6906,6 +6907,7 @@ function renderContent(){
   ${tab==='signals' ? renderContentSignalsTab() : ''}
   ${tab==='drafts' ? renderContentDraftsTab() : ''}
   ${tab==='calendar' ? renderContentCalendarTab() : ''}
+  ${tab==='performance' ? renderContentPerformanceTab() : ''}
   ${tab==='settings' ? renderContentSettingsTab() : ''}
   `;
 }
@@ -6946,6 +6948,18 @@ async function loadContentSettings(){
     window.__contentSettings = { error: err.message };
   }
   if(state.currentPage === 'content' && window.__contentSubTab === 'settings') renderPage();
+}
+
+async function loadContentPerformance(){
+  try {
+    const res = await fetch('/api/content/performance');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__contentPerformance = data.posts || [];
+  } catch(err){
+    window.__contentPerformance = { error: err.message };
+  }
+  if(state.currentPage === 'content' && window.__contentSubTab === 'performance') renderPage();
 }
 
 async function loadHomeContentSignals(){
@@ -7459,6 +7473,139 @@ async function refreshContentCadence(){
 }
 
 /* ---- Settings (voice profile) ---- */
+
+/* ---- My Performance ---- */
+
+const CONTENT_PERF_SORT_DEFAULT = { key:'date', dir:'desc' };
+
+function renderContentPerformanceTab(){
+  const posts = window.__contentPerformance;
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-chart-bar"></i> My Performance</div>
+      <button class="btn btn-primary btn-sm" id="analysePostsBtn" onclick="runMarcusContentAnalysis()"><i class="ti ti-sparkles"></i> Analyse my LinkedIn posts</button>
+    </div>
+    <p class="muted" style="font-size:12.5px;margin-top:6px;margin-bottom:0;">Pulls Marcus's last 3 months of LinkedIn posts via Trigify, scores them with Claude, and saves the results to Airtable.</p>
+  </div>
+  ${renderContentPerformanceSummary(posts)}
+  <div class="card">
+    ${renderContentPerformanceTable(posts)}
+  </div>
+  `;
+}
+
+function renderContentPerformanceSummary(posts){
+  if(!Array.isArray(posts) || !posts.length) return '';
+
+  function topByAvg(keyFn){
+    const buckets = {};
+    posts.forEach(p=>{
+      const k = keyFn(p);
+      if(!k) return;
+      if(!buckets[k]) buckets[k] = { sum:0, count:0 };
+      buckets[k].sum += p.engagementScore||0;
+      buckets[k].count++;
+    });
+    return Object.entries(buckets).map(([key,v])=>({ key, avg: v.sum/v.count, count: v.count }));
+  }
+
+  const topTopics = topByAvg(p=>p.topic).sort((a,b)=>b.avg-a.avg).slice(0,3);
+  const bestFormat = topByAvg(p=>p.format).sort((a,b)=>b.avg-a.avg)[0];
+  const bestDay = topByAvg(p=> p.date ? new Date(p.date).toLocaleDateString('en-AU',{weekday:'long'}) : null).sort((a,b)=>b.avg-a.avg)[0];
+  const ctaEntries = topByAvg(p=>p.ctaUsed);
+  const mostUsedCta = ctaEntries.slice().sort((a,b)=>b.count-a.count)[0];
+  const bestConvertingCta = ctaEntries.slice().sort((a,b)=>b.avg-a.avg)[0];
+
+  return `
+  <div class="mini-cards" style="margin-bottom:16px;">
+    <div class="mini-card" style="text-align:left;">
+      <div class="label" style="margin-bottom:6px;">Top topics by avg. engagement</div>
+      ${topTopics.length ? topTopics.map(t=>`<div style="font-size:12.5px;">${esc(t.key)} <span class="muted">(${t.avg.toFixed(1)})</span></div>`).join('') : '<div class="muted">—</div>'}
+    </div>
+    <div class="mini-card">
+      <div class="num" style="font-size:16px;">${bestFormat?esc(bestFormat.key):'—'}</div>
+      <div class="label">Best performing format</div>
+    </div>
+    <div class="mini-card">
+      <div class="num" style="font-size:16px;">${bestDay?esc(bestDay.key):'—'}</div>
+      <div class="label">Best day to post</div>
+    </div>
+    <div class="mini-card" style="text-align:left;">
+      <div class="label" style="margin-bottom:6px;">CTA usage</div>
+      <div style="font-size:12.5px;">Most used: ${mostUsedCta?esc(mostUsedCta.key):'—'}</div>
+      <div style="font-size:12.5px;">Highest engagement: ${bestConvertingCta?esc(bestConvertingCta.key):'—'}</div>
+    </div>
+  </div>`;
+}
+
+function renderContentPerformanceTable(posts){
+  if(!posts) return '<div class="muted"><i class="ti ti-loader-2"></i> Loading...</div>';
+  if(posts.error) return `<div class="muted">Could not load performance data: ${esc(posts.error)}</div>`;
+  if(!posts.length) return '<div class="empty-state">No analysed posts yet. Click "Analyse my LinkedIn posts" to pull and score the last 3 months.</div>';
+
+  const sort = window.__contentPerfSort || CONTENT_PERF_SORT_DEFAULT;
+  const sorted = posts.slice().sort((a,b)=>{
+    let av=a[sort.key], bv=b[sort.key];
+    if(sort.key==='date'){ av=new Date(av||0).getTime(); bv=new Date(bv||0).getTime(); }
+    else if(typeof av==='string' || typeof bv==='string'){ av=(av||'').toString().toLowerCase(); bv=(bv||'').toString().toLowerCase(); }
+    if(av<bv) return sort.dir==='asc'?-1:1;
+    if(av>bv) return sort.dir==='asc'?1:-1;
+    return 0;
+  });
+
+  const cols = [
+    ['date','Date'],['topic','Topic'],['format','Format'],['likes','Likes'],
+    ['comments','Comments'],['engagementScore','Engagement Score'],['ctaUsed','CTA Used'],['whatWorked','What Worked']
+  ];
+
+  return `
+  <div class="perf-table-wrap">
+  <table class="perf-table">
+    <thead><tr>${cols.map(([key,label])=>`<th style="cursor:pointer;" onclick="sortContentPerformance('${key}')">${label}${sort.key===key?(sort.dir==='asc'?' &#9650;':' &#9660;'):''}</th>`).join('')}</tr></thead>
+    <tbody>
+      ${sorted.map(p=>`
+        <tr>
+          <td>${p.date ? esc(new Date(p.date).toLocaleDateString('en-AU')) : '—'}</td>
+          <td>${esc(p.topic||'—')}</td>
+          <td>${esc(p.format||'—')}</td>
+          <td>${p.likes ?? 0}</td>
+          <td>${p.comments ?? 0}</td>
+          <td>${p.engagementScore ?? 0}</td>
+          <td>${esc(p.ctaUsed||'—')}</td>
+          <td style="max-width:320px;white-space:normal;">${esc(p.whatWorked||'—')}</td>
+        </tr>
+      `).join('')}
+    </tbody>
+  </table>
+  </div>`;
+}
+
+function sortContentPerformance(key){
+  const current = window.__contentPerfSort || CONTENT_PERF_SORT_DEFAULT;
+  window.__contentPerfSort = { key, dir: (current.key===key && current.dir==='desc') ? 'asc' : 'desc' };
+  renderPage();
+}
+
+async function runMarcusContentAnalysis(){
+  const btn = document.getElementById('analysePostsBtn');
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<i class="ti ti-loader-2"></i> Analysing...';
+  try {
+    const res = await fetch('/api/trigify/marcus-content-analysis', { method:'POST' });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    toast(data.saved ? `Analysed and saved ${data.saved} post${data.saved===1?'':'s'}` : (data.message || 'No posts found'), 'success');
+    window.__contentPerformance = undefined;
+    loadContentPerformance();
+  } catch(err){
+    toast('Could not analyse posts: ' + err.message, 'warn');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = original;
+  }
+}
 
 function renderContentSettingsTab(){
   const s = window.__contentSettings;

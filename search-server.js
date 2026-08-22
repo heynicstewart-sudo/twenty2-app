@@ -2,6 +2,7 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const cron = require('node-cron');
 
 const app = express();
 app.use(cors());
@@ -133,6 +134,28 @@ async function findRecordByFieldName(table, fieldName, value) {
   return (data.records && data.records[0]) || null;
 }
 
+// Fetches every full record (not just the first page) in a table, following
+// Airtable's `offset` pagination cursor. The plain airtableRequest('GET',
+// table) used elsewhere in this file only returns the first 100 records -
+// fine for routes that just display/search, but not safe for the Trigify
+// sync routes below, which need every Contact regardless of table size.
+async function airtableFetchAllRecords(table) {
+  const records = [];
+  let offset;
+  do {
+    const qs = new URLSearchParams({ pageSize: '100' });
+    if (offset) qs.set('offset', offset);
+    const res = await fetch(`${AIRTABLE_URL}/${encodeURIComponent(table)}?${qs.toString()}`, {
+      headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` }
+    });
+    if (!res.ok) { const err = await res.text(); throw new Error(`Airtable error ${res.status}: ${err}`); }
+    const data = await res.json();
+    records.push(...(data.records || []));
+    offset = data.offset;
+  } while (offset);
+  return records;
+}
+
 // Campaign lookup by name for the Sales tab routes - fetches the whole
 // Campaigns table and matches by exact string equality in JS instead of
 // going through findRecordByFieldName's filterByFormula. That formula gets
@@ -258,6 +281,12 @@ app.post('/api/airtable/contact', async (req, res) => {
     const data = await airtableRequest('POST', 'Contacts', {
       records: [{ fields }]
     });
+
+    if (linkedinUrl) {
+      trigifyAddProfileToContactSearch(linkedinUrl)
+        .catch(err => console.warn('Could not add new contact to Trigify contact search (non-fatal):', err.message));
+    }
+
     res.json({ success: true, skipped: false, recordId: data.records[0].id });
   } catch (err) {
     console.error('Airtable contact create error:', err.message);
@@ -2802,6 +2831,8 @@ app.post('/api/content/draft', async (req, res) => {
     if (signalRecord) targetCompanies = signalRecord.fields['Related Companies'] || [];
     else if (existingContent) targetCompanies = existingContent.fields['Target Companies'] || [];
 
+    const performancePatterns = draftMode !== 'refine' ? await getContentPerformanceSummaryForPrompt() : '';
+
     let prompt;
     if (draftMode === 'refine') {
       prompt = `You are Marcus, writing for T2C Outreach, Twenty2 Collective. You previously drafted this ${resolvedFormat}:
@@ -2830,6 +2861,7 @@ ${contentContext ? `\nCAMPAIGN CONTENT CONTEXT (reshapes but does not override t
 
 TOPIC: ${resolvedTopic}
 ${signalRecord ? `This is informed by a real recurring theme detected from account activity: "${signalRecord.fields['Theme'] || ''}". Suggested ICP targets: ${signalRecord.fields['Suggested ICP Targets'] || 'not specified'}.` : ''}
+${performancePatterns ? `\nWHAT HAS PERFORMED WELL BEFORE (Marcus's own top posts by engagement - use these patterns, don't copy them):\n${performancePatterns}` : ''}
 
 Write a ${resolvedFormat} of target length ${lengthTarget}. UK English, no em dashes, first person as Marcus.
 
@@ -2965,6 +2997,427 @@ Recommend a realistic content posting cadence across LinkedIn, Blog, and Newslet
     res.json({ success: true, cadence });
   } catch (err) {
     console.error('Content cadence error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===================== TRIGIFY INTEGRATION =====================
+// Contact post monitoring (Part 1), Serper-based job-title drift detection
+// (Part 2), and Marcus's own content performance analysis (Part 3). The
+// Settings table (singleton, like Content Settings) holds the two Trigify
+// search ids plus "My LinkedIn URL" - the brief called this "Marcus's
+// LinkedIn URL from Content Settings", but the field actually lives on the
+// real Settings table, so that's what's read here.
+//
+// Trigify's own endpoint/payload shapes aren't fully public outside a
+// logged-in dashboard - what's used below (POST/GET/PATCH /v1/searches,
+// GET /v1/searches/{id}/results, "Business Network" as the LinkedIn
+// platform label, profile-monitor search type) follows the REST
+// conventions documented at help.trigify.io. All of it is funnelled
+// through trigifyRequest() so the base path/shape only needs adjusting in
+// one place if a live key shows a different contract.
+
+const TRIGIFY_API_KEY = process.env.TRIGIFY_API_KEY;
+const TRIGIFY_URL = 'https://api.trigify.io';
+const TRIGIFY_LINKEDIN_PLATFORM = 'Business Network';
+const TRIGIFY_CONTACT_SEARCH_NAME = 'T2C — All Contacts';
+const TRIGIFY_MARCUS_SEARCH_NAME = 'T2C — Marcus Content';
+const SETTINGS_TABLE = 'Settings';
+const CONTENT_PERFORMANCE_TABLE = 'Content Performance';
+
+async function trigifyRequest(method, path, body) {
+  const res = await fetch(`${TRIGIFY_URL}${path}`, {
+    method,
+    headers: {
+      'x-api-key': TRIGIFY_API_KEY,
+      'Content-Type': 'application/json'
+    },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Trigify error ${res.status}: ${err}`);
+  }
+  return res.json();
+}
+
+// Settings is a singleton, same convention as getContentSettingsRecord.
+async function getSettingsRecord() {
+  const data = await airtableRequest('GET', SETTINGS_TABLE);
+  return (data.records && data.records[0]) || null;
+}
+
+async function getOrCreateSettingsRecord() {
+  const existing = await getSettingsRecord();
+  if (existing) return existing;
+  const data = await airtableRequest('POST', SETTINGS_TABLE, { records: [{ fields: {} }] });
+  return data.records[0];
+}
+
+async function trigifyUpsertContactSearch(linkedinUrls, existingSearchId) {
+  const payload = {
+    name: TRIGIFY_CONTACT_SEARCH_NAME,
+    type: 'profile_monitor',
+    platforms: [TRIGIFY_LINKEDIN_PLATFORM],
+    sources: linkedinUrls,
+    max_results_per_source: 3
+  };
+  if (existingSearchId) return trigifyRequest('PATCH', `/v1/searches/${existingSearchId}`, payload);
+  return trigifyRequest('POST', '/v1/searches', payload);
+}
+
+// Fire-and-forget add of one new contact's profile to the existing "T2C —
+// All Contacts" search, called from POST /api/airtable/contact right after
+// a new contact is created. No-ops quietly if the search hasn't been set
+// up yet (via /api/trigify/setup-contact-search) or Trigify isn't
+// configured - the contact save itself must never fail because of this.
+async function trigifyAddProfileToContactSearch(linkedinUrl) {
+  if (!TRIGIFY_API_KEY || !AIRTABLE_API_KEY) return;
+  const settingsRecord = await getSettingsRecord();
+  const searchId = settingsRecord && settingsRecord.fields['Trigify Contact Search ID'];
+  if (!searchId) return;
+  const current = await trigifyRequest('GET', `/v1/searches/${searchId}`);
+  const existingSources = current.sources || (current.search && current.search.sources) || [];
+  if (existingSources.includes(linkedinUrl)) return;
+  await trigifyRequest('PATCH', `/v1/searches/${searchId}`, { sources: [...existingSources, linkedinUrl] });
+}
+
+function normalizeTrigifyPost(p) {
+  return {
+    text: p.text || p.content || p.body || '',
+    date: p.date || p.publishedAt || p.postedAt || p.createdAt || '',
+    likes: p.likes ?? p.likeCount ?? p.reactions ?? 0,
+    comments: p.comments ?? p.commentCount ?? 0
+  };
+}
+
+function normalizeTrigifyResult(r) {
+  const profileUrl = r.profileUrl || r.source || r.sourceUrl || r.url || '';
+  const posts = (r.posts || r.items || []).map(normalizeTrigifyPost);
+  return { profileUrl, posts };
+}
+
+async function trigifyGetSearchResults(searchId) {
+  const data = await trigifyRequest('GET', `/v1/searches/${searchId}/results`);
+  return data.results || data.data || [];
+}
+
+function formatRecentPosts(posts) {
+  return posts.map(p => {
+    const date = p.date ? new Date(p.date).toISOString().slice(0, 10) : '';
+    const text = (p.text || '').replace(/\s+/g, ' ').trim();
+    return `[${date}] ${text} | Likes: ${p.likes ?? 0} Comments: ${p.comments ?? 0}`;
+  }).join('\n\n');
+}
+
+// One Claude call per contact covering all of their (up to 3) fetched
+// posts together, rather than one call per individual post - cheaper and
+// no less accurate, since a job change only needs to be caught once.
+async function detectJobChangeFromPosts(posts) {
+  if (!posts.length || !process.env.ANTHROPIC_API_KEY) return null;
+  const prompt = `Below are up to 3 recent LinkedIn posts from one person, newest first. Determine if ANY of them signal a job change - language like "excited to join", "starting as", "leaving", "new role", "new chapter" (or similar). If so, extract the new company and/or role and the post's date.
+
+POSTS:
+${JSON.stringify(posts.map(p => ({ date: p.date, text: p.text })))}
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "isJobChange": boolean, "newCompanyOrRole": string, "date": string }`;
+  try {
+    const parsed = await callClaudeJson(prompt, 500);
+    return parsed && parsed.isJobChange ? parsed : null;
+  } catch (err) {
+    console.warn('Job change detection failed for a contact (non-fatal):', err.message);
+    return null;
+  }
+}
+
+// Shared by the manual POST route and the daily 6am cron job below - never
+// throws for a single bad contact/result, since one malformed Trigify
+// result shouldn't sink the whole sync.
+async function syncTrigifyContactPosts() {
+  const settingsRecord = await getSettingsRecord();
+  const searchId = settingsRecord && settingsRecord.fields['Trigify Contact Search ID'];
+  if (!searchId) return { synced: 0, message: 'Trigify contact search not set up yet - run setup-contact-search first' };
+
+  const [rawResults, contacts] = await Promise.all([
+    trigifyGetSearchResults(searchId),
+    airtableFetchAllRecords('Contacts')
+  ]);
+
+  const contactsBySlug = {};
+  contacts.forEach(c => {
+    const slug = extractLinkedInSlug(c.fields['LinkedIn URL'] || '');
+    if (slug) contactsBySlug[slug] = c;
+  });
+
+  const updates = [];
+  for (const raw of rawResults) {
+    const { profileUrl, posts } = normalizeTrigifyResult(raw);
+    const slug = extractLinkedInSlug(profileUrl);
+    const contact = slug ? contactsBySlug[slug] : null;
+    if (!contact || !posts.length) continue;
+
+    const top3 = posts.slice(0, 3);
+    const fields = { 'Recent Posts': formatRecentPosts(top3) };
+
+    const jobChange = await detectJobChangeFromPosts(top3);
+    if (jobChange) {
+      fields['Job Change Signal'] = `${jobChange.newCompanyOrRole || 'Possible job change'}${jobChange.date ? ' — ' + jobChange.date : ''}`;
+    }
+    updates.push({ id: contact.id, fields });
+  }
+
+  for (let i = 0; i < updates.length; i += 10) {
+    await airtableRequest('PATCH', 'Contacts', { records: updates.slice(i, i + 10), typecast: true });
+  }
+  return { synced: updates.length };
+}
+
+app.post('/api/trigify/setup-contact-search', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!TRIGIFY_API_KEY) return res.status(500).json({ error: 'TRIGIFY_API_KEY not configured' });
+
+  try {
+    const contacts = await airtableFetchAllRecords('Contacts');
+    const linkedinUrls = contacts.map(c => c.fields['LinkedIn URL']).filter(Boolean);
+    if (!linkedinUrls.length) {
+      return res.json({ success: true, searchId: null, profileCount: 0, message: 'No contacts with a LinkedIn URL yet' });
+    }
+
+    const settingsRecord = await getOrCreateSettingsRecord();
+    const existingSearchId = settingsRecord.fields['Trigify Contact Search ID'] || null;
+
+    const result = await trigifyUpsertContactSearch(linkedinUrls, existingSearchId);
+    const searchId = result.id || (result.search && result.search.id) || existingSearchId;
+    if (!searchId) throw new Error('Trigify did not return a search id');
+
+    if (searchId !== existingSearchId) {
+      await airtableRequest('PATCH', SETTINGS_TABLE, {
+        records: [{ id: settingsRecord.id, fields: { 'Trigify Contact Search ID': searchId } }]
+      });
+    }
+
+    res.json({ success: true, searchId, profileCount: linkedinUrls.length });
+  } catch (err) {
+    console.error('Trigify setup-contact-search error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/trigify/sync-contact-posts', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!TRIGIFY_API_KEY) return res.status(500).json({ error: 'TRIGIFY_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  try {
+    const result = await syncTrigifyContactPosts();
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('Trigify sync-contact-posts error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Part 2: Serper job title drift detection ----
+
+// Pulls the headline/title portion out of a Google result title for a
+// LinkedIn profile, e.g. "Jane Doe - Head of Marketing - Acme | LinkedIn"
+// -> "Head of Marketing - Acme". Falls back to the raw snippet by the
+// caller if this can't confidently strip the name.
+function extractHeadlineFromSerpTitle(title, fullName) {
+  if (!title) return '';
+  let rest = title;
+  if (fullName && rest.toLowerCase().indexOf(fullName.toLowerCase()) === 0) {
+    rest = rest.slice(fullName.length);
+  }
+  rest = rest.replace(/^[\s\-|]+/, '');
+  rest = rest.split(' | ')[0];
+  return rest.trim();
+}
+
+// Shared by the manual POST route and the Sunday 7am cron job below.
+async function checkContactJobChanges() {
+  const [contacts, companiesData] = await Promise.all([
+    airtableFetchAllRecords('Contacts'),
+    airtableRequest('GET', 'Companies')
+  ]);
+  const companiesById = {};
+  (companiesData.records || []).forEach(r => { companiesById[r.id] = r.fields['Company Name'] || ''; });
+
+  const targets = contacts.filter(c => c.fields['LinkedIn URL'] && c.fields['Job Title']);
+  const updates = [];
+
+  for (const contact of targets) {
+    const name = contact.fields['Full Name'];
+    const companyId = (contact.fields['Company'] || [])[0];
+    const companyName = companyId ? companiesById[companyId] : '';
+    if (!companyName) continue;
+
+    try {
+      const serperRes = await fetch(SERPER_URL, {
+        method: 'POST',
+        headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ q: `"${name}" "${companyName}" site:linkedin.com` })
+      });
+      if (!serperRes.ok) continue;
+      const data = await serperRes.json();
+      const top = (data.organic || [])[0];
+      if (!top) continue;
+
+      const headline = extractHeadlineFromSerpTitle(top.title, name) || top.snippet || '';
+      const storedTitle = (contact.fields['Job Title'] || '').toLowerCase().trim();
+      if (!headline || !storedTitle) continue;
+
+      const headlineLower = headline.toLowerCase();
+      const sameTitle = headlineLower.includes(storedTitle) || storedTitle.includes(headlineLower);
+      if (sameTitle) continue;
+      if (contact.fields['Job Change Signal']) continue;
+
+      updates.push({ id: contact.id, fields: { 'Job Change Signal': `Serper detected possible title change: ${headline} — verify manually` } });
+    } catch (err) {
+      console.warn(`Job change check failed for ${name}:`, err.message);
+    }
+  }
+
+  for (let i = 0; i < updates.length; i += 10) {
+    await airtableRequest('PATCH', 'Contacts', { records: updates.slice(i, i + 10), typecast: true });
+  }
+  return { checked: targets.length, flagged: updates.length };
+}
+
+app.post('/api/contacts/check-job-changes', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.SERPER_API_KEY) return res.status(500).json({ error: 'SERPER_API_KEY not configured' });
+  try {
+    const result = await checkContactJobChanges();
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('Check job changes error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Part 3: Marcus's content performance analysis ----
+
+async function trigifyEnsureMarcusSearch() {
+  const settingsRecord = await getOrCreateSettingsRecord();
+  const marcusUrl = settingsRecord.fields['My LinkedIn URL'];
+  if (!marcusUrl) throw new Error("Marcus's LinkedIn URL is not set in Settings yet");
+
+  let searchId = settingsRecord.fields['Trigify Marcus Search ID'] || null;
+  if (searchId) return searchId;
+
+  const created = await trigifyRequest('POST', '/v1/searches', {
+    name: TRIGIFY_MARCUS_SEARCH_NAME,
+    type: 'profile_monitor',
+    platforms: [TRIGIFY_LINKEDIN_PLATFORM],
+    sources: [marcusUrl],
+    max_results_per_source: 50
+  });
+  searchId = created.id || (created.search && created.search.id);
+  if (!searchId) throw new Error('Trigify did not return a search id');
+
+  await airtableRequest('PATCH', SETTINGS_TABLE, {
+    records: [{ id: settingsRecord.id, fields: { 'Trigify Marcus Search ID': searchId } }]
+  });
+  return searchId;
+}
+
+// Reads the last few highest-engagement Content Performance rows, formatted
+// for inclusion in a content draft prompt. Called from POST /api/content/
+// draft below so new drafts are informed by what has actually worked.
+// Never throws - a missing/empty table just means no patterns to add yet.
+async function getContentPerformanceSummaryForPrompt() {
+  try {
+    const records = await airtableFetchAllRecords(CONTENT_PERFORMANCE_TABLE);
+    if (!records.length) return '';
+    const top = records
+      .slice()
+      .sort((a, b) => (b.fields['Engagement Score'] || 0) - (a.fields['Engagement Score'] || 0))
+      .slice(0, 8);
+    return top.map(r => `- Topic: ${r.fields['Topic'] || '—'} | Format: ${r.fields['Format'] || '—'} | Engagement: ${r.fields['Engagement Score'] || 0} | What worked: ${r.fields['What Worked'] || '—'}`).join('\n');
+  } catch (err) {
+    console.warn('Could not load content performance for draft prompt (non-fatal):', err.message);
+    return '';
+  }
+}
+
+app.post('/api/trigify/marcus-content-analysis', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!TRIGIFY_API_KEY) return res.status(500).json({ error: 'TRIGIFY_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  try {
+    const searchId = await trigifyEnsureMarcusSearch();
+    const rawResults = await trigifyGetSearchResults(searchId);
+
+    const cutoff = daysAgoDate(90);
+    const posts = [];
+    rawResults.forEach(raw => {
+      normalizeTrigifyResult(raw).posts.forEach(p => {
+        if (p.date && new Date(p.date) >= cutoff) posts.push(p);
+      });
+    });
+
+    if (!posts.length) return res.json({ success: true, posts: [], saved: 0, message: 'No posts found in the last 3 months' });
+
+    const prompt = `You are analysing Marcus's own LinkedIn posts from the last 3 months for T2C Outreach, Twenty2 Collective, to learn what content performs well.
+
+POSTS (${posts.length}):
+${JSON.stringify(posts)}
+
+For EACH post, analyse and return: post_text, date, likes, comments, engagement_score (likes + comments), topic (3-5 words describing what the post is about), format (one of: short, long, question, story, insight), cta_used (the call to action used, or empty string if none), what_worked (one sentence on why this post performed well or didn't).
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "posts": [ { "post_text": string, "date": string, "likes": number, "comments": number, "engagement_score": number, "topic": string, "format": string, "cta_used": string, "what_worked": string } ] }`;
+
+    const parsed = await callClaudeJson(prompt, 8000);
+    const analysed = parsed.posts || [];
+
+    const records = analysed.map(p => ({
+      fields: {
+        'Post Text': p.post_text || '',
+        'Date': p.date || '',
+        'Likes': p.likes || 0,
+        'Comments': p.comments || 0,
+        'Engagement Score': p.engagement_score ?? ((p.likes || 0) + (p.comments || 0)),
+        'Topic': p.topic || '',
+        'Format': p.format || '',
+        'CTA Used': p.cta_used || '',
+        'What Worked': p.what_worked || '',
+        'Source': 'Trigify'
+      }
+    }));
+
+    for (let i = 0; i < records.length; i += 10) {
+      await airtableRequest('POST', CONTENT_PERFORMANCE_TABLE, { records: records.slice(i, i + 10), typecast: true });
+    }
+
+    res.json({ success: true, posts: analysed, saved: records.length });
+  } catch (err) {
+    console.error('Marcus content analysis error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/content/performance', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const records = await airtableFetchAllRecords(CONTENT_PERFORMANCE_TABLE);
+    const posts = records.map(r => ({
+      id: r.id,
+      postText: r.fields['Post Text'] || '',
+      date: r.fields['Date'] || '',
+      likes: r.fields['Likes'] || 0,
+      comments: r.fields['Comments'] || 0,
+      engagementScore: r.fields['Engagement Score'] || 0,
+      topic: r.fields['Topic'] || '',
+      format: r.fields['Format'] || '',
+      ctaUsed: r.fields['CTA Used'] || '',
+      whatWorked: r.fields['What Worked'] || ''
+    })).sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+    res.json({ posts });
+  } catch (err) {
+    console.error('Get content performance error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -4281,6 +4734,21 @@ app.delete('/api/grid', async (req, res) => {
     console.error('Grid delete error:', err.message);
     res.status(500).json({ error: err.message });
   }
+});
+
+// ===================== SCHEDULED SYNC JOBS =====================
+// Both run silently in the background and never block the UI - failures
+// are logged, not thrown, same as every other cron-eligible job in this
+// file (detectContentSignals, etc).
+
+// Daily 6am: Trigify contact post sync + post-based job change detection.
+cron.schedule('0 6 * * *', () => {
+  syncTrigifyContactPosts().catch(err => console.warn('Scheduled Trigify contact sync failed:', err.message));
+});
+
+// Weekly Sunday 7am: Serper-based job title drift detection.
+cron.schedule('0 7 * * 0', () => {
+  checkContactJobChanges().catch(err => console.warn('Scheduled job change check failed:', err.message));
 });
 
 const PORT = process.env.PORT || 3000;
