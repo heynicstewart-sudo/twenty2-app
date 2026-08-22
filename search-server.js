@@ -3254,7 +3254,7 @@ app.post('/api/trigify/setup-contact-search', async (req, res) => {
 // registers everyone with a LinkedIn URL but no Trigify Search ID yet via
 // the same trigifyCreateContactSearch() that on-create hook uses, so
 // there's one registration implementation instead of two.
-app.post('/api/trigify/backfill-contacts', async (req, res) => {
+app.get('/api/trigify/backfill-contacts', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   if (!TRIGIFY_API_KEY) return res.status(500).json({ error: 'TRIGIFY_API_KEY not configured' });
 
