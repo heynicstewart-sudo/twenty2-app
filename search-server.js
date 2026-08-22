@@ -3419,7 +3419,13 @@ async function runMarcusContentAnalysisJob(forceRefresh = false) {
     try {
       searchId = await trigifyEnsureMarcusSearch();
       rawResults = await trigifyGetSearchResults(searchId);
-      console.log('Marcus content analysis - Trigify fetch complete. searchId:', searchId, 'raw result count:', Array.isArray(rawResults) ? rawResults.length : typeof rawResults, 'sample raw result:', JSON.stringify((rawResults || [])[0]));
+      console.log('Marcus content analysis - Trigify fetch complete. searchId:', searchId, 'raw result count:', Array.isArray(rawResults) ? rawResults.length : typeof rawResults);
+
+      const sampleContainer = (rawResults || [])[0];
+      const sampleRawPost = sampleContainer && (Array.isArray(sampleContainer.posts) || Array.isArray(sampleContainer.items))
+        ? (sampleContainer.posts || sampleContainer.items)[0]
+        : sampleContainer;
+      console.log('Marcus content analysis - raw Trigify post object for one post (exact fields as returned by Trigify):', JSON.stringify(sampleRawPost, null, 2));
     } catch (err) {
       console.error('Marcus content analysis - Trigify fetch failed:', err.message);
       throw err;
