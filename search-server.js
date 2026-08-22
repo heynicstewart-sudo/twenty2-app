@@ -3530,7 +3530,7 @@ async function trigifyGetSearchResults(searchId) {
 function formatRecentPosts(posts) {
   return posts.map(p => {
     const date = p.date ? new Date(p.date).toISOString().slice(0, 10) : '';
-    const text = (p.text || '').replace(/\s+/g, ' ').trim();
+    const text = String(p.text || '').replace(/\s+/g, ' ').trim();
     return `[${date}] ${text} | Likes: ${p.likes ?? 0} Comments: ${p.comments ?? 0}`;
   }).join('\n\n');
 }
