@@ -7666,10 +7666,11 @@ function renderContentPerformanceTable(posts){
   return `
   <div class="perf-table-wrap">
   <table class="perf-table">
-    <thead><tr>${cols.map(([key,label])=>`<th style="cursor:pointer;" onclick="sortContentPerformance('${key}')">${label}${sort.key===key?(sort.dir==='asc'?' &#9650;':' &#9660;'):''}</th>`).join('')}<th></th></tr></thead>
+    <thead><tr><th></th>${cols.map(([key,label])=>`<th style="cursor:pointer;" onclick="sortContentPerformance('${key}')">${label}${sort.key===key?(sort.dir==='asc'?' &#9650;':' &#9660;'):''}</th>`).join('')}</tr></thead>
     <tbody>
       ${sorted.map(p=>`
         <tr style="cursor:pointer;" onclick="showContentPerformanceDetail('${p.id}')">
+          <td><span class="muted" style="font-size:12px;text-decoration:underline;" onclick="event.stopPropagation();showContentPerformanceDetail('${p.id}')">View</span></td>
           <td>${p.date ? esc(new Date(p.date).toLocaleDateString('en-AU')) : '—'}</td>
           <td>${esc(p.topic||'—')}</td>
           <td style="max-width:320px;white-space:normal;">${esc(p.whatWorked||'—')}</td>
@@ -7677,8 +7678,7 @@ function renderContentPerformanceTable(posts){
           <td>${p.likes ?? 0}</td>
           <td>${p.comments ?? 0}</td>
           <td>${p.engagementScore ?? 0}</td>
-          <td>${esc(p.ctaUsed||'—')}</td>
-          <td><span class="muted" style="font-size:12px;text-decoration:underline;" onclick="event.stopPropagation();showContentPerformanceDetail('${p.id}')">View</span></td>
+          <td style="max-width:200px;white-space:normal;">${esc(p.ctaUsed||'—')}</td>
         </tr>
       `).join('')}
     </tbody>
