@@ -1444,9 +1444,9 @@ function renderContextConnectionsCard(){
   return `
   <div class="learning-panel" ${dropZoneAttrs('ctxConnectionsInput')}>
     <h4><i class="ti ti-brand-linkedin"></i> LinkedIn Connections</h4>
-    <p class="muted" style="font-size:12px;margin-bottom:12px;">Upload your LinkedIn connections CSV export, or drag and drop it here. Matches First + Last name against Contacts and advances anyone in "Connection Requested" to "Connected".</p>
-    <input type="file" id="ctxConnectionsInput" accept=".csv" style="display:none;" onchange="handleContextConnectionsCsv(event)">
-    <button class="btn btn-secondary btn-sm" onclick="document.getElementById('ctxConnectionsInput').click()"><i class="ti ti-upload"></i> Upload CSV</button>
+    <p class="muted" style="font-size:12px;margin-bottom:12px;">Upload your LinkedIn connections CSV export or a screenshot of your Connections list, or drag and drop it here. Matches First + Last name against Contacts and advances anyone in "Connection Requested" to "Connected".</p>
+    <input type="file" id="ctxConnectionsInput" accept=".csv,image/*" style="display:none;" onchange="handleContextConnectionsFile(event)">
+    <button class="btn btn-secondary btn-sm" onclick="document.getElementById('ctxConnectionsInput').click()"><i class="ti ti-upload"></i> Upload CSV or screenshot</button>
     <div id="ctxConnectionsResult" class="learning-result"></div>
   </div>
   `;
@@ -1467,10 +1467,19 @@ function handleContextDropZoneFiles(inputId, dataTransfer){
   input.dispatchEvent(new Event('change', { bubbles:true }));
 }
 
-function handleContextConnectionsCsv(event){
+// Dispatches to the CSV or screenshot path by file type - CSV parsing and
+// the downstream Airtable matching (runContextConnectionsImport) are
+// unchanged either way, the screenshot path just uses Claude to produce
+// the same first-name/last-name rows a CSV would.
+function handleContextConnectionsFile(event){
   const file = event.target.files && event.target.files[0];
   event.target.value = '';
   if(!file) return;
+  if(file.type.startsWith('image/')) handleContextConnectionsScreenshot(file);
+  else handleContextConnectionsCsv(file);
+}
+
+function handleContextConnectionsCsv(file){
   const reader = new FileReader();
   reader.onload = () => {
     const rows = parseCsv(String(reader.result));
@@ -1479,6 +1488,43 @@ function handleContextConnectionsCsv(event){
   };
   reader.onerror = () => toast('Could not read that file', 'warn');
   reader.readAsText(file);
+}
+
+function handleContextConnectionsScreenshot(file){
+  const reader = new FileReader();
+  reader.onload = async () => {
+    const match = String(reader.result).match(/^data:([^;]+);base64,(.*)$/);
+    if(!match){ toast('Could not read that image', 'warn'); return; }
+
+    const resultEl = document.getElementById('ctxConnectionsResult');
+    if(resultEl) resultEl.innerHTML = '<div class="muted"><i class="ti ti-loader-2"></i> Reading screenshot with Claude...</div>';
+
+    try {
+      const res = await fetch('/api/context/parse-connections-screenshot', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ image: { mediaType: match[1], base64: match[2] } })
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+
+      const connections = data.connections || [];
+      if(!connections.length){
+        toast('Could not read any connections from that screenshot', 'warn');
+        if(resultEl) resultEl.innerHTML = '';
+        return;
+      }
+
+      const rows = [['first name','last name'], ...connections.map(c => [c.firstName||'', c.lastName||''])];
+      runContextConnectionsImport(rows);
+    } catch(err){
+      console.warn('Connections screenshot parse failed:', err.message);
+      toast('Could not read that screenshot: ' + err.message, 'warn');
+      if(resultEl) resultEl.innerHTML = '';
+    }
+  };
+  reader.onerror = () => toast('Could not read that file', 'warn');
+  reader.readAsDataURL(file);
 }
 
 async function runContextConnectionsImport(rows){

@@ -4701,6 +4701,39 @@ Write the next message in the conversation, following on naturally from what the
   }
 });
 
+// Reads a screenshot of a LinkedIn "Connections" list and extracts each
+// visible connection's name and connection date. Only extraction happens
+// here - matching against Airtable and updating Journey Stage is left to
+// the same client-side runContextConnectionsImport() the CSV upload uses,
+// so there's one matching implementation instead of two.
+app.post('/api/context/parse-connections-screenshot', async (req, res) => {
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  const { image } = req.body;
+  if (!image) return res.status(400).json({ error: 'image is required' });
+
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const prompt = `You are reading a screenshot of a LinkedIn "Connections" list for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM.
+
+Extract every visible connection: their first name, last name, and the connection date if shown (e.g. "Connected 3 days ago", "Connected on August 12, 2026"). Convert relative dates using today's date, ${today}, and format as YYYY-MM-DD. If no date is visible or it can't be determined, use an empty string.
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "connections": [ { "firstName": string, "lastName": string, "date": string } ] }`;
+
+    const content = [
+      { type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.base64 } },
+      { type: 'text', text: prompt }
+    ];
+
+    const parsed = await callClaudeJson(content, 1500);
+    res.json({ success: true, connections: Array.isArray(parsed.connections) ? parsed.connections : [] });
+  } catch (err) {
+    console.error('Parse connections screenshot error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/context/log-content', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
