@@ -3746,28 +3746,21 @@ app.get('/api/contacts/recent-posts-signals', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
   try {
-    const [contactsData, campaignsData, companiesData, campaignContactRows] = await Promise.all([
+    const [contactsData, companiesData] = await Promise.all([
       airtableRequest('GET', 'Contacts'),
-      airtableRequest('GET', 'Campaigns'),
-      airtableRequest('GET', 'Companies'),
-      fetchCampaignContactsRows()
+      airtableRequest('GET', 'Companies')
     ]);
-
-    const liveCampaignIds = new Set(
-      (campaignsData.records || []).filter(c => c.fields['Status'] === 'Live').map(c => c.id)
-    );
-    const activeContactIds = new Set();
-    campaignContactRows.forEach(row => {
-      const inLiveCampaign = (row.fields['Campaign'] || []).some(id => liveCampaignIds.has(id));
-      if (inLiveCampaign) (row.fields['Contact'] || []).forEach(cid => activeContactIds.add(cid));
-    });
 
     const companyNameById = {};
     (companiesData.records || []).forEach(c => { companyNameById[c.id] = c.fields['Company Name'] || ''; });
 
+    // Every contact with a Trigify Search ID and post activity, not just
+    // those in an active (Live) campaign - the previous Live-campaign
+    // filter meant a job change or other signal on a contact between
+    // campaigns (or not yet assigned to one) never surfaced here.
     const signals = [];
     (contactsData.records || []).forEach(r => {
-      if (!activeContactIds.has(r.id)) return;
+      if (!r.fields['Trigify Search ID']) return;
       const posts = parseRecentPosts(r.fields['Recent Posts']);
       if (!posts.length) return;
       const contactName = r.fields['Full Name'] || 'Unknown';
@@ -3796,6 +3789,38 @@ app.get('/api/contacts/:id/recent-posts', async (req, res) => {
     res.json({ posts });
   } catch (err) {
     console.error('Contact recent posts error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Home page "Contact signals" strip - every contact with a populated Job
+// Change Signal field (written by syncTrigifyContactPosts's per-profile
+// Claude detection, syncJobChangeMonitorSignals's keyword search match, or
+// checkContactJobChanges's weekly Serper check).
+app.get('/api/contacts/job-change-signals', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const [contactsData, companiesData] = await Promise.all([
+      airtableRequest('GET', 'Contacts'),
+      airtableRequest('GET', 'Companies')
+    ]);
+
+    const companyNameById = {};
+    (companiesData.records || []).forEach(c => { companyNameById[c.id] = c.fields['Company Name'] || ''; });
+
+    const signals = (contactsData.records || [])
+      .filter(r => r.fields['Job Change Signal'])
+      .map(r => ({
+        contactId: r.id,
+        contactName: r.fields['Full Name'] || 'Unknown',
+        company: (r.fields['Company'] || []).map(id => companyNameById[id]).filter(Boolean).join(', '),
+        linkedinUrl: r.fields['LinkedIn URL'] || '',
+        jobChangeSignal: r.fields['Job Change Signal']
+      }));
+
+    res.json({ signals });
+  } catch (err) {
+    console.error('Job change signals error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -3923,6 +3948,110 @@ async function trigifyEnsureMarcusSearch() {
     records: [{ id: settingsRecord.id, fields: { 'Trigify Marcus Search ID': searchId } }]
   });
   return searchId;
+}
+
+const TRIGIFY_JOB_CHANGE_MONITOR_NAME = 'T2C Job Change Monitor';
+const TRIGIFY_JOB_CHANGE_KEYWORDS = ['excited to join', 'new role', 'starting as', 'thrilled to announce', 'joining as'];
+const TRIGIFY_JOB_CHANGE_KEYWORDS_NOT = ['hiring', 'we are hiring'];
+
+// One-time setup for a Trigify LinkedIn posts keyword search watching for
+// job-change language across LinkedIn generally, not scoped to any one
+// contact's own profile (unlike trigifyCreateProfileMonitor). Its results
+// are matched against Contacts by author name/LinkedIn URL in the daily
+// sync cron (syncJobChangeMonitorSignals, below), contributing to Job
+// Change Signal alongside the existing per-profile Claude-based detection.
+// Idempotent like trigifyEnsureMarcusSearch - returns the existing search
+// id from Settings if setup has already run.
+async function trigifyCreateJobChangeMonitor() {
+  const settingsRecord = await getOrCreateSettingsRecord();
+  let searchId = settingsRecord.fields['Job Change Monitor ID'] || null;
+  if (searchId) return searchId;
+
+  try {
+    const result = await trigifyRequest('POST', '/v1/searches/linkedin/posts', {
+      name: TRIGIFY_JOB_CHANGE_MONITOR_NAME,
+      keywords: TRIGIFY_JOB_CHANGE_KEYWORDS,
+      keywords_not: TRIGIFY_JOB_CHANGE_KEYWORDS_NOT,
+      frequency: 'DAILY',
+      max_results: 100
+    });
+    searchId = result.id || (result.search && result.search.id);
+    if (!searchId) throw new Error('Trigify did not return a search id');
+  } catch (err) {
+    if (err.status === 409 && /already/i.test(err.body || '')) {
+      searchId = await trigifyFindExistingSearch(null, TRIGIFY_JOB_CHANGE_MONITOR_NAME);
+      if (!searchId) throw new Error('Trigify reported this search already exists, but no matching search was found in GET /v1/searches');
+    } else {
+      throw err;
+    }
+  }
+
+  await airtableRequest('PATCH', SETTINGS_TABLE, {
+    records: [{ id: settingsRecord.id, fields: { 'Job Change Monitor ID': searchId } }]
+  });
+  return searchId;
+}
+
+app.get('/api/trigify/setup-job-change-monitor', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!TRIGIFY_API_KEY) return res.status(500).json({ error: 'TRIGIFY_API_KEY not configured' });
+  try {
+    const searchId = await trigifyCreateJobChangeMonitor();
+    res.json({ success: true, searchId });
+  } catch (err) {
+    console.error('Trigify setup-job-change-monitor error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Fetches the Job Change Monitor's latest keyword-search results and
+// matches each post's author against Contacts by (normalised) LinkedIn URL
+// first, falling back to an exact case-insensitive Full Name match. Skips
+// a contact that already has a Job Change Signal - this runs alongside
+// syncTrigifyContactPosts's per-profile Claude detection and
+// checkContactJobChanges's weekly Serper check, so all three contribute to
+// the same field without clobbering each other's find.
+async function syncJobChangeMonitorSignals() {
+  const settingsRecord = await getSettingsRecord();
+  const searchId = settingsRecord && settingsRecord.fields['Job Change Monitor ID'];
+  if (!searchId) return { matched: 0, message: 'Job Change Monitor not set up yet - run /api/trigify/setup-job-change-monitor first' };
+
+  const rawResults = await trigifyGetSearchResults(searchId);
+  const results = (rawResults || []).map(r => {
+    const author = r.author || {};
+    return {
+      authorName: author.name || r.author_name || '',
+      authorProfileUrl: author.profile_url || r.author_profile_url || '',
+      text: String(extractPostValue((r.content && r.content.text) || r.text || '')).trim(),
+      date: r.published_at || r.date || ''
+    };
+  }).filter(r => r.text);
+
+  const contacts = await airtableFetchAllRecords('Contacts');
+  const contactByUrl = {};
+  const contactByName = {};
+  contacts.forEach(c => {
+    const url = normalizeLinkedInUrl(c.fields['LinkedIn URL'] || '');
+    if (url) contactByUrl[url] = c;
+    const name = (c.fields['Full Name'] || '').trim().toLowerCase();
+    if (name) contactByName[name] = c;
+  });
+
+  const updates = [];
+  results.forEach(r => {
+    const url = r.authorProfileUrl ? normalizeLinkedInUrl(r.authorProfileUrl) : '';
+    const match = (url && contactByUrl[url]) || (r.authorName && contactByName[r.authorName.trim().toLowerCase()]);
+    if (!match || match.fields['Job Change Signal']) return;
+    updates.push({
+      id: match.id,
+      fields: { 'Job Change Signal': `${r.text.slice(0, 300)}${r.date ? ' — ' + r.date : ''}` }
+    });
+  });
+
+  for (let i = 0; i < updates.length; i += 10) {
+    await airtableRequest('PATCH', 'Contacts', { records: updates.slice(i, i + 10), typecast: true });
+  }
+  return { checked: results.length, matched: updates.length };
 }
 
 // Reads the last few highest-engagement Content Performance rows, formatted
@@ -4261,6 +4390,7 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
         journeyStage: cf['Journey Stage'] || '',
         aiSummary: cf['AI Summary'] || '',
         notes: cf['Notes'] || '',
+        jobChangeSignal: cf['Job Change Signal'] || '',
         lastEnrichedDate: enrichMatch ? enrichMatch[1] : null
       },
       sequenceStage,
@@ -5684,9 +5814,12 @@ app.delete('/api/grid', async (req, res) => {
 // are logged, not thrown, same as every other cron-eligible job in this
 // file (detectContentSignals, etc).
 
-// Daily 6am: Trigify contact post sync + post-based job change detection.
+// Daily 6am: Trigify contact post sync + post-based job change detection,
+// plus the Job Change Monitor keyword search - two independent methods
+// both contributing to Job Change Signal.
 cron.schedule('0 6 * * *', () => {
   syncTrigifyContactPosts().catch(err => console.warn('Scheduled Trigify contact sync failed:', err.message));
+  syncJobChangeMonitorSignals().catch(err => console.warn('Scheduled job change monitor sync failed:', err.message));
 });
 
 // Weekly Sunday 7am: Serper-based job title drift detection.

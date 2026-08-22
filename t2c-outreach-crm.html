@@ -451,6 +451,8 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .signal-card:last-child{margin-bottom:0;}
 .contact-signal-text{font-size:12.5px;line-height:1.5;white-space:pre-wrap;}
 .contact-signal-text.clamped{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
+.signal-card-alert{background:#fdf0d9;border-color:#a1701c;}
+.job-change-badge{display:flex;align-items:flex-start;gap:8px;background:#fdf0d9;border:1px solid #a1701c;border-radius:var(--radius-card);padding:10px 12px;margin-bottom:14px;}
 .format-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:middle;}
 .format-linkedin{background:#0084C5;}
 .format-blog{background:#44A574;}
@@ -4025,6 +4027,14 @@ function renderContactDrawerContent(data, campaignName){
 
   return `
   <button class="drawer-close" onclick="closeDrawer()">&times;</button>
+  ${c.jobChangeSignal ? `
+  <div class="job-change-badge">
+    <i class="ti ti-alert-triangle" style="color:#a1701c;flex-shrink:0;margin-top:1px;"></i>
+    <div>
+      <div style="font-weight:700;font-size:12.5px;color:#a1701c;">Job change detected</div>
+      <div style="font-size:12.5px;margin-top:2px;">${esc(c.jobChangeSignal)}</div>
+    </div>
+  </div>` : ''}
   <div style="display:flex;gap:14px;align-items:flex-start;">
     <div class="drawer-avatar">${esc(initials(c.fullName))}</div>
     <div style="flex:1;min-width:0;">
@@ -7405,7 +7415,7 @@ async function loadContentPerformance(){
 
 async function loadHomeContactSignals(){
   try {
-    const res = await fetch('/api/contacts/recent-posts-signals');
+    const res = await fetch('/api/contacts/job-change-signals');
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
     window.__homeContactSignals = data.signals || [];
@@ -8184,20 +8194,23 @@ function saveContentSettings(){
 }
 
 /* ---- Home page signal strip ---- */
-// Contact signals: one card per LinkedIn post from contacts in a Live
-// campaign whose Recent Posts field (from GET /api/trigify/sync-contact-posts)
-// has activity, newest first (see GET /api/contacts/recent-posts-signals).
-// Distinct from the Content Signals feature (renderContentSignalsTab/
-// renderCampaignContentTab) - that one surfaces content-marketing theme
-// ideas from the Content Signals Airtable table, this one surfaces raw
-// contact post activity. Unrelated data, kept separate on purpose.
+// Contact signals: job change alerts only - one high-visibility amber card
+// per contact whose Job Change Signal field is populated (from either the
+// per-profile Claude detection in syncTrigifyContactPosts, the Job Change
+// Monitor keyword search, or the weekly Serper check - see
+// GET /api/contacts/job-change-signals). Distinct from the Content Signals
+// feature (renderContentSignalsTab/renderCampaignContentTab) - that one
+// surfaces content-marketing theme ideas from the Content Signals Airtable
+// table, this one surfaces job change activity. Unrelated data, kept
+// separate on purpose.
 
 function renderContactSignalsStrip(){
   const signals = window.__homeContactSignals;
   const count = Array.isArray(signals) ? signals.length : 0;
   return `
   <div class="card" style="margin-bottom:22px;">
-    <div class="section-title"><i class="ti ti-bulb"></i> Contact signals ${count ? `<span class="count-pill has" style="margin-left:6px;">${count}</span>` : ''}</div>
+    <div class="section-title"><i class="ti ti-alert-triangle"></i> Contact signals ${count ? `<span class="count-pill has" style="margin-left:6px;">${count}</span>` : ''}</div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">These contacts have changed roles recently - a fresh job change is one of the strongest windows to reach out.</div>
     ${renderContactSignalCards(signals)}
   </div>`;
 }
@@ -8205,26 +8218,23 @@ function renderContactSignalsStrip(){
 function renderContactSignalCards(signals){
   if(!signals) return '<div class="muted"><i class="ti ti-loader-2"></i> Loading signals...</div>';
   if(signals.error) return `<div class="muted">Could not load signals: ${esc(signals.error)}</div>`;
-  if(!signals.length) return '<div class="empty-state">No new contact signals. Sync LinkedIn posts for contacts in active campaigns and new activity will surface here automatically.</div>';
-  return signals.map((s, i) => `
-    <div class="signal-card">
-      <div style="flex:1;min-width:220px;">
-        <div style="font-weight:700;font-size:13.5px;margin-bottom:2px;">${esc(s.contactName)}${s.company ? ` <span class="muted" style="font-weight:400;">&middot; ${esc(s.company)}</span>` : ''}</div>
-        <div class="muted" style="font-size:11px;margin-bottom:6px;">${esc(s.date || '')}${(s.likes || s.comments) ? ` &middot; ${s.likes||0} likes, ${s.comments||0} comments` : ''}</div>
-        <div class="contact-signal-text clamped" id="contactSignalText-${i}">${esc(s.text)}</div>
-        <button class="btn btn-ghost btn-sm" style="margin-top:6px;" onclick="toggleContactSignalExpand(${i})" id="contactSignalToggle-${i}">View</button>
+  if(!signals.length) return '<div class="empty-state">No job change signals right now. Keep syncing LinkedIn posts and new activity will surface here automatically.</div>';
+  return signals.map(s => `
+    <div class="signal-card signal-card-alert">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">
+        <div style="flex:1;min-width:220px;">
+          <div style="display:flex;align-items:center;gap:6px;">
+            <i class="ti ti-alert-triangle" style="color:#a1701c;"></i>
+            <div style="font-weight:700;font-size:13.5px;">${esc(s.contactName)}${s.company ? ` <span class="muted" style="font-weight:400;">&middot; ${esc(s.company)}</span>` : ''}</div>
+          </div>
+          <div style="font-size:12.5px;margin-top:6px;">${esc(s.jobChangeSignal)}</div>
+        </div>
+        <div style="flex-shrink:0;">
+          ${s.linkedinUrl ? `<a href="${esc(s.linkedinUrl)}" target="_blank" rel="noopener" class="btn btn-primary btn-sm"><i class="ti ti-brand-linkedin"></i> Reach out</a>` : ''}
+        </div>
       </div>
     </div>
   `).join('');
-}
-
-function toggleContactSignalExpand(i){
-  const textEl = document.getElementById('contactSignalText-' + i);
-  const btn = document.getElementById('contactSignalToggle-' + i);
-  if(!textEl || !btn) return;
-  const wasClamped = textEl.classList.contains('clamped');
-  textEl.classList.toggle('clamped', !wasClamped);
-  btn.textContent = wasClamped ? 'Collapse' : 'View';
 }
 
 /* ---- Per-campaign Content sub-tab ---- */
