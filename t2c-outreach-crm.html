@@ -465,6 +465,9 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .analysis-block.recs{background:#e2f2fa;border:1px solid #bfe0f0;}
 .analysis-block h4{display:flex;align-items:center;gap:7px;font-size:13px;margin-bottom:10px;}
 .analysis-block ul{padding-left:18px;font-size:12.5px;line-height:1.6;}
+.engine-run-card{background:var(--accent-dim);border-color:var(--accent);}
+.engine-group-heading{font-size:12.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:26px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:7px;}
+.engine-group-heading i{font-size:15px;}
 .learning-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;}
 .context-upload-grid{grid-template-columns:repeat(3,1fr);}
 .learning-panel{border-radius:var(--radius-card);padding:16px;background:var(--surface-2);border:1px solid var(--border);transition:border-color .15s,background .15s;}
@@ -6489,10 +6492,12 @@ async function runAnalysis(){
 /* ===================== INTELLIGENCE PAGE ===================== */
 // Top-level page (nav label "Engine") with 2 sub-tabs. "Context" comes
 // first, then "Intelligence", which now also includes the former
-// standalone "Analytics" sub-tab's content inline (both renderIntelligence()
-// and renderAnalytics() render together under the one tab) - same
-// renderAnalytics()/renderContext() functions, just no longer reachable
-// as their own nav items or their own sub-tab.
+// standalone "Analytics" sub-tab's content inline - renderIntelligence()
+// below calls renderAnalytics() itself partway through, to place its
+// stats under the "Analytics & what's working" heading rather than
+// tacking it on after everything else. Same renderAnalytics()/
+// renderContext() functions, just no longer reachable as their own nav
+// items or their own sub-tab.
 
 const INTEL_SUBTABS = [ ['context','Context'], ['intelligence','Intelligence'] ];
 
@@ -6503,7 +6508,7 @@ function renderIntelligencePage(){
   <div class="seq-tabs">
     ${INTEL_SUBTABS.map(([key,label]) => `<div class="seq-tab ${tab===key?'active':''}" onclick="setIntelSubTab('${key}')">${label}</div>`).join('')}
   </div>
-  ${tab==='intelligence' ? renderIntelligence() + renderAnalytics() : ''}
+  ${tab==='intelligence' ? renderIntelligence() : ''}
   ${tab==='context' ? renderContext() : ''}
   `;
 }
@@ -6515,52 +6520,82 @@ function setIntelSubTab(tab){
 
 function renderIntelligence(){
   return `
-  <div class="card" style="margin-bottom:16px;">
-    <div class="section-title"><i class="ti ti-bolt"></i> Run Engine</div>
-    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Runs intelligence, insights, health and strategy analysis in sequence - one click for the full picture below.</p>
-    <button class="btn btn-primary" id="runEngineBtn" onclick="runEngine()"><i class="ti ti-sparkles"></i> Run Engine</button>
+  <div class="card engine-run-card" style="margin-bottom:24px;">
+    <div class="section-title" style="font-size:16px;"><i class="ti ti-bolt"></i> Run Engine</div>
+    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Runs intelligence, insights, health and strategy analysis in one click.</p>
+    <button class="btn btn-primary" id="runEngineBtn" onclick="runEngine()" style="padding:12px 22px;font-size:14px;"><i class="ti ti-sparkles"></i> Run Engine</button>
     <div id="engineMeta" class="muted" style="font-size:11.5px;margin-top:10px;"></div>
   </div>
 
-  <div class="card" style="margin-bottom:16px;">
-    <div class="section-title"><i class="ti ti-brain"></i> Intelligence</div>
-    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Pulls every contact, touch point, campaign, conversion and learning record synced to Airtable and asks Claude for campaign ideas, contacts going cold, relationship health, ready-to-send drafts, and specific data-backed insights and optimisation suggestions.</p>
-    <div id="intelMeta" class="muted" style="font-size:11.5px;margin-top:10px;"></div>
+  <div class="engine-group-heading"><i class="ti ti-brain"></i> Intelligence results</div>
+  <div id="intelMeta" class="muted" style="font-size:11.5px;margin-bottom:10px;"></div>
+  <div class="card" style="margin-bottom:12px;">
+    <div class="section-title"><i class="ti ti-chart-line"></i> Campaign performance</div>
+    <div class="perf-table-wrap" id="campaignPerformanceWrap">
+      <span class="muted" style="font-size:12.5px;">Run Engine to see campaign performance</span>
+    </div>
   </div>
-
-  <div class="card" style="margin-bottom:16px;">
-    <div class="section-title"><i class="ti ti-target-arrow"></i> What's working</div>
-    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Calculated live from every logged conversion in Airtable - which ICP roles, products, industries and methods actually turn into booked meetings.</p>
-    <div id="insightsMeta" class="muted" style="font-size:11.5px;margin-top:10px;"></div>
-    <div class="analysis-grid" style="margin-top:14px;">
-      <div class="analysis-block wins">
-        <h4><i class="ti ti-trophy"></i> Top converting ICP roles</h4>
-        <ul id="insightsIcpRoles"><li class="muted">Run insights to see top roles</li></ul>
-      </div>
-      <div class="analysis-block wins">
-        <h4><i class="ti ti-package"></i> Best performing products</h4>
-        <ul id="insightsProducts"><li class="muted">Run insights to see best products</li></ul>
-      </div>
-      <div class="analysis-block wins">
-        <h4><i class="ti ti-building-factory-2"></i> Best performing industries</h4>
-        <ul id="insightsIndustries"><li class="muted">Run insights to see top industries</li></ul>
-      </div>
-      <div class="analysis-block recs">
-        <h4><i class="ti ti-route"></i> Avg touch points to conversion</h4>
-        <ul id="insightsAvgTouches"><li class="muted">Run insights to see the average</li></ul>
-      </div>
-      <div class="analysis-block recs">
-        <h4><i class="ti ti-message-circle"></i> Best communication methods</h4>
-        <ul id="insightsMethods"><li class="muted">Run insights to see best methods</li></ul>
-      </div>
+  <div class="analysis-grid">
+    <div class="card">
+      <div class="section-title"><i class="ti ti-bulb"></i> Campaign suggestions</div>
+      <ul id="intelCampaigns"><li class="muted">Run Engine to see suggestions</li></ul>
+    </div>
+    <div class="card">
+      <div class="section-title"><i class="ti ti-snowflake"></i> Cold contacts</div>
+      <ul id="intelColdContacts"><li class="muted">Run Engine to see cold contacts</li></ul>
+    </div>
+    <div class="card">
+      <div class="section-title"><i class="ti ti-heart-rate-monitor"></i> Relationship health</div>
+      <ul id="intelRelationshipHealth"><li class="muted">Run Engine to see relationship health</li></ul>
+    </div>
+    <div class="card">
+      <div class="section-title"><i class="ti ti-mail"></i> Message drafts</div>
+      <div id="intelMessageDrafts"><span class="muted" style="font-size:12.5px;">Run Engine to see drafts</span></div>
+    </div>
+    <div class="card">
+      <div class="section-title"><i class="ti ti-bulb-filled"></i> Learning insights</div>
+      <ul id="intelLearningInsights"><li class="muted">Run Engine to see learning insights</li></ul>
+    </div>
+    <div class="card">
+      <div class="section-title"><i class="ti ti-adjustments"></i> Optimisation suggestions</div>
+      <ul id="intelOptimisation"><li class="muted">Run Engine to see optimisation suggestions</li></ul>
     </div>
   </div>
 
+  <div class="engine-group-heading"><i class="ti ti-chart-bar"></i> Analytics &amp; what's working</div>
+  <div class="card" style="margin-bottom:12px;">
+    <div class="section-title"><i class="ti ti-target-arrow"></i> What's working</div>
+    <p class="muted" style="font-size:12px;margin-bottom:10px;">Which ICP roles, products, industries and methods actually turn into booked meetings.</p>
+    <div id="insightsMeta" class="muted" style="font-size:11.5px;margin-bottom:6px;"></div>
+    <div class="analysis-grid">
+      <div class="analysis-block wins">
+        <h4><i class="ti ti-trophy"></i> Top converting ICP roles</h4>
+        <ul id="insightsIcpRoles"><li class="muted">Run Engine to see top roles</li></ul>
+      </div>
+      <div class="analysis-block wins">
+        <h4><i class="ti ti-package"></i> Best performing products</h4>
+        <ul id="insightsProducts"><li class="muted">Run Engine to see best products</li></ul>
+      </div>
+      <div class="analysis-block wins">
+        <h4><i class="ti ti-building-factory-2"></i> Best performing industries</h4>
+        <ul id="insightsIndustries"><li class="muted">Run Engine to see top industries</li></ul>
+      </div>
+      <div class="analysis-block recs">
+        <h4><i class="ti ti-route"></i> Avg touch points to conversion</h4>
+        <ul id="insightsAvgTouches"><li class="muted">Run Engine to see the average</li></ul>
+      </div>
+      <div class="analysis-block recs">
+        <h4><i class="ti ti-message-circle"></i> Best communication methods</h4>
+        <ul id="insightsMethods"><li class="muted">Run Engine to see best methods</li></ul>
+      </div>
+    </div>
+  </div>
+  ${renderAnalytics()}
+
+  <div class="engine-group-heading"><i class="ti ti-activity-heartbeat"></i> Engine health</div>
   <div class="card" style="margin-bottom:16px;">
-    <div class="section-title"><i class="ti ti-activity-heartbeat"></i> Engine health</div>
-    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Raw database stats straight from Airtable - no AI, just counts.</p>
-    <div id="healthMeta" class="muted" style="font-size:11.5px;margin-top:10px;"></div>
-    <div class="mini-cards health-stat-grid" id="healthStats" style="margin-top:14px;margin-bottom:0;">
+    <div id="healthMeta" class="muted" style="font-size:11.5px;margin-bottom:6px;"></div>
+    <div class="mini-cards health-stat-grid" id="healthStats" style="margin-bottom:0;">
       <div class="mini-card"><div class="num" id="healthTotalContacts">—</div><div class="label">Total contacts</div></div>
       <div class="mini-card"><div class="num" id="healthTouchPointsWeek">—</div><div class="label">Touch points this week</div></div>
       <div class="mini-card"><div class="num" id="healthActiveCampaigns">—</div><div class="label">Active campaigns</div></div>
@@ -6568,54 +6603,13 @@ function renderIntelligence(){
     </div>
     <div style="margin-top:14px;">
       <div style="font-weight:700;font-size:12px;margin-bottom:6px;">Contacts by journey stage</div>
-      <ul id="healthByStage" style="padding-left:18px;font-size:12.5px;line-height:1.6;"><li class="muted">Refresh health to see the breakdown</li></ul>
+      <ul id="healthByStage" style="padding-left:18px;font-size:12.5px;line-height:1.6;"><li class="muted">Run Engine to see the breakdown</li></ul>
     </div>
-  </div>
-
-  <div class="card" style="margin-bottom:16px;">
-    <div class="section-title"><i class="ti ti-chart-line"></i> Campaign performance</div>
-    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Every live campaign ranked best to worst by real conversion rate. Populated by Run intelligence above.</p>
-    <div class="perf-table-wrap" id="campaignPerformanceWrap">
-      <span class="muted" style="font-size:12.5px;">Run intelligence to see campaign performance</span>
-    </div>
-  </div>
-
-  <div class="analysis-grid">
-    <div class="analysis-block recs">
-      <h4><i class="ti ti-bulb"></i> Campaign suggestions</h4>
-      <ul id="intelCampaigns"><li class="muted">Run intelligence to see suggestions</li></ul>
-    </div>
-    <div class="analysis-block gaps">
-      <h4><i class="ti ti-snowflake"></i> Cold contacts</h4>
-      <ul id="intelColdContacts"><li class="muted">Run intelligence to see cold contacts</li></ul>
-    </div>
-  </div>
-
-  <div class="card" style="margin-top:14px;margin-bottom:16px;background:#eaf7f0;border-color:#c9e9d7;">
-    <div class="section-title"><i class="ti ti-heart-rate-monitor"></i> Relationship health</div>
-    <ul id="intelRelationshipHealth" style="padding-left:18px;font-size:12.5px;line-height:1.6;"><li class="muted">Run intelligence to see relationship health</li></ul>
-  </div>
-
-  <div class="card" style="margin-bottom:16px;">
-    <div class="section-title"><i class="ti ti-mail"></i> Message drafts</div>
-    <div id="intelMessageDrafts"><span class="muted" style="font-size:12.5px;">Run intelligence to see drafts</span></div>
-  </div>
-
-  <div class="card" style="margin-bottom:16px;background:#fdf1e0;border-color:#f5dcae;">
-    <div class="section-title"><i class="ti ti-bulb-filled"></i> Learning insights</div>
-    <p class="muted" style="font-size:12.5px;margin-bottom:10px;">Specific, numbers-backed observations Claude found in the data.</p>
-    <ul id="intelLearningInsights" style="padding-left:18px;font-size:12.5px;line-height:1.6;"><li class="muted">Run intelligence to see learning insights</li></ul>
-  </div>
-
-  <div class="card" style="margin-bottom:16px;background:#e2f2fa;border-color:#bfe0f0;">
-    <div class="section-title"><i class="ti ti-adjustments"></i> Optimisation suggestions</div>
-    <p class="muted" style="font-size:12.5px;margin-bottom:10px;">What to do next - who to prioritise, which campaign needs attention, what to try.</p>
-    <ul id="intelOptimisation" style="padding-left:18px;font-size:12.5px;line-height:1.6;"><li class="muted">Run intelligence to see optimisation suggestions</li></ul>
   </div>
 
   <div class="card" style="margin-top:16px;">
     <div class="section-title"><i class="ti ti-school"></i> Learning Data</div>
-    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Upload historical customer and deal data so Claude learns real ICP and sales patterns. Every upload is saved to Airtable and sharpens future intelligence runs and campaign suggestions.</p>
+    <p class="muted" style="font-size:12px;margin-bottom:14px;">Upload historical customer and deal data so Claude learns real ICP and sales patterns.</p>
     <div class="learning-grid">
       <div class="learning-panel">
         <h4><i class="ti ti-users"></i> Past Customers</h4>
