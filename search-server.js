@@ -3445,6 +3445,9 @@ Respond with only a valid JSON array. No preamble, no explanation, no markdown f
     }
     if (!Array.isArray(analysed)) analysed = [];
 
+    console.log('Marcus content analysis - raw Claude text:', rawText);
+    console.log('Marcus content analysis - sample parsed object:', analysed[0]);
+
     const records = analysed.map(p => ({
       fields: {
         'Post Text': p.post_text || '',
