@@ -7487,7 +7487,10 @@ function renderContentPerformanceTab(){
   <div class="card" style="margin-bottom:16px;">
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-chart-bar"></i> My Performance</div>
-      <button class="btn btn-primary btn-sm" id="analysePostsBtn" onclick="runMarcusContentAnalysis()" ${isRunning?'disabled':''}><i class="ti ${isRunning?'ti-loader-2':'ti-sparkles'}"></i> ${isRunning?'Analysing...':'Analyse my LinkedIn posts'}</button>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button class="btn btn-primary btn-sm" id="analysePostsBtn" onclick="runMarcusContentAnalysis(false)" ${isRunning?'disabled':''}><i class="ti ${isRunning?'ti-loader-2':'ti-sparkles'}"></i> ${isRunning?'Analysing...':'Load my posts'}</button>
+        <button class="btn btn-secondary btn-sm" id="refreshPostsBtn" onclick="runMarcusContentAnalysis(true)" ${isRunning?'disabled':''} title="Re-pull the last month of posts from Trigify"><i class="ti ti-refresh"></i> Refresh from LinkedIn</button>
+      </div>
     </div>
     <p class="muted" style="font-size:12.5px;margin-top:6px;margin-bottom:0;">Pulls Marcus's last month of LinkedIn posts via Trigify, scores them with Claude, and saves the results to Airtable. Runs in the background - safe to navigate away.</p>
     ${isRunning ? `<div class="muted" style="font-size:12px;margin-top:8px;"><i class="ti ti-loader-2"></i> Running - ${job.savedCount || 0} post${job.savedCount===1?'':'s'} saved so far.</div>` : ''}
@@ -7547,7 +7550,7 @@ function renderContentPerformanceSummary(posts){
 function renderContentPerformanceTable(posts){
   if(!posts) return '<div class="muted"><i class="ti ti-loader-2"></i> Loading...</div>';
   if(posts.error) return `<div class="muted">Could not load performance data: ${esc(posts.error)}</div>`;
-  if(!posts.length) return '<div class="empty-state">No analysed posts yet. Click "Analyse my LinkedIn posts" to pull and score the last month.</div>';
+  if(!posts.length) return '<div class="empty-state">No analysed posts yet. Click "Load my posts" to pull and score the last month.</div>';
 
   const sort = window.__contentPerfSort || CONTENT_PERF_SORT_DEFAULT;
   const sorted = posts.slice().sort((a,b)=>{
@@ -7597,9 +7600,13 @@ function sortContentPerformance(key){
 // even if this tab is closed - the POST below just kicks it off and
 // returns immediately. Progress is picked up by polling
 // /api/trigify/marcus-content-status every 5s until it's no longer running.
-async function runMarcusContentAnalysis(){
+async function runMarcusContentAnalysis(forceRefresh){
   try {
-    const res = await fetch('/api/trigify/marcus-content-analysis', { method:'POST' });
+    const res = await fetch('/api/trigify/marcus-content-analysis', {
+      method:'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ forceRefresh: !!forceRefresh })
+    });
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
     toast(data.message || 'Analysis started', 'success');

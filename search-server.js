@@ -3405,8 +3405,16 @@ let marcusAnalysisJob = { status: 'idle', savedCount: 0, error: null, startedAt:
 // the frontend that triggered it navigates away or disconnects. Updates
 // marcusAnalysisJob as it goes so GET /api/trigify/marcus-content-status
 // can report live progress to the My Performance tab's poll.
-async function runMarcusContentAnalysisJob() {
+async function runMarcusContentAnalysisJob(forceRefresh = false) {
   try {
+    if (!forceRefresh) {
+      const existing = await airtableFetchAllRecords(CONTENT_PERFORMANCE_TABLE);
+      if (existing.length) {
+        marcusAnalysisJob = { status: 'complete', savedCount: existing.length, error: null, startedAt: marcusAnalysisJob.startedAt, finishedAt: Date.now() };
+        return;
+      }
+    }
+
     const searchId = await trigifyEnsureMarcusSearch();
     const posts = normalizeTrigifyResults(await trigifyGetSearchResults(searchId));
 
@@ -3467,8 +3475,9 @@ app.post('/api/trigify/marcus-content-analysis', async (req, res) => {
     return res.json({ success: true, alreadyRunning: true, message: 'Analysis already running, results will appear in Airtable shortly.' });
   }
 
+  const forceRefresh = req.body?.forceRefresh === true;
   marcusAnalysisJob = { status: 'running', savedCount: 0, error: null, startedAt: Date.now(), finishedAt: null };
-  runMarcusContentAnalysisJob();
+  runMarcusContentAnalysisJob(forceRefresh);
 
   res.json({ success: true, message: 'Analysis started, results will appear in Airtable shortly.' });
 });
