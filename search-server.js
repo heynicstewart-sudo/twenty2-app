@@ -283,8 +283,8 @@ app.post('/api/airtable/contact', async (req, res) => {
     });
 
     if (linkedinUrl) {
-      trigifyAddProfileToContactSearch(linkedinUrl)
-        .catch(err => console.warn('Could not add new contact to Trigify contact search (non-fatal):', err.message));
+      trigifyCreateContactSearch(data.records[0].id, name, linkedinUrl)
+        .catch(err => console.warn('Could not create Trigify search for new contact (non-fatal):', err.message));
     }
 
     res.json({ success: true, skipped: false, recordId: data.records[0].id });
@@ -3004,23 +3004,24 @@ Recommend a realistic content posting cadence across LinkedIn, Blog, and Newslet
 // ===================== TRIGIFY INTEGRATION =====================
 // Contact post monitoring (Part 1), Serper-based job-title drift detection
 // (Part 2), and Marcus's own content performance analysis (Part 3). The
-// Settings table (singleton, like Content Settings) holds the two Trigify
-// search ids plus "My LinkedIn URL" - the brief called this "Marcus's
-// LinkedIn URL from Content Settings", but the field actually lives on the
-// real Settings table, so that's what's read here.
+// Settings table (singleton, like Content Settings) holds the Trigify
+// Marcus search id plus "My LinkedIn URL" - the brief called this
+// "Marcus's LinkedIn URL from Content Settings", but the field actually
+// lives on the real Settings table, so that's what's read here.
 //
-// Trigify's own endpoint/payload shapes aren't fully public outside a
-// logged-in dashboard - what's used below (POST/GET/PATCH /v1/searches,
-// GET /v1/searches/{id}/results, "Business Network" as the LinkedIn
-// platform label, profile-monitor search type) follows the REST
-// conventions documented at help.trigify.io. All of it is funnelled
-// through trigifyRequest() so the base path/shape only needs adjusting in
-// one place if a live key shows a different contract.
+// Trigify's LinkedIn monitoring API (per its API docs) only has one
+// profile-monitor endpoint, and it tracks exactly one profile per search:
+//   POST /v1/searches/linkedin/profile  { name, profile_url, max_results?,
+//     frequency?: DAILY|WEEKLY|MONTHLY|QUARTERLY,
+//     time_frame?: past-24h|past-week|past-month|past-year|all-time }
+//   GET  /v1/searches/{id}/results
+// There is no multi-profile search - a contact-wide monitor isn't
+// possible, so Contacts gets one Trigify search each (Contacts.Trigify
+// Search ID), same as Marcus's own search (Settings.Trigify Marcus Search
+// ID). All calls are funnelled through trigifyRequest().
 
 const TRIGIFY_API_KEY = process.env.TRIGIFY_API_KEY;
 const TRIGIFY_URL = 'https://api.trigify.io';
-const TRIGIFY_LINKEDIN_PLATFORM = 'Business Network';
-const TRIGIFY_CONTACT_SEARCH_NAME = 'T2C — All Contacts';
 const TRIGIFY_MARCUS_SEARCH_NAME = 'T2C — Marcus Content';
 const SETTINGS_TABLE = 'Settings';
 const CONTENT_PERFORMANCE_TABLE = 'Content Performance';
@@ -3074,32 +3075,27 @@ app.post('/api/settings/linkedin-url', async (req, res) => {
   }
 });
 
-async function trigifyUpsertContactSearch(linkedinUrls, existingSearchId) {
-  const payload = {
-    name: TRIGIFY_CONTACT_SEARCH_NAME,
-    type: 'profile_monitor',
-    platforms: [TRIGIFY_LINKEDIN_PLATFORM],
-    sources: linkedinUrls,
-    max_results_per_source: 3
-  };
-  if (existingSearchId) return trigifyRequest('PATCH', `/v1/searches/${existingSearchId}`, payload);
-  return trigifyRequest('POST', '/v1/searches', payload);
+// One profile per search - the only shape POST /v1/searches/linkedin/
+// profile supports. Returns the new search id.
+async function trigifyCreateProfileMonitor(name, profileUrl, { maxResults, frequency, timeFrame } = {}) {
+  const payload = { name, profile_url: profileUrl };
+  if (maxResults) payload.max_results = maxResults;
+  if (frequency) payload.frequency = frequency;
+  if (timeFrame) payload.time_frame = timeFrame;
+  const result = await trigifyRequest('POST', '/v1/searches/linkedin/profile', payload);
+  const searchId = result.id || (result.search && result.search.id);
+  if (!searchId) throw new Error('Trigify did not return a search id');
+  return searchId;
 }
 
-// Fire-and-forget add of one new contact's profile to the existing "T2C —
-// All Contacts" search, called from POST /api/airtable/contact right after
-// a new contact is created. No-ops quietly if the search hasn't been set
-// up yet (via /api/trigify/setup-contact-search) or Trigify isn't
-// configured - the contact save itself must never fail because of this.
-async function trigifyAddProfileToContactSearch(linkedinUrl) {
+// Fire-and-forget creation of one new contact's own Trigify profile
+// monitor, called from POST /api/airtable/contact right after a new
+// contact is created. No-ops quietly if Trigify isn't configured - the
+// contact save itself must never fail because of this.
+async function trigifyCreateContactSearch(contactId, contactName, linkedinUrl) {
   if (!TRIGIFY_API_KEY || !AIRTABLE_API_KEY) return;
-  const settingsRecord = await getSettingsRecord();
-  const searchId = settingsRecord && settingsRecord.fields['Trigify Contact Search ID'];
-  if (!searchId) return;
-  const current = await trigifyRequest('GET', `/v1/searches/${searchId}`);
-  const existingSources = current.sources || (current.search && current.search.sources) || [];
-  if (existingSources.includes(linkedinUrl)) return;
-  await trigifyRequest('PATCH', `/v1/searches/${searchId}`, { sources: [...existingSources, linkedinUrl] });
+  const searchId = await trigifyCreateProfileMonitor(`T2C — ${contactName}`, linkedinUrl, { maxResults: 3, frequency: 'WEEKLY' });
+  await airtableRequest('PATCH', 'Contacts', { records: [{ id: contactId, fields: { 'Trigify Search ID': searchId } }] });
 }
 
 function normalizeTrigifyPost(p) {
@@ -3111,10 +3107,21 @@ function normalizeTrigifyPost(p) {
   };
 }
 
-function normalizeTrigifyResult(r) {
-  const profileUrl = r.profileUrl || r.source || r.sourceUrl || r.url || '';
-  const posts = (r.posts || r.items || []).map(normalizeTrigifyPost);
-  return { profileUrl, posts };
+// Each search now tracks exactly one known profile (the contact or Marcus,
+// already resolved by whoever called trigifyGetSearchResults), so results
+// no longer need per-profile grouping/matching - just a flat post list.
+// Handles both a flat array of posts and one grouped under posts/items,
+// since the exact results shape isn't specified beyond the endpoint path.
+function normalizeTrigifyResults(rawResults) {
+  const posts = [];
+  (rawResults || []).forEach(raw => {
+    if (Array.isArray(raw.posts) || Array.isArray(raw.items)) {
+      (raw.posts || raw.items).forEach(p => posts.push(normalizeTrigifyPost(p)));
+    } else {
+      posts.push(normalizeTrigifyPost(raw));
+    }
+  });
+  return posts;
 }
 
 async function trigifyGetSearchResults(searchId) {
@@ -3153,29 +3160,25 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 
 // Shared by the manual POST route and the daily 6am cron job below - never
 // throws for a single bad contact/result, since one malformed Trigify
-// result shouldn't sink the whole sync.
+// result shouldn't sink the whole sync. Iterates every Contact that has
+// its own Trigify Search ID (set by /api/trigify/setup-contact-search or
+// on contact creation), one results fetch per contact - there's no more
+// shared multi-profile search to fetch once and match against.
 async function syncTrigifyContactPosts() {
-  const settingsRecord = await getSettingsRecord();
-  const searchId = settingsRecord && settingsRecord.fields['Trigify Contact Search ID'];
-  if (!searchId) return { synced: 0, message: 'Trigify contact search not set up yet - run setup-contact-search first' };
-
-  const [rawResults, contacts] = await Promise.all([
-    trigifyGetSearchResults(searchId),
-    airtableFetchAllRecords('Contacts')
-  ]);
-
-  const contactsBySlug = {};
-  contacts.forEach(c => {
-    const slug = extractLinkedInSlug(c.fields['LinkedIn URL'] || '');
-    if (slug) contactsBySlug[slug] = c;
-  });
+  const contacts = await airtableFetchAllRecords('Contacts');
+  const targets = contacts.filter(c => c.fields['Trigify Search ID']);
+  if (!targets.length) return { synced: 0, message: 'No contacts have a Trigify Search ID yet - run setup-contact-search first' };
 
   const updates = [];
-  for (const raw of rawResults) {
-    const { profileUrl, posts } = normalizeTrigifyResult(raw);
-    const slug = extractLinkedInSlug(profileUrl);
-    const contact = slug ? contactsBySlug[slug] : null;
-    if (!contact || !posts.length) continue;
+  for (const contact of targets) {
+    let posts;
+    try {
+      posts = normalizeTrigifyResults(await trigifyGetSearchResults(contact.fields['Trigify Search ID']));
+    } catch (err) {
+      console.warn(`Trigify results fetch failed for ${contact.fields['Full Name']} (non-fatal):`, err.message);
+      continue;
+    }
+    if (!posts.length) continue;
 
     const top3 = posts.slice(0, 3);
     const fields = { 'Recent Posts': formatRecentPosts(top3) };
@@ -3190,34 +3193,39 @@ async function syncTrigifyContactPosts() {
   for (let i = 0; i < updates.length; i += 10) {
     await airtableRequest('PATCH', 'Contacts', { records: updates.slice(i, i + 10), typecast: true });
   }
-  return { synced: updates.length };
+  return { synced: updates.length, checked: targets.length };
 }
 
+// Creates one Trigify profile monitor per contact that has a LinkedIn URL
+// but no Trigify Search ID yet (contacts already set up - e.g. by the
+// on-create hook above - are skipped, so re-running this only fills in the
+// gaps instead of re-creating every search each time).
 app.post('/api/trigify/setup-contact-search', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   if (!TRIGIFY_API_KEY) return res.status(500).json({ error: 'TRIGIFY_API_KEY not configured' });
 
   try {
     const contacts = await airtableFetchAllRecords('Contacts');
-    const linkedinUrls = contacts.map(c => c.fields['LinkedIn URL']).filter(Boolean);
-    if (!linkedinUrls.length) {
-      return res.json({ success: true, searchId: null, profileCount: 0, message: 'No contacts with a LinkedIn URL yet' });
+    const alreadySetUp = contacts.filter(c => c.fields['Trigify Search ID']).length;
+    const targets = contacts.filter(c => c.fields['LinkedIn URL'] && !c.fields['Trigify Search ID']);
+
+    let created = 0;
+    const errors = [];
+    for (const contact of targets) {
+      try {
+        const searchId = await trigifyCreateProfileMonitor(
+          `T2C — ${contact.fields['Full Name']}`,
+          contact.fields['LinkedIn URL'],
+          { maxResults: 3, frequency: 'WEEKLY' }
+        );
+        await airtableRequest('PATCH', 'Contacts', { records: [{ id: contact.id, fields: { 'Trigify Search ID': searchId } }] });
+        created++;
+      } catch (err) {
+        errors.push(`${contact.fields['Full Name']}: ${err.message}`);
+      }
     }
 
-    const settingsRecord = await getOrCreateSettingsRecord();
-    const existingSearchId = settingsRecord.fields['Trigify Contact Search ID'] || null;
-
-    const result = await trigifyUpsertContactSearch(linkedinUrls, existingSearchId);
-    const searchId = result.id || (result.search && result.search.id) || existingSearchId;
-    if (!searchId) throw new Error('Trigify did not return a search id');
-
-    if (searchId !== existingSearchId) {
-      await airtableRequest('PATCH', SETTINGS_TABLE, {
-        records: [{ id: settingsRecord.id, fields: { 'Trigify Contact Search ID': searchId } }]
-      });
-    }
-
-    res.json({ success: true, searchId, profileCount: linkedinUrls.length });
+    res.json({ success: true, created, alreadySetUp, errors });
   } catch (err) {
     console.error('Trigify setup-contact-search error:', err.message);
     res.status(500).json({ error: err.message });
@@ -3326,15 +3334,13 @@ async function trigifyEnsureMarcusSearch() {
   let searchId = settingsRecord.fields['Trigify Marcus Search ID'] || null;
   if (searchId) return searchId;
 
-  const created = await trigifyRequest('POST', '/v1/searches', {
-    name: TRIGIFY_MARCUS_SEARCH_NAME,
-    type: 'profile_monitor',
-    platforms: [TRIGIFY_LINKEDIN_PLATFORM],
-    sources: [marcusUrl],
-    max_results_per_source: 50
+  // 3 months isn't a single time_frame option - past-month is the closest
+  // supported value, and the search re-runs weekly regardless.
+  searchId = await trigifyCreateProfileMonitor(TRIGIFY_MARCUS_SEARCH_NAME, marcusUrl, {
+    maxResults: 25,
+    frequency: 'WEEKLY',
+    timeFrame: 'past-month'
   });
-  searchId = created.id || (created.search && created.search.id);
-  if (!searchId) throw new Error('Trigify did not return a search id');
 
   await airtableRequest('PATCH', SETTINGS_TABLE, {
     records: [{ id: settingsRecord.id, fields: { 'Trigify Marcus Search ID': searchId } }]
@@ -3368,19 +3374,11 @@ app.post('/api/trigify/marcus-content-analysis', async (req, res) => {
 
   try {
     const searchId = await trigifyEnsureMarcusSearch();
-    const rawResults = await trigifyGetSearchResults(searchId);
+    const posts = normalizeTrigifyResults(await trigifyGetSearchResults(searchId));
 
-    const cutoff = daysAgoDate(90);
-    const posts = [];
-    rawResults.forEach(raw => {
-      normalizeTrigifyResult(raw).posts.forEach(p => {
-        if (p.date && new Date(p.date) >= cutoff) posts.push(p);
-      });
-    });
+    if (!posts.length) return res.json({ success: true, posts: [], saved: 0, message: 'No posts found in the past month' });
 
-    if (!posts.length) return res.json({ success: true, posts: [], saved: 0, message: 'No posts found in the last 3 months' });
-
-    const prompt = `You are analysing Marcus's own LinkedIn posts from the last 3 months for T2C Outreach, Twenty2 Collective, to learn what content performs well.
+    const prompt = `You are analysing Marcus's own LinkedIn posts from the past month for T2C Outreach, Twenty2 Collective, to learn what content performs well.
 
 POSTS (${posts.length}):
 ${JSON.stringify(posts)}
