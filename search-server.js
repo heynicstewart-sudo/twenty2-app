@@ -3099,7 +3099,7 @@ async function trigifyCreateProfileMonitor(name, profileUrl, { maxResults, frequ
 // contact save itself must never fail because of this.
 async function trigifyCreateContactSearch(contactId, contactName, linkedinUrl) {
   if (!TRIGIFY_API_KEY || !AIRTABLE_API_KEY) return;
-  const searchId = await trigifyCreateProfileMonitor(`T2C — ${contactName}`, linkedinUrl, { maxResults: 10, frequency: 'WEEKLY' });
+  const searchId = await trigifyCreateProfileMonitor(`T2C — ${contactName}`, linkedinUrl, { maxResults: 10, frequency: 'DAILY' });
   await airtableRequest('PATCH', 'Contacts', { records: [{ id: contactId, fields: { 'Trigify Search ID': searchId } }] });
 }
 
