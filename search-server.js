@@ -3104,11 +3104,23 @@ async function trigifyCreateContactSearch(contactId, contactName, linkedinUrl) {
 }
 
 function normalizeTrigifyPost(p) {
+  const reactions = p.reactions;
+  const engagement = p.engagement;
   return {
     text: p.text || p.content || p.body || '',
-    date: p.date || p.publishedAt || p.postedAt || p.createdAt || '',
-    likes: p.likes ?? p.likeCount ?? p.reactions ?? 0,
-    comments: p.comments ?? p.commentCount ?? 0
+    date: p.date || p.collected_at || p.collectedAt || p.published_at || p.publishedAt || p.postedAt || p.createdAt || p.created_at || '',
+    likes: p.likes
+      ?? p.likeCount
+      ?? p.like_count
+      ?? (typeof reactions === 'number' ? reactions : reactions?.likes)
+      ?? engagement?.likes
+      ?? 0,
+    comments: p.comments
+      ?? p.commentCount
+      ?? p.comment_count
+      ?? p.comments_count
+      ?? engagement?.comments
+      ?? 0
   };
 }
 
