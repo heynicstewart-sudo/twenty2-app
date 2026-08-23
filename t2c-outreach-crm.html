@@ -3086,7 +3086,15 @@ function syncContactToAirtable(contact) {
       companyLinkedinUrl: grid ? ((grid.companyLinkedIn[contact.company] && grid.companyLinkedIn[contact.company].linkedinUrl) || '') : '',
       gridName: gridNameForContact(contact)
     })
-  }).catch(err => console.warn('Airtable contact sync failed:', err.message));
+  })
+    .then(res => res.json())
+    // contact.id starts out as a local uid('c') placeholder (see
+    // runDailySearch) until this sync gives it a real Airtable record id -
+    // without this, later Airtable writes for this contact (e.g. dragging
+    // its Roadmap card) keep sending the placeholder id and get rejected
+    // with 422 INVALID_RECORDS.
+    .then(data => { if(data && data.recordId) contact.id = data.recordId; })
+    .catch(err => console.warn('Airtable contact sync failed:', err.message));
 }
 
 function syncStageToAirtable(contact) {
@@ -3130,7 +3138,14 @@ async function syncAllContactsToAirtable(){
           gridName: grid.name
         })
       });
-      if(res.ok) syncedCount++;
+      if(res.ok){
+        syncedCount++;
+        // Same id-repair as syncContactToAirtable - without it, contacts
+        // synced only through this button keep their local uid('c')
+        // placeholder id and fail later Airtable writes (e.g. Roadmap drag).
+        const data = await res.json();
+        if(data && data.recordId) contact.id = data.recordId;
+      }
     } catch(err){
       console.warn('Airtable sync failed for', contact.name, err.message);
     }
@@ -3853,9 +3868,24 @@ function onColDragOver(e){ e.preventDefault(); }
 // the value synced when a card lands back in that column.
 const ROADMAP_COL_TO_JOURNEY_STAGE = { pending:'Connection Pending', made:'Connected', messaging:'Messaging', booked:'Booked' };
 
+// Airtable record ids are always "rec" + 14 alphanumeric chars. A contact
+// found via runDailySearch starts with a local uid('c') placeholder instead
+// until syncContactToAirtable/syncAllContactsToAirtable replaces it with the
+// real id - dragging its card before that sync completes would otherwise
+// send the placeholder as contactId and get rejected by Airtable with 422
+// INVALID_RECORDS.
+function isAirtableRecordId(id){
+  return /^rec[A-Za-z0-9]{14}$/.test(id || '');
+}
+
 async function syncJourneyStageForColumn(contactId, colKey){
   const journeyStage = ROADMAP_COL_TO_JOURNEY_STAGE[colKey];
   if(!journeyStage) return;
+  if(!isAirtableRecordId(contactId)){
+    console.warn('Skipping Airtable Journey Stage sync - contact has no Airtable record id yet:', contactId);
+    toast('Moved locally, but this contact hasn\'t synced to Airtable yet - press "Sync to Airtable" first.', 'warn');
+    return;
+  }
   try {
     const res = await fetch('/api/context/contact-fields', {
       method: 'PATCH',
@@ -5544,7 +5574,7 @@ function saveCampaignStrategy(campaignId){
 // see initCampaignAnalyticsCharts(), called from afterRender.
 
 const CAMPAIGN_PERIOD_OPTIONS = [ ['thisWeek','This week'], ['lastWeek','Last week'], ['30d','Last 30 days'], ['60d','Last 60 days'], ['quarter','This quarter'] ];
-const LEAD_STATUS_META = [ ['connected','Connected','#0084C5'], ['messaging','Messaging','#FFD05D'], ['warm','Warm','#FF834C'], ['booked','Booked','#44A574'], ['lost','Lost','#c44a2a'] ];
+const LEAD_STATUS_META = [ ['messaging','Messaging','#FFD05D'], ['warm','Warm','#FF834C'], ['booked','Booked','#44A574'], ['lost','Lost','#c44a2a'] ];
 
 function startOfWeek(d){
   const date = new Date(d); const day = date.getDay();
@@ -5581,7 +5611,6 @@ function campaignLeadStatus(c){
     const replied = (c.thread.m1 && c.thread.m1.replied) || (c.thread.m2 && c.thread.m2.replied);
     return replied ? 'warm' : 'messaging';
   }
-  if(c.state === 'connected') return 'connected';
   return null;
 }
 
@@ -5601,7 +5630,7 @@ function buildCampaignSeries(campaign, periodKey){
   }
   const labels = buckets.map(b => useDaily ? fmtDateShort(isoDate(b.start)) : `${fmtDateShort(isoDate(b.start))}–${fmtDateShort(isoDate(b.end))}`);
   const contactIds = new Set(contacts.map(c=>c.id));
-  const leads = buckets.map(b => contacts.filter(c => inDateRange(c.foundDate, b.start, b.end)).length);
+  const leads = buckets.map(b => contacts.filter(c => inDateRange(c.foundDate, b.start, b.end) && campaignLeadStatus(c)).length);
   const meetings = buckets.map(b => state.bookings.filter(bk => contactIds.has(bk.contactId) && inDateRange(bk.date, b.start, b.end)).length);
   const won = buckets.map(b => deals.filter(d => d.outcome === 'won' && inDateRange(d.date, b.start, b.end)).length);
   return { labels, leads, meetings, won };
