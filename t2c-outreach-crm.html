@@ -203,6 +203,7 @@ label{font-size:var(--label-size);font-weight:700;color:var(--muted);display:blo
 .mini-card .num{font-size:24px;font-weight:800;color:var(--primary);}
 .mini-card .label{font-size:12px;color:var(--muted);margin-top:4px;font-weight:600;}
 .health-stat-grid{grid-template-columns:repeat(4,1fr);}
+.health-cards-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;margin-bottom:16px;}
 .perf-table-wrap{overflow-x:auto;}
 .perf-table{width:100%;border-collapse:collapse;font-size:12.5px;}
 .perf-table th{text-align:left;padding:8px 10px;font-size:11px;text-transform:uppercase;letter-spacing:.03em;color:var(--muted);border-bottom:1px solid var(--border);white-space:nowrap;}
@@ -1011,9 +1012,9 @@ function goToRunIntelligence(){
 const NAV = [
   { id:'home', label:'Home', icon:'ti-home' },
   { id:'campaigns', label:'Campaigns', icon:'ti-rocket' },
-  { id:'calendar', label:'Sales Calendar', icon:'ti-calendar' },
+  { id:'calendar', label:'Sales', icon:'ti-calendar' },
   { id:'intelligence', label:'Engine', icon:'ti-brain' },
-  { id:'content', label:'Content', icon:'ti-news' },
+  { id:'content', label:'Marketing', icon:'ti-news' },
   { id:'research', label:'Research', icon:'ti-microscope' },
   { id:'settings', label:'Settings', icon:'ti-settings' },
   { id:'grid', label:'Grid', icon:'ti-grid-dots', hidden:true }
@@ -1037,7 +1038,7 @@ function navigate(page){
 
 function renderPage(){
   const el = document.getElementById('pageContent');
-  const renderers = { home: renderHome, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderCalendar, intelligence: renderIntelligencePage, content: renderContent, research: renderResearch, settings: renderSettings };
+  const renderers = { home: renderHome, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, research: renderResearch, settings: renderSettings };
   el.innerHTML = renderers[state.currentPage]();
   afterRender(state.currentPage);
 }
@@ -1082,8 +1083,15 @@ function afterRender(page){
   if(page === 'intelligence' && (window.__intelSubTab||'intelligence') === 'context') ensureContextDataLoaded();
   if(page === 'home') ensureTodaysActionsSequenceStagesLoaded();
   if(page === 'calendar'){
-    if(window.__calendarEvents === undefined) loadCalendarEvents();
-    if(window.__repsCache === undefined) loadRepsCache();
+    const salesTab = window.__salesSubTab || 'overview';
+    if(salesTab === 'calendar'){
+      if(window.__calendarEvents === undefined) loadCalendarEvents();
+      if(window.__repsCache === undefined) loadRepsCache();
+    }
+    if(salesTab === 'overview'){
+      if(window.__salesHealthData === undefined) loadSalesHealthData();
+      if(window.__salesInsights === undefined) loadSalesInsights();
+    }
   }
   if(page === 'content'){
     const tab = window.__contentSubTab || 'signals';
@@ -6588,6 +6596,161 @@ function syncCampaignStatusToAirtable(campaign){
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: campaign.name, status: campaign.status })
   }).catch(err => console.warn('Campaign status sync failed:', err.message));
+}
+
+/* ===================== SALES PAGE (top-level nav, id 'calendar') ===================== */
+// Nav label is now "Sales"; the page has two sub-tabs. "Calendar" is the
+// original per-day meeting calendar, unchanged below in the CALENDAR PAGE
+// section. "Overview" is new: campaign health cards + a pipeline totals
+// bar, both computed client-side from the same /api/campaign/:id/sales-
+// overview payload (and computeFunnelCounts() math) the per-campaign Sales
+// tab already uses, plus an AI insights panel backed by GET /api/sales/
+// insights (Claude reading straight from Airtable server-side).
+
+const SALES_SUBTABS = [['overview','Overview'],['calendar','Calendar']];
+
+function setSalesSubTab(tab){
+  window.__salesSubTab = tab;
+  renderPage();
+}
+
+function renderSalesPage(){
+  const tab = window.__salesSubTab || 'overview';
+  return `
+  <div class="seq-tabs">
+    ${SALES_SUBTABS.map(([key,label]) => `<div class="seq-tab ${tab===key?'active':''}" onclick="setSalesSubTab('${key}')">${label}</div>`).join('')}
+  </div>
+  ${tab==='overview' ? renderSalesOverviewTab() : renderCalendar()}
+  `;
+}
+
+// Health cards cover Live and Past campaigns - Draft campaigns haven't
+// launched so there's no funnel data to show yet.
+function salesHealthCampaigns(){
+  return state.campaigns.filter(c => c.status !== 'Draft');
+}
+
+async function loadSalesHealthData(){
+  const campaigns = salesHealthCampaigns();
+  if(!campaigns.length){
+    window.__salesHealthData = { campaigns: [] };
+    if(state.currentPage === 'calendar' && (window.__salesSubTab||'overview') === 'overview') renderPage();
+    return;
+  }
+  try {
+    const results = await Promise.all(campaigns.map(async campaign => {
+      const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/sales-overview`);
+      const json = await res.json();
+      if(!res.ok) throw new Error(json.error || ('Request failed with status '+res.status));
+      return computeCampaignHealth(campaign, json);
+    }));
+    window.__salesHealthData = { campaigns: results };
+  } catch(err){
+    window.__salesHealthData = { error: err.message };
+  }
+  if(state.currentPage === 'calendar' && (window.__salesSubTab||'overview') === 'overview') renderPage();
+}
+
+// Status badge: Live campaigns with activity in the last 14 days are On
+// Track; Live but stale is Needs Attention; anything not Live (Past) is
+// Ended.
+function computeCampaignHealth(campaign, data){
+  const { stageCounts, won, lost } = computeFunnelCounts(data);
+  const connections = stageCounts.find(s=>s.key==='connected').count;
+  const meetingsBooked = stageCounts.find(s=>s.key==='meeting').count;
+  const messagesSent = data.touchPoints.filter(tp => tp.type !== 'Inbound Reply').length;
+
+  const activityDates = [];
+  data.touchPoints.forEach(tp => { if(tp.date) activityDates.push(tp.date); });
+  data.deals.forEach(d => { if(d.date) activityDates.push(d.date); });
+  data.campaignContacts.forEach(cc => (cc.stageHistory||[]).forEach(h => { if(h.date) activityDates.push(h.date); }));
+  const lastActivity = activityDates.length ? activityDates.reduce((a,b) => new Date(a) > new Date(b) ? a : b) : null;
+  const recentlyActive = lastActivity !== null && daysBetween(lastActivity) <= 14;
+
+  let statusKey = 'ended', statusLabel = 'Ended';
+  if(campaign.status === 'Live'){
+    statusKey = recentlyActive ? 'ontrack' : 'attention';
+    statusLabel = recentlyActive ? 'On Track' : 'Needs Attention';
+  }
+
+  return { id: campaign.id, name: campaign.name, connections, messagesSent, meetingsBooked, won, lost, statusKey, statusLabel };
+}
+
+async function loadSalesInsights(){
+  try {
+    const res = await fetch('/api/sales/insights');
+    const json = await res.json();
+    if(!res.ok) throw new Error(json.error || ('Request failed with status '+res.status));
+    window.__salesInsights = json.insights || [];
+  } catch(err){
+    window.__salesInsights = { error: err.message };
+  }
+  if(state.currentPage === 'calendar' && (window.__salesSubTab||'overview') === 'overview') renderPage();
+}
+
+function renderSalesOverviewTab(){
+  return `
+  ${renderSalesHealthCards()}
+  ${renderPipelineSummaryBar()}
+  ${renderSalesInsightsPanel()}
+  `;
+}
+
+const SALES_STATUS_BADGE_CLASS = { ontrack:'campaign-status-active', attention:'campaign-status-paused', ended:'campaign-status-draft' };
+
+function renderSalesHealthCards(){
+  const data = window.__salesHealthData;
+  if(data === undefined) return '<div class="card" style="margin-bottom:16px;"><div class="muted"><i class="ti ti-loader-2"></i> Loading campaign health...</div></div>';
+  if(data.error) return `<div class="card" style="margin-bottom:16px;"><div class="muted">Could not load campaign health: ${esc(data.error)}</div></div>`;
+  if(!data.campaigns.length) return '<div class="card" style="margin-bottom:16px;"><div class="empty-state">No live or past campaigns yet.</div></div>';
+  return `
+  <div class="section-title"><i class="ti ti-heart-rate-monitor"></i> Campaign health</div>
+  <div class="health-cards-grid">
+    ${data.campaigns.map(c => `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:10px;">
+        <div style="font-weight:800;font-size:14px;">${esc(c.name)}</div>
+        <span class="campaign-status ${SALES_STATUS_BADGE_CLASS[c.statusKey]}">${c.statusLabel}</span>
+      </div>
+      <div class="mini-cards" style="grid-template-columns:repeat(2,1fr);margin-bottom:0;">
+        <div class="mini-card"><div class="num">${c.connections}</div><div class="label">Connections made</div></div>
+        <div class="mini-card"><div class="num">${c.messagesSent}</div><div class="label">Messages sent</div></div>
+        <div class="mini-card"><div class="num">${c.meetingsBooked}</div><div class="label">Meetings booked</div></div>
+        <div class="mini-card"><div class="num">${c.won} / ${c.lost}</div><div class="label">Won / Lost</div></div>
+      </div>
+    </div>`).join('')}
+  </div>`;
+}
+
+function renderPipelineSummaryBar(){
+  const data = window.__salesHealthData;
+  if(!data || data.error || !data.campaigns || !data.campaigns.length) return '';
+  const totals = data.campaigns.reduce((acc,c) => {
+    acc.connections += c.connections; acc.messagesSent += c.messagesSent; acc.meetingsBooked += c.meetingsBooked; acc.won += c.won; acc.lost += c.lost;
+    return acc;
+  }, { connections:0, messagesSent:0, meetingsBooked:0, won:0, lost:0 });
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title"><i class="ti ti-chart-bar"></i> Pipeline summary — all campaigns</div>
+    <div class="mini-cards" style="grid-template-columns:repeat(5,1fr);margin-bottom:0;">
+      <div class="mini-card"><div class="num">${totals.connections}</div><div class="label">Connections made</div></div>
+      <div class="mini-card"><div class="num">${totals.messagesSent}</div><div class="label">Messages sent</div></div>
+      <div class="mini-card"><div class="num">${totals.meetingsBooked}</div><div class="label">Meetings booked</div></div>
+      <div class="mini-card"><div class="num">${totals.won}</div><div class="label">Won</div></div>
+      <div class="mini-card"><div class="num">${totals.lost}</div><div class="label">Lost</div></div>
+    </div>
+  </div>`;
+}
+
+function renderSalesInsightsPanel(){
+  const insights = window.__salesInsights;
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title"><i class="ti ti-bulb-filled"></i> AI insights</div>
+    ${insights === undefined ? '<div class="muted"><i class="ti ti-loader-2"></i> Generating insights...</div>' : ''}
+    ${insights && insights.error ? `<div class="muted">Could not load insights: ${esc(insights.error)}</div>` : ''}
+    ${Array.isArray(insights) ? `<ul style="margin:0;padding-left:18px;font-size:12.5px;line-height:1.7;">${insights.map(i=>`<li>${esc(i)}</li>`).join('')}</ul>` : ''}
+  </div>`;
 }
 
 /* ===================== CALENDAR PAGE ===================== */

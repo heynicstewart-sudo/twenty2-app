@@ -2616,6 +2616,68 @@ app.get('/api/campaign/:id/conversion-intelligence', async (req, res) => {
   }
 });
 
+// Top-level Sales page > Overview tab AI insights panel. Aggregates every
+// Live/Past campaign's Campaign Contacts + Deals + Touch Points rows into a
+// compact per-campaign summary (a lighter pass than the full stage-history
+// funnel math sales-overview above feeds the per-campaign Sales tab - good
+// enough for the model to reason over) and asks Claude for a handful of
+// bullet takeaways across the whole pipeline.
+app.get('/api/sales/insights', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const [campaignsData, ccRows, dealsData, tpData] = await Promise.all([
+      airtableRequest('GET', 'Campaigns'),
+      fetchCampaignContactsRows(),
+      airtableRequest('GET', 'Deals'),
+      airtableRequest('GET', 'Touch Points')
+    ]);
+
+    const campaigns = (campaignsData.records || [])
+      .filter(r => (r.fields['Status'] || '') !== 'Draft')
+      .map(r => ({ id: r.id, name: r.fields['Name'] || '', status: r.fields['Status'] || '' }));
+
+    if (!campaigns.length) {
+      return res.json({ insights: ['No live or past campaigns yet — insights will appear once a campaign goes live.'], generatedAt: new Date().toISOString() });
+    }
+
+    // Same "reached Connected or later" stage list the per-campaign Sales
+    // tab's FUNNEL_STAGE_GROUPS['connected'] uses client-side - the early
+    // stages (Found, Connection Pending/Requested) don't count as connected.
+    const CONNECTED_OR_LATER_STAGES = ['Connected', 'Message 1 Sent', 'Pending Reply M1', 'Ready for Message 2', 'Message 2 Sent', 'Pending Reply M2', 'Ready for Message 3', 'Message 3 Sent', 'Pending Reply M3', 'Meeting Booked'];
+
+    const summary = campaigns.map(c => {
+      const myCc = ccRows.filter(r => (r.fields['Campaign'] || []).includes(c.id));
+      const myDeals = (dealsData.records || []).filter(r => (r.fields['Campaign'] || []).includes(c.id));
+      const myContactIds = new Set(myCc.map(r => (r.fields['Contact'] || [])[0]).filter(Boolean));
+      const myTouchPoints = (tpData.records || []).filter(r => (r.fields['Campaign'] || []).includes(c.id) || (r.fields['Contact'] || []).some(cid => myContactIds.has(cid)));
+
+      const connections = myCc.filter(r => CONNECTED_OR_LATER_STAGES.includes(r.fields['Sequence Stage'] || '')).length;
+      const messagesSent = myTouchPoints.filter(r => !touchPointIsReply(r.fields)).length;
+      const meetingsBooked = myCc.filter(r => (r.fields['Sequence Stage'] || '') === 'Meeting Booked').length;
+      const won = myDeals.filter(r => r.fields['Outcome'] === 'Won').length;
+      const lost = myDeals.filter(r => r.fields['Outcome'] === 'Lost').length;
+
+      return { name: c.name, status: c.status, contacts: myCc.length, connections, messagesSent, meetingsBooked, won, lost };
+    });
+
+    const prompt = `You are a sales analyst reviewing outreach campaign performance for a B2B agency. Here is a summary of every live or past campaign:
+
+${summary.map(s => `- ${s.name} (${s.status}): ${s.contacts} contacts, ${s.connections} connections made, ${s.messagesSent} messages sent, ${s.meetingsBooked} meetings booked, ${s.won} won, ${s.lost} lost`).join('\n')}
+
+Write 3-5 bullet point insights a sales lead would find useful - call out standout campaigns (best/worst), pipeline risks, and any patterns worth acting on. Each bullet must be one plain sentence with no markdown formatting, one per line, no numbering or leading dashes.`;
+
+    const text = await callClaudeText(prompt, 700);
+    const insights = text.split('\n')
+      .map(l => l.replace(/^[-*•]\s*/, '').replace(/^\d+[.)]\s*/, '').trim())
+      .filter(Boolean);
+
+    res.json({ insights, generatedAt: new Date().toISOString() });
+  } catch (err) {
+    console.error('Sales insights error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Section 4's "Log a deal" - writes to the real Deals table (replaces the
 // old speculative Sales Log write this route used to make).
 app.post('/api/campaign/:id/deals', async (req, res) => {
