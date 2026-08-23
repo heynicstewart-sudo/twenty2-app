@@ -3551,7 +3551,10 @@ function normalizeTrigifyPost(p) {
   const engagement = p.engagement;
   return {
     text: p.text || p.content || p.body || '',
-    date: p.date || p.collected_at || p.collectedAt || p.published_at || p.publishedAt || p.postedAt || p.createdAt || p.created_at || '',
+    // Actual post-publish-date fields first; collected_at/collectedAt is
+    // when Trigify's crawler picked the post up (i.e. sync time), not when
+    // it was posted, so those stay as the last resort only.
+    date: p.date_posted || p.datePosted || p.published_at || p.publishedAt || p.postedAt || p.date || p.createdAt || p.created_at || p.collected_at || p.collectedAt || '',
     likes: p.likes
       ?? p.likeCount
       ?? p.like_count
@@ -3834,6 +3837,15 @@ function parseRecentPosts(recentPostsText) {
   }).filter(Boolean);
 }
 
+// Contact's Recent Posts, filtered to the last `days` and formatted for
+// dropping straight into an outreach-message prompt - keeps Claude from
+// referencing a post that's old enough to be a stale/odd callback.
+function recentPostsPromptSnippet(recentPostsField, days) {
+  const posts = parseRecentPosts(recentPostsField).filter(p => isWithinLastDays(p.date, days));
+  if (!posts.length) return 'none recent';
+  return posts.map(p => `[${p.date}] ${p.text}`).join('\n');
+}
+
 // Home page "Contact signals" strip - one card per post from contacts who
 // are (a) in a Live campaign and (b) have a non-empty Recent Posts field
 // (populated by GET /api/trigify/sync-contact-posts), newest post first.
@@ -3892,7 +3904,7 @@ app.get('/api/contacts/:id/recent-posts', async (req, res) => {
 // Change Signal field (written by syncTrigifyContactPosts's per-profile
 // Claude detection, syncJobChangeMonitorSignals's keyword search match, or
 // checkContactJobChanges's weekly Serper check) whose Job Change Signal Date
-// falls within the last 7 days - Job Change Signal itself is never cleared
+// falls within the last 14 days - Job Change Signal itself is never cleared
 // automatically, so without this a months-old signal would keep showing
 // here forever.
 app.get('/api/contacts/job-change-signals', async (req, res) => {
@@ -3907,7 +3919,7 @@ app.get('/api/contacts/job-change-signals', async (req, res) => {
     (companiesData.records || []).forEach(c => { companyNameById[c.id] = c.fields['Company Name'] || ''; });
 
     const signals = (contactsData.records || [])
-      .filter(r => r.fields['Job Change Signal'] && isWithinLastDays(r.fields['Job Change Signal Date'], 7))
+      .filter(r => r.fields['Job Change Signal'] && isWithinLastDays(r.fields['Job Change Signal Date'], 14))
       .map(r => ({
         contactId: r.id,
         contactName: r.fields['Full Name'] || 'Unknown',
@@ -4125,7 +4137,7 @@ async function syncJobChangeMonitorSignals() {
       authorName: author.name || r.author_name || '',
       authorProfileUrl: author.profile_url || r.author_profile_url || '',
       text: String(extractPostValue((r.content && r.content.text) || r.text || '')).trim(),
-      date: r.published_at || r.date || ''
+      date: r.date_posted || r.datePosted || r.published_at || r.date || ''
     };
   }).filter(r => r.text && isWithinLastDays(r.date, 7));
 
@@ -5085,11 +5097,13 @@ app.post('/api/campaign/:id/contacts/:contactId/generate-message', async (req, r
     }
 
     const camp = campaignRecord.fields || {};
+    const recentPosts = recentPostsPromptSnippet(cf['Recent Posts'], 30);
     const prompt = `You are drafting LinkedIn outreach message ${messageNumber} of 3 for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM.
 
 Campaign: "${campaignName}". Goal: ${camp['Goal'] || 'not recorded'}. Product: ${camp['Product'] || 'not recorded'}. Target ICP: ${camp['Target ICP'] || 'not recorded'}. Strategy notes: ${camp['Strategy Notes'] || 'none recorded'}.
 
 Contact: ${cf['Full Name'] || 'Unknown'}, ${cf['Job Title'] || ''}. AI summary: ${cf['AI Summary'] || 'none yet'}. Conversation so far: ${cf['Conversation Context'] || 'none yet - this is the first message'}.
+Recent posts (last 30 days only): ${recentPosts}
 
 Write only message ${messageNumber} in this contact's sequence for this specific campaign, following on naturally from the conversation so far (if any). UK English, no em dashes, peer to peer tone, 3-4 sentences, signed off "Marcus". Return only the message text, no preamble.`;
 
@@ -5611,10 +5625,12 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
         if (parsed.sentiment) rowUpdateFields['Sentiment'] = parsed.sentiment;
 
         if (newStage.startsWith('Ready for Message')) {
+          const recentPosts = recentPostsPromptSnippet(f['Recent Posts'], 30);
           const draftPrompt = `You are drafting the next LinkedIn message for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM. This is for the "${campaignName}" campaign.
 
 Contact: ${contactName}, ${f['Job Title'] || ''}.
 AI Summary: ${f['AI Summary'] || 'none yet'}
+Recent posts (last 30 days only): ${recentPosts}
 Conversation so far: ${newContext}
 
 Write the next message in the conversation, following on naturally from what they just said. UK English, no em dashes, peer to peer tone, 3-4 sentences, one observation and one question, signed off "Marcus". Return only the message text.`;
