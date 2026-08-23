@@ -3969,7 +3969,7 @@ async function trigifyEnsureMarcusSearch() {
 
 const TRIGIFY_JOB_CHANGE_MONITOR_NAME = 'T2C Job Change Monitor';
 const TRIGIFY_JOB_CHANGE_KEYWORDS = ['excited to join', 'new role', 'starting as', 'thrilled to announce', 'joining as'];
-const TRIGIFY_JOB_CHANGE_KEYWORDS_NOT = ['hiring', 'we are hiring'];
+const TRIGIFY_JOB_CHANGE_KEYWORDS_NOT = ['hiring'];
 
 // One-time setup for a Trigify LinkedIn posts keyword search watching for
 // job-change language across LinkedIn generally, not scoped to any one
