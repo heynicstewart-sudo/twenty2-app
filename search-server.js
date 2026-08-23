@@ -3606,11 +3606,18 @@ function extractPostValue(value) {
   return value;
 }
 
+// Same nested-value unwrap + parse used by formatRecentPosts, pulled out so
+// the job-change signal writers below can stamp the real Trigify post date
+// instead of defaulting to whenever the sync happened to run.
+function normalizePostDate(value) {
+  const raw = extractPostValue(value);
+  const parsed = raw ? new Date(raw) : null;
+  return parsed && !isNaN(parsed) ? parsed.toISOString().slice(0, 10) : '';
+}
+
 function formatRecentPosts(posts) {
   return posts.map(p => {
-    const rawDate = extractPostValue(p.date);
-    const parsedDate = rawDate ? new Date(rawDate) : null;
-    const date = parsedDate && !isNaN(parsedDate) ? parsedDate.toISOString().slice(0, 10) : '';
+    const date = normalizePostDate(p.date);
     const text = String(extractPostValue(p.text)).replace(/\s+/g, ' ').trim();
     const likes = extractPostValue(p.likes);
     const comments = extractPostValue(p.comments);
@@ -3683,8 +3690,16 @@ async function syncTrigifyContactPosts() {
     const recentEnough = top3.filter(p => isWithinLastDays(p.date, 7));
     const jobChange = await detectJobChangeFromPosts(recentEnough);
     if (jobChange) {
-      fields['Job Change Signal'] = `${jobChange.newCompanyOrRole || 'Possible job change'}${jobChange.date ? ' — ' + jobChange.date : ''}`;
-      fields['Job Change Signal Date'] = new Date().toISOString().slice(0, 10);
+      // Use the actual Trigify post date, not the time this sync ran.
+      // detectJobChangeFromPosts doesn't say which of the (up to 3) posts
+      // triggered the signal, so prefer whichever post's date matches what
+      // Claude echoed back, falling back to the newest post (recentEnough
+      // is newest-first) since every post here already passed the 7-day
+      // isWithinLastDays filter and so has a real, parseable date.
+      const matchedPost = recentEnough.find(p => normalizePostDate(p.date) === normalizePostDate(jobChange.date)) || recentEnough[0];
+      const postDate = normalizePostDate(matchedPost.date);
+      fields['Job Change Signal'] = `${jobChange.newCompanyOrRole || 'Possible job change'}${postDate ? ' — ' + postDate : ''}`;
+      fields['Job Change Signal Date'] = postDate || new Date().toISOString().slice(0, 10);
     }
     updates.push({ id: contact.id, fields });
   }
@@ -4129,11 +4144,14 @@ async function syncJobChangeMonitorSignals() {
     const url = r.authorProfileUrl ? normalizeLinkedInUrl(r.authorProfileUrl) : '';
     const match = (url && contactByUrl[url]) || (r.authorName && contactByName[r.authorName.trim().toLowerCase()]);
     if (!match || match.fields['Job Change Signal']) return;
+    // Same fix as syncTrigifyContactPosts: stamp the post's own date, not
+    // whenever this sync happened to run.
+    const postDate = normalizePostDate(r.date);
     updates.push({
       id: match.id,
       fields: {
-        'Job Change Signal': `${r.text.slice(0, 300)}${r.date ? ' — ' + r.date : ''}`,
-        'Job Change Signal Date': new Date().toISOString().slice(0, 10)
+        'Job Change Signal': `${r.text.slice(0, 300)}${postDate ? ' — ' + postDate : ''}`,
+        'Job Change Signal Date': postDate || new Date().toISOString().slice(0, 10)
       }
     });
   });
