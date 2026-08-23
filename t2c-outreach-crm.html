@@ -3520,22 +3520,37 @@ function renderEnrichmentPanelHtml(cid, profile){
 // from this contact's Airtable record (populated by
 // GET /api/trigify/sync-contact-posts), not part of the AI enrichment call,
 // so it's fetched and cached separately in window.__contactRecentPosts.
-function renderEnrichmentRecentPosts(posts){
-  let body;
-  if(!posts) body = '<span class="muted" style="font-size:11.5px;"><i class="ti ti-loader-2"></i> Loading...</span>';
-  else if(posts.error) body = `<span class="muted" style="font-size:11.5px;">Could not load recent posts: ${esc(posts.error)}</span>`;
-  else if(!posts.length) body = '<span class="muted" style="font-size:11.5px;">No recent posts found</span>';
-  else body = posts.map(p => `
+function renderRecentPostsCards(posts){
+  if(!posts) return '<span class="muted" style="font-size:11.5px;"><i class="ti ti-loader-2"></i> Loading...</span>';
+  if(posts.error) return `<span class="muted" style="font-size:11.5px;">Could not load recent posts: ${esc(posts.error)}</span>`;
+  if(!posts.length) return '<span class="muted" style="font-size:11.5px;">No recent posts found</span>';
+  return posts.map(p => `
     <div style="margin-top:6px;padding:8px;border:1px solid var(--border);border-radius:6px;">
       <div class="muted" style="font-size:11px;">${esc(p.date || '')} &middot; ${p.likes||0} likes, ${p.comments||0} comments</div>
       <div style="font-size:12px;margin-top:2px;">${esc(p.text)}</div>
     </div>
   `).join('');
+}
+
+function renderEnrichmentRecentPosts(posts){
   return `
         <div style="margin-top:8px;">
           <div style="font-weight:700;font-size:11.5px;">Recent posts</div>
-          <div style="margin-top:2px;">${body}</div>
+          <div style="margin-top:2px;">${renderRecentPostsCards(posts)}</div>
         </div>`;
+}
+
+// Contact profile drawer's own Recent Posts section, below Account
+// history - same window.__contactRecentPosts cache/loader as the grid
+// enrichment panel's "Recent posts" sub-field, just rendered as a
+// full drawer-section with its own header.
+function renderContactDrawerRecentPosts(cid){
+  if(!window.__contactRecentPosts || window.__contactRecentPosts[cid] === undefined) loadContactRecentPosts(cid);
+  const posts = window.__contactRecentPosts && window.__contactRecentPosts[cid];
+  return `
+    <div class="section-title" style="font-size:13px;"><i class="ti ti-brand-linkedin"></i> Recent Posts</div>
+    ${renderRecentPostsCards(posts)}
+  `;
 }
 
 async function loadContactRecentPosts(cid){
@@ -3550,6 +3565,8 @@ async function loadContactRecentPosts(cid){
     window.__contactRecentPosts[cid] = { error: err.message };
   }
   renderPage();
+  const drawerSection = document.getElementById('recentPostsSection');
+  if(drawerSection) drawerSection.innerHTML = renderContactDrawerRecentPosts(cid);
 }
 
 async function copyEnrichmentProfile(cid){
@@ -4070,6 +4087,10 @@ function renderContactDrawerContent(data, campaignName){
       ${otherCollapsed.map(tp=>renderDrawerTouchPoint(tp, campaignName)).join('')}
     </details>` : ''}
     ${(data.deals||[]).length ? `<div class="muted" style="font-size:11px;font-weight:700;margin-top:12px;margin-bottom:6px;">DEALS</div>${data.deals.map(d=>`<div class="tp-item">${esc(d.outcome)}${d.dealValue?' · $'+Number(d.dealValue).toLocaleString():''} · ${fmtDate(d.date)}${d.campaignName?' · '+esc(d.campaignName):''}</div>`).join('')}` : ''}
+  </div>
+
+  <div class="drawer-section" id="recentPostsSection">
+    ${renderContactDrawerRecentPosts(c.id)}
   </div>
 
   <div class="drawer-section">

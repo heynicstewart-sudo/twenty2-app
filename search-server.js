@@ -3622,6 +3622,7 @@ async function syncTrigifyContactPosts() {
     const jobChange = await detectJobChangeFromPosts(recentEnough);
     if (jobChange) {
       fields['Job Change Signal'] = `${jobChange.newCompanyOrRole || 'Possible job change'}${jobChange.date ? ' — ' + jobChange.date : ''}`;
+      fields['Job Change Signal Date'] = new Date().toISOString().slice(0, 10);
     }
     updates.push({ id: contact.id, fields });
   }
@@ -3813,7 +3814,10 @@ app.get('/api/contacts/:id/recent-posts', async (req, res) => {
 // Home page "Contact signals" strip - every contact with a populated Job
 // Change Signal field (written by syncTrigifyContactPosts's per-profile
 // Claude detection, syncJobChangeMonitorSignals's keyword search match, or
-// checkContactJobChanges's weekly Serper check).
+// checkContactJobChanges's weekly Serper check) whose Job Change Signal Date
+// falls within the last 7 days - Job Change Signal itself is never cleared
+// automatically, so without this a months-old signal would keep showing
+// here forever.
 app.get('/api/contacts/job-change-signals', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   try {
@@ -3826,7 +3830,7 @@ app.get('/api/contacts/job-change-signals', async (req, res) => {
     (companiesData.records || []).forEach(c => { companyNameById[c.id] = c.fields['Company Name'] || ''; });
 
     const signals = (contactsData.records || [])
-      .filter(r => r.fields['Job Change Signal'])
+      .filter(r => r.fields['Job Change Signal'] && isWithinLastDays(r.fields['Job Change Signal Date'], 7))
       .map(r => ({
         contactId: r.id,
         contactName: r.fields['Full Name'] || 'Unknown',
@@ -3897,7 +3901,10 @@ async function checkContactJobChanges() {
       if (sameTitle) continue;
       if (contact.fields['Job Change Signal']) continue;
 
-      updates.push({ id: contact.id, fields: { 'Job Change Signal': `Serper detected possible title change: ${headline} — verify manually` } });
+      updates.push({ id: contact.id, fields: {
+        'Job Change Signal': `Serper detected possible title change: ${headline} — verify manually`,
+        'Job Change Signal Date': new Date().toISOString().slice(0, 10)
+      } });
     } catch (err) {
       console.warn(`Job change check failed for ${name}:`, err.message);
     }
@@ -4061,7 +4068,10 @@ async function syncJobChangeMonitorSignals() {
     if (!match || match.fields['Job Change Signal']) return;
     updates.push({
       id: match.id,
-      fields: { 'Job Change Signal': `${r.text.slice(0, 300)}${r.date ? ' — ' + r.date : ''}` }
+      fields: {
+        'Job Change Signal': `${r.text.slice(0, 300)}${r.date ? ' — ' + r.date : ''}`,
+        'Job Change Signal Date': new Date().toISOString().slice(0, 10)
+      }
     });
   });
 
