@@ -591,7 +591,7 @@ table.spreadsheet-table{border-collapse:collapse;width:100%;min-width:960px;font
       </div>
     </div>
     <nav class="sidebar-nav" id="sidebarNav"></nav>
-    <div class="sidebar-footer">Marcus Ward<br>Perth, WA</div>
+    <div class="sidebar-footer">Twenty2 Collective<br>Perth, WA</div>
   </aside>
 
   <div class="main">
@@ -683,17 +683,17 @@ let rawState = {
   sequences: [
     { id:'seniorLeaders', name:'Senior Leaders', roles:['Product Owner','Transformation Lead'], voice:'Peer to peer',
       stages:{
-        connect:"Hi {{first}}, I work with transformation and delivery leaders across WA and noticed your work at {{company}}. Would be good to connect.\n\nMarcus",
-        m1:"Thanks for connecting, {{first}}. I've been speaking with a few {{role}}s in WA lately about how their teams are handling the pace of change at the moment. How's that landing for you at {{company}}?\n\nMarcus",
-        m2:"No worries if you're flat out, {{first}}. I ask because a few of the leaders I've spoken with have found it useful to get a quick outside read on where their delivery rhythm might be losing time. Would that be worth a look for you?\n\nMarcus",
-        cta:"If it's useful, {{first}}, I've got a short Change Value Check that gives a clear picture in under 15 minutes, no pitch involved. Happy to send it through if you'd like a look.\n\nMarcus"
+        connect:"Hi {{first}}, I work with transformation and delivery leaders across WA and noticed your work at {{company}}. Would be good to connect.\n\nTwenty2 Collective",
+        m1:"Thanks for connecting, {{first}}. I've been speaking with a few {{role}}s in WA lately about how their teams are handling the pace of change at the moment. How's that landing for you at {{company}}?\n\nTwenty2 Collective",
+        m2:"No worries if you're flat out, {{first}}. I ask because a few of the leaders I've spoken with have found it useful to get a quick outside read on where their delivery rhythm might be losing time. Would that be worth a look for you?\n\nTwenty2 Collective",
+        cta:"If it's useful, {{first}}, I've got a short Change Value Check that gives a clear picture in under 15 minutes, no pitch involved. Happy to send it through if you'd like a look.\n\nTwenty2 Collective"
       } },
     { id:'digitalTech', name:'Digital and Tech', roles:['Digital and Tech'], voice:'Warm consultant',
       stages:{
-        connect:"Hi {{first}}, I work with tech and delivery teams across WA and saw your background in {{role}} at {{company}}. Would be good to connect.\n\nMarcus",
-        m1:"Thanks for connecting, {{first}}. Curious how things are tracking on the engineering and delivery side at {{company}} at the moment, sprint cadence, tooling, that sort of thing. What's top of mind for you right now?\n\nMarcus",
-        m2:"All good if you're deep in it, {{first}}. A few tech leads I've spoken with lately have found it useful to get a quick outside view on where their sprint cycle is actually losing time. Worth a look for you?\n\nMarcus",
-        cta:"If it'd help, {{first}}, I've put together a short Change Value Check that maps this out in under 15 minutes, no pitch. Keen to send it over if useful.\n\nMarcus"
+        connect:"Hi {{first}}, I work with tech and delivery teams across WA and saw your background in {{role}} at {{company}}. Would be good to connect.\n\nTwenty2 Collective",
+        m1:"Thanks for connecting, {{first}}. Curious how things are tracking on the engineering and delivery side at {{company}} at the moment, sprint cadence, tooling, that sort of thing. What's top of mind for you right now?\n\nTwenty2 Collective",
+        m2:"All good if you're deep in it, {{first}}. A few tech leads I've spoken with lately have found it useful to get a quick outside view on where their sprint cycle is actually losing time. Worth a look for you?\n\nTwenty2 Collective",
+        cta:"If it'd help, {{first}}, I've put together a short Change Value Check that maps this out in under 15 minutes, no pitch. Keen to send it over if useful.\n\nTwenty2 Collective"
       } }
   ],
   settings: {
@@ -701,14 +701,14 @@ let rawState = {
     timeoutAction: 'Move to archive',
     services: ['Meeting','Discovery call','Workshop','Training'],
     accounts: [
-      { name:'Marcus Ward', url:'https://linkedin.com/in/marcusward', columns:['Product Owner','Transformation Lead','Digital and Tech'], primary:true }
+      { name:'Twenty2 Collective', url:'https://linkedin.com/in/marcusward', columns:['Product Owner','Transformation Lead','Digital and Tech'], primary:true }
     ],
     strategy: {
       messagesBeforeCta: '2',
       tone: 'Peer to peer',
       connLength: 'Short (under 300 characters)',
       cadence: '3-4 days between messages',
-      voiceInstructions: 'UK English. No em dashes. Peer to peer, not salesy. One observation, one question per message. 3 to 4 sentences. Sign off as Marcus. Frame CTAs conditionally, never pushy.'
+      voiceInstructions: 'UK English. No em dashes. Peer to peer, not salesy. One observation, one question per message. 3 to 4 sentences. Sign off as Twenty2 Collective. Frame CTAs conditionally, never pushy.'
     },
     leadMagnets: [
       { name:'Change Value Check', enabled:true, url:'https://twenty2collective.com/change-value-check' },
@@ -1116,7 +1116,7 @@ function afterRender(page){
 
 function renderHome(){
   return `
-  <div class="section-title" style="font-size:22px;margin-bottom:2px;">Hey Marcus, ready to get started?</div>
+  <div class="section-title" style="font-size:22px;margin-bottom:2px;">Hey Twenty2 Collective, ready to get started?</div>
   <div class="muted" style="margin-bottom:20px;">Your WA market intelligence engine.</div>
 
   ${renderContactSignalsStrip()}
@@ -1140,7 +1140,7 @@ function renderHome(){
     </div>
     <div class="home-action-card" onclick="goToRunIntelligence()">
       <div class="home-action-icon" style="background:#fde9d6;color:#a1571c;"><i class="ti ti-brain"></i></div>
-      <div class="home-action-title">Run Intelligence</div>
+      <div class="home-action-title">Run Engine</div>
       <div class="home-action-desc">Analyse everything, surface insights</div>
     </div>
   </div>
@@ -1240,10 +1240,10 @@ function renderContext(){
   }
   const campaignTag = window.__ctxCampaignTag;
   return `
-  <div class="section-title" style="font-size:20px;margin-bottom:2px;">${campaignTag ? 'Intelligence' : 'Context'}</div>
-  <div class="muted" style="margin-bottom:14px;">Marcus's primary data input hub - log touch points, upload context, and keep AI Summaries current.${campaignTag ? ` Everything logged here also tags the record with the <strong>${esc(campaignTag.name)}</strong> campaign, so it shows up at account level and pre-loads intelligence for future similar campaigns.` : ''}</div>
+  <div class="section-title" style="font-size:20px;margin-bottom:2px;">${campaignTag ? 'Engine' : 'Context'}</div>
+  <div class="muted" style="margin-bottom:14px;">Twenty2 Collective's primary data input hub - log touch points, upload context, and keep Engine Summaries current.${campaignTag ? ` Everything logged here also tags the record with the <strong>${esc(campaignTag.name)}</strong> campaign, so it shows up at account level and pre-loads intelligence for future similar campaigns.` : ''}</div>
   ${campaignTag ? `<div class="card" style="margin-bottom:16px;background:#e2f2fa;border-color:#bfe0f0;"><span class="pill" style="background:#fff;"><i class="ti ti-rocket" style="font-size:11px;"></i> ${esc(campaignTag.name)}</span> <span class="muted" style="font-size:12px;">Everything saved below is tagged to this campaign.</span></div>` : ''}
-  <div id="ctxUpdatingIndicator" class="muted" style="font-size:11.5px;margin-bottom:14px;display:none;"><i class="ti ti-loader-2"></i> Updating AI summaries...</div>
+  <div id="ctxUpdatingIndicator" class="muted" style="font-size:11.5px;margin-bottom:14px;display:none;"><i class="ti ti-loader-2"></i> Updating Engine summaries...</div>
   ${renderTouchPointLogger()}
   ${renderContextUploadSection()}
   ${renderHistoricalUploadSection()}
@@ -1312,8 +1312,8 @@ function renderTouchPointLogger(){
     ` : ''}
     ${logger.companyId && logger.contactIds.length && !logger.mode ? `
     <div style="display:flex;gap:10px;margin-top:12px;">
-      <button class="btn btn-primary btn-sm" onclick="getContextDebriefQuestions()"><i class="ti ti-sparkles"></i> Get AI Questions</button>
-      <button class="btn btn-secondary btn-sm" onclick="skipContextDebrief()"><i class="ti ti-arrow-right"></i> Skip AI, just log it</button>
+      <button class="btn btn-primary btn-sm" onclick="getContextDebriefQuestions()"><i class="ti ti-sparkles"></i> Get Engine Questions</button>
+      <button class="btn btn-secondary btn-sm" onclick="skipContextDebrief()"><i class="ti ti-arrow-right"></i> Skip the Engine, just log it</button>
     </div>
     ` : ''}
     <div id="ctxDebriefArea">${renderContextDebriefArea(logger)}</div>
@@ -1322,7 +1322,7 @@ function renderTouchPointLogger(){
 }
 
 function renderContextDebriefArea(logger){
-  if(logger.mode === 'loading') return '<div class="muted" style="margin-top:12px;font-size:12.5px;"><i class="ti ti-loader-2"></i> Getting questions from Claude...</div>';
+  if(logger.mode === 'loading') return '<div class="muted" style="margin-top:12px;font-size:12.5px;"><i class="ti ti-loader-2"></i> Getting questions from the Engine...</div>';
   if(logger.mode === 'debrief'){
     return `
     <div style="margin-top:14px;">
@@ -1381,7 +1381,7 @@ async function getContextDebriefQuestions(){
     l.debriefQuestions = data.questions || [];
     l.mode = l.debriefQuestions.length ? 'debrief' : 'notes';
   } catch(err){
-    toast('Could not get AI questions: ' + err.message, 'warn');
+    toast('Could not get Engine questions: ' + err.message, 'warn');
     l.mode = 'notes';
   }
   renderPage();
@@ -1519,7 +1519,7 @@ function handleContextConnectionsScreenshot(file){
     if(!match){ toast('Could not read that image', 'warn'); return; }
 
     const resultEl = document.getElementById('ctxConnectionsResult');
-    if(resultEl) resultEl.innerHTML = '<div class="muted"><i class="ti ti-loader-2"></i> Reading screenshot with Claude...</div>';
+    if(resultEl) resultEl.innerHTML = '<div class="muted"><i class="ti ti-loader-2"></i> Reading screenshot with the Engine...</div>';
 
     try {
       const res = await fetch('/api/context/parse-connections-screenshot', {
@@ -1627,7 +1627,7 @@ function renderContextScreenshotCard(){
     <button class="btn btn-secondary btn-sm" onclick="document.getElementById('ctxScreenshotInput').click()"><i class="ti ti-upload"></i> Upload screenshot</button>
     <div id="ctxScreenshotPreview" style="font-size:11.5px;margin-top:8px;"></div>
     <div class="field" style="margin-top:10px;"><label>Or paste text</label><textarea id="ctxScreenshotText" rows="4" placeholder="Paste the conversation..."></textarea></div>
-    <button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="runContextParseScreenshot()"><i class="ti ti-sparkles"></i> Parse with Claude</button>
+    <button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="runContextParseScreenshot()"><i class="ti ti-sparkles"></i> Parse with the Engine</button>
     <div id="ctxScreenshotResult" class="learning-result"></div>
   </div>
   `;
@@ -1660,7 +1660,7 @@ async function runContextParseScreenshot(){
   if(!image && !text){ toast('Upload a screenshot or paste some text first', 'warn'); return; }
 
   const resultEl = document.getElementById('ctxScreenshotResult');
-  if(resultEl) resultEl.innerHTML = '<div class="muted"><i class="ti ti-loader-2"></i> Reading with Claude...</div>';
+  if(resultEl) resultEl.innerHTML = '<div class="muted"><i class="ti ti-loader-2"></i> Reading with the Engine...</div>';
 
   try {
     const res = await fetch('/api/context/parse-screenshot', {
@@ -1686,7 +1686,7 @@ async function runContextParseScreenshot(){
         <p style="font-size:12px;margin-top:6px;">${esc(data.messageSummary)}</p>
         ${data.campaignScoped
           ? `<p class="muted" style="font-size:11.5px;margin-top:8px;">Sequence stage in this campaign: ${esc(data.previousStage||'—')} &rarr; ${esc(data.newStage||'—')}</p>`
-          : `<p class="muted" style="font-size:11.5px;margin-top:8px;">No campaign active, so sequence stage wasn't advanced - open this from a campaign's Intelligence tab to track that.</p>`}
+          : `<p class="muted" style="font-size:11.5px;margin-top:8px;">No campaign active, so sequence stage wasn't advanced - open this from a campaign's Engine tab to track that.</p>`}
         ${data.draft ? `<div style="margin-top:10px;"><div style="font-weight:700;font-size:11.5px;">Next message draft</div><textarea readonly rows="4" style="margin-top:4px;">${esc(data.draft)}</textarea></div>` : ''}
       `;
     }
@@ -1727,7 +1727,7 @@ async function submitContextLogContent(){
   if(!targetName || !content){ toast('Add both who this is about and the content', 'warn'); return; }
 
   const resultEl = document.getElementById('ctxContentResult');
-  if(resultEl) resultEl.innerHTML = '<div class="muted"><i class="ti ti-loader-2"></i> Summarising with Claude...</div>';
+  if(resultEl) resultEl.innerHTML = '<div class="muted"><i class="ti ti-loader-2"></i> Summarising with the Engine...</div>';
 
   try {
     const res = await fetch('/api/context/log-content', {
@@ -1764,7 +1764,7 @@ function renderHistoricalUploadSection(){
   return `
   <div class="card">
     <div class="section-title"><i class="ti ti-history"></i> Historical Context Upload</div>
-    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Paste text, or upload a PDF or plain text file. Claude extracts decision makers, pain points, outcomes, objections and timelines into the linked record's AI Summary.</p>
+    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Paste text, or upload a PDF or plain text file. The Engine extracts decision makers, pain points, outcomes, objections and timelines into the linked record's Engine Summary.</p>
     <div class="toolbar">
       <div class="field"><label>Tag</label>
         <select id="ctxHistTag">
@@ -1842,7 +1842,7 @@ async function submitContextHistoricalUpload(){
   if(!text && !file){ toast('Paste some text or upload a file first', 'warn'); return; }
 
   const resultEl = document.getElementById('ctxHistResult');
-  if(resultEl) resultEl.innerHTML = '<div class="muted"><i class="ti ti-loader-2"></i> Extracting with Claude...</div>';
+  if(resultEl) resultEl.innerHTML = '<div class="muted"><i class="ti ti-loader-2"></i> Extracting with the Engine...</div>';
 
   try {
     const res = await fetch('/api/context/historical-upload', {
@@ -2285,7 +2285,7 @@ ${isMessage
   const date = isoDate(TODAY);
   const tpType = TOUCH_POINT_TYPES.includes(method) ? method : 'LinkedIn message';
   if(!c.touchPoints) c.touchPoints = [];
-  c.touchPoints.push({ id: uid('tp'), date, type: tpType, communicationMethod: method, notes: 'AI-generated brief', painPoints: [], aiBrief: result });
+  c.touchPoints.push({ id: uid('tp'), date, type: tpType, communicationMethod: method, notes: 'Engine-generated brief', painPoints: [], aiBrief: result });
 
   fetch('/api/airtable/touchpoint', {
     method: 'POST',
@@ -2295,7 +2295,7 @@ ${isMessage
       company: c.company,
       date,
       type: tpType,
-      notes: 'AI-generated brief',
+      notes: 'Engine-generated brief',
       outcome: 'No reply',
       communicationMethod: method,
       aiBrief: result
@@ -2311,7 +2311,7 @@ function localBriefFallback(c, action, method, isMessage){
     const opener = painPoint
       ? `Last time we touched on ${painPoint.toLowerCase()}, keen to hear how that is tracking.`
       : `Keen to hear how things are tracking on your end.`;
-    return `Hi ${firstName(c.name)}, following up given where things are with ${c.company}. ${opener}\n\nMarcus`;
+    return `Hi ${firstName(c.name)}, following up given where things are with ${c.company}. ${opener}\n\nTwenty2 Collective`;
   }
   return [
     `- Cover: where things stand since the last touch point and next steps for ${c.company}.`,
@@ -2369,19 +2369,19 @@ function renderHowItWorks(){
       <div class="howto-item-head"><div class="howto-num">1</div><h4><i class="ti ti-home"></i> Home — your grids and today's actions</h4></div>
       <p>Today's actions surfaces exactly who needs a message, a follow-up or a re-engage today, oldest first. Below that, Your Grids lists every company x job-title grid you've built - each row is a company, each column a job title. Click <strong>Run daily search</strong> inside a grid to fill empty cells with verified LinkedIn profiles.</p>
       <ul>
-        <li>New Grid, Import from CSV, New Campaign and Run Intelligence are one click away from the top of Home</li>
+        <li>New Grid, Import from CSV, New Campaign and Run Engine are one click away from the top of Home</li>
         <li>A grid linked to a campaign shows that campaign's name right on its row</li>
         <li>After sending connection requests in LinkedIn, drop a screenshot of your connections list into a grid to mark accepted contacts as connected</li>
       </ul>
     </div>
     <div class="howto-item">
       <div class="howto-item-head"><div class="howto-num">2</div><h4><i class="ti ti-rocket"></i> Campaigns — where the work happens</h4></div>
-      <p>Every campaign has its own six tabs: Intelligence, Grid, Roadmap, Strategy, Analytics and Sales. Open a campaign and work through them left to right.</p>
+      <p>Every campaign has its own six tabs: Engine, Grid, Roadmap, Strategy, Analytics and Sales. Open a campaign and work through them left to right.</p>
       <ul>
-        <li><strong>Intelligence</strong> - log touch points and upload context, tagged to this campaign so it also feeds account-level intelligence</li>
+        <li><strong>Engine</strong> - log touch points and upload context, tagged to this campaign so it also feeds account-level intelligence</li>
         <li><strong>Grid</strong> - link an existing grid from Home or create a new one; grids are never duplicated, just referenced</li>
         <li><strong>Roadmap</strong> - the kanban board (Connection pending / made / Messaging / Booked) scoped to this campaign's contacts</li>
-        <li><strong>Strategy</strong> - the campaign brief plus its messaging templates, CTAs and AI redrafts - the controller for what gets said and to whom</li>
+        <li><strong>Strategy</strong> - the campaign brief plus its messaging templates, CTAs and Engine redrafts - the controller for what gets said and to whom</li>
         <li><strong>Analytics</strong> - a leads/meetings/sales-won line chart and a lead-status pie chart for this campaign only, with a time range selector</li>
         <li><strong>Sales</strong> - scorecards, a deal log, and transcript scoring against this campaign's Strategy</li>
       </ul>
@@ -2402,8 +2402,8 @@ function renderHowItWorks(){
     </div>
     <div class="howto-item">
       <div class="howto-item-head"><div class="howto-num">5</div><h4><i class="ti ti-brain"></i> Engine — account-level view</h4></div>
-      <p>Engine has two sub-tabs. <strong>Context</strong> (first) is the same touch-point logger and upload tools as a campaign's Intelligence tab, just untagged. <strong>Intelligence</strong> pulls every contact, touch point, campaign and conversion for campaign ideas, cold contacts and ready-to-send drafts, plus the account-wide numbers - strategy tally, CTA performance, bookings by service, connection speed.</p>
-      <ul><li>Click <strong>Run Engine</strong> at the top of the Intelligence tab to run intelligence, insights, health and a plain-English strategy read all in one go</li></ul>
+      <p>Engine has two sub-tabs. <strong>Context</strong> (first) is the same touch-point logger and upload tools as a campaign's Engine tab, just untagged. <strong>Engine</strong> pulls every contact, touch point, campaign and conversion for campaign ideas, cold contacts and ready-to-send drafts, plus the account-wide numbers - strategy tally, CTA performance, bookings by service, connection speed.</p>
+      <ul><li>Click <strong>Run Engine</strong> at the top of the Engine tab to run the full analysis, insights, health and a plain-English strategy read all in one go</li></ul>
     </div>
   </div>
 
@@ -4539,7 +4539,7 @@ async function generateTemplate(seqId, stageKey){
 
 function voiceRulesText(){
   const v = state.settings.strategy;
-  return `Voice rules: UK English, no em dashes, ${v.tone.toLowerCase()} tone, one observation and one question per message, 3 to 4 sentences, signed off "Marcus", conditional CTA framing (never pushy). Connection requests should be ${v.connLength.toLowerCase()}. Follow-up cadence is ${v.cadence.toLowerCase()}. ${v.voiceInstructions}`;
+  return `Voice rules: UK English, no em dashes, ${v.tone.toLowerCase()} tone, one observation and one question per message, 3 to 4 sentences, signed off "Twenty2 Collective", conditional CTA framing (never pushy). Connection requests should be ${v.connLength.toLowerCase()}. Follow-up cadence is ${v.cadence.toLowerCase()}. ${v.voiceInstructions}`;
 }
 
 function messageNumberForStage(stageKey){
@@ -4570,16 +4570,16 @@ function appendCtaNudge(text, stageKey){
   if(messageNumberForStage(stageKey) < n) return text;
   const nudge = ctaNudgeLine();
   if(!nudge) return text;
-  if(/\n\nMarcus\s*$/.test(text)) return text.replace(/\n\nMarcus\s*$/, `\n\n${nudge}\n\nMarcus`);
+  if(/\n\nTwenty2 Collective\s*$/.test(text)) return text.replace(/\n\nTwenty2 Collective\s*$/, `\n\n${nudge}\n\nTwenty2 Collective`);
   return text + `\n\n${nudge}`;
 }
 
 function localTemplateFallback(seq, stageKey){
   const fallbacks = {
-    connect: "Hi {{first}}, I work with {{role}}s across WA and came across your profile at {{company}}. Would be good to connect.\n\nMarcus",
-    m1: "Thanks for connecting, {{first}}. Curious how things are tracking at {{company}} at the moment. What's top of mind for you right now?\n\nMarcus",
-    m2: "No worries if you're flat out, {{first}}. A few {{role}}s I've spoken with lately have found it useful to get a quick outside read on their delivery rhythm. Worth a look for you?\n\nMarcus",
-    cta: "If it's useful, {{first}}, I've got a short Change Value Check that gives a clear picture in under 15 minutes, no pitch. Happy to send it through.\n\nMarcus"
+    connect: "Hi {{first}}, I work with {{role}}s across WA and came across your profile at {{company}}. Would be good to connect.\n\nTwenty2 Collective",
+    m1: "Thanks for connecting, {{first}}. Curious how things are tracking at {{company}} at the moment. What's top of mind for you right now?\n\nTwenty2 Collective",
+    m2: "No worries if you're flat out, {{first}}. A few {{role}}s I've spoken with lately have found it useful to get a quick outside read on their delivery rhythm. Worth a look for you?\n\nTwenty2 Collective",
+    cta: "If it's useful, {{first}}, I've got a short Change Value Check that gives a clear picture in under 15 minutes, no pitch. Happy to send it through.\n\nTwenty2 Collective"
   };
   return appendCtaNudge(fallbacks[stageKey], stageKey);
 }
@@ -5100,7 +5100,7 @@ function editCampaign(campaignId){
 
 /* ---- Detail view ---- */
 
-const CAMPAIGN_DETAIL_TABS = [['intelligence','Intelligence'],['grid','Grid'],['roadmap','Roadmap'],['strategy','Strategy'],['analytics','Analytics'],['sales','Sales'],['content','Content']];
+const CAMPAIGN_DETAIL_TABS = [['intelligence','Engine'],['grid','Grid'],['roadmap','Roadmap'],['strategy','Strategy'],['analytics','Analytics'],['sales','Sales'],['content','Content']];
 
 // tab param lets callers (e.g. the Grid page's back button) land on a
 // specific tab instead of always resetting to the first one.
@@ -5426,7 +5426,7 @@ function openSequenceEditModal(campaignId, stageKey){
   `;
   const footer = `
     <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-    <button class="btn btn-secondary" onclick="aiRedraftSequenceStage('${campaignId}','${stageKey}')"><i class="ti ti-sparkles"></i> AI redraft</button>
+    <button class="btn btn-secondary" onclick="aiRedraftSequenceStage('${campaignId}','${stageKey}')"><i class="ti ti-sparkles"></i> Engine redraft</button>
     <button class="btn btn-primary" onclick="saveSequenceStageEdit('${campaignId}','${stageKey}')"><i class="ti ti-check"></i> Save</button>
   `;
   openModal(`Edit — ${label}`, body, footer);
@@ -5453,7 +5453,7 @@ async function aiRedraftSequenceStage(campaignId, stageKey){
   if(!campaign) return;
   const statusEl = document.getElementById('seqEditAiStatus');
   const label = CAMPAIGN_STAGE_META.find(([k])=>k===stageKey)[1];
-  if(statusEl) statusEl.textContent = 'Redrafting with Claude...';
+  if(statusEl) statusEl.textContent = 'Redrafting with the Engine...';
 
   const currentContent = document.getElementById('seqEditContent').value;
   const currentType = document.getElementById('seqEditType').value;
@@ -5473,9 +5473,9 @@ Current draft: ${currentContent || '(none yet)'}
 
 T2C's historical conversion data for this campaign, factor it in if relevant: ${historicalNote}.
 
-Rewrite this message. UK English, no em dashes, peer to peer tone, one observation and one question, 3-4 sentences, signed off "Marcus". Return only the message text, nothing else.`;
+Rewrite this message. UK English, no em dashes, peer to peer tone, one observation and one question, 3-4 sentences, signed off "Twenty2 Collective". Return only the message text, nothing else.`;
 
-  const result = await callAI(prompt, 300, () => currentContent || 'Following up given where things stand - keen to hear how things are tracking.\n\nMarcus');
+  const result = await callAI(prompt, 300, () => currentContent || 'Following up given where things stand - keen to hear how things are tracking.\n\nTwenty2 Collective');
   const contentEl = document.getElementById('seqEditContent');
   if(contentEl) contentEl.value = result;
   if(statusEl) statusEl.textContent = 'Redraft ready — review and Save to keep it.';
@@ -5733,7 +5733,7 @@ function renderCampaignAnalyticsTab(campaign){
 
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-bulb-filled"></i> AI Insights</div>
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-bulb-filled"></i> Engine Insights</div>
       <button class="btn btn-secondary btn-sm" onclick="refreshCampaignInsights()"><i class="ti ti-refresh"></i> Refresh insights</button>
     </div>
     ${insights === null && !insightsErr ? '<div class="muted"><i class="ti ti-loader-2"></i> Loading insights...</div>' :
@@ -5973,7 +5973,7 @@ function renderSalesScorecards(data, period){
   </div>`;
 }
 
-/* -- Section 3: Conversion intelligence (6 panels) -- */
+/* -- Section 3: Conversion engine (6 panels) -- */
 const HEATMAP_DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const HEATMAP_BUCKETS = ['Morning','Midday','Afternoon','Evening','Late night'];
 
@@ -5996,11 +5996,11 @@ function renderBestTimeHeatmap(rows){
 }
 
 function renderConversionIntelligence(intel){
-  if(intel === undefined) return `<div class="card" style="margin-bottom:16px;"><div class="section-title"><i class="ti ti-bulb-filled"></i> Conversion intelligence</div><div class="muted"><i class="ti ti-loader-2"></i> Loading...</div></div>`;
-  if(!intel || intel.error) return `<div class="card" style="margin-bottom:16px;"><div class="section-title"><i class="ti ti-bulb-filled"></i> Conversion intelligence</div><div class="muted">Could not load: ${esc(intel && intel.error || 'unknown error')}</div></div>`;
+  if(intel === undefined) return `<div class="card" style="margin-bottom:16px;"><div class="section-title"><i class="ti ti-bulb-filled"></i> Conversion engine</div><div class="muted"><i class="ti ti-loader-2"></i> Loading...</div></div>`;
+  if(!intel || intel.error) return `<div class="card" style="margin-bottom:16px;"><div class="section-title"><i class="ti ti-bulb-filled"></i> Conversion engine</div><div class="muted">Could not load: ${esc(intel && intel.error || 'unknown error')}</div></div>`;
   return `
   <div class="card" style="margin-bottom:16px;">
-    <div class="section-title"><i class="ti ti-bulb-filled"></i> Conversion intelligence</div>
+    <div class="section-title"><i class="ti ti-bulb-filled"></i> Conversion engine</div>
     <div class="two-col">
       <div class="card"><div class="section-title" style="margin-bottom:10px;font-size:13px;">Message step \u2192 booking</div><div style="position:relative;height:220px;"><canvas id="salesStepChart"></canvas></div></div>
       <div class="card"><div class="section-title" style="margin-bottom:10px;font-size:13px;">CTA \u2192 booking</div><div style="position:relative;height:220px;">${intel.ctaToBooking.length ? '<canvas id="salesCtaChart"></canvas>' : '<div class="empty-state">Add CTAs on the Strategy tab to see this chart.</div>'}</div></div>
@@ -6207,7 +6207,7 @@ async function submitDealNote(dealId, phase){
     const deal = findDealById(dealId);
     const container = textEl.closest('.deal-notes-body') || textEl.closest('.modal-body');
     if(container && deal) container.innerHTML = renderDealNotesThread(deal);
-    toast('Note added \u2014 also feeding the contact/company AI Summary in the background', 'success');
+    toast('Note added \u2014 also feeding the contact/company Engine Summary in the background', 'success');
   } catch(err){
     toast('Could not save note: ' + err.message, 'warn');
   }
@@ -6411,7 +6411,7 @@ function renderSalesTranscriptCard(campaign){
   return `
   <div class="card" style="margin-top:16px;">
     <div class="section-title"><i class="ti ti-file-text"></i> Sales conversation transcripts</div>
-    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Paste a transcript or upload a file. Claude scores it against this campaign's Strategy (script adherence, CTAs used, objections raised) and saves the analysis to Airtable, tagged to this campaign so it feeds account-level intelligence.</p>
+    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Paste a transcript or upload a file. The Engine scores it against this campaign's Strategy (script adherence, CTAs used, objections raised) and saves the analysis to Airtable, tagged to this campaign so it feeds account-level intelligence.</p>
     <input type="file" id="salesTranscriptFile" accept=".txt,.pdf,text/plain,application/pdf" style="display:none;" onchange="handleSalesTranscriptFile(event)">
     <button class="btn btn-secondary btn-sm" onclick="document.getElementById('salesTranscriptFile').click()"><i class="ti ti-upload"></i> Upload file</button>
     <div id="salesTranscriptFilePreview" style="font-size:11.5px;margin-top:8px;"></div>
@@ -6799,7 +6799,7 @@ function renderSalesInsightsPanel(){
   const insights = window.__salesInsights;
   return `
   <div class="card" style="margin-bottom:16px;">
-    <div class="section-title"><i class="ti ti-bulb-filled"></i> AI insights</div>
+    <div class="section-title"><i class="ti ti-bulb-filled"></i> Engine insights</div>
     ${insights === undefined ? '<div class="muted"><i class="ti ti-loader-2"></i> Generating insights...</div>' : ''}
     ${insights && insights.error ? `<div class="muted">Could not load insights: ${esc(insights.error)}</div>` : ''}
     ${Array.isArray(insights) ? `<ul style="margin:0;padding-left:18px;font-size:12.5px;line-height:1.7;">${insights.map(i=>`<li>${esc(i)}</li>`).join('')}</ul>` : ''}
@@ -6814,7 +6814,7 @@ function renderSalesInsightsPanel(){
 // confirmBooking()/openBookingModal() are left untouched since they still
 // feed the separate legacy Intelligence > Analytics sub-tab.
 
-// Fetches the full account-wide event list once; the Per-Assignee view
+// Fetches the full account-wide event list once; the Rep dropdown
 // filters this same cached list client-side rather than re-fetching on
 // every dropdown change (rep counts are small - see /api/calendar/events'
 // optional ?assigneeId= server-side filter, unused here on purpose).
@@ -6842,11 +6842,6 @@ async function loadRepsCache(){
   if(state.currentPage === 'calendar') renderPage();
 }
 
-function setCalendarView(view){
-  window.__calendarView = view;
-  renderPage();
-}
-
 function setCalendarAssignee(repId){
   window.__calendarAssigneeFilter = repId || null;
   renderPage();
@@ -6861,7 +6856,6 @@ function eventColorByAssignee(assigneeId){
 }
 
 function renderCalendar(){
-  const view = window.__calendarView || 'overview';
   const y = state.calYear, m = state.calMonth;
   const first = new Date(y, m, 1);
   const startDow = first.getDay();
@@ -6875,22 +6869,17 @@ function renderCalendar(){
   const loading = eventsRaw === undefined;
   const errored = eventsRaw && eventsRaw.error;
   let events = loading || errored ? [] : eventsRaw;
-  if(view === 'perAssignee' && window.__calendarAssigneeFilter) events = events.filter(ev => ev.assigneeId === window.__calendarAssigneeFilter);
+  if(window.__calendarAssigneeFilter) events = events.filter(ev => ev.assigneeId === window.__calendarAssigneeFilter);
 
   const reps = window.__repsCache || [];
 
   return `
-  <div class="seq-tabs">
-    <div class="seq-tab ${view==='overview'?'active':''}" onclick="setCalendarView('overview')">Overview</div>
-    <div class="seq-tab ${view==='perAssignee'?'active':''}" onclick="setCalendarView('perAssignee')">Per assignee</div>
-  </div>
-  ${view === 'perAssignee' ? `
   <div class="field" style="max-width:260px;margin-bottom:14px;"><label>Rep</label>
     <select onchange="setCalendarAssignee(this.value)">
-      <option value="">All reps</option>
+      <option value="">All</option>
       ${reps.map(r=>`<option value="${r.id}" ${window.__calendarAssigneeFilter===r.id?'selected':''}>${esc(r.name)}</option>`).join('')}
     </select>
-  </div>` : ''}
+  </div>
   <div class="cal-header">
     <div style="font-size:16px;font-weight:800;">${monthLabel}</div>
     <div class="cal-nav">
@@ -7200,7 +7189,7 @@ function renderIntelligence(){
     <div id="engineMeta" class="muted" style="font-size:11.5px;margin-top:10px;"></div>
   </div>
 
-  <div class="engine-group-heading"><i class="ti ti-brain"></i> Intelligence results</div>
+  <div class="engine-group-heading"><i class="ti ti-brain"></i> Engine results</div>
   <div id="intelMeta" class="muted" style="font-size:11.5px;margin-bottom:10px;"></div>
   <div class="card" style="margin-bottom:12px;">
     <div class="section-title"><i class="ti ti-chart-line"></i> Campaign performance</div>
@@ -7282,7 +7271,7 @@ function renderIntelligence(){
 
   <div class="card" style="margin-top:16px;">
     <div class="section-title"><i class="ti ti-school"></i> Learning Data</div>
-    <p class="muted" style="font-size:12px;margin-bottom:14px;">Upload historical customer and deal data so Claude learns real ICP and sales patterns.</p>
+    <p class="muted" style="font-size:12px;margin-bottom:14px;">Upload historical customer and deal data so the Engine learns real ICP and sales patterns.</p>
     <div class="learning-grid">
       <div class="learning-panel">
         <h4><i class="ti ti-users"></i> Past Customers</h4>
@@ -7321,11 +7310,11 @@ async function runIntelligence(){
 
     const generatedAt = data.generatedAt ? new Date(data.generatedAt).toLocaleString('en-AU') : '';
     document.getElementById('intelMeta').textContent = `Based on ${data.contactCount ?? '—'} contacts and ${data.touchPointCount ?? '—'} touch points from Airtable${generatedAt ? ' · '+generatedAt : ''}`;
-    toast('Intelligence updated', 'success');
+    toast('Engine updated', 'success');
   } catch(err){
     console.warn('Intelligence request failed:', err.message);
-    document.getElementById('intelMeta').textContent = 'Could not run intelligence: ' + err.message;
-    toast('Could not run intelligence: ' + err.message, 'warn');
+    document.getElementById('intelMeta').textContent = 'Could not run engine: ' + err.message;
+    toast('Could not run engine: ' + err.message, 'warn');
   }
 }
 
@@ -7426,7 +7415,7 @@ async function runEngine(){
   document.getElementById('engineMeta').textContent = '';
 
   const steps = [
-    ['Running intelligence...', runIntelligence],
+    ['Running engine...', runIntelligence],
     ['Running insights...', runTrackInsights],
     ['Refreshing health...', runEngineHealth],
     ['Analysing strategy...', runAnalysis]
@@ -8177,7 +8166,7 @@ function renderContentPerformanceTab(){
         <button class="btn btn-secondary btn-sm" id="refreshPostsBtn" onclick="runMarcusContentAnalysis(true)" ${isRunning?'disabled':''} title="Re-pull the last month of posts from Trigify"><i class="ti ti-refresh"></i> Refresh from LinkedIn</button>
       </div>
     </div>
-    <p class="muted" style="font-size:12.5px;margin-top:6px;margin-bottom:0;">Pulls Marcus's last month of LinkedIn posts via Trigify, scores them with Claude, and saves the results to Airtable. Runs in the background - safe to navigate away.</p>
+    <p class="muted" style="font-size:12.5px;margin-top:6px;margin-bottom:0;">Pulls Twenty2 Collective's last month of LinkedIn posts via Trigify, scores them with the Engine, and saves the results to Airtable. Runs in the background - safe to navigate away.</p>
     ${isRunning ? `<div class="muted" style="font-size:12px;margin-top:8px;"><i class="ti ti-loader-2"></i> Running - ${job.savedCount || 0} post${job.savedCount===1?'':'s'} saved so far.</div>` : ''}
     ${job && job.status==='error' ? `<div style="font-size:12px;margin-top:8px;color:var(--danger,#b42318);">Last run failed: ${esc(job.error||'unknown error')}</div>` : ''}
   </div>
@@ -8369,7 +8358,7 @@ function renderContentSettingsTab(){
   return `
   <div class="card">
     <div class="section-title"><i class="ti ti-microphone-2"></i> Voice profile</div>
-    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Filled in once at account level. Passed to Claude on every content draft.</p>
+    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Filled in once at account level. Passed to the Engine on every content draft.</p>
     <div class="field"><label>Writing style</label><textarea id="csVoiceStyle" rows="3">${esc(s.voiceStyle)}</textarea></div>
     <div class="row">
       <div class="field"><label>Tone</label>
@@ -8580,7 +8569,7 @@ function renderResearchUploadCard(){
   return `
   <div class="card">
     <div class="section-title"><i class="ti ti-upload"></i> Upload event transcript</div>
-    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Upload a transcript from a Leaders Connect, Community Connect or other market research event. Claude extracts key themes, pain points, hot topics, industries represented and sentiment, and saves it all to the Research Events table.</p>
+    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Upload a transcript from a Leaders Connect, Community Connect or other market research event. The Engine extracts key themes, pain points, hot topics, industries represented and sentiment, and saves it all to the Research Events table.</p>
     <div class="toolbar">
       <div class="field"><label>Event Name</label><input id="researchEventName" placeholder="e.g. Leaders Connect - August"></div>
       <div class="field"><label>Event Type</label>
@@ -8663,7 +8652,7 @@ async function submitResearchTranscript(){
   const btn = document.getElementById('researchUploadBtn');
   const original = btn.innerHTML;
   btn.disabled = true;
-  btn.innerHTML = '<i class="ti ti-loader-2"></i> Extracting with Claude...';
+  btn.innerHTML = '<i class="ti ti-loader-2"></i> Extracting with the Engine...';
   const resultEl = document.getElementById('researchUploadResult');
   if(resultEl) resultEl.innerHTML = '';
 
