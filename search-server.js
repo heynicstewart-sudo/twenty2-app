@@ -5386,6 +5386,69 @@ app.get('/api/campaign/:id/campaign-contacts', async (req, res) => {
   }
 });
 
+// Same "message ${n} in this contact's sequence" CTA-timing logic as the
+// client's ctaStrategyNote() (t2c-outreach-crm.html) - ported here so
+// POST /api/messages/generate can build the identical prompt server-side.
+function ctaStrategyNoteText(stageKey, messageNumber, messagesBeforeCta) {
+  const n = parseInt(messagesBeforeCta, 10) || 2;
+  const num = messageNumber || 0;
+  if (stageKey === 'cta') {
+    return `Strategy: this is the CTA ask (message ${num} in the sequence). Per the outreach strategy the CTA should land by message ${n}, so make the ask directly here${num > n ? ", it's already overdue so don't hold back" : ''}.`;
+  }
+  if (!num) return '';
+  if (num >= n) {
+    return `Strategy: the outreach strategy says the CTA should be introduced by message ${n}. This is message ${num}, so it's fine to start gently pointing toward the CTA if the moment fits, without being pushy about it.`;
+  }
+  return `Strategy: the outreach strategy says the CTA shouldn't appear until message ${n}. This is message ${num}, so keep this purely relationship-building, no CTA mention yet.`;
+}
+
+// Mirrors the client's voiceRulesText() - ported here for the same reason.
+function voiceRulesPromptText(voice) {
+  const v = voice || {};
+  return `Voice rules: UK English, no em dashes, ${(v.tone || 'peer to peer').toLowerCase()} tone, one observation and one question per message, 3 to 4 sentences, signed off "Twenty2 Collective", conditional CTA framing (never pushy). Connection requests should be ${(v.connLength || 'short').toLowerCase()}. Follow-up cadence is ${(v.cadence || 'steady').toLowerCase()}. ${v.voiceInstructions || ''}`;
+}
+
+// Generates a message for the "Write & copy message" modal (openGenerateModal
+// in t2c-outreach-crm.html) - previously done client-side by calling
+// api.anthropic.com directly from the browser with no API key, which always
+// failed silently to a local template fallback. Moved server-side so the
+// generation actually runs, using the same ANTHROPIC_API_KEY every other
+// Claude-calling route here uses. Distinct from
+// POST /api/campaign/:id/contacts/:contactId/generate-message below, which
+// drafts for a specific campaign's Sequence Stage rather than the
+// account-level template/voice-profile flow this modal is used from.
+app.post('/api/messages/generate', async (req, res) => {
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  const { contact, enrichment, campaign, stage, voice, images } = req.body || {};
+  if (!contact || !contact.name) return res.status(400).json({ error: 'contact.name is required' });
+  if (!stage || !stage.key) return res.status(400).json({ error: 'stage.key is required' });
+
+  try {
+    const imgs = Array.isArray(images) ? images : [];
+    const profileImages = imgs.filter(i => i.kind === 'profile');
+    const convoImages = imgs.filter(i => i.kind === 'convo');
+    let imageNote = '';
+    if (profileImages.length) imageNote += ` You've been given ${profileImages.length} screenshot(s) of the contact's LinkedIn profile — read their bio, posts and work history and weave in anything relevant.`;
+    if (convoImages.length) imageNote += ` You've also been given ${convoImages.length} screenshot(s) of the conversation so far — read what they actually said and write a reply that responds to it naturally, rather than restating the template.`;
+
+    const campaignNote = campaign ? `\n\nThis contact is part of the active campaign "${campaign.name}" (goal: ${campaign.goal || 'not recorded'}). Campaign strategy: ${campaign.strategyBrief || 'none recorded'}. Write in line with this strategy.` : '';
+
+    const enrichmentNote = enrichment ? `\n\nEnrichment data from research on this contact (weave in naturally, don't just list it back): current title ${enrichment.currentTitle || 'unknown'}; company ${enrichment.company || 'unknown'}; work history ${enrichment.workHistory || 'unknown'}; education ${enrichment.education || 'unknown'}; location ${enrichment.location || 'unknown'}.` : '';
+
+    const promptText = `Template for this stage:\n${stage.template || ''}\n\nContact: ${contact.name}, ${contact.role || ''} at ${contact.company || ''}. Sequence stage: ${stage.label || stage.key} (message ${stage.messageNumber || 'n/a'} in the sequence). Profile notes: ${contact.notes || 'none'}.\n\n${ctaStrategyNoteText(stage.key, stage.messageNumber, voice && voice.messagesBeforeCta)}\n\n${voiceRulesPromptText(voice)}${imageNote}${campaignNote}${enrichmentNote}\n\nWrite the actual message for this specific contact, replacing placeholders naturally. Return only the message text.`;
+
+    const content = imgs.map(img => ({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.base64 } }));
+    content.push({ type: 'text', text: promptText });
+
+    const message = await callClaudeText(content, 400);
+    res.json({ success: true, message });
+  } catch (err) {
+    console.error('Message generate error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Drafts the next outreach message for a contact's Today's Actions "fast
 // action" card, scoped to their specific campaign - not the account-level
 // template/voice-profile flow used elsewhere (openGenerateModal), which

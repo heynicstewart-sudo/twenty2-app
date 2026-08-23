@@ -4824,6 +4824,12 @@ function removeScreenshot(kind, idx){
   renderShotFiles(kind);
 }
 
+// Calls the server (POST /api/messages/generate) instead of hitting the
+// Anthropic API directly from the browser - the old client-side callAI()
+// path here had no API key and always failed silently to the local
+// template fallback below. The server now owns prompt assembly; this just
+// gathers the structured inputs (contact, enrichment, campaign, stage,
+// voice settings, screenshots) for it.
 async function generateMessageForModal(cid, stageKey){
   const c = state.contacts.find(x=>x.id===cid);
   const seq = state.sequences.find(s=>s.id===c.seqId) || state.sequences[0];
@@ -4837,17 +4843,35 @@ async function generateMessageForModal(cid, stageKey){
 
   const profileImages = (window.__genCtx && window.__genCtx.profileImages) || [];
   const convoImages = (window.__genCtx && window.__genCtx.convoImages) || [];
-  const images = [...profileImages, ...convoImages].map(f => ({ mediaType: f.mediaType, base64: f.base64 }));
-  let imageNote = '';
-  if(profileImages.length) imageNote += ` You've been given ${profileImages.length} screenshot(s) of the contact's LinkedIn profile — read their bio, posts and work history and weave in anything relevant.`;
-  if(convoImages.length) imageNote += ` You've also been given ${convoImages.length} screenshot(s) of the conversation so far — read what they actually said and write a reply that responds to it naturally, rather than restating the template.`;
-  const campaignNote = campaign ? `\n\nThis contact is part of the active campaign "${campaign.name}" (goal: ${campaign.goal}). Campaign strategy: ${campaign.strategyBrief || 'none recorded'}. Write in line with this strategy.` : '';
+  const images = [
+    ...profileImages.map(f => ({ mediaType: f.mediaType, base64: f.base64, kind: 'profile' })),
+    ...convoImages.map(f => ({ mediaType: f.mediaType, base64: f.base64, kind: 'convo' }))
+  ];
 
   const enrichment = (window.__enrichmentProfiles && window.__enrichmentProfiles[cid]) || c.enrichment || null;
-  const enrichmentNote = enrichment ? `\n\nEnrichment data from research on this contact (weave in naturally, don't just list it back): current title ${enrichment.currentTitle || 'unknown'}; company ${enrichment.company || 'unknown'}; work history ${enrichment.workHistory || 'unknown'}; education ${enrichment.education || 'unknown'}; location ${enrichment.location || 'unknown'}.` : '';
+  const v = state.settings.strategy;
 
-  const prompt = `Template for this stage:\n${template}\n\nContact: ${c.name}, ${c.role} at ${c.company}. Sequence stage: ${st.label} (message ${messageNumberForStage(stageKey) || 'n/a'} in the sequence). Profile notes: ${notes || 'none'}.\n\n${ctaStrategyNote(stageKey)}\n\n${voiceRulesText()}${imageNote}${campaignNote}${enrichmentNote}\n\nWrite the actual message for this specific contact, replacing placeholders naturally. Return only the message text.`;
-  const result = await callAI(prompt, 400, ()=>fillTemplate(template, c, stageKey), images);
+  let result;
+  try {
+    const res = await fetch('/api/messages/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contact: { name: c.name, role: c.role, company: c.company, notes: notes || '' },
+        enrichment,
+        campaign: campaign ? { name: campaign.name, goal: campaign.goal, strategyBrief: campaign.strategyBrief || '' } : null,
+        stage: { key: stageKey, label: st.label, messageNumber: messageNumberForStage(stageKey), template },
+        voice: { tone: v.tone, connLength: v.connLength, cadence: v.cadence, voiceInstructions: v.voiceInstructions, messagesBeforeCta: v.messagesBeforeCta },
+        images
+      })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
+    result = data.message;
+  } catch(err){
+    console.warn('Message generation unavailable, using local fallback:', err.message);
+    result = fillTemplate(template, c, stageKey);
+  }
   const out = document.getElementById('genOutput');
   if(out) out.value = result;
 }
