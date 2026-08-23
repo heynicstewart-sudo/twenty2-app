@@ -5407,26 +5407,34 @@ async function getOrCreateCampaignContactRow(contactId, contactName, campaignRec
   return data.records[0];
 }
 
-// Sequence Stage vocabulary was simplified to a single linear flow for the
-// Today's Actions fast-action cards: Found -> Connection Pending ->
-// Message 1 Sent -> Message 2 Sent -> Message 3 Sent. Older rows (or ones
-// still written by the DM-screenshot reply-tracking flow) may carry the
-// previous "Connection Requested"/"Connected" labels - normalise those to
-// the new ones wherever Sequence Stage is read, so both old and new rows
-// drive the same card.
+// Today's Actions fast-action cards read this normalised Sequence Stage
+// vocabulary: Found (not yet connected) -> Connection Pending (request
+// sent, not yet accepted - a genuine waiting state, distinct from
+// Connected) -> Connected (accepted - the "Connections Made" funnel stage
+// client-side, CONNECTED_OR_LATER_STAGES below) -> Message 1 Sent ->
+// Message 2 Sent -> Message 3 Sent, with reply-gating on messages handled
+// by the DM-screenshot flow's richer vocabulary (SEQUENCE_STAGE_ADVANCE
+// below: "Pending Reply MN" while waiting, "Ready for Message N+1" once a
+// reply's been detected) passing through unchanged. Only "Connection
+// Requested" (the old label for "Found") gets normalised - Connected must
+// stay distinct from Connection Pending, or the fast-action card has no
+// way to tell "just sent" from "accepted" and either shows "Generate
+// message 1" before the connection is accepted or never shows it at all.
 function normalizeSequenceStage(stage) {
   if (stage === 'Connection Requested') return 'Found';
-  if (stage === 'Connected') return 'Connection Pending';
   return stage || 'Found';
 }
 
 // Straight-line advance for the Today's Actions "Copy & mark sent" flow -
-// no reply-gating (no "Pending Reply"/"Ready for Message N" in between),
-// unlike the DM-screenshot flow's SEQUENCE_STAGE_ADVANCE. Message 3 Sent
-// is terminal: no further fast-action card shows for that contact.
+// no reply-gating between messages (no "Pending Reply"/"Ready for Message
+// N" in between), unlike the DM-screenshot flow's SEQUENCE_STAGE_ADVANCE.
+// Message 3 Sent is terminal: no further fast-action card shows for that
+// contact. Found and Connection Pending aren't here - their next stage
+// isn't reached by "mark sent" (Found has no message to send yet;
+// Connection Pending advances to Connected via the "Connected" branch of
+// PATCH /api/context/contact-fields once accepted, not by sending anything).
 const SEQUENCE_STAGE_NEXT = {
-  'Found': 'Connection Pending',
-  'Connection Pending': 'Message 1 Sent',
+  'Connected': 'Message 1 Sent',
   'Message 1 Sent': 'Message 2 Sent',
   'Message 2 Sent': 'Message 3 Sent'
 };
@@ -5434,7 +5442,7 @@ const SEQUENCE_STAGE_NEXT = {
 // Which message number a "Generate message" click should draft, given the
 // contact's current (normalised) Sequence Stage.
 const MESSAGE_NUMBER_FOR_STAGE = {
-  'Connection Pending': 1,
+  'Connected': 1,
   'Message 1 Sent': 2,
   'Message 2 Sent': 3
 };
@@ -5899,7 +5907,11 @@ app.get('/api/context/data', async (req, res) => {
           .slice(0, 3);
 
         const myCampaignRows = campaignRowsByContact[r.id] || [];
-        const hasPendingConnection = myCampaignRows.some(cr => ['Connection Requested', 'Found'].includes(cr.fields['Sequence Stage'] || ''));
+        // Eligible for the CSV upload to advance to "Connected" if any
+        // campaign row is still short of it: not yet requested at all
+        // ("Connection Requested"/"Found") or requested but not yet
+        // accepted ("Connection Pending" - see PATCH /api/context/contact-fields).
+        const hasPendingConnection = myCampaignRows.some(cr => ['Connection Requested', 'Found', 'Connection Pending'].includes(cr.fields['Sequence Stage'] || ''));
         let sequenceStage = '', nextMessageDraft = '', campaignContactId = null;
         if (campaignRecord) {
           const myRow = myCampaignRows.find(cr => (cr.fields['Campaign'] || []).includes(campaignRecord.id));
@@ -5942,19 +5954,29 @@ app.get('/api/context/data', async (req, res) => {
 // - reusing it would have meant overloading it with a second, unrelated
 // update shape.
 //
-// sequenceStage='Connected' is the one remaining piece of Sequence Stage
-// this route touches, and it no longer writes to Contacts at all - it
-// syncs every one of this contact's Campaign Contacts rows that's still
-// sitting at "Connection Requested" forward to "Connected", since accepting
-// a LinkedIn connection is true for every campaign the contact is in, not
-// just one. Rows already further along in a given campaign are left alone.
+// Two sequenceStage values this route handles, both syncing every one of
+// this contact's Campaign Contacts rows rather than just the active
+// campaign's, since sending/accepting a LinkedIn connection request is true
+// account-wide, not per campaign:
+// - 'Connection Pending': fired by the Today's Actions "Send connection"
+//   click - advances rows still at Found/"Connection Requested" forward,
+//   and stamps Connection Sent Date for the Roadmap day-counter and
+//   Strategy tab timeout check.
+// - 'Connected': fired by the LinkedIn Connections CSV upload card once it
+//   matches a contact - advances rows still at "Connection Pending" (sent,
+//   not yet accepted) forward to "Connected" (accepted). Must stay a
+//   distinct Sequence Stage from Connection Pending, or Today's Actions
+//   (getFastActionForCampaignContact, t2c-outreach-crm.html) can't tell
+//   "just sent" from "accepted" and either shows "Generate message 1"
+//   before the connection is accepted or never shows it at all.
+// Rows already further along in a given campaign are left alone either way.
 app.patch('/api/context/contact-fields', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
   const { contactId, journeyStage, sequenceStage } = req.body;
   if (!contactId) return res.status(400).json({ error: 'contactId is required' });
-  if (!journeyStage && sequenceStage !== 'Connection Pending') {
-    return res.status(400).json({ error: 'journeyStage is required, or sequenceStage must be "Connection Pending"' });
+  if (!journeyStage && !['Connection Pending', 'Connected'].includes(sequenceStage)) {
+    return res.status(400).json({ error: 'journeyStage is required, or sequenceStage must be "Connection Pending" or "Connected"' });
   }
 
   try {
@@ -5977,6 +5999,17 @@ app.patch('/api/context/contact-fields', async (req, res) => {
           }
         })));
         campaignContactRowsSynced = pendingRows.length;
+      }
+    } else if (sequenceStage === 'Connected') {
+      const rows = await fetchCampaignContactsRows();
+      const acceptedRows = rows.filter(r => (r.fields['Contact'] || []).includes(contactId) && (r.fields['Sequence Stage'] || '') === 'Connection Pending');
+      if (acceptedRows.length) {
+        const today = new Date().toISOString().slice(0, 10);
+        await airtableBatchPatch(CAMPAIGN_CONTACTS_TABLE, acceptedRows.map(r => ({
+          id: r.id,
+          fields: { 'Sequence Stage': 'Connected', 'Stage History': appendStageHistory(r.fields['Stage History'], 'Connected', today) }
+        })));
+        campaignContactRowsSynced = acceptedRows.length;
       }
     }
 

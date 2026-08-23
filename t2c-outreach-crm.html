@@ -1620,7 +1620,7 @@ async function runContextConnectionsImport(rows){
   if(resultEl){
     resultEl.innerHTML = `
       <p style="font-size:12.5px;font-weight:700;">${updatedCount} contact${updatedCount===1?'':'s'} updated &middot; ${flagged.length} not found</p>
-      ${skippedOtherStage ? `<p class="muted" style="font-size:11.5px;margin-top:4px;">${skippedOtherStage} matched but not in "Connection Requested" - skipped.</p>` : ''}
+      ${skippedOtherStage ? `<p class="muted" style="font-size:11.5px;margin-top:4px;">${skippedOtherStage} matched but already past "Connection Pending" - skipped.</p>` : ''}
       ${flagged.length ? `<ul style="padding-left:18px;font-size:11.5px;margin-top:6px;">${flagged.map(f=>`<li>${f}</li>`).join('')}</ul>` : ''}
     `;
   }
@@ -1930,12 +1930,18 @@ function activeCampaignForContact(c){
 function getContactAction(c){
   const campaign = activeCampaignForContact(c);
   // A live campaign fully owns this contact's Today's Actions card while
-  // their Sequence Stage is still in the fast-action range (Found through
-  // Message 2 Sent) - the account-level "natural" actions below (Reply
-  // back, Follow up, Re-engage...) only apply once that campaign sequence
-  // is exhausted (Message 3 Sent) or there's no active campaign at all.
+  // their Sequence Stage is still in the fast-action range - the
+  // account-level "natural" actions below (Reply back, Follow up,
+  // Re-engage...) only apply once that campaign sequence is exhausted
+  // (Meeting Booked/Nurture/Timed Out) or there's no active campaign at
+  // all. A contact genuinely waiting on the other side (connection not yet
+  // accepted, or a message sent with no reply yet) shows nothing at all -
+  // never a fast action, and never a fallback natural action either, since
+  // that reads entirely different local-state fields unrelated to this
+  // campaign's real Sequence Stage and would show a stale/wrong action.
   if(campaign){
     const fastAction = getFastActionForCampaignContact(c, campaign);
+    if(fastAction && fastAction.waiting) return null;
     if(fastAction) return fastAction;
   }
   const natural = getNaturalContactAction(c);
@@ -1946,14 +1952,33 @@ function getContactAction(c){
   return null;
 }
 
-const SEQUENCE_STAGE_MESSAGE_NUMBER = { 'Connection Pending': 1, 'Message 1 Sent': 2, 'Message 2 Sent': 3 };
+// Stages where a connection request or message has gone out but there's
+// nothing to do yet - waiting on the other person, not on us. Includes the
+// richer reply-gated vocabulary the DM-screenshot flow writes
+// (SEQUENCE_STAGE_ADVANCE, search-server.js): "Pending Reply MN" while
+// waiting, "Ready for Message N+1" once a reply's been detected (handled
+// below, not here, since that IS an action due).
+const WAITING_SEQUENCE_STAGES = new Set([
+  'Connection Pending',
+  'Message 1 Sent', 'Pending Reply M1',
+  'Message 2 Sent', 'Pending Reply M2',
+  'Message 3 Sent', 'Pending Reply M3'
+]);
+
+// "Connected" (connection accepted - see the "Connected" branch of PATCH
+// /api/context/contact-fields) is the trigger for message 1; "Ready for
+// Message N" (a reply was detected to the previous message) triggers the
+// next one. Deliberately does not include "Connection Pending" or
+// "Message N Sent" - those are waiting states, listed above.
+const SEQUENCE_STAGE_MESSAGE_NUMBER = { 'Connected': 1, 'Ready for Message 2': 2, 'Ready for Message 3': 3 };
 
 // Today's Actions "fast action" card for a contact in a live campaign,
 // driven entirely by their per-campaign Sequence Stage (window.
 // __campaignSequenceStages, loaded by ensureTodaysActionsSequenceStagesLoaded).
-// Returns null if the stage map hasn't loaded yet (afterRender() kicks off
-// the load and re-renders once it lands) or once the sequence is exhausted
-// (Message 3 Sent), letting the caller fall through to a natural action.
+// Returns { waiting: true } for a genuine waiting state (never shown, and
+// never falls through to a natural action - see getContactAction), or null
+// if the stage map hasn't loaded yet or the sequence is exhausted (Meeting
+// Booked/Nurture/Timed Out/etc.), which does allow falling through.
 function getFastActionForCampaignContact(c, campaign){
   const stages = window.__campaignSequenceStages && window.__campaignSequenceStages[campaign.id];
   if(!stages) return null;
@@ -1961,6 +1986,9 @@ function getFastActionForCampaignContact(c, campaign){
 
   if(stage === 'Found'){
     return { type:'Send connection', stageLabel: stage, campaignName: campaign.name, daysSinceTouch: null, isFastAction: true };
+  }
+  if(WAITING_SEQUENCE_STAGES.has(stage)){
+    return { waiting: true };
   }
   const messageNumber = SEQUENCE_STAGE_MESSAGE_NUMBER[stage];
   if(messageNumber){
@@ -2090,11 +2118,15 @@ function renderTodaysActionItem(a){
 
 // Minimal Today's Actions card for a contact whose live campaign Sequence
 // Stage drives one specific action - exactly one button, no touch-point
-// logger or brief generator clutter, per stage:
-//   Found              -> Send connection (opens LinkedIn, advances stage)
-//   Connection Pending -> Generate message (message 1)
-//   Message 1 Sent     -> Generate message (message 2, a follow-up)
-//   Message 2 Sent     -> Generate message (message 3)
+// logger or brief generator clutter, per stage (see WAITING_SEQUENCE_STAGES/
+// getFastActionForCampaignContact above for the full state machine):
+//   Found               -> Send connection (opens LinkedIn, advances stage)
+//   Connection Pending  -> hidden (sent, not yet accepted)
+//   Connected           -> Generate message (message 1)
+//   Message 1 Sent      -> hidden (waiting for a reply)
+//   Ready for Message 2 -> Generate message (message 2, a reply came in)
+//   Message 2 Sent      -> hidden (waiting for a reply)
+//   Ready for Message 3 -> Generate message (message 3, a reply came in)
 // "Generate message" swaps itself for the drafted text plus a single
 // "Copy & mark sent" button once clicked (handleGenerateFastMessage).
 function renderFastActionCard(a){
