@@ -2091,7 +2091,7 @@ function renderTodaysActionItem(a){
 function renderFastActionCard(a){
   const c = a.contact;
   return `
-  <div class="todo-item">
+  <div class="todo-item" id="todaysAction-${c.id}">
     <div class="todo-item-main">
       <div>
         <div class="todo-item-name">${esc(c.name)}</div>
@@ -2118,12 +2118,17 @@ function toggleQuickTouchPoint(cid){
 
 // Fires when the "Send connection" link on a fast-action card is clicked -
 // the href already opens the contact's LinkedIn profile in a new tab
-// natively, this advances both their account-level Journey Stage and
-// (via the sequenceStage branch in PATCH /api/context/contact-fields)
-// every campaign they're pending a connection in to "Connection Pending",
-// then reloads this campaign's Sequence Stage map and re-renders so the
-// card immediately swaps to "Generate message".
+// natively. Removes the card from Today's Actions immediately (rather than
+// waiting on the round trip below, or leaving it to flip to a "Generate
+// message" card mid-view) and, in the background, advances both their
+// account-level Journey Stage and (via the sequenceStage branch in PATCH
+// /api/context/contact-fields) every campaign they're pending a connection
+// in to "Connection Pending", then refreshes this campaign's cached
+// Sequence Stage map so later renders of Today's Actions reflect it.
 async function handleSendConnectionClick(cid){
+  const cardEl = document.getElementById('todaysAction-' + cid);
+  if(cardEl) cardEl.remove();
+
   try {
     const res = await fetch('/api/context/contact-fields', {
       method: 'PATCH',
@@ -2137,7 +2142,6 @@ async function handleSendConnectionClick(cid){
     if(c) c.state = 'connectionPending';
     const campaign = c ? activeCampaignForContact(c) : null;
     if(campaign) await loadCampaignSequenceStages(campaign);
-    renderPage();
   } catch(err){
     console.warn('Could not update stage to Connection Pending:', err.message);
     toast('LinkedIn opened, but could not update stage: ' + err.message, 'warn');
@@ -3198,6 +3202,18 @@ async function syncAllContactsToAirtable(){
 
 const JOURNEY_STAGE_TO_STATE = { 'Identified':'found', 'Connection Pending':'connectionPending', 'Connected':'connected', 'Messaging':'messaging', 'Booked':'booked' };
 
+// Mirrors the server's parseContactEnrichment (search-server.js) - reads the
+// ENRICHMENT_JSON block persisted at the start of Contacts.AI Summary by
+// POST /api/enrich/contact and /api/contacts/enrich, so enrichment done from
+// either the grid or the contact drawer is visible from raw Airtable data
+// everywhere a contact is rendered, not just in the session that ran it.
+function parseContactEnrichment(aiSummaryText){
+  if(!aiSummaryText) return null;
+  const m = aiSummaryText.match(/^ENRICHMENT_JSON:\s*(\{[\s\S]*?\})\n\n/);
+  if(!m) return null;
+  try { return JSON.parse(m[1]); } catch(e){ return null; }
+}
+
 async function hydrateContactsFromAirtable(){
   try {
     const res = await fetch('/api/airtable/contact');
@@ -3205,9 +3221,12 @@ async function hydrateContactsFromAirtable(){
     if(!res.ok) throw new Error((records && records.error) || ('Request failed with status '+res.status));
     if(!Array.isArray(records) || !records.length) return;
 
+    window.__enrichmentProfiles = window.__enrichmentProfiles || {};
     state.contacts = records.map(r => {
       const f = r.fields || {};
       const role = f['Job Title'] || '';
+      const enrichment = parseContactEnrichment(f['AI Summary']);
+      if(enrichment) window.__enrichmentProfiles[r.id] = enrichment;
       return {
         id: r.id || uid('c'),
         gridId: resolveGridIdByName(f['Grid Name']),
@@ -3221,6 +3240,7 @@ async function hydrateContactsFromAirtable(){
         connReqDate: null,
         connDate: null,
         notes: f['Notes'] || '',
+        enrichment,
         thread: { connSent:null, m1:null, m2:null, cta:null, booked:false },
         generated: {},
         touchPoints: []
@@ -3231,6 +3251,34 @@ async function hydrateContactsFromAirtable(){
     toast('Contacts loaded from Airtable', 'success');
   } catch(err){
     console.warn('Could not load contacts from Airtable:', err.message);
+  }
+}
+
+// Runs on every page load where contacts are already cached locally (so
+// hydrateContactsFromAirtable's full reset doesn't run) - refreshes just
+// the enrichment data from Airtable onto the existing contacts/state
+// without touching locally-tracked thread progress, so enrichment done in
+// another session or another view always shows up here too.
+async function refreshEnrichmentFromAirtable(){
+  try {
+    const res = await fetch('/api/airtable/contact');
+    const records = await res.json();
+    if(!res.ok || !Array.isArray(records)) return;
+    window.__enrichmentProfiles = window.__enrichmentProfiles || {};
+    let changed = false;
+    records.forEach(r => {
+      const enrichment = parseContactEnrichment((r.fields||{})['AI Summary']);
+      if(!enrichment) return;
+      window.__enrichmentProfiles[r.id] = enrichment;
+      const c = state.contacts.find(x => x.id === r.id);
+      if(c && JSON.stringify(c.enrichment) !== JSON.stringify(enrichment)){
+        c.enrichment = enrichment;
+        changed = true;
+      }
+    });
+    if(changed) renderPage();
+  } catch(err){
+    console.warn('Could not refresh enrichment from Airtable:', err.message);
   }
 }
 
@@ -3501,8 +3549,10 @@ async function enrichContact(cid){
 
     window.__enrichmentProfiles = window.__enrichmentProfiles || {};
     window.__enrichmentProfiles[cid] = data.profile;
+    c.enrichment = data.profile;
     panel.innerHTML = renderEnrichmentPanelHtml(cid, data.profile);
     toast('Enrichment complete', 'success');
+    regenerateOpenMessageModalIfNeeded(cid);
   } catch(err){
     console.warn('Enrichment failed:', err.message);
     panel.innerHTML = `<div class="muted" style="font-size:12.5px;">Could not enrich this contact: ${esc(err.message)}</div>`;
@@ -3512,9 +3562,19 @@ async function enrichContact(cid){
   }
 }
 
+// If a "Write & copy message" modal is currently open for this contact,
+// re-run generation so the draft picks up the enrichment data just fetched
+// instead of leaving a stale pre-enrichment draft on screen.
+function regenerateOpenMessageModalIfNeeded(cid){
+  if(window.__genCtx && window.__genCtx.cid === cid) regenerateMessage(cid, window.__genCtx.stageKey);
+}
+
 const ENRICHMENT_FIELDS = [
   ['currentTitle','Current title'],
   ['company','Company'],
+  ['workHistory','Work history'],
+  ['education','Education'],
+  ['location','Location'],
   ['bio','Bio'],
   ['recentActivity','Recent activity'],
   ['likelyPainPoints','Likely pain points'],
@@ -3544,16 +3604,42 @@ function renderEnrichmentPanelHtml(cid, profile){
 // from this contact's Airtable record (populated by
 // GET /api/trigify/sync-contact-posts), not part of the AI enrichment call,
 // so it's fetched and cached separately in window.__contactRecentPosts.
+function isWithinLastDays(dateStr, days){
+  if(!dateStr) return false;
+  const parsed = new Date(dateStr);
+  if(isNaN(parsed)) return false;
+  return parsed.getTime() >= Date.now() - days*24*60*60*1000;
+}
+
+function renderPostCard(p){
+  return `
+    <div style="margin-top:6px;padding:8px;border:1px solid var(--border);border-radius:6px;">
+      <div class="muted" style="font-size:11px;">${esc(p.date || '')} &middot; ${p.likes||0} likes, ${p.comments||0} comments</div>
+      <div style="font-size:12px;margin-top:2px;">${esc(p.text)}</div>
+    </div>`;
+}
+
+// Splits into a "Recent Posts" list (last 30 days) shown inline, plus a
+// collapsible "Older Posts" section for everything before that - applied
+// everywhere Recent Posts renders (grid enrichment panel, contact drawer).
 function renderRecentPostsCards(posts){
   if(!posts) return '<span class="muted" style="font-size:11.5px;"><i class="ti ti-loader-2"></i> Loading...</span>';
   if(posts.error) return `<span class="muted" style="font-size:11.5px;">Could not load recent posts: ${esc(posts.error)}</span>`;
   if(!posts.length) return '<span class="muted" style="font-size:11.5px;">No recent posts found</span>';
-  return posts.map(p => `
-    <div style="margin-top:6px;padding:8px;border:1px solid var(--border);border-radius:6px;">
-      <div class="muted" style="font-size:11px;">${esc(p.date || '')} &middot; ${p.likes||0} likes, ${p.comments||0} comments</div>
-      <div style="font-size:12px;margin-top:2px;">${esc(p.text)}</div>
-    </div>
-  `).join('');
+
+  const recent = posts.filter(p => isWithinLastDays(p.date, 30));
+  const older = posts.filter(p => !isWithinLastDays(p.date, 30));
+
+  const recentHtml = recent.length
+    ? recent.map(renderPostCard).join('')
+    : '<span class="muted" style="font-size:11.5px;">No posts in the last 30 days</span>';
+
+  const olderHtml = older.length ? `<details style="margin-top:8px;">
+      <summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--muted);">Older Posts (${older.length})</summary>
+      ${older.map(renderPostCard).join('')}
+    </details>` : '';
+
+  return recentHtml + olderHtml;
 }
 
 function renderEnrichmentRecentPosts(posts){
@@ -4049,17 +4135,17 @@ function renderDrawerTouchPoint(tp, campaignName){
   </div>`;
 }
 
-function renderContactEnrichmentSection(c, fresh){
-  if(fresh){
+// Renders from c.enrichment - the canonical profile persisted to Airtable
+// (Contacts.AI Summary, see parseContactEnrichment) and returned fresh by
+// GET /api/contacts/profile on every drawer open, so this always reflects
+// enrichment done anywhere in the app, not just a locally-cached copy.
+function renderContactEnrichmentSection(c){
+  const profile = c.enrichment;
+  if(profile){
     return `
     <div class="section-title" style="font-size:13px;"><i class="ti ti-search"></i> Enrichment</div>
-    <div class="muted" style="font-size:11px;margin-bottom:6px;">Last enriched ${fmtDate(fresh.enrichedDate)}</div>
-    <div style="font-size:12px;"><strong>Headline:</strong> ${esc(fresh.headline||'—')}</div>
-    <div style="font-size:12px;margin-top:6px;"><strong>Bio:</strong> ${esc(fresh.bioSummary||'—')}</div>
-    ${(fresh.recentPosts||[]).length ? `<div style="font-size:12px;margin-top:6px;"><strong>Recent posts:</strong><ul style="margin:4px 0 0 16px;padding:0;">${fresh.recentPosts.map(p=>`<li>${esc(p.summary)}</li>`).join('')}</ul></div>` : ''}
-    ${(fresh.newsMentions||[]).length ? `<div style="font-size:12px;margin-top:6px;"><strong>News:</strong><ul style="margin:4px 0 0 16px;padding:0;">${fresh.newsMentions.map(n=>`<li>${esc(n)}</li>`).join('')}</ul></div>` : ''}
-    <div style="font-size:12px;margin-top:6px;"><strong>Years in role:</strong> ${esc(fresh.yearsInRole||'—')}</div>
-    ${(fresh.previousCompanies||[]).length ? `<div style="font-size:12px;margin-top:6px;"><strong>Previous companies:</strong> ${esc(fresh.previousCompanies.join(', '))}</div>` : ''}
+    <div class="muted" style="font-size:11px;margin-bottom:6px;">Last enriched ${fmtDate(profile.date)}</div>
+    ${ENRICHMENT_FIELDS.map(([key,label]) => `<div style="font-size:12px;margin-top:6px;"><strong>${esc(label)}:</strong> ${esc(profile[key]||'—')}</div>`).join('')}
     `;
   }
   return `
@@ -4153,9 +4239,17 @@ async function enrichContactDrawer(){
     });
     const data = await res.json();
     if(!res.ok || !data.success) throw new Error(data.error || 'Enrich failed');
+    if(profile){
+      profile.contact.enrichment = data.profile;
+      window.__enrichmentProfiles = window.__enrichmentProfiles || {};
+      window.__enrichmentProfiles[profile.contact.id] = data.profile;
+      const c = state.contacts.find(x => x.id === profile.contact.id);
+      if(c) c.enrichment = data.profile;
+    }
     const section = document.getElementById('enrichmentSection');
-    if(section && profile) section.innerHTML = renderContactEnrichmentSection(profile.contact, data);
+    if(section && profile) section.innerHTML = renderContactEnrichmentSection(profile.contact);
     toast('Contact enriched', 'success');
+    if(profile) regenerateOpenMessageModalIfNeeded(profile.contact.id);
   } catch(err){
     toast('Could not enrich: ' + err.message, 'warn');
   } finally {
@@ -4749,7 +4843,10 @@ async function generateMessageForModal(cid, stageKey){
   if(convoImages.length) imageNote += ` You've also been given ${convoImages.length} screenshot(s) of the conversation so far — read what they actually said and write a reply that responds to it naturally, rather than restating the template.`;
   const campaignNote = campaign ? `\n\nThis contact is part of the active campaign "${campaign.name}" (goal: ${campaign.goal}). Campaign strategy: ${campaign.strategyBrief || 'none recorded'}. Write in line with this strategy.` : '';
 
-  const prompt = `Template for this stage:\n${template}\n\nContact: ${c.name}, ${c.role} at ${c.company}. Sequence stage: ${st.label} (message ${messageNumberForStage(stageKey) || 'n/a'} in the sequence). Profile notes: ${notes || 'none'}.\n\n${ctaStrategyNote(stageKey)}\n\n${voiceRulesText()}${imageNote}${campaignNote}\n\nWrite the actual message for this specific contact, replacing placeholders naturally. Return only the message text.`;
+  const enrichment = (window.__enrichmentProfiles && window.__enrichmentProfiles[cid]) || c.enrichment || null;
+  const enrichmentNote = enrichment ? `\n\nEnrichment data from research on this contact (weave in naturally, don't just list it back): current title ${enrichment.currentTitle || 'unknown'}; company ${enrichment.company || 'unknown'}; work history ${enrichment.workHistory || 'unknown'}; education ${enrichment.education || 'unknown'}; location ${enrichment.location || 'unknown'}.` : '';
+
+  const prompt = `Template for this stage:\n${template}\n\nContact: ${c.name}, ${c.role} at ${c.company}. Sequence stage: ${st.label} (message ${messageNumberForStage(stageKey) || 'n/a'} in the sequence). Profile notes: ${notes || 'none'}.\n\n${ctaStrategyNote(stageKey)}\n\n${voiceRulesText()}${imageNote}${campaignNote}${enrichmentNote}\n\nWrite the actual message for this specific contact, replacing placeholders naturally. Return only the message text.`;
   const result = await callAI(prompt, 400, ()=>fillTemplate(template, c, stageKey), images);
   const out = document.getElementById('genOutput');
   if(out) out.value = result;
@@ -9552,6 +9649,8 @@ renderPage();
 
 if(state.contacts.length === 0){
   hydrateContactsFromAirtable();
+} else {
+  refreshEnrichmentFromAirtable();
 }
 </script>
 </body>

@@ -1392,7 +1392,7 @@ Guidance for each section:
 - campaignSuggestions: 3-5 concrete outreach campaign or angle ideas based on real patterns in the data (shared roles, industries, company clusters, recurring themes in notes) and, where relevant, the learning data and conversion patterns above (ICP profiles, products and communication methods that have actually converted).
 - coldContacts: contacts with no recent touch points or who have gone quiet after early engagement, each as one sentence naming the contact and why they're worth a nudge.
 - relationshipHealth: a short read on which relationships are warm and which are at risk, each as one sentence naming the contact and the reasoning.
-- messageDrafts: 2-4 ready-to-send message drafts for specific contacts who look due for a follow-up. UK English, no em dashes, peer to peer tone, one observation and one question, 3-4 sentences, signed off "Marcus". For a Website Lead contact with a CVC report, use their primary leak's mapped T2C product (per the mapping above) to pick the outreach angle and reference their specific archetype/leak rather than writing a generic message.
+- messageDrafts: 2-4 ready-to-send message drafts for specific contacts who look due for a follow-up. UK English, no em dashes, peer to peer tone, one observation and one question, 3-4 sentences, signed off "Twenty2 Collective". For a Website Lead contact with a CVC report, use their primary leak's mapped T2C product (per the mapping above) to pick the outreach angle and reference their specific archetype/leak rather than writing a generic message.
 - learningInsights: 3-5 specific, numbers-backed observations pulled directly from the data above, in the style of "You haven't contacted 34 Transformation leads in 21+ days" or "Mining sector contacts convert after 3 touch points vs 6 for government". Every number must be real, counted from the data given, never estimated or invented.
 - optimisationSuggestions: 3-5 specific, actionable improvements - which contacts to prioritise this week, which campaign needs attention (use the campaign performance data above), which ICP segment is underperforming, what message angle to try next. Each one grounded in something specific from the data, not generic sales advice.
 
@@ -1630,42 +1630,37 @@ function extractLinkedInSlug(url) {
   return match ? match[1] : null;
 }
 
-app.post('/api/enrich/contact', async (req, res) => {
-  if (!process.env.SERPER_API_KEY) return res.status(500).json({ error: 'SERPER_API_KEY not configured' });
-  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
-  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+// Shared research call - two Serper searches (profile + general/news) fed to
+// Claude for synthesis. Used by both the grid card's Enrich button (POST
+// /api/enrich/contact) and the contact drawer's Enrich button (POST
+// /api/contacts/enrich), which previously duplicated this near-identical
+// logic with two different output shapes and only one of them (the drawer)
+// actually persisted successfully.
+async function researchContactEnrichment(name, company, linkedinUrl) {
+  const slug = extractLinkedInSlug(linkedinUrl || '');
+  const [profileSearch, newsSearch] = await Promise.all([
+    fetch(SERPER_URL, {
+      method: 'POST',
+      headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ q: slug ? `site:linkedin.com/in/${slug}` : `${name} LinkedIn` })
+    }).then(r => r.json()),
+    fetch(SERPER_URL, {
+      method: 'POST',
+      headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ q: `${name} ${company || ''}`.trim() })
+    }).then(r => r.json())
+  ]);
 
-  const { linkedinUrl, name, company } = req.body;
-  if (!linkedinUrl || !name) return res.status(400).json({ error: 'linkedinUrl and name are required' });
+  const profileResults = (profileSearch.organic || []).slice(0, 5)
+    .map(r => `${r.title || ''}\n${r.snippet || ''}`).join('\n\n');
+  const newsResults = (newsSearch.organic || []).slice(0, 5)
+    .map(r => `${r.title || ''}\n${r.snippet || ''}\n${r.link || ''}`).join('\n\n');
 
-  const slug = extractLinkedInSlug(linkedinUrl);
-  if (!slug) return res.status(400).json({ error: 'Could not parse a LinkedIn slug from that URL' });
+  const prompt = `You are researching a LinkedIn contact for a Perth-based Agile and change consultancy (Twenty2 Collective) ahead of outreach.
 
-  try {
-    const [profileSearch, newsSearch] = await Promise.all([
-      fetch(SERPER_URL, {
-        method: 'POST',
-        headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ q: `site:linkedin.com/in/${slug}` })
-      }).then(r => r.json()),
-      fetch(SERPER_URL, {
-        method: 'POST',
-        headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ q: `${name} ${company || ''}`.trim() })
-      }).then(r => r.json())
-    ]);
+Contact: ${name}${company ? ' at ' + company : ''}.${linkedinUrl ? `\nLinkedIn: ${linkedinUrl}` : ''}
 
-    const profileResults = (profileSearch.organic || []).slice(0, 5)
-      .map(r => `${r.title || ''}\n${r.snippet || ''}`).join('\n\n');
-    const newsResults = (newsSearch.organic || []).slice(0, 5)
-      .map(r => `${r.title || ''}\n${r.snippet || ''}\n${r.link || ''}`).join('\n\n');
-
-    const prompt = `You are researching a LinkedIn contact for a Perth-based Agile and change consultancy (Twenty2 Collective) ahead of outreach.
-
-Contact: ${name}${company ? ' at ' + company : ''}.
-LinkedIn: ${linkedinUrl}
-
-Search results for their LinkedIn profile (site:linkedin.com/in/${slug}):
+Search results for their LinkedIn profile${slug ? ` (site:linkedin.com/in/${slug})` : ''}:
 ${profileResults || 'No results found.'}
 
 Search results for "${name} ${company || ''}" (news, interviews, speaking events):
@@ -1675,73 +1670,78 @@ Based only on the above, return ONLY valid JSON, no markdown, no commentary, in 
 {
   "currentTitle": string,
   "company": string,
+  "workHistory": string,
+  "education": string,
+  "location": string,
   "bio": string,
   "recentActivity": string,
   "likelyPainPoints": string,
   "bestOutreachAngle": string
 }
 
-If the search results do not give enough to fill a field confidently, say so plainly in that field (e.g. "Not enough public information found") rather than inventing detail.`;
+"workHistory" is a short summary of previous roles/companies if findable. "education" and "location" should each be one line. If the search results do not give enough to fill a field confidently, say so plainly in that field (e.g. "Not enough public information found") rather than inventing detail.`;
 
-    const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 1000,
-        messages: [{ role: 'user', content: prompt }]
-      })
-    });
+  const profile = await callClaudeJson(prompt, 1200);
+  profile.date = new Date().toISOString().slice(0, 10);
+  return profile;
+}
 
-    if (!aiRes.ok) {
-      const errText = await aiRes.text();
-      throw new Error(`Claude API error ${aiRes.status}: ${errText}`);
-    }
+// The enrichment profile is persisted as a single JSON block prepended to
+// Contacts.AI Summary (there's no dedicated enrichment field on the real
+// table, and past instruction was not to add one) - stripped and replaced
+// on every re-enrich rather than accumulating, so the field always carries
+// at most one enrichment block plus whatever narrative text (notes summaries
+// etc.) already lived there. Skips the write entirely for a Website Lead
+// contact, whose AI Summary field is a single Change Value Check JSON blob
+// (see POST /api/leads/website) that a prepended block would corrupt.
+const ENRICHMENT_BLOCK_RE = /^ENRICHMENT_JSON:\s*(\{[\s\S]*?\})\n\n/;
 
-    const aiData = await aiRes.json();
-    const block = (aiData.content || []).find(b => b.type === 'text');
-    if (!block) throw new Error('No text content in Claude response');
+function parseContactEnrichment(aiSummaryText) {
+  const m = (aiSummaryText || '').match(ENRICHMENT_BLOCK_RE);
+  if (!m) return null;
+  try { return JSON.parse(m[1]); } catch (e) { return null; }
+}
 
-    let profile;
+function stripContactEnrichmentBlock(aiSummaryText) {
+  return (aiSummaryText || '').replace(ENRICHMENT_BLOCK_RE, '');
+}
+
+async function persistContactEnrichment(contactRecord, profile) {
+  const existing = contactRecord.fields['AI Summary'] || '';
+  let cvc = null;
+  try { cvc = JSON.parse(existing); } catch (e) { /* not JSON - plain narrative text, fine to prepend to */ }
+  if (cvc && cvc.archetype) {
+    console.warn(`Skipping enrichment write for contact ${contactRecord.id} - AI Summary holds Change Value Check data`);
+    return;
+  }
+  const newSummary = `ENRICHMENT_JSON: ${JSON.stringify(profile)}\n\n${stripContactEnrichmentBlock(existing)}`;
+  await airtableRequest('PATCH', 'Contacts', { records: [{ id: contactRecord.id, fields: { 'AI Summary': newSummary } }] });
+}
+
+app.post('/api/enrich/contact', async (req, res) => {
+  if (!process.env.SERPER_API_KEY) return res.status(500).json({ error: 'SERPER_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const { linkedinUrl, name, company } = req.body;
+  if (!linkedinUrl || !name) return res.status(400).json({ error: 'linkedinUrl and name are required' });
+  if (!extractLinkedInSlug(linkedinUrl)) return res.status(400).json({ error: 'Could not parse a LinkedIn slug from that URL' });
+
+  try {
+    const profile = await researchContactEnrichment(name, company, linkedinUrl);
+
+    // Store back onto the Airtable Contact record immediately so the
+    // profile persists across page loads and other views. Non-fatal if
+    // this fails - the enrichment itself already succeeded and should
+    // still reach the client.
     try {
-      const jsonMatch = block.text.match(/\{[\s\S]*\}/);
-      profile = JSON.parse(jsonMatch ? jsonMatch[0] : block.text);
-    } catch (parseErr) {
-      throw new Error('Could not parse Claude response as JSON');
-    }
-
-    const formattedText = [
-      `Current title: ${profile.currentTitle || '—'}`,
-      `Company: ${profile.company || '—'}`,
-      `Bio: ${profile.bio || '—'}`,
-      `Recent activity: ${profile.recentActivity || '—'}`,
-      `Likely pain points: ${profile.likelyPainPoints || '—'}`,
-      `Best outreach angle: ${profile.bestOutreachAngle || '—'}`
-    ].join('\n\n');
-
-    // Store back onto the Airtable Contact record. Non-fatal if this fails -
-    // the enrichment itself already succeeded and should still reach the client.
-    try {
-      const searchRes = await fetch(
-        `${AIRTABLE_URL}/Contacts?filterByFormula=${encodeURIComponent(`{Full Name}="${name}"`)}`,
-        { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
-      );
-      const searchData = await searchRes.json();
-      const record = searchData.records && searchData.records[0];
-      if (record) {
-        await airtableRequest('PATCH', 'Contacts', {
-          records: [{ id: record.id, fields: { 'Enrichment Profile': formattedText } }]
-        });
-      }
+      const contactRecord = await findRecordByFieldName('Contacts', 'Full Name', name);
+      if (contactRecord) await persistContactEnrichment(contactRecord, profile);
     } catch (airtableErr) {
       console.warn('Could not store enrichment profile to Airtable:', airtableErr.message);
     }
 
-    res.json({ success: true, profile, formattedText });
+    res.json({ success: true, profile });
   } catch (err) {
     console.error('Enrichment error:', err.message);
     res.status(500).json({ error: err.message });
@@ -1928,7 +1928,7 @@ Guidance:
 - objectionHandling: 2-3 sentences on the most likely objection this audience will raise and how to handle it.
 - successMetric: one short phrase for what counts as success (e.g. "Booked discovery calls", "Workshop bookings").
 - matchedContactNames: full names of contacts from the list above whose role, company or notes plausibly match the audience described in the conversation. Only include contacts that actually appear in the list above. Return an empty array if nothing matches rather than inventing names.
-- sequence: three outreach stages. "type" is one of "LinkedIn message", "Email", "Call" - pick whatever fits the conversation, default to "LinkedIn message" if nothing was specified. If an existing strategy/script was mentioned in the conversation, adapt it rather than starting from scratch. Otherwise write fresh copy. UK English, no em dashes, peer to peer tone, one observation and one question per message, 3-4 sentences, signed off "Marcus". "timing" is when to send relative to the previous step, e.g. "Day 0", "3 days after message 1", "7 days after follow-up 1".
+- sequence: three outreach stages. "type" is one of "LinkedIn message", "Email", "Call" - pick whatever fits the conversation, default to "LinkedIn message" if nothing was specified. If an existing strategy/script was mentioned in the conversation, adapt it rather than starting from scratch. Otherwise write fresh copy. UK English, no em dashes, peer to peer tone, one observation and one question per message, 3-4 sentences, signed off "Twenty2 Collective". "timing" is when to send relative to the previous step, e.g. "Day 0", "3 days after message 1", "7 days after follow-up 1".
 - strategyBrief: 3-5 sentences summarising the angle and why it should work for this audience.
 - estimatedConversions: one or two sentences estimating likely bookings, grounded in the historical conversion rate above and the number of matched contacts. Be honest if the sample is too small to be confident.`;
 
@@ -4848,7 +4848,7 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
       });
 
     const firstContactedDate = touchPoints.length ? touchPoints[touchPoints.length - 1].date : null;
-    const enrichMatch = (cf['AI Summary'] || '').match(/^\[Enriched:\s*(\d{4}-\d{2}-\d{2})\]/);
+    const enrichment = parseContactEnrichment(cf['AI Summary']);
 
     res.json({
       contact: {
@@ -4862,7 +4862,8 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
         aiSummary: cf['AI Summary'] || '',
         notes: cf['Notes'] || '',
         jobChangeSignal: cf['Job Change Signal'] || '',
-        lastEnrichedDate: enrichMatch ? enrichMatch[1] : null
+        enrichment,
+        lastEnrichedDate: enrichment ? enrichment.date : null
       },
       sequenceStage,
       campaigns,
@@ -4886,47 +4887,15 @@ app.post('/api/contacts/enrich', async (req, res) => {
   try {
     const contactRecord = await findRecordByFieldName('Contacts', 'Full Name', name);
     if (!contactRecord) return res.status(404).json({ error: 'Contact not found' });
-    const slug = extractLinkedInSlug(contactRecord.fields['LinkedIn URL'] || '');
 
-    const [profileSearch, newsSearch] = await Promise.all([
-      fetch(SERPER_URL, { method: 'POST', headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ q: slug ? `site:linkedin.com/in/${slug}` : `${name} LinkedIn` }) }).then(r => r.json()),
-      fetch(SERPER_URL, { method: 'POST', headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ q: `${name} ${company || ''}`.trim() }) }).then(r => r.json())
-    ]);
-    const profileResults = (profileSearch.organic || []).slice(0, 5).map(r => `${r.title || ''}\n${r.snippet || ''}`).join('\n\n');
-    const newsResults = (newsSearch.organic || []).slice(0, 5).map(r => `${r.title || ''}\n${r.snippet || ''}\n${r.link || ''}`).join('\n\n');
+    const profile = await researchContactEnrichment(name, company, contactRecord.fields['LinkedIn URL'] || '');
+    try {
+      await persistContactEnrichment(contactRecord, profile);
+    } catch (airtableErr) {
+      console.warn('Could not store enrichment profile to Airtable:', airtableErr.message);
+    }
 
-    const prompt = `You are researching a LinkedIn contact for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM, ahead of outreach.
-
-Contact: ${name}${company ? ' at ' + company : ''}.
-
-LinkedIn search results:
-${profileResults || 'No results found.'}
-
-General/news search results for "${name} ${company || ''}":
-${newsResults || 'No results found.'}
-
-Based only on the above, return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
-{ "headline": string, "bioSummary": string, "recentPosts": [{"summary": string}], "newsMentions": string[], "yearsInRole": string, "previousCompanies": string[] }
-
-"recentPosts" should have at most 3 entries, each a one-or-two sentence summary of a real post if findable, empty array if none found. If a field can't be determined from the results, say "Not enough public information found" rather than inventing detail.`;
-
-    const enrichment = await callClaudeJson(prompt, 1200);
-    const today = new Date().toISOString().slice(0, 10);
-    const formattedBlock = [
-      `[Enriched: ${today}]`,
-      `Headline: ${enrichment.headline || '—'}`,
-      `Bio: ${enrichment.bioSummary || '—'}`,
-      (enrichment.recentPosts || []).length ? `Recent posts:\n${enrichment.recentPosts.map(p => `- ${p.summary}`).join('\n')}` : '',
-      (enrichment.newsMentions || []).length ? `News mentions:\n${enrichment.newsMentions.map(n => `- ${n}`).join('\n')}` : '',
-      `Years in current role: ${enrichment.yearsInRole || '—'}`,
-      (enrichment.previousCompanies || []).length ? `Previous companies: ${enrichment.previousCompanies.join(', ')}` : ''
-    ].filter(Boolean).join('\n');
-
-    const existingSummary = contactRecord.fields['AI Summary'] || '';
-    const newSummary = existingSummary ? formattedBlock + '\n\n' + existingSummary : formattedBlock;
-    await airtableRequest('PATCH', 'Contacts', { records: [{ id: contactRecord.id, fields: { 'AI Summary': newSummary } }] });
-
-    res.json(Object.assign({ success: true, enrichedDate: today }, enrichment));
+    res.json({ success: true, profile, enrichedDate: profile.date });
   } catch (err) {
     console.error('Contact enrich error:', err.message);
     res.status(500).json({ error: err.message });
@@ -5461,7 +5430,7 @@ Contact: ${cf['Full Name'] || 'Unknown'}, ${cf['Job Title'] || ''}. AI summary: 
 Recent posts (last 30 days only): ${recentPosts}
 ${offer && offer.summary ? `\nThis campaign's offer: ${offer.summary}\nWeave the offer above into this message naturally, in your own words - do not paste it verbatim.` : ''}
 
-Write only message ${messageNumber} in this contact's sequence for this specific campaign, following on naturally from the conversation so far (if any). UK English, no em dashes, peer to peer tone, 3-4 sentences, signed off "Marcus". Return only the message text, no preamble.`;
+Write only message ${messageNumber} in this contact's sequence for this specific campaign, following on naturally from the conversation so far (if any). UK English, no em dashes, peer to peer tone, 3-4 sentences, signed off "Twenty2 Collective". Return only the message text, no preamble.`;
 
     const message = await callClaudeText(prompt, 400);
     await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, { records: [{ id: row.id, fields: { 'Next Message Draft': message } }] });
@@ -5993,7 +5962,7 @@ AI Summary: ${f['AI Summary'] || 'none yet'}
 Recent posts (last 30 days only): ${recentPosts}
 ${offer && offer.summary ? `This campaign's offer: ${offer.summary}\nWeave the offer above into this message naturally, in your own words - do not paste it verbatim.\n` : ''}Conversation so far: ${newContext}
 
-Write the next message in the conversation, following on naturally from what they just said. UK English, no em dashes, peer to peer tone, 3-4 sentences, one observation and one question, signed off "Marcus". Return only the message text.`;
+Write the next message in the conversation, following on naturally from what they just said. UK English, no em dashes, peer to peer tone, 3-4 sentences, one observation and one question, signed off "Twenty2 Collective". Return only the message text.`;
           draft = await callClaudeText(draftPrompt, 400);
           rowUpdateFields['Next Message Draft'] = draft;
         }
