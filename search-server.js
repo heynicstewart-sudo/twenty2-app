@@ -5439,10 +5439,16 @@ const MESSAGE_NUMBER_FOR_STAGE = {
   'Message 2 Sent': 3
 };
 
-// Airtable caps batch writes at 10 records per request.
+// Airtable caps batch writes at 10 records per request. typecast:true so a
+// Sequence Stage value from the app's simplified vocabulary (e.g.
+// "Connection Pending", "Timed Out") that isn't yet a configured choice on
+// the single select gets added automatically instead of 422ing - without
+// this, PATCH /api/context/contact-fields writing "Connection Pending" was
+// failing on every "Send connection" click since that string was never a
+// real choice on Campaign Contacts.Sequence Stage.
 async function airtableBatchPatch(table, records) {
   for (let i = 0; i < records.length; i += 10) {
-    await airtableRequest('PATCH', table, { records: records.slice(i, i + 10) });
+    await airtableRequest('PATCH', table, { records: records.slice(i, i + 10), typecast: true });
   }
 }
 
@@ -5512,7 +5518,8 @@ app.get('/api/campaign/:id/campaign-contacts', async (req, res) => {
           contactId,
           contactName: contactId ? (nameById[contactId] || '') : '',
           sequenceStage: normalizeSequenceStage(r.fields['Sequence Stage']),
-          nextMessageDraft: r.fields['Next Message Draft'] || ''
+          nextMessageDraft: r.fields['Next Message Draft'] || '',
+          connectionSentDate: r.fields['Connection Sent Date'] || null
         };
       })
       .filter(r => r.contactName);
@@ -5520,6 +5527,68 @@ app.get('/api/campaign/:id/campaign-contacts', async (req, res) => {
     res.json({ rows: result });
   } catch (err) {
     console.error('Campaign contacts fetch error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Strategy tab "Check for timeouts" - flags any Campaign Contact still
+// sitting at "Connection Pending" (connection sent, no reply/progress
+// since) whose Connection Sent Date is older than timeoutDays. "No reply"
+// here means the row hasn't advanced past Connection Pending at all - this
+// fast-action flow has no separate "accepted" signal, so staying on
+// Connection Pending past the window is the only available proxy. Writes
+// 'Timed Out' as the new Sequence Stage (typecast in airtableBatchPatch
+// adds it as a real choice the first time) and increments Campaigns.Timed
+// Out by the number newly flagged.
+app.post('/api/campaign/:id/check-timeouts', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const campaignName = decodeURIComponent(req.params.id);
+  const timeoutDays = parseInt(req.body && req.body.timeoutDays, 10) || 10;
+
+  try {
+    const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
+    if (!campaignRecord) return res.status(404).json({ error: `Campaign "${campaignName}" not found` });
+
+    const [rows, contactsData] = await Promise.all([
+      fetchCampaignContactsRows(),
+      airtableRequest('GET', 'Contacts')
+    ]);
+    const nameById = {};
+    (contactsData.records || []).forEach(r => { nameById[r.id] = r.fields['Full Name'] || ''; });
+
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - timeoutDays);
+    const cutoffStr = cutoff.toISOString().slice(0, 10);
+
+    const toFlag = rows.filter(r => {
+      if (!(r.fields['Campaign'] || []).includes(campaignRecord.id)) return false;
+      const stage = normalizeSequenceStage(r.fields['Sequence Stage']);
+      const sentDate = r.fields['Connection Sent Date'];
+      return stage === 'Connection Pending' && sentDate && sentDate < cutoffStr;
+    });
+
+    let totalTimedOut = campaignRecord.fields['Timed Out'] || 0;
+    if (toFlag.length) {
+      const today = new Date().toISOString().slice(0, 10);
+      await airtableBatchPatch(CAMPAIGN_CONTACTS_TABLE, toFlag.map(r => ({
+        id: r.id,
+        fields: { 'Sequence Stage': 'Timed Out', 'Stage History': appendStageHistory(r.fields['Stage History'], 'Timed Out', today) }
+      })));
+
+      totalTimedOut += toFlag.length;
+      await airtableRequest('PATCH', 'Campaigns', {
+        records: [{ id: campaignRecord.id, fields: { 'Timed Out': totalTimedOut } }]
+      });
+    }
+
+    const flaggedNames = toFlag
+      .map(r => { const contactId = (r.fields['Contact'] || [])[0]; return contactId ? (nameById[contactId] || '') : ''; })
+      .filter(Boolean);
+
+    res.json({ success: true, flaggedCount: toFlag.length, flaggedNames, totalTimedOut });
+  } catch (err) {
+    console.error('Check timeouts error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -5901,7 +5970,11 @@ app.patch('/api/context/contact-fields', async (req, res) => {
         const today = new Date().toISOString().slice(0, 10);
         await airtableBatchPatch(CAMPAIGN_CONTACTS_TABLE, pendingRows.map(r => ({
           id: r.id,
-          fields: { 'Sequence Stage': 'Connection Pending', 'Stage History': appendStageHistory(r.fields['Stage History'], 'Connection Pending', today) }
+          fields: {
+            'Sequence Stage': 'Connection Pending',
+            'Stage History': appendStageHistory(r.fields['Stage History'], 'Connection Pending', today),
+            'Connection Sent Date': today
+          }
         })));
         campaignContactRowsSynced = pendingRows.length;
       }

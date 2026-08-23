@@ -860,7 +860,16 @@ function getRoadmapColumn(c){
   return 'pending';
 }
 
+// Days pending is calculated from Airtable's Connection Sent Date (written
+// when "Send connection" is clicked - see handleSendConnectionClick and
+// campaignConnectionSentDateFor) whenever this Roadmap is scoped to a
+// campaign, since that's the real source of truth for the fast-action flow.
+// Falls back to the older local-state fields (connReqDate/foundDate) for
+// the account-level Roadmap, which isn't tied to a campaign's Airtable
+// Sequence Stage at all.
 function getPendingDays(c){
+  const connectionSentDate = campaignConnectionSentDateFor(c.name);
+  if(connectionSentDate) return daysBetween(connectionSentDate);
   if(c.connReqDate) return daysBetween(c.connReqDate);
   return daysBetween(c.foundDate);
 }
@@ -5692,13 +5701,23 @@ async function loadCampaignSequenceStages(campaign){
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
     const map = {};
-    (data.rows||[]).forEach(r => { if(r.contactName) map[r.contactName.trim().toLowerCase()] = r.sequenceStage; });
+    const dateMap = {};
+    (data.rows||[]).forEach(r => {
+      if(!r.contactName) return;
+      const key = r.contactName.trim().toLowerCase();
+      map[key] = r.sequenceStage;
+      dateMap[key] = r.connectionSentDate || null;
+    });
     window.__campaignSequenceStages = window.__campaignSequenceStages || {};
     window.__campaignSequenceStages[campaign.id] = map;
+    window.__campaignConnectionSentDates = window.__campaignConnectionSentDates || {};
+    window.__campaignConnectionSentDates[campaign.id] = dateMap;
   } catch(err){
     console.warn('Could not load campaign sequence stages:', err.message);
     window.__campaignSequenceStages = window.__campaignSequenceStages || {};
     window.__campaignSequenceStages[campaign.id] = {};
+    window.__campaignConnectionSentDates = window.__campaignConnectionSentDates || {};
+    window.__campaignConnectionSentDates[campaign.id] = {};
   }
   if(window.__campaignView === 'detail' && window.__campaignDetailId === campaign.id && window.__campaignDetailTab === 'roadmap') renderPage();
   if(state.currentPage === 'grid' && gridViewMode(currentGrid().id) === 'table') renderPage();
@@ -5719,6 +5738,11 @@ function ensureTodaysActionsSequenceStagesLoaded(){
 function campaignSequenceStageFor(contactName){
   const map = window.__roadmapCampaignId && window.__campaignSequenceStages && window.__campaignSequenceStages[window.__roadmapCampaignId];
   return map ? (map[contactName.trim().toLowerCase()] || '') : '';
+}
+
+function campaignConnectionSentDateFor(contactName){
+  const map = window.__roadmapCampaignId && window.__campaignConnectionSentDates && window.__campaignConnectionSentDates[window.__roadmapCampaignId];
+  return map ? (map[contactName.trim().toLowerCase()] || null) : null;
 }
 
 /* ---- Strategy tab: messaging templates (formerly the Sequence tab) ---- */
@@ -5907,6 +5931,8 @@ function renderCampaignStrategyTab(campaign){
     </div>
   </div>
 
+  ${renderConnectionTimeoutSection(campaign)}
+
   ${renderCampaignMessagingSection(campaign)}
 
   <div class="card">
@@ -5916,6 +5942,59 @@ function renderCampaignStrategyTab(campaign){
     </div>
   </div>
   `;
+}
+
+// Flags Campaign Contacts still stuck at "Connection Pending" (connection
+// sent, never progressed - the fast-action flow has no separate "accepted"
+// signal, so no progress past this stage is the proxy for "no reply") once
+// their Connection Sent Date is older than the account-level Settings
+// "Days until flagged" value. On-demand via the button below rather than
+// automatic, same pattern as Engine redraft / Run Engine elsewhere.
+function renderConnectionTimeoutSection(campaign){
+  const cached = window.__timeoutCheckResults && window.__timeoutCheckResults[campaign.id];
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title"><i class="ti ti-clock-hour-4"></i> Connection timeout</div>
+    <div class="muted" style="font-size:12px;margin-bottom:8px;">Flags contacts still at "Connection Pending" whose connection request was sent more than ${state.settings.timeoutDays} day${state.settings.timeoutDays===1?'':'s'} ago with no reply. Change the day count in Settings &gt; Connection timeout.</div>
+    <button class="btn btn-secondary btn-sm" id="timeoutCheckBtn-${campaign.id}" onclick="checkCampaignTimeouts('${campaign.id}')"><i class="ti ti-alert-triangle"></i> Check for timeouts</button>
+    <div id="timeoutCheckResult-${campaign.id}" style="margin-top:8px;">${cached ? renderTimeoutCheckResultHtml(cached) : ''}</div>
+  </div>`;
+}
+
+function renderTimeoutCheckResultHtml(result){
+  if(!result.flaggedCount){
+    return `<span class="muted" style="font-size:12.5px;">No new timeouts. ${result.totalTimedOut} total timed out on this campaign.</span>`;
+  }
+  return `<span style="font-size:12.5px;">Flagged ${result.flaggedCount} contact${result.flaggedCount===1?'':'s'} as timed out: ${esc(result.flaggedNames.join(', '))}. ${result.totalTimedOut} total timed out on this campaign.</span>`;
+}
+
+async function checkCampaignTimeouts(campaignId){
+  const campaign = state.campaigns.find(c => c.id === campaignId);
+  if(!campaign) return;
+  const btn = document.getElementById('timeoutCheckBtn-'+campaignId);
+  const resultEl = document.getElementById('timeoutCheckResult-'+campaignId);
+  const original = btn ? btn.innerHTML : '';
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Checking...'; }
+  if(resultEl) resultEl.innerHTML = '<span class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Checking connection ages...</span>';
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/check-timeouts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ timeoutDays: state.settings.timeoutDays })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
+    window.__timeoutCheckResults = window.__timeoutCheckResults || {};
+    window.__timeoutCheckResults[campaignId] = data;
+    if(resultEl) resultEl.innerHTML = renderTimeoutCheckResultHtml(data);
+    toast(data.flaggedCount ? `${data.flaggedCount} contact${data.flaggedCount===1?'':'s'} flagged as timed out` : 'No new timeouts found', data.flaggedCount ? 'warn' : 'success');
+    if(window.__roadmapCampaignId === campaignId) loadCampaignSequenceStages(campaign);
+  } catch(err){
+    if(resultEl) resultEl.innerHTML = `<span class="muted" style="font-size:12.5px;">Could not check timeouts: ${esc(err.message)}</span>`;
+    toast('Could not check timeouts: ' + err.message, 'warn');
+  } finally {
+    if(btn){ btn.disabled = false; btn.innerHTML = original; }
+  }
 }
 
 function saveCampaignStrategy(campaignId){
