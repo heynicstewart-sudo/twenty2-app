@@ -173,6 +173,28 @@ async function findCampaignRecordByName(campaignName) {
   return (data.records || []).find(r => (r.fields['Name'] || '') === campaignName) || null;
 }
 
+function isAirtableRecordId(id) {
+  return /^rec[A-Za-z0-9]{14}$/.test(id || '');
+}
+
+// Campaign-scoped routes (Analytics/Sales tabs) are given either the
+// campaign's stable Airtable record id - once syncCampaignToAirtable has
+// cached one client-side - or, for a campaign that hasn't synced since
+// that field was added, its Name. Name alone is what these routes used to
+// resolve on exclusively, but it's cached client-side once at creation and
+// never refreshed: a direct rename in Airtable (or a redrafted title on
+// resave) silently breaks every subsequent name-based lookup with
+// "Campaign not found in Airtable" even though the record still exists.
+// Resolving by record id first sidesteps that drift entirely.
+async function resolveCampaignRecord(idOrName) {
+  if (!idOrName) return null;
+  if (isAirtableRecordId(idOrName)) {
+    const record = await airtableGetRecord('Campaigns', idOrName);
+    if (record) return record;
+  }
+  return findCampaignRecordByName(idOrName);
+}
+
 // Shared Claude call - `content` is either a plain string (text-only) or an
 // array of content blocks (for vision/PDF document prompts). Every new
 // Claude-calling route added in the Context tab work uses this instead of
@@ -2035,18 +2057,23 @@ function computeHistoricalCampaignAverage(campaigns, contacts, touchPoints, conv
 app.get('/api/campaign/:id/analytics', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
-  const campaignName = decodeURIComponent(req.params.id);
+  const campaignIdOrName = decodeURIComponent(req.params.id);
 
   try {
-    const [contactsData, touchPointsData, conversions, campaigns] = await Promise.all([
+    const [contactsData, touchPointsData, conversions, campaigns, campaignRecord] = await Promise.all([
       airtableRequest('GET', 'Contacts'),
       airtableRequest('GET', 'Touch Points'),
       fetchConversions(),
-      fetchCampaigns()
+      fetchCampaigns(),
+      resolveCampaignRecord(campaignIdOrName)
     ]);
 
+    // Re-derive the canonical Name from the resolved record rather than
+    // trusting campaignIdOrName - it may be a record id, and campaigns[]
+    // (from fetchCampaigns) only matches on Name.
+    const campaignName = campaignRecord ? (campaignRecord.fields['Name'] || '') : campaignIdOrName;
     const campaign = campaigns.find(c => c.name === campaignName);
-    if (!campaign) return res.status(404).json({ error: 'Campaign not found in Airtable' });
+    if (!campaignRecord || !campaign) return res.status(404).json({ error: 'Campaign not found in Airtable' });
 
     const contacts = (contactsData.records || []).map(r => ({ id: r.id, name: r.fields['Full Name'] || '' }));
     const touchPoints = (touchPointsData.records || []).map(r => ({
@@ -2069,19 +2096,24 @@ app.get('/api/campaign/:id/insights', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
 
-  const campaignName = decodeURIComponent(req.params.id);
+  const campaignIdOrName = decodeURIComponent(req.params.id);
 
   try {
-    const [contactsData, touchPointsData, conversions, campaigns, learningData] = await Promise.all([
+    const [contactsData, touchPointsData, conversions, campaigns, learningData, campaignRecord] = await Promise.all([
       airtableRequest('GET', 'Contacts'),
       airtableRequest('GET', 'Touch Points'),
       fetchConversions(),
       fetchCampaigns(),
-      fetchLearningData()
+      fetchLearningData(),
+      resolveCampaignRecord(campaignIdOrName)
     ]);
 
+    // Re-derive the canonical Name from the resolved record rather than
+    // trusting campaignIdOrName - it may be a record id, and campaigns[]
+    // (from fetchCampaigns) only matches on Name.
+    const campaignName = campaignRecord ? (campaignRecord.fields['Name'] || '') : campaignIdOrName;
     const campaign = campaigns.find(c => c.name === campaignName);
-    if (!campaign) return res.status(404).json({ error: 'Campaign not found in Airtable' });
+    if (!campaignRecord || !campaign) return res.status(404).json({ error: 'Campaign not found in Airtable' });
 
     const contacts = (contactsData.records || []).map(r => ({
       id: r.id,
@@ -2405,9 +2437,9 @@ Rewrite the AI Summary folding in this new signal alongside everything already k
 // for the Analytics tab.
 app.get('/api/campaign/:id/sales-overview', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
-  const campaignName = decodeURIComponent(req.params.id);
+  const campaignIdOrName = decodeURIComponent(req.params.id);
   try {
-    const campaignRecord = await findCampaignRecordByName(campaignName);
+    const campaignRecord = await resolveCampaignRecord(campaignIdOrName);
     if (!campaignRecord) return res.status(404).json({ error: 'Campaign not found' });
 
     const [ccRows, dealsData, tpData, contactsData, companiesData, repsData] = await Promise.all([
@@ -2498,9 +2530,9 @@ app.get('/api/campaign/:id/sales-overview', async (req, res) => {
 // load the rest of the tab depends on.
 app.get('/api/campaign/:id/conversion-intelligence', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
-  const campaignName = decodeURIComponent(req.params.id);
+  const campaignIdOrName = decodeURIComponent(req.params.id);
   try {
-    const campaignRecord = await findCampaignRecordByName(campaignName);
+    const campaignRecord = await resolveCampaignRecord(campaignIdOrName);
     if (!campaignRecord) return res.status(404).json({ error: 'Campaign not found' });
 
     const [ccRows, dealsData, tpData, contactsData] = await Promise.all([

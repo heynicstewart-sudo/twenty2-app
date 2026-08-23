@@ -5134,6 +5134,17 @@ function backToCampaignList(){
   renderPage();
 }
 
+// Identifier for Airtable-scoped campaign routes (Analytics/Sales tabs
+// etc.) - prefers the stable Airtable record id captured by
+// syncCampaignToAirtable once available, falling back to the campaign
+// name for a campaign that hasn't synced yet (or predates this fix). Name
+// alone is fragile: it's cached client-side at creation and never
+// refreshed, so a direct Airtable rename (or a redrafted title on resave)
+// silently breaks every subsequent name-based lookup.
+function campaignRouteKey(campaign){
+  return campaign.recordId || campaign.name;
+}
+
 function setCampaignDetailTab(tab){
   window.__campaignDetailTab = tab;
   window.__contentEditorId = null;
@@ -5645,7 +5656,7 @@ async function runCampaignAnalytics(){
   const campaign = state.campaigns.find(c => c.id === window.__campaignDetailId);
   if(!campaign) return;
   try {
-    const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/analytics`);
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaignRouteKey(campaign))}/analytics`);
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
     window.__campaignAnalytics = data;
@@ -5659,7 +5670,7 @@ async function runCampaignInsights(){
   const campaign = state.campaigns.find(c => c.id === window.__campaignDetailId);
   if(!campaign) return;
   try {
-    const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/insights`);
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaignRouteKey(campaign))}/insights`);
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
     window.__campaignInsights = data.insights || [];
@@ -5790,7 +5801,7 @@ function setSalesPeriod(period){
 
 async function loadSalesOverview(campaign){
   try {
-    const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/sales-overview`);
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaignRouteKey(campaign))}/sales-overview`);
     const json = await res.json();
     if(!res.ok) throw new Error(json.error || ('Request failed with status '+res.status));
     window.__salesData = json;
@@ -5802,7 +5813,7 @@ async function loadSalesOverview(campaign){
 
 async function loadConversionIntelligence(campaign){
   try {
-    const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/conversion-intelligence`);
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaignRouteKey(campaign))}/conversion-intelligence`);
     const json = await res.json();
     if(!res.ok) throw new Error(json.error || ('Request failed with status '+res.status));
     window.__salesConversionIntel = json;
@@ -6602,7 +6613,20 @@ function syncCampaignToAirtable(campaign){
       status: campaign.status,
       ctas: campaign.ctas || ''
     })
-  }).catch(err => console.warn('Airtable campaign sync failed:', err.message));
+  })
+    .then(res => res.json())
+    // campaign.name is the only handle Airtable-scoped campaign routes
+    // (Analytics/Sales tabs) have to find this campaign - if it's ever
+    // renamed directly in Airtable (or a redraft-and-resave produces a
+    // slightly different AI-generated title), that name drifts out of
+    // sync with the cached one here and every fresh lookup by name starts
+    // failing with "Campaign not found in Airtable". Caching the stable
+    // Airtable record id (same fix already applied to contacts - see
+    // syncContactToAirtable) lets those routes resolve the campaign by id
+    // first, falling back to name only for campaigns that haven't synced
+    // yet.
+    .then(data => { if(data && data.recordId) campaign.recordId = data.recordId; })
+    .catch(err => console.warn('Airtable campaign sync failed:', err.message));
 }
 
 // Creates a Campaign Contacts junction row (Airtable) for each contact the
@@ -6668,7 +6692,7 @@ async function loadSalesHealthData(){
   }
   try {
     const results = await Promise.all(campaigns.map(async campaign => {
-      const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/sales-overview`);
+      const res = await fetch(`/api/campaign/${encodeURIComponent(campaignRouteKey(campaign))}/sales-overview`);
       const json = await res.json();
       if(!res.ok) throw new Error(json.error || ('Request failed with status '+res.status));
       return computeCampaignHealth(campaign, json);
