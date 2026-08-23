@@ -3999,6 +3999,7 @@ async function trigifyCreateJobChangeMonitor() {
       frequency: 'DAILY',
       max_results: 100
     });
+    console.log('Trigify create-job-change-monitor raw response:', JSON.stringify(result));
     searchId = result.id || (result.search && result.search.id);
     if (!searchId) throw new Error('Trigify did not return a search id');
   } catch (err) {
