@@ -1201,6 +1201,40 @@ app.get('/api/intelligence/health', async (req, res) => {
   }
 });
 
+// "Run Engine" pipeline strategy analysis (Home tab) - takes the same
+// engineHealth (GET /api/intelligence/health) and insights (GET
+// /api/track/insights) payloads the client already fetches for the other
+// three Run Engine steps, and asks Claude for a wins/gaps/losses/
+// recommendations read. Moved server-side from a direct, key-less browser
+// call to api.anthropic.com that always failed to its local fallback.
+app.post('/api/intelligence/strategy-analysis', async (req, res) => {
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  const { engineHealth, insights } = req.body || {};
+  if (!engineHealth || !insights) return res.status(400).json({ error: 'engineHealth and insights are required' });
+
+  try {
+    const stageBreakdown = (engineHealth.contactsByStage || []).map(s => `${s.stage}: ${s.count}`).join(', ') || 'none on file';
+    const topRoles = (insights.topIcpRoles || []).join('; ') || 'none logged yet';
+    const topProducts = (insights.topProducts || []).join('; ') || 'none logged yet';
+    const topMethods = (insights.topMethods || []).join('; ') || 'none logged yet';
+
+    const prompt = `Analyse this LinkedIn outreach pipeline for a Perth Agile/change consultancy, using live data synced from Airtable.\n\nNumeric data: ${engineHealth.totalContacts ?? 0} total contacts, ${engineHealth.touchPointsThisWeek ?? 0} touch points logged this week, ${engineHealth.activeCampaigns ?? 0} active campaigns, ${engineHealth.overallConversionRate ?? 0}% overall conversion rate, ${insights.conversionCount ?? 0} conversions logged.\nContacts by journey stage: ${stageBreakdown}.\nTop converting ICP roles: ${topRoles}.\nTop converting products: ${topProducts}.\nTop converting communication methods: ${topMethods}.\nAverage touch points to convert: ${insights.avgTouchPoints ?? 'not enough data'}.\n\nReturn ONLY valid JSON in this exact shape: {"wins": string[], "gaps": string[], "losses": string[], "recommendations": string[]}. 2-4 items per array, each a single short sentence, no markdown.`;
+
+    const parsed = await callClaudeJson(prompt, 1000);
+    res.json({
+      success: true,
+      wins: Array.isArray(parsed.wins) ? parsed.wins : [],
+      gaps: Array.isArray(parsed.gaps) ? parsed.gaps : [],
+      losses: Array.isArray(parsed.losses) ? parsed.losses : [],
+      recommendations: Array.isArray(parsed.recommendations) ? parsed.recommendations : []
+    });
+  } catch (err) {
+    console.error('Strategy analysis error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ===================== CAMPAIGN PERFORMANCE =====================
 // Ranks every Live campaign by real conversion rate, cross-referencing
 // Campaigns (who was targeted), Touch Points (what was actually sent and
@@ -1979,6 +2013,41 @@ Guidance:
     });
   } catch (err) {
     console.error('Campaign build error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Strategy tab "Engine redraft" on a sequence stage (aiRedraftSequenceStage
+// in t2c-outreach-crm.html) - the campaign object here is whatever the
+// client currently holds in local state (possibly not yet saved to
+// Airtable), so this takes it as-is in the body rather than looking a
+// record up by id.
+app.post('/api/campaign/redraft-stage', async (req, res) => {
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  const { campaign, stageLabel, currentType, currentContent, historicalNote } = req.body || {};
+  if (!campaign || !campaign.name) return res.status(400).json({ error: 'campaign.name is required' });
+  if (!stageLabel) return res.status(400).json({ error: 'stageLabel is required' });
+
+  try {
+    const prompt = `You are redrafting the "${stageLabel}" step of a LinkedIn outreach sequence for the campaign "${campaign.name}" at Twenty2 Collective, a Perth-based Agile and change consultancy.
+
+Campaign goal: ${campaign.goal || 'not specified'}
+Target ICP: ${campaign.targetSegmentSummary || 'not specified'}
+Pitch angle: ${campaign.pitchAngle || 'not specified'}
+Objection handling: ${campaign.objectionHandling || 'not specified'}
+Strategy: ${campaign.strategyBrief || 'not specified'}
+Touch type: ${currentType || 'not specified'}
+Current draft: ${currentContent || '(none yet)'}
+
+T2C's historical conversion data for this campaign, factor it in if relevant: ${historicalNote || 'no campaign insights run yet for this campaign'}.
+
+Rewrite this message. UK English, no em dashes, peer to peer tone, one observation and one question, 3-4 sentences, signed off "Twenty2 Collective". Return only the message text, nothing else.`;
+
+    const message = await callClaudeText(prompt, 300);
+    res.json({ success: true, message });
+  } catch (err) {
+    console.error('Campaign redraft-stage error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -4902,6 +4971,75 @@ app.post('/api/contacts/enrich', async (req, res) => {
   }
 });
 
+// Today's Actions "Generate brief" (generateContactBrief in
+// t2c-outreach-crm.html) - either a ready-to-send message or a short prep
+// brief depending on the recommended communication method, built from the
+// contact's local touch point history the client already assembled.
+app.post('/api/contacts/generate-brief', async (req, res) => {
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  const { contact, action, method, touchHistory, voice } = req.body || {};
+  if (!contact || !contact.name) return res.status(400).json({ error: 'contact.name is required' });
+  if (!action || !action.type || !method) return res.status(400).json({ error: 'action.type and method are required' });
+
+  try {
+    const isMessage = method === 'LinkedIn message' || method === 'Email';
+    const prompt = `Contact: ${contact.name}, ${contact.role || ''} at ${contact.company || ''}.
+Journey stage: ${contact.journeyStage || 'unknown'}.
+Pain points on file: ${(contact.painPoints && contact.painPoints.length) ? contact.painPoints.join(', ') : 'none logged'}.
+Today's recommended action: ${action.type}.
+Recommended communication method: ${method}.
+
+Full touch point history:
+${touchHistory || 'No touch points logged yet.'}
+
+${isMessage
+  ? `Write a ready-to-send ${method === 'LinkedIn message' ? 'LinkedIn message' : 'email'} for this contact given the above. ${voiceRulesPromptText(voice)} Return only the message text.`
+  : `Write a short prep brief for a ${method.toLowerCase()} with this contact. Return 3-4 bullet points covering what to cover, what to reference from the history above, and what to avoid. Return only the bullet points, one per line, each starting with "- ".`}`;
+
+    const message = await callClaudeText(prompt, 400);
+    res.json({ success: true, message, isMessage });
+  } catch (err) {
+    console.error('Generate brief error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Roadmap "Read connections screenshot" (readConnectionsScreenshot in
+// t2c-outreach-crm.html) - cross-references names visible in one or more
+// LinkedIn "My Network" screenshots against the given list of contacts
+// still awaiting connection acceptance, returning which of them appear to
+// have accepted.
+app.post('/api/contacts/match-connections-screenshot', async (req, res) => {
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  const { candidates, images } = req.body || {};
+  if (!Array.isArray(candidates) || !candidates.length) return res.status(400).json({ error: 'candidates is required' });
+  if (!Array.isArray(images) || !images.length) return res.status(400).json({ error: 'images is required' });
+
+  try {
+    const list = candidates.map(c => `${c.id}: ${c.name} (${c.company})`).join('\n');
+    const promptText = `Here is a screenshot of a LinkedIn connections list. Cross-reference the names visible in the screenshot against this list of contacts awaiting connection acceptance:\n${list}\n\nReturn ONLY a JSON array of the contact ids (e.g. ["c4","c9"]) whose names appear in the screenshot as accepted connections. If none appear, return [].`;
+
+    const content = images.map(img => ({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.base64 } }));
+    content.push({ type: 'text', text: promptText });
+
+    const rawText = await callClaudeText(content, 200);
+    let matchedIds = [];
+    try {
+      const jsonMatch = rawText.match(/\[[\s\S]*\]/);
+      matchedIds = JSON.parse(jsonMatch ? jsonMatch[0] : rawText);
+    } catch (parseErr) {
+      throw new Error('Could not parse Claude response as a JSON array');
+    }
+
+    res.json({ success: true, matchedIds: Array.isArray(matchedIds) ? matchedIds : [] });
+  } catch (err) {
+    console.error('Match connections screenshot error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/contacts/notes', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   const { name, noteText } = req.body;
@@ -5445,6 +5583,27 @@ app.post('/api/messages/generate', async (req, res) => {
     res.json({ success: true, message });
   } catch (err) {
     console.error('Message generate error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Generates a fresh account-level sequence-stage template (Settings > flow
+// editor "Generate" button) - reuses the same ctaStrategyNoteText/
+// voiceRulesPromptText helpers as POST /api/messages/generate above.
+app.post('/api/messages/generate-template', async (req, res) => {
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  const { stageLabel, roles, stageKey, messageNumber, voice } = req.body || {};
+  if (!stageLabel || !stageKey) return res.status(400).json({ error: 'stageLabel and stageKey are required' });
+
+  try {
+    const roleList = (Array.isArray(roles) ? roles : []).join(', ') || 'senior leaders';
+    const promptText = `Write a LinkedIn outreach template for the "${stageLabel}" stage of a sequence targeting ${roleList} at WA companies.\n\n${ctaStrategyNoteText(stageKey, messageNumber, voice && voice.messagesBeforeCta)}\n\n${voiceRulesPromptText(voice)}\n\nUse {{first}}, {{company}}, {{role}} as placeholders. Return only the message text.`;
+
+    const message = await callClaudeText(promptText, 300);
+    res.json({ success: true, message });
+  } catch (err) {
+    console.error('Generate template error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

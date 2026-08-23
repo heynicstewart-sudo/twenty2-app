@@ -2267,20 +2267,27 @@ async function generateContactBrief(cid){
 
   const isMessage = method === 'LinkedIn message' || method === 'Email';
 
-  const prompt = `Contact: ${c.name}, ${c.role} at ${c.company}.
-Journey stage: ${c.state}.
-Pain points on file: ${(c.painPoints && c.painPoints.length) ? c.painPoints.join(', ') : 'none logged'}.
-Today's recommended action: ${action.type}.
-Recommended communication method: ${method}.
-
-Full touch point history:
-${touchHistory}
-
-${isMessage
-  ? `Write a ready-to-send ${method === 'LinkedIn message' ? 'LinkedIn message' : 'email'} for this contact given the above. ${voiceRulesText()} Return only the message text.`
-  : `Write a short prep brief for a ${method.toLowerCase()} with this contact. Return 3-4 bullet points covering what to cover, what to reference from the history above, and what to avoid. Return only the bullet points, one per line, each starting with "- ".`}`;
-
-  const result = await callAI(prompt, 400, () => localBriefFallback(c, action, method, isMessage));
+  let result;
+  try {
+    const v = state.settings.strategy;
+    const res = await fetch('/api/contacts/generate-brief', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contact: { name: c.name, role: c.role, company: c.company, journeyStage: c.state, painPoints: c.painPoints || [] },
+        action: { type: action.type },
+        method,
+        touchHistory,
+        voice: { tone: v.tone, connLength: v.connLength, cadence: v.cadence, voiceInstructions: v.voiceInstructions }
+      })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
+    result = data.message;
+  } catch(err){
+    console.warn('Brief generation unavailable, using local fallback:', err.message);
+    result = localBriefFallback(c, action, method, isMessage);
+  }
 
   window.__contactBriefs = window.__contactBriefs || {};
   window.__contactBriefs[cid] = { result, isMessage, method };
@@ -3380,24 +3387,27 @@ async function readConnectionsScreenshot(){
     return;
   }
 
-  const list = candidates.map(c => `${c.id}: ${c.name} (${c.company})`).join('\n');
-  const prompt = `Here is a screenshot of a LinkedIn connections list. Cross-reference the names visible in the screenshot against this list of contacts awaiting connection acceptance:\n${list}\n\nReturn ONLY a JSON array of the contact ids (e.g. ["c4","c9"]) whose names appear in the screenshot as accepted connections. If none appear, return [].`;
   const images = shots.map(f => ({ mediaType: f.mediaType, base64: f.base64 }));
-  const raw = await callAI(prompt, 200, null, images);
-
-  btn.disabled = false;
-  btn.innerHTML = original;
-
-  if(raw === null){
+  let matchedIds = [];
+  try {
+    const res = await fetch('/api/contacts/match-connections-screenshot', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ candidates: candidates.map(c => ({ id: c.id, name: c.name, company: c.company })), images })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
+    matchedIds = data.matchedIds || [];
+  } catch(err){
+    console.warn('Screenshot matching unavailable, using local fallback:', err.message);
+    btn.disabled = false;
+    btn.innerHTML = original;
     demoMatchConnections(candidates);
     return;
   }
 
-  let matchedIds = [];
-  try {
-    const jsonMatch = raw.match(/\[[\s\S]*\]/);
-    matchedIds = JSON.parse(jsonMatch ? jsonMatch[0] : raw);
-  } catch(e){ matchedIds = []; }
+  btn.disabled = false;
+  btn.innerHTML = original;
 
   const matched = candidates.filter(c => matchedIds.includes(c.id));
   if(!matched.length){
@@ -4623,8 +4633,27 @@ async function generateTemplate(seqId, stageKey){
   const original = btn.innerHTML;
   btn.innerHTML = '<i class="ti ti-loader-2"></i> Generating...';
   btn.disabled = true;
-  const prompt = `Write a LinkedIn outreach template for the "${st.label}" stage of a sequence targeting ${seq.roles.join(', ') || 'senior leaders'} at WA companies.\n\n${ctaStrategyNote(stageKey)}\n\n${voiceRulesText()}\n\nUse {{first}}, {{company}}, {{role}} as placeholders. Return only the message text.`;
-  const result = await callAI(prompt, 300, ()=>localTemplateFallback(seq, stageKey));
+  let result;
+  try {
+    const v = state.settings.strategy;
+    const res = await fetch('/api/messages/generate-template', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        stageLabel: st.label,
+        roles: seq.roles,
+        stageKey,
+        messageNumber: messageNumberForStage(stageKey),
+        voice: { tone: v.tone, connLength: v.connLength, cadence: v.cadence, voiceInstructions: v.voiceInstructions, messagesBeforeCta: v.messagesBeforeCta }
+      })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
+    result = data.message;
+  } catch(err){
+    console.warn('Template generation unavailable, using local fallback:', err.message);
+    result = localTemplateFallback(seq, stageKey);
+  }
   document.getElementById(`tpl-${seqId}-${stageKey}`).value = result;
   seq.stages[stageKey] = result;
   btn.innerHTML = original;
@@ -4915,10 +4944,11 @@ async function saveGeneratedMessage(cid, stageKey){
   else renderPage();
 
   // Save the drafted text onto this contact's Campaign Contacts row
-  // (PATCH /api/campaign/:name/contacts/:id/draft) - this client-side
-  // callAI() generator has no server-side equivalent write, unlike the
-  // Today's Actions fast-action's generate-message endpoint which already
-  // writes to Next Message Draft on its own.
+  // (PATCH /api/campaign/:name/contacts/:id/draft) - this modal's own
+  // generation endpoint (POST /api/messages/generate) has no server-side
+  // write of its own, unlike the Today's Actions fast-action's
+  // generate-message endpoint which already writes to Next Message Draft
+  // on its own.
   const campaign = state.campaigns.find(x => x.id === window.__roadmapCampaignId) || activeCampaignForContact(c);
   if(!campaign) return;
   try {
@@ -5782,21 +5812,26 @@ async function aiRedraftSequenceStage(campaignId, stageKey){
     ? window.__campaignInsights.join(' ')
     : 'no campaign insights run yet for this campaign';
 
-  const prompt = `You are redrafting the "${label}" step of a LinkedIn outreach sequence for the campaign "${campaign.name}" at Twenty2 Collective, a Perth-based Agile and change consultancy.
-
-Campaign goal: ${campaign.goal || 'not specified'}
-Target ICP: ${campaign.targetSegmentSummary || 'not specified'}
-Pitch angle: ${campaign.pitchAngle || 'not specified'}
-Objection handling: ${campaign.objectionHandling || 'not specified'}
-Strategy: ${campaign.strategyBrief || 'not specified'}
-Touch type: ${currentType}
-Current draft: ${currentContent || '(none yet)'}
-
-T2C's historical conversion data for this campaign, factor it in if relevant: ${historicalNote}.
-
-Rewrite this message. UK English, no em dashes, peer to peer tone, one observation and one question, 3-4 sentences, signed off "Twenty2 Collective". Return only the message text, nothing else.`;
-
-  const result = await callAI(prompt, 300, () => currentContent || 'Following up given where things stand - keen to hear how things are tracking.\n\nTwenty2 Collective');
+  let result;
+  try {
+    const res = await fetch('/api/campaign/redraft-stage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        campaign: { name: campaign.name, goal: campaign.goal, targetSegmentSummary: campaign.targetSegmentSummary, pitchAngle: campaign.pitchAngle, objectionHandling: campaign.objectionHandling, strategyBrief: campaign.strategyBrief },
+        stageLabel: label,
+        currentType,
+        currentContent,
+        historicalNote
+      })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
+    result = data.message;
+  } catch(err){
+    console.warn('Redraft unavailable, using local fallback:', err.message);
+    result = currentContent || 'Following up given where things stand - keen to hear how things are tracking.\n\nTwenty2 Collective';
+  }
   const contentEl = document.getElementById('seqEditContent');
   if(contentEl) contentEl.value = result;
   if(statusEl) statusEl.textContent = 'Redraft ready — review and Save to keep it.';
@@ -7623,13 +7658,6 @@ async function runAnalysis(){
     return;
   }
 
-  const stageBreakdown = (engineHealth.contactsByStage || []).map(s => `${s.stage}: ${s.count}`).join(', ') || 'none on file';
-  const topRoles = (insights.topIcpRoles || []).join('; ') || 'none logged yet';
-  const topProducts = (insights.topProducts || []).join('; ') || 'none logged yet';
-  const topMethods = (insights.topMethods || []).join('; ') || 'none logged yet';
-
-  const prompt = `Analyse this LinkedIn outreach pipeline for a Perth Agile/change consultancy, using live data synced from Airtable.\n\nNumeric data: ${engineHealth.totalContacts ?? 0} total contacts, ${engineHealth.touchPointsThisWeek ?? 0} touch points logged this week, ${engineHealth.activeCampaigns ?? 0} active campaigns, ${engineHealth.overallConversionRate ?? 0}% overall conversion rate, ${insights.conversionCount ?? 0} conversions logged.\nContacts by journey stage: ${stageBreakdown}.\nTop converting ICP roles: ${topRoles}.\nTop converting products: ${topProducts}.\nTop converting communication methods: ${topMethods}.\nAverage touch points to convert: ${insights.avgTouchPoints ?? 'not enough data'}.\n\nReturn ONLY valid JSON in this exact shape: {"wins": string[], "gaps": string[], "losses": string[], "recommendations": string[]}. 2-4 items per array, each a single short sentence, no markdown.`;
-
   const fallback = () => ({
     wins: [
       "The Change Value Check is converting: Stuart Williams booked a Workshop directly off it.",
@@ -7652,15 +7680,20 @@ async function runAnalysis(){
     ]
   });
 
-  const raw = await callAI(prompt, 1000, null);
   let parsed = null;
-  if(raw){
-    try {
-      const jsonMatch = raw.match(/\{[\s\S]*\}/);
-      parsed = JSON.parse(jsonMatch ? jsonMatch[0] : raw);
-    } catch(e){ parsed = null; }
+  try {
+    const res = await fetch('/api/intelligence/strategy-analysis', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ engineHealth, insights })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
+    parsed = { wins: data.wins, gaps: data.gaps, losses: data.losses, recommendations: data.recommendations };
+  } catch(err){
+    console.warn('Strategy analysis unavailable, using local fallback:', err.message);
+    parsed = fallback();
   }
-  if(!parsed) parsed = fallback();
 
   parsed.runAt = TODAY.toLocaleString('en-AU',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
   parsed.notesCount = insights.conversionCount ?? 0;
@@ -9605,35 +9638,6 @@ function saveSettings(){
   flash.style.display = 'inline-flex';
   setTimeout(()=>{ flash.style.display='none'; }, 2200);
   toast('Settings saved', 'success');
-}
-
-/* ===================== ANTHROPIC API WRAPPER ===================== */
-
-async function callAI(promptText, maxTokens, fallbackFn, images){
-  try {
-    const content = (images || []).map(img => ({
-      type: 'image',
-      source: { type: 'base64', media_type: img.mediaType, data: img.base64 }
-    }));
-    content.push({ type: 'text', text: promptText });
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-opus-4-6',
-        max_tokens: maxTokens,
-        messages: [{ role:'user', content }]
-      })
-    });
-    if(!res.ok) throw new Error('API error '+res.status);
-    const data = await res.json();
-    const block = data.content && data.content.find(b => b.type === 'text');
-    if(!block) throw new Error('No text content in response');
-    return block.text.trim();
-  } catch(err){
-    console.warn('AI call unavailable, using local fallback:', err.message);
-    return fallbackFn ? fallbackFn() : null;
-  }
 }
 
 /* ===================== THEME (light/dark mode) ===================== */
