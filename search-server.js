@@ -4000,7 +4000,7 @@ async function trigifyCreateJobChangeMonitor() {
       max_results: 100
     });
     console.log('Trigify create-job-change-monitor raw response:', JSON.stringify(result));
-    searchId = result.id || (result.search && result.search.id);
+    searchId = (result.data && result.data.id) || result.id || (result.search && result.search.id);
     if (!searchId) throw new Error('Trigify did not return a search id');
   } catch (err) {
     if (err.status === 409 && /already/i.test(err.body || '')) {
