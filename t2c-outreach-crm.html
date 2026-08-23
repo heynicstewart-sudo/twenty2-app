@@ -1074,6 +1074,7 @@ function afterRender(page){
       if(window.__salesData === undefined) loadSalesOverview(campaign);
       if(window.__salesConversionIntel === undefined) loadConversionIntelligence(campaign);
       if(window.__salesData && window.__salesConversionIntel) initSalesConversionCharts(window.__salesConversionIntel);
+      if(window.__campaignOffer === undefined) loadCampaignOffer(campaign);
     }
     if(tab === 'content' && campaign){
       if(window.__campaignContentSignals === undefined) loadCampaignContentSignals(campaign);
@@ -4905,7 +4906,11 @@ function initCampaignChat(){
     ready: false,
     progressPercent: 0,
     previewCampaign: null,
-    editingCampaignId: null
+    editingCampaignId: null,
+    offerStep: null,
+    offer: null,
+    offerAnswers: {},
+    offerQuestionIndex: 0
   };
 }
 
@@ -4929,6 +4934,7 @@ function renderCampaignChatTab(){
     <div class="campaign-chat" id="campaignChatScroll">
       ${chat.messages.map(m => `<div class="campaign-chat-msg ${m.role==='assistant'?'assistant':'user'}">${esc(m.content)}</div>`).join('')}
       ${chat.previewCampaign ? renderCampaignPreviewCard(chat.previewCampaign) : ''}
+      ${chat.previewCampaign && chat.offerStep ? renderOfferSetupCard(chat) : ''}
     </div>
     ${!chat.previewCampaign ? `
       ${chat.chips.length ? `<div class="campaign-chips">${chat.chips.map(c=>`<span class="pill" style="cursor:pointer;" onclick="sendCampaignChatChip(${JSON.stringify(c).replace(/"/g,'&quot;')})">${esc(c)}</span>`).join('')}</div>` : ''}
@@ -5011,6 +5017,11 @@ async function buildCampaignFromChat(){
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
     chat.previewCampaign = data;
+    // Name, ICP, and goal are all set by this point - gate Save to Draft on
+    // the offer step below rather than reintroducing a new build round trip
+    // for it.
+    chat.offerStep = 'choose';
+    chat.offer = null;
     renderPage();
     scrollCampaignChatToBottom();
   } catch(err){
@@ -5019,6 +5030,7 @@ async function buildCampaignFromChat(){
 }
 
 function renderCampaignPreviewCard(preview){
+  const offerReady = window.__campaignChat && window.__campaignChat.offerStep === 'accepted';
   return `
   <div class="campaign-preview-card">
     <div class="campaign-card-name">${esc(preview.campaignName)}</div>
@@ -5033,10 +5045,165 @@ function renderCampaignPreviewCard(preview){
     <div style="margin-top:12px;"><div style="font-weight:700;font-size:12px;">Strategy</div><p style="font-size:12px;margin-top:4px;">${esc(preview.strategyBrief||'')}</p></div>
     <div style="margin-top:12px;"><div style="font-weight:700;font-size:12px;">Estimated conversions</div><p style="font-size:12px;margin-top:4px;">${esc(preview.estimatedConversions||'')}</p></div>
     <div style="margin-top:14px;display:flex;gap:10px;">
-      <button class="btn btn-primary" onclick="saveCampaignToDraft()"><i class="ti ti-device-floppy"></i> Save to Draft</button>
+      ${offerReady ? `<button class="btn btn-primary" onclick="saveCampaignToDraft()"><i class="ti ti-device-floppy"></i> Save to Draft</button>` : ''}
       <button class="btn btn-secondary" onclick="startOverCampaignChat()"><i class="ti ti-refresh"></i> Start Over</button>
     </div>
   </div>`;
+}
+
+/* ---- Offer setup (Hormozi Grand Slam Offer), shown once the campaign
+   preview - name/ICP/goal - is ready and before Save to Draft unlocks ---- */
+
+const OFFER_QUESTIONS = [
+  ['dreamOutcome', 'What is the dream outcome for your prospect?'],
+  ['timeToValue', 'How quickly can you deliver results?'],
+  ['effortAndSacrifice', 'What effort is required from them?'],
+  ['guarantee', 'What guarantee can you offer?']
+];
+
+function renderOfferSetupCard(chat){
+  const step = chat.offerStep;
+  if(step === 'choose'){
+    return `
+    <div class="card" style="margin-top:14px;">
+      <div class="section-title"><i class="ti ti-diamond"></i> Set the offer</div>
+      <p class="muted" style="font-size:12px;margin-bottom:12px;">Every campaign needs a Grand Slam Offer before it can be saved - this is what gets woven into outreach messages once a contact replies.</p>
+      <div style="display:flex;gap:10px;">
+        <button class="btn btn-primary" onclick="chooseOfferPath('generate')"><i class="ti ti-sparkles"></i> Generate offer for me</button>
+        <button class="btn btn-secondary" onclick="chooseOfferPath('together')"><i class="ti ti-messages"></i> Build it together</button>
+      </div>
+    </div>`;
+  }
+  if(step === 'generating'){
+    return `<div class="card" style="margin-top:14px;"><div class="muted"><i class="ti ti-loader-2"></i> Generating an offer from T2C's past campaign performance...</div></div>`;
+  }
+  if(step === 'building'){
+    const idx = chat.offerQuestionIndex || 0;
+    const [, label] = OFFER_QUESTIONS[idx];
+    return `
+    <div class="card" style="margin-top:14px;">
+      <div class="section-title"><i class="ti ti-diamond"></i> Set the offer &mdash; question ${idx+1} of ${OFFER_QUESTIONS.length}</div>
+      <p style="font-size:13px;font-weight:700;margin-bottom:8px;">${esc(label)}</p>
+      <textarea id="offerAnswerInput" rows="3" placeholder="Type your answer..."></textarea>
+      <div style="margin-top:10px;"><button class="btn btn-primary" onclick="submitOfferAnswer()"><i class="ti ti-arrow-right"></i> Next</button></div>
+    </div>`;
+  }
+  if(step === 'review'){
+    const o = chat.offer || {};
+    return `
+    <div class="card" style="margin-top:14px;">
+      <div class="section-title"><i class="ti ti-diamond"></i> Review the offer</div>
+      ${o.rationale ? `<p class="muted" style="font-size:11.5px;margin-bottom:10px;"><i class="ti ti-info-circle"></i> ${esc(o.rationale)}</p>` : ''}
+      <div class="field"><label>Dream outcome</label><textarea rows="2" oninput="updateOfferField('dreamOutcome',this.value)">${esc(o.dreamOutcome||'')}</textarea></div>
+      <div class="field"><label>Speed (time to value)</label><textarea rows="2" oninput="updateOfferField('timeToValue',this.value)">${esc(o.timeToValue||'')}</textarea></div>
+      <div class="field"><label>Effort &amp; sacrifice</label><textarea rows="2" oninput="updateOfferField('effortAndSacrifice',this.value)">${esc(o.effortAndSacrifice||'')}</textarea></div>
+      <div class="field"><label>Guarantee</label><textarea rows="2" oninput="updateOfferField('guarantee',this.value)">${esc(o.guarantee||'')}</textarea></div>
+      <div class="field"><label>Offer summary</label><textarea rows="3" oninput="updateOfferField('summary',this.value)">${esc(o.summary||'')}</textarea></div>
+      <div style="display:flex;gap:10px;margin-top:10px;">
+        <button class="btn btn-primary" onclick="acceptOffer()"><i class="ti ti-check"></i> Use this offer</button>
+        <button class="btn btn-secondary" onclick="chooseOfferPath('generate')"><i class="ti ti-refresh"></i> Regenerate</button>
+      </div>
+    </div>`;
+  }
+  if(step === 'accepted'){
+    const o = chat.offer || {};
+    return `
+    <div class="card" style="margin-top:14px;">
+      <div class="section-title"><i class="ti ti-circle-check"></i> Offer set</div>
+      <p style="font-size:12.5px;">${esc(o.summary||'')}</p>
+      <button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="editOfferAgain()">Edit offer</button>
+    </div>`;
+  }
+  return '';
+}
+
+async function chooseOfferPath(path){
+  const chat = window.__campaignChat;
+  const preview = chat.previewCampaign;
+  if(path === 'generate'){
+    chat.offerStep = 'generating';
+    renderPage();
+    scrollCampaignChatToBottom();
+    try {
+      const res = await fetch('/api/offers/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ icp: preview.targetSegmentSummary || '', goal: preview.goal || '', product: preview.product || '' })
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+      chat.offer = Object.assign({}, data.offer, { rationale: data.rationale || '' });
+      chat.offerStep = 'review';
+    } catch(err){
+      toast('Could not generate offer: ' + err.message, 'warn');
+      chat.offerStep = 'choose';
+    }
+    renderPage();
+    scrollCampaignChatToBottom();
+  } else {
+    chat.offerAnswers = {};
+    chat.offerQuestionIndex = 0;
+    chat.offerStep = 'building';
+    renderPage();
+    scrollCampaignChatToBottom();
+  }
+}
+
+async function submitOfferAnswer(){
+  const chat = window.__campaignChat;
+  const input = document.getElementById('offerAnswerInput');
+  const text = input ? input.value.trim() : '';
+  if(!text) return;
+  const idx = chat.offerQuestionIndex || 0;
+  const [key] = OFFER_QUESTIONS[idx];
+  chat.offerAnswers[key] = text;
+
+  if(idx + 1 < OFFER_QUESTIONS.length){
+    chat.offerQuestionIndex = idx + 1;
+    renderPage();
+    scrollCampaignChatToBottom();
+    return;
+  }
+
+  chat.offerStep = 'generating';
+  renderPage();
+  scrollCampaignChatToBottom();
+  try {
+    const res = await fetch('/api/offers/compose', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(chat.offerAnswers)
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+    chat.offer = Object.assign({}, chat.offerAnswers, { summary: data.summary });
+  } catch(err){
+    toast('Could not compose offer summary: ' + err.message, 'warn');
+    chat.offer = Object.assign({}, chat.offerAnswers, { summary: '' });
+  }
+  chat.offerStep = 'review';
+  renderPage();
+  scrollCampaignChatToBottom();
+}
+
+function updateOfferField(key, value){
+  const chat = window.__campaignChat;
+  if(!chat.offer) chat.offer = {};
+  chat.offer[key] = value;
+}
+
+function acceptOffer(){
+  const chat = window.__campaignChat;
+  if(!chat.offer) return;
+  chat.offerStep = 'accepted';
+  renderPage();
+  scrollCampaignChatToBottom();
+}
+
+function editOfferAgain(){
+  window.__campaignChat.offerStep = 'review';
+  renderPage();
+  scrollCampaignChatToBottom();
 }
 
 function saveCampaignToDraft(){
@@ -5070,10 +5237,35 @@ function saveCampaignToDraft(){
     updatedAt: isoDate(TODAY)
   });
 
-  syncCampaignToAirtable(campaign);
+  const offerToSave = chat.offer;
+  syncCampaignToAirtable(campaign, () => { if(offerToSave) saveOfferForCampaign(campaign, offerToSave); });
   toast(`Campaign "${campaign.name}" saved to Draft with ${contactIds.length} matched contact${contactIds.length===1?'':'s'}`, 'success');
   window.__campaignChat = null;
   openCampaignDetail(campaign.id);
+}
+
+// Writes the offer set during campaign creation (or regenerated on the
+// Sales tab) to Airtable as this campaign's new Active offer - called only
+// once syncCampaignToAirtable's callback confirms campaign.recordId is set,
+// since the Offers record must link to a real Campaign record.
+function saveOfferForCampaign(campaign, offer){
+  if(!campaign.recordId){ console.warn('Cannot save offer - campaign has no Airtable record id yet'); return; }
+  fetch('/api/offers/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      campaignId: campaign.recordId,
+      campaignName: campaign.name,
+      icp: campaign.targetSegmentSummary || '',
+      goal: campaign.goal || '',
+      dreamOutcome: offer.dreamOutcome || '',
+      timeToValue: offer.timeToValue || '',
+      effortAndSacrifice: offer.effortAndSacrifice || '',
+      guarantee: offer.guarantee || '',
+      summary: offer.summary || '',
+      rationale: offer.rationale || ''
+    })
+  }).catch(err => console.warn('Offer save failed:', err.message));
 }
 
 function startOverCampaignChat(){
@@ -5091,7 +5283,11 @@ function editCampaign(campaignId){
     ready: false,
     progressPercent: 0,
     previewCampaign: null,
-    editingCampaignId: campaignId
+    editingCampaignId: campaignId,
+    offerStep: null,
+    offer: null,
+    offerAnswers: {},
+    offerQuestionIndex: 0
   };
   window.__campaignView = 'chat';
   renderPage();
@@ -5121,6 +5317,10 @@ function openCampaignDetail(campaignId, tab){
   window.__salesPeriod = window.__salesPeriod || 'thisWeek';
   window.__salesData = undefined;
   window.__salesConversionIntel = undefined;
+  window.__campaignOffer = undefined;
+  window.__campaignOfferEditing = false;
+  window.__campaignOfferPending = null;
+  window.__campaignOfferGenerating = false;
   window.__campaignContentSignals = undefined;
   window.__campaignContentDrafts = undefined;
   window.__contentEditorId = null;
@@ -5823,12 +6023,207 @@ async function loadConversionIntelligence(campaign){
   if(window.__campaignDetailTab === 'sales') renderPage();
 }
 
+/* -- Offer section (Hormozi Grand Slam Offer), top of the Sales tab -- */
+
+async function loadCampaignOffer(campaign){
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaignRouteKey(campaign))}/offer`);
+    const json = await res.json();
+    if(!res.ok) throw new Error(json.error || ('Request failed with status '+res.status));
+    window.__campaignOffer = json.offer;
+  } catch(err){
+    window.__campaignOffer = { error: err.message };
+  }
+  if(window.__campaignDetailTab === 'sales') renderPage();
+}
+
+function renderCampaignOfferSection(campaign){
+  if(window.__campaignOfferGenerating){
+    return `<div class="card" style="margin-bottom:16px;"><div class="muted"><i class="ti ti-loader-2"></i> Generating an offer from T2C's past campaign performance...</div></div>`;
+  }
+  if(window.__campaignOfferPending){
+    return renderCampaignOfferPendingCard(window.__campaignOfferPending);
+  }
+
+  const offer = window.__campaignOffer;
+  if(offer === undefined) return '<div class="card" style="margin-bottom:16px;"><div class="muted"><i class="ti ti-loader-2"></i> Loading offer...</div></div>';
+  if(offer && offer.error) return `<div class="card" style="margin-bottom:16px;"><div class="muted">Could not load offer: ${esc(offer.error)}</div></div>`;
+  if(window.__campaignOfferEditing) return renderCampaignOfferEditForm(offer);
+
+  if(!offer){
+    return `
+    <div class="card" style="margin-bottom:16px;">
+      <div class="section-title"><i class="ti ti-diamond"></i> Offer</div>
+      <p class="muted" style="font-size:12px;margin-bottom:12px;">This campaign doesn't have an offer yet.</p>
+      <button class="btn btn-primary" onclick="generateNewOfferForCampaign()"><i class="ti ti-sparkles"></i> Generate new offer</button>
+    </div>`;
+  }
+
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-diamond"></i> Offer</div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-secondary btn-sm" onclick="editCampaignOffer()"><i class="ti ti-edit"></i> Edit</button>
+        <button class="btn btn-secondary btn-sm" onclick="generateNewOfferForCampaign()"><i class="ti ti-refresh"></i> Generate new offer</button>
+      </div>
+    </div>
+    <div class="mini-cards" style="grid-template-columns:repeat(2,1fr);margin-bottom:12px;">
+      <div class="mini-card" style="text-align:left;padding:12px 14px;"><div class="label" style="margin-top:0;">Dream outcome</div><div style="font-size:12.5px;margin-top:4px;">${esc(offer.dreamOutcome||'—')}</div></div>
+      <div class="mini-card" style="text-align:left;padding:12px 14px;"><div class="label" style="margin-top:0;">Speed</div><div style="font-size:12.5px;margin-top:4px;">${esc(offer.timeToValue||'—')}</div></div>
+      <div class="mini-card" style="text-align:left;padding:12px 14px;"><div class="label" style="margin-top:0;">Effort &amp; sacrifice</div><div style="font-size:12.5px;margin-top:4px;">${esc(offer.effortAndSacrifice||'—')}</div></div>
+      <div class="mini-card" style="text-align:left;padding:12px 14px;"><div class="label" style="margin-top:0;">Guarantee</div><div style="font-size:12.5px;margin-top:4px;">${esc(offer.guarantee||'—')}</div></div>
+    </div>
+    <div style="font-size:12.5px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card);padding:12px 14px;margin-bottom:12px;">${esc(offer.summary||'No summary yet.')}</div>
+    <div class="mini-cards" style="grid-template-columns:repeat(4,1fr);margin-bottom:0;">
+      <div class="mini-card"><div class="num">${offer.meetingsBooked||0}</div><div class="label">Meetings booked</div></div>
+      <div class="mini-card"><div class="num">${offer.replyRate||0}%</div><div class="label">Reply rate</div></div>
+      <div class="mini-card"><div class="num">${offer.connectionRate||0}%</div><div class="label">Connection rate</div></div>
+      <div class="mini-card"><div class="num">${offer.engagementScore||0}%</div><div class="label">Engagement score</div></div>
+    </div>
+  </div>`;
+}
+
+function renderCampaignOfferEditForm(offer){
+  const o = offer || {};
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title"><i class="ti ti-diamond"></i> Edit offer</div>
+    <div class="field"><label>Dream outcome</label><textarea id="offerEditDreamOutcome" rows="2">${esc(o.dreamOutcome||'')}</textarea></div>
+    <div class="field"><label>Speed (time to value)</label><textarea id="offerEditTimeToValue" rows="2">${esc(o.timeToValue||'')}</textarea></div>
+    <div class="field"><label>Effort &amp; sacrifice</label><textarea id="offerEditEffort" rows="2">${esc(o.effortAndSacrifice||'')}</textarea></div>
+    <div class="field"><label>Guarantee</label><textarea id="offerEditGuarantee" rows="2">${esc(o.guarantee||'')}</textarea></div>
+    <div class="field"><label>Offer summary</label><textarea id="offerEditSummary" rows="3">${esc(o.summary||'')}</textarea></div>
+    <div style="display:flex;gap:10px;margin-top:10px;">
+      <button class="btn btn-primary" onclick="saveCampaignOfferEdit()"><i class="ti ti-device-floppy"></i> Save</button>
+      <button class="btn btn-secondary" onclick="cancelEditCampaignOffer()">Cancel</button>
+    </div>
+  </div>`;
+}
+
+function editCampaignOffer(){
+  window.__campaignOfferEditing = true;
+  renderPage();
+}
+
+function cancelEditCampaignOffer(){
+  window.__campaignOfferEditing = false;
+  renderPage();
+}
+
+async function saveCampaignOfferEdit(){
+  const offer = window.__campaignOffer;
+  if(!offer || !offer.id) return;
+  const fields = {
+    dreamOutcome: document.getElementById('offerEditDreamOutcome').value,
+    timeToValue: document.getElementById('offerEditTimeToValue').value,
+    effortAndSacrifice: document.getElementById('offerEditEffort').value,
+    guarantee: document.getElementById('offerEditGuarantee').value,
+    summary: document.getElementById('offerEditSummary').value
+  };
+  try {
+    const res = await fetch(`/api/offers/${offer.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(fields)
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+    Object.assign(offer, fields);
+    window.__campaignOfferEditing = false;
+    toast('Offer updated', 'success');
+    renderPage();
+  } catch(err){
+    toast('Could not save offer: ' + err.message, 'warn');
+  }
+}
+
+function renderCampaignOfferPendingCard(pending){
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title"><i class="ti ti-diamond"></i> New offer (not saved yet)</div>
+    ${pending.rationale ? `<p class="muted" style="font-size:11.5px;margin-bottom:10px;"><i class="ti ti-info-circle"></i> ${esc(pending.rationale)}</p>` : ''}
+    <div class="mini-cards" style="grid-template-columns:repeat(2,1fr);margin-bottom:12px;">
+      <div class="mini-card" style="text-align:left;padding:12px 14px;"><div class="label" style="margin-top:0;">Dream outcome</div><div style="font-size:12.5px;margin-top:4px;">${esc(pending.dreamOutcome||'—')}</div></div>
+      <div class="mini-card" style="text-align:left;padding:12px 14px;"><div class="label" style="margin-top:0;">Speed</div><div style="font-size:12.5px;margin-top:4px;">${esc(pending.timeToValue||'—')}</div></div>
+      <div class="mini-card" style="text-align:left;padding:12px 14px;"><div class="label" style="margin-top:0;">Effort &amp; sacrifice</div><div style="font-size:12.5px;margin-top:4px;">${esc(pending.effortAndSacrifice||'—')}</div></div>
+      <div class="mini-card" style="text-align:left;padding:12px 14px;"><div class="label" style="margin-top:0;">Guarantee</div><div style="font-size:12.5px;margin-top:4px;">${esc(pending.guarantee||'—')}</div></div>
+    </div>
+    <div style="font-size:12.5px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card);padding:12px 14px;margin-bottom:12px;">${esc(pending.summary||'')}</div>
+    <div style="display:flex;gap:10px;">
+      <button class="btn btn-primary" onclick="acceptGeneratedOffer()"><i class="ti ti-check"></i> Use this offer</button>
+      <button class="btn btn-secondary" onclick="discardGeneratedOffer()">Discard</button>
+    </div>
+  </div>`;
+}
+
+async function generateNewOfferForCampaign(){
+  const campaign = state.campaigns.find(c => c.id === window.__campaignDetailId);
+  if(!campaign) return;
+  window.__campaignOfferGenerating = true;
+  renderPage();
+  try {
+    const res = await fetch('/api/offers/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ icp: campaign.targetSegmentSummary || '', goal: campaign.goal || '', product: campaign.product || '', campaignId: campaign.recordId || null })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+    window.__campaignOfferPending = Object.assign({}, data.offer, { rationale: data.rationale || '' });
+  } catch(err){
+    toast('Could not generate offer: ' + err.message, 'warn');
+    window.__campaignOfferPending = null;
+  }
+  window.__campaignOfferGenerating = false;
+  renderPage();
+}
+
+function discardGeneratedOffer(){
+  window.__campaignOfferPending = null;
+  renderPage();
+}
+
+async function acceptGeneratedOffer(){
+  const campaign = state.campaigns.find(c => c.id === window.__campaignDetailId);
+  const pending = window.__campaignOfferPending;
+  if(!campaign || !pending) return;
+  if(!campaign.recordId){ toast('Cannot save offer - campaign has no Airtable record id yet', 'warn'); return; }
+  try {
+    const res = await fetch('/api/offers/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        campaignId: campaign.recordId,
+        campaignName: campaign.name,
+        icp: campaign.targetSegmentSummary || '',
+        goal: campaign.goal || '',
+        dreamOutcome: pending.dreamOutcome || '',
+        timeToValue: pending.timeToValue || '',
+        effortAndSacrifice: pending.effortAndSacrifice || '',
+        guarantee: pending.guarantee || '',
+        summary: pending.summary || '',
+        rationale: pending.rationale || ''
+      })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+    toast('New offer saved', 'success');
+    window.__campaignOfferPending = null;
+    window.__campaignOffer = undefined;
+    loadCampaignOffer(campaign);
+  } catch(err){
+    toast('Could not save offer: ' + err.message, 'warn');
+  }
+}
+
 function renderCampaignSalesTab(campaign){
   const period = window.__salesPeriod || 'thisWeek';
   const data = window.__salesData;
   if(data === undefined) return '<div class="card"><div class="muted"><i class="ti ti-loader-2"></i> Loading sales data...</div></div>';
   if(data.error) return `<div class="card"><div class="muted">Could not load sales data: ${esc(data.error)}</div></div>`;
   return `
+    ${renderCampaignOfferSection(campaign)}
     ${renderSalesPeriodSelector(period)}
     ${renderPipelineFunnel(data)}
     ${renderSalesScorecards(data, period)}
@@ -6593,7 +6988,7 @@ function formatSequenceForAirtable(sequence){
   }).filter(Boolean).join('\n\n');
 }
 
-function syncCampaignToAirtable(campaign){
+function syncCampaignToAirtable(campaign, onSynced){
   const contactNames = state.contacts.filter(c => (campaign.contactIds||[]).includes(c.id)).map(c => c.name);
   fetch('/api/airtable/campaign', {
     method: 'POST',
@@ -6625,7 +7020,10 @@ function syncCampaignToAirtable(campaign){
     // syncContactToAirtable) lets those routes resolve the campaign by id
     // first, falling back to name only for campaigns that haven't synced
     // yet.
-    .then(data => { if(data && data.recordId) campaign.recordId = data.recordId; })
+    .then(data => {
+      if(data && data.recordId) campaign.recordId = data.recordId;
+      if(onSynced) onSynced(data);
+    })
     .catch(err => console.warn('Airtable campaign sync failed:', err.message));
 }
 

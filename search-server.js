@@ -2654,6 +2654,12 @@ app.get('/api/campaign/:id/conversion-intelligence', async (req, res) => {
 // funnel math sales-overview above feeds the per-campaign Sales tab - good
 // enough for the model to reason over) and asks Claude for a handful of
 // bullet takeaways across the whole pipeline.
+// Same "reached Connected or later" stage list the per-campaign Sales
+// tab's FUNNEL_STAGE_GROUPS['connected'] uses client-side - the early
+// stages (Found, Connection Pending/Requested) don't count as connected.
+// Shared by /api/sales/insights and the offer learning-loop metrics below.
+const CONNECTED_OR_LATER_STAGES = ['Connected', 'Message 1 Sent', 'Pending Reply M1', 'Ready for Message 2', 'Message 2 Sent', 'Pending Reply M2', 'Ready for Message 3', 'Message 3 Sent', 'Pending Reply M3', 'Meeting Booked'];
+
 app.get('/api/sales/insights', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   try {
@@ -2671,11 +2677,6 @@ app.get('/api/sales/insights', async (req, res) => {
     if (!campaigns.length) {
       return res.json({ insights: ['No live or past campaigns yet — insights will appear once a campaign goes live.'], generatedAt: new Date().toISOString() });
     }
-
-    // Same "reached Connected or later" stage list the per-campaign Sales
-    // tab's FUNNEL_STAGE_GROUPS['connected'] uses client-side - the early
-    // stages (Found, Connection Pending/Requested) don't count as connected.
-    const CONNECTED_OR_LATER_STAGES = ['Connected', 'Message 1 Sent', 'Pending Reply M1', 'Ready for Message 2', 'Message 2 Sent', 'Pending Reply M2', 'Ready for Message 3', 'Message 3 Sent', 'Pending Reply M3', 'Meeting Booked'];
 
     const summary = campaigns.map(c => {
       const myCc = ccRows.filter(r => (r.fields['Campaign'] || []).includes(c.id));
@@ -2709,6 +2710,324 @@ Write 3-5 bullet point insights a sales lead would find useful - call out stando
     res.status(500).json({ error: err.message });
   }
 });
+
+/* ===================== OFFERS (Hormozi Grand Slam Offer system) =====================
+ * Airtable "Offers" table (linked 1:many from Campaigns, prefers one Active
+ * offer per campaign at a time - older ones get retired, not deleted, so
+ * they remain available as performance history for future /generate calls).
+ * Field names used below match that table's existing schema exactly. */
+
+const OFFERS_TABLE = 'Offers';
+
+function offerFromRecord(r) {
+  const f = r.fields || {};
+  return {
+    id: r.id,
+    name: f['Offer Name'] || '',
+    campaignId: (f['Campaign'] || [])[0] || null,
+    icpType: f['ICP Type'] || '',
+    goal: f['Goal'] || '',
+    dreamOutcome: f['Dream Outcome'] || '',
+    timeToValue: f['Time to Value'] || '',
+    effortAndSacrifice: f['Effort and Sacrifice'] || '',
+    guarantee: f['Guarantee'] || '',
+    summary: f['Offer Summary'] || '',
+    meetingsBooked: f['Meetings Booked'] || 0,
+    replyRate: f['Reply Rate'] || 0,
+    connectionRate: f['Connection Rate'] || 0,
+    engagementScore: f['Engagement Score'] || 0,
+    status: f['Status'] || '',
+    notes: f['Notes'] || ''
+  };
+}
+
+// The Sales tab's Offer section and outreach message generation (Today's
+// Actions / Intelligence tab) both need "the current active offer for this
+// campaign" - centralized here so both read the same definition of
+// "active" (Status = Active, most recently created if more than one).
+async function getActiveOfferForCampaign(campaignRecordId) {
+  if (!campaignRecordId) return null;
+  const data = await airtableRequest('GET', OFFERS_TABLE);
+  const records = (data.records || [])
+    .filter(r => (r.fields['Campaign'] || []).includes(campaignRecordId) && r.fields['Status'] === 'Active')
+    .sort((a, b) => new Date(b.createdTime) - new Date(a.createdTime));
+  return records.length ? offerFromRecord(records[0]) : null;
+}
+
+// GET the active offer for a campaign - Sales tab's Offer section.
+app.get('/api/campaign/:id/offer', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const campaignRecord = await resolveCampaignRecord(decodeURIComponent(req.params.id));
+    if (!campaignRecord) return res.status(404).json({ error: 'Campaign not found in Airtable' });
+    const offer = await getActiveOfferForCampaign(campaignRecord.id);
+    res.json({ offer, campaignRecordId: campaignRecord.id });
+  } catch (err) {
+    console.error('Get campaign offer error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Generates a recommended offer from ICP/goal/product, informed by T2C's
+// own best-performing past offers for a similar ICP. Used both by the
+// campaign-creation "Generate offer for me" path (no campaignId yet - the
+// campaign hasn't been saved to Airtable at that point in the chat flow)
+// and the Sales tab's "Generate new offer" button (campaignId set, so its
+// own current offer is excluded from the comparison pool).
+app.post('/api/offers/generate', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  const { icp, goal, product, campaignId } = req.body;
+  if (!icp) return res.status(400).json({ error: 'icp is required' });
+
+  try {
+    const [offersData, campaignsData] = await Promise.all([
+      airtableRequest('GET', OFFERS_TABLE),
+      airtableRequest('GET', 'Campaigns')
+    ]);
+    const campaignById = {};
+    (campaignsData.records || []).forEach(r => { campaignById[r.id] = r; });
+
+    // "Similar ICP" = at least one significant (4+ letter) word shared with
+    // the target ICP text - a lightweight filter, not a rigid taxonomy,
+    // since ICP Type is free text.
+    const icpWords = new Set((icp.toLowerCase().match(/[a-z]{4,}/g) || []));
+
+    const pastOffers = (offersData.records || [])
+      .filter(r => (r.fields['Campaign'] || [])[0] !== campaignId)
+      .filter(r => r.fields['Dream Outcome'] || r.fields['Offer Summary'])
+      .map(r => {
+        const linkedCampaignId = (r.fields['Campaign'] || [])[0] || null;
+        const campaign = linkedCampaignId ? campaignById[linkedCampaignId] : null;
+        // Airtable "Contact Count" is a count rollup already on Campaigns -
+        // goal completion rate is derived from it rather than stored, since
+        // the Offers table has no dedicated field for it.
+        const contactCount = campaign ? (campaign.fields['Contact Count'] || 0) : 0;
+        const meetingsBooked = r.fields['Meetings Booked'] || 0;
+        const goalCompletionRate = contactCount ? Math.round((meetingsBooked / contactCount) * 100) : 0;
+        const icpType = r.fields['ICP Type'] || '';
+        const similarIcp = icpType ? [...icpWords].some(w => icpType.toLowerCase().includes(w)) : false;
+        return {
+          campaignName: campaign ? (campaign.fields['Name'] || campaign.fields['Campaign Name'] || '') : '',
+          icpType,
+          goalCompletionRate,
+          engagementScore: r.fields['Engagement Score'] || 0,
+          dreamOutcome: r.fields['Dream Outcome'] || '',
+          timeToValue: r.fields['Time to Value'] || '',
+          effortAndSacrifice: r.fields['Effort and Sacrifice'] || '',
+          guarantee: r.fields['Guarantee'] || '',
+          similarIcp
+        };
+      });
+
+    const similar = pastOffers.filter(o => o.similarIcp);
+    const candidatePool = similar.length ? similar : pastOffers;
+    const ranked = candidatePool
+      .sort((a, b) => (b.engagementScore + b.goalCompletionRate) - (a.engagementScore + a.goalCompletionRate))
+      .slice(0, 5);
+
+    const prompt = `You are building a Hormozi-style Grand Slam Offer (Dream Outcome, Speed/Time to Value, Effort & Sacrifice, Guarantee) for a new outreach campaign at Twenty2 Collective (T2C), a Perth-based Agile and change consultancy.
+
+New campaign:
+- Target ICP: ${icp}
+- Goal: ${goal || 'not recorded'}
+- Product/service: ${product || 'not recorded'}
+
+${ranked.length ? `Here are T2C's best-performing past offers for a similar ICP, ranked by engagement score and goal completion rate (use these to inform what has actually worked, not just theory):
+${ranked.map(o => `- "${o.campaignName}" (ICP: ${o.icpType || 'not recorded'}, engagement score ${o.engagementScore}, goal completion ${o.goalCompletionRate}%): Dream outcome: ${o.dreamOutcome || 'n/a'}. Time to value: ${o.timeToValue || 'n/a'}. Effort: ${o.effortAndSacrifice || 'n/a'}. Guarantee: ${o.guarantee || 'n/a'}.`).join('\n')}` : `No past offers with a similar ICP exist yet - base this on T2C's general positioning as an Agile/change consultancy.`}
+
+Generate a new Grand Slam Offer for this campaign. Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "dreamOutcome": string, "timeToValue": string, "effortAndSacrifice": string, "guarantee": string, "summary": string, "rationale": string }
+
+"summary" is a single persuasive paragraph combining all four components, written so it can be dropped directly into a LinkedIn outreach message. "rationale" is one or two sentences naming which past campaign(s) informed this offer and why, or noting this is a first-of-its-kind offer if no past campaign applied.`;
+
+    const parsed = await callClaudeJson(prompt, 1200);
+    res.json({
+      offer: {
+        dreamOutcome: parsed.dreamOutcome || '',
+        timeToValue: parsed.timeToValue || '',
+        effortAndSacrifice: parsed.effortAndSacrifice || '',
+        guarantee: parsed.guarantee || '',
+        summary: parsed.summary || ''
+      },
+      rationale: parsed.rationale || '',
+      informedBy: ranked.map(o => o.campaignName).filter(Boolean)
+    });
+  } catch (err) {
+    console.error('Offer generate error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// "Build it together" path - turns the four raw sequential-question
+// answers into one cohesive narrative paragraph, same shape as the
+// "summary" field /api/offers/generate produces, so both paths feed the
+// same downstream save/display code identically.
+app.post('/api/offers/compose', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  const { dreamOutcome, timeToValue, effortAndSacrifice, guarantee } = req.body;
+  if (!dreamOutcome || !timeToValue || !effortAndSacrifice || !guarantee) {
+    return res.status(400).json({ error: 'dreamOutcome, timeToValue, effortAndSacrifice, and guarantee are all required' });
+  }
+  try {
+    const prompt = `Turn these four raw answers into one persuasive paragraph combining them into a single Grand Slam Offer summary, written so it can be dropped directly into a LinkedIn outreach message. UK English, no em dashes, no markdown.
+
+Dream outcome: ${dreamOutcome}
+Speed / time to value: ${timeToValue}
+Effort required from them: ${effortAndSacrifice}
+Guarantee: ${guarantee}
+
+Return only the paragraph, nothing else.`;
+    const summary = await callClaudeText(prompt, 400);
+    res.json({ summary });
+  } catch (err) {
+    console.error('Offer compose error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Writes a completed offer to Airtable, linked to the campaign, as the new
+// Active offer - retiring (not deleting) whatever was Active before so it
+// stays available as performance history. Used by both campaign-creation
+// paths (once the campaign itself has been saved and has a real record
+// id) and the Sales tab's "Generate new offer" flow once the generated
+// recommendation has been reviewed/accepted.
+app.post('/api/offers/save', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { campaignId, campaignName, icp, goal, dreamOutcome, timeToValue, effortAndSacrifice, guarantee, summary, rationale } = req.body;
+  if (!campaignId) return res.status(400).json({ error: 'campaignId is required' });
+  if (!dreamOutcome || !timeToValue || !effortAndSacrifice || !guarantee) {
+    return res.status(400).json({ error: 'dreamOutcome, timeToValue, effortAndSacrifice, and guarantee are all required' });
+  }
+
+  try {
+    const existing = await airtableRequest('GET', OFFERS_TABLE);
+    const activeForCampaign = (existing.records || []).filter(r => (r.fields['Campaign'] || []).includes(campaignId) && r.fields['Status'] === 'Active');
+    if (activeForCampaign.length) {
+      await airtableRequest('PATCH', OFFERS_TABLE, {
+        records: activeForCampaign.map(r => ({ id: r.id, fields: { 'Status': 'Retired' } }))
+      });
+    }
+
+    const fields = {
+      'Offer Name': `${campaignName || 'Campaign'} — Offer`,
+      'Campaign': [campaignId],
+      'ICP Type': icp || '',
+      'Goal': goal || '',
+      'Dream Outcome': dreamOutcome,
+      'Time to Value': timeToValue,
+      'Effort and Sacrifice': effortAndSacrifice,
+      'Guarantee': guarantee,
+      'Offer Summary': summary || '',
+      'Status': 'Active'
+    };
+    if (rationale) fields['Notes'] = rationale;
+
+    const data = await airtableRequest('POST', OFFERS_TABLE, { records: [{ fields }] });
+    res.json({ success: true, offerId: data.records[0].id });
+  } catch (err) {
+    console.error('Offer save error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Sales tab's Edit button - patches an existing offer's fields in place
+// without touching Status or retiring anything.
+app.patch('/api/offers/:id', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { dreamOutcome, timeToValue, effortAndSacrifice, guarantee, summary } = req.body;
+  try {
+    const fields = {};
+    if (dreamOutcome !== undefined) fields['Dream Outcome'] = dreamOutcome;
+    if (timeToValue !== undefined) fields['Time to Value'] = timeToValue;
+    if (effortAndSacrifice !== undefined) fields['Effort and Sacrifice'] = effortAndSacrifice;
+    if (guarantee !== undefined) fields['Guarantee'] = guarantee;
+    if (summary !== undefined) fields['Offer Summary'] = summary;
+    await airtableRequest('PATCH', OFFERS_TABLE, { records: [{ id: req.params.id, fields }] });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Offer edit error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Offer learning loop: reads this campaign's Campaign Contacts + Touch
+// Points and writes Meetings Booked / Reply Rate / Connection Rate (plus a
+// derived Engagement Score) onto its Active offer, so future
+// /api/offers/generate calls can rank past offers by what actually
+// performed. ccRows/tpRecords/offerRecords are optional pre-fetched
+// tables, passed by updateAllOfferMetrics's cron sweep so it fetches each
+// table once instead of once per campaign.
+async function updateOfferMetricsForCampaign(campaignId, ccRows, tpRecords, offerRecords) {
+  const rows = ccRows || await fetchCampaignContactsRows();
+  const touchPoints = tpRecords || (await airtableRequest('GET', 'Touch Points')).records || [];
+  const offers = offerRecords || (await airtableRequest('GET', OFFERS_TABLE)).records || [];
+
+  const myCc = rows.filter(r => (r.fields['Campaign'] || []).includes(campaignId));
+  if (!myCc.length) return null;
+
+  const myContactIds = new Set(myCc.map(r => (r.fields['Contact'] || [])[0]).filter(Boolean));
+  const myTouchPoints = touchPoints.filter(r => (r.fields['Campaign'] || []).includes(campaignId) || (r.fields['Contact'] || []).some(cid => myContactIds.has(cid)));
+
+  const totalContacts = myCc.length;
+  const connected = myCc.filter(r => CONNECTED_OR_LATER_STAGES.includes(r.fields['Sequence Stage'] || '')).length;
+  const meetingsBooked = myCc.filter(r => (r.fields['Sequence Stage'] || '') === 'Meeting Booked').length;
+  const messagesSent = myTouchPoints.filter(r => !touchPointIsReply(r.fields));
+  const repliesReceived = myTouchPoints.filter(r => touchPointIsReply(r.fields));
+
+  const connectionRate = totalContacts ? Math.round((connected / totalContacts) * 100) : 0;
+  const replyRate = messagesSent.length ? Math.round((repliesReceived.length / messagesSent.length) * 100) : 0;
+  const engagementScore = Math.round((connectionRate + replyRate) / 2);
+
+  const activeOffer = offers.find(r => (r.fields['Campaign'] || []).includes(campaignId) && r.fields['Status'] === 'Active');
+  if (!activeOffer) return null;
+
+  await airtableRequest('PATCH', OFFERS_TABLE, {
+    records: [{
+      id: activeOffer.id,
+      fields: {
+        'Meetings Booked': meetingsBooked,
+        'Reply Rate': replyRate,
+        'Connection Rate': connectionRate,
+        'Engagement Score': engagementScore
+      }
+    }]
+  });
+  return { meetingsBooked, replyRate, connectionRate, engagementScore };
+}
+
+app.post('/api/offers/update-metrics', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { campaignId } = req.body;
+  if (!campaignId) return res.status(400).json({ error: 'campaignId is required' });
+  try {
+    const metrics = await updateOfferMetricsForCampaign(campaignId);
+    if (!metrics) return res.json({ success: false, reason: 'No campaign contacts or no Active offer for this campaign' });
+    res.json({ success: true, metrics });
+  } catch (err) {
+    console.error('Offer update-metrics error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Daily sweep for the cron job below - fetches each shared table once,
+// then updates every campaign's Active offer metrics from it.
+async function updateAllOfferMetrics() {
+  const [campaignsData, ccRows, tpData, offersData] = await Promise.all([
+    airtableRequest('GET', 'Campaigns'),
+    fetchCampaignContactsRows(),
+    airtableRequest('GET', 'Touch Points'),
+    airtableRequest('GET', OFFERS_TABLE)
+  ]);
+  for (const campaign of (campaignsData.records || [])) {
+    try {
+      await updateOfferMetricsForCampaign(campaign.id, ccRows, tpData.records || [], offersData.records || []);
+    } catch (err) {
+      console.warn(`Offer metrics update failed for campaign ${campaign.id} (non-fatal):`, err.message);
+    }
+  }
+}
 
 // Section 4's "Log a deal" - writes to the real Deals table (replaces the
 // old speculative Sales Log write this route used to make).
@@ -5130,12 +5449,17 @@ app.post('/api/campaign/:id/contacts/:contactId/generate-message', async (req, r
 
     const camp = campaignRecord.fields || {};
     const recentPosts = recentPostsPromptSnippet(cf['Recent Posts'], 30);
+    // Only weave the offer in once the contact is past the first connection
+    // message (messageNumber 1) - pitching the offer on first touch reads
+    // as a cold sales blast rather than a peer-to-peer opener.
+    const offer = messageNumber >= 2 ? await getActiveOfferForCampaign(campaignRecord.id) : null;
     const prompt = `You are drafting LinkedIn outreach message ${messageNumber} of 3 for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM.
 
 Campaign: "${campaignName}". Goal: ${camp['Goal'] || 'not recorded'}. Product: ${camp['Product'] || 'not recorded'}. Target ICP: ${camp['Target ICP'] || 'not recorded'}. Strategy notes: ${camp['Strategy Notes'] || 'none recorded'}.
 
 Contact: ${cf['Full Name'] || 'Unknown'}, ${cf['Job Title'] || ''}. AI summary: ${cf['AI Summary'] || 'none yet'}. Conversation so far: ${cf['Conversation Context'] || 'none yet - this is the first message'}.
 Recent posts (last 30 days only): ${recentPosts}
+${offer && offer.summary ? `\nThis campaign's offer: ${offer.summary}\nWeave the offer above into this message naturally, in your own words - do not paste it verbatim.` : ''}
 
 Write only message ${messageNumber} in this contact's sequence for this specific campaign, following on naturally from the conversation so far (if any). UK English, no em dashes, peer to peer tone, 3-4 sentences, signed off "Marcus". Return only the message text, no preamble.`;
 
@@ -5658,12 +5982,16 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 
         if (newStage.startsWith('Ready for Message')) {
           const recentPosts = recentPostsPromptSnippet(f['Recent Posts'], 30);
+          // A "Ready for Message N" stage is always message 2+ (message 1
+          // is sent straight through Today's Actions, never reply-gated),
+          // so the offer is always in scope here once the campaign has one.
+          const offer = await getActiveOfferForCampaign(campaignRecord.id);
           const draftPrompt = `You are drafting the next LinkedIn message for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM. This is for the "${campaignName}" campaign.
 
 Contact: ${contactName}, ${f['Job Title'] || ''}.
 AI Summary: ${f['AI Summary'] || 'none yet'}
 Recent posts (last 30 days only): ${recentPosts}
-Conversation so far: ${newContext}
+${offer && offer.summary ? `This campaign's offer: ${offer.summary}\nWeave the offer above into this message naturally, in your own words - do not paste it verbatim.\n` : ''}Conversation so far: ${newContext}
 
 Write the next message in the conversation, following on naturally from what they just said. UK English, no em dashes, peer to peer tone, 3-4 sentences, one observation and one question, signed off "Marcus". Return only the message text.`;
           draft = await callClaudeText(draftPrompt, 400);
@@ -5971,11 +6299,12 @@ app.delete('/api/grid', async (req, res) => {
 // file (detectContentSignals, etc).
 
 // Daily 6am: Trigify contact post sync + post-based job change detection,
-// plus the Job Change Monitor keyword search - two independent methods
-// both contributing to Job Change Signal.
+// the Job Change Monitor keyword search, and the offer learning-loop
+// metrics sweep - unrelated jobs that just happen to share a daily cadence.
 cron.schedule('0 6 * * *', () => {
   syncTrigifyContactPosts().catch(err => console.warn('Scheduled Trigify contact sync failed:', err.message));
   syncJobChangeMonitorSignals().catch(err => console.warn('Scheduled job change monitor sync failed:', err.message));
+  updateAllOfferMetrics().catch(err => console.warn('Scheduled offer metrics update failed:', err.message));
 });
 
 // Weekly Sunday 7am: Serper-based job title drift detection.
