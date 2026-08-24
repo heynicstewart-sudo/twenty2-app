@@ -989,6 +989,7 @@ function openGrid(gridId){
   window.__gridReturnTo = null;
   state.currentGridId = gridId;
   navigate('grid');
+  hydrateGridCompaniesFromAirtable(gridId);
 }
 
 // Same as openGrid, but remembers which campaign's Grid tab to return to
@@ -997,6 +998,7 @@ function openGridFromCampaign(gridId, campaignId){
   window.__gridReturnTo = { campaignId };
   state.currentGridId = gridId;
   navigate('grid');
+  hydrateGridCompaniesFromAirtable(gridId);
 }
 
 function gridBackAction(){
@@ -3176,7 +3178,7 @@ function openCsvColumnModal(rows){
   openModal('Import companies from CSV', body, footer);
 }
 
-function confirmCsvImport(){
+async function confirmCsvImport(){
   const grid = currentGrid();
   const colIdx = parseInt(document.getElementById('csvCompanyColumn').value);
   const contactColValue = document.getElementById('csvContactColumn').value;
@@ -3186,7 +3188,7 @@ function confirmCsvImport(){
   const seenContacts = new Set(
     state.contacts.filter(c => c.gridId === grid.id).map(c => c.name.trim().toLowerCase()+'|'+c.company.trim().toLowerCase())
   );
-  let addedCount = 0;
+  const newCompanies = [];
   let contactsAddedCount = 0;
   rows.forEach(r => {
     const val = (r[colIdx] || '').trim();
@@ -3195,7 +3197,7 @@ function confirmCsvImport(){
     if(!seen.has(key)){
       seen.add(key);
       grid.companies.push(val);
-      addedCount++;
+      newCompanies.push(val);
     }
 
     if(contactColIdx === null) return;
@@ -3211,6 +3213,7 @@ function confirmCsvImport(){
     });
     contactsAddedCount++;
   });
+  const addedCount = newCompanies.length;
   if(addedCount || contactsAddedCount) touchGrid(grid.id);
   closeModal();
   if(addedCount || contactsAddedCount) renderPage();
@@ -3218,6 +3221,24 @@ function confirmCsvImport(){
   if(addedCount) parts.push(addedCount + ' compan' + (addedCount===1?'y':'ies'));
   if(contactsAddedCount) parts.push(contactsAddedCount + ' contact' + (contactsAddedCount===1?'':'s'));
   toast(parts.length ? parts.join(' and ') + ' added from CSV' : 'Nothing new to add from CSV', parts.length ? 'success' : 'warn');
+
+  // Same Airtable write addGridCompany() does for a single manually-added
+  // company (POST /api/airtable/company with Grid Name), just sequenced
+  // with a small delay between each - a CSV can add far more companies at
+  // once than the single-company input ever would, so firing them all in
+  // parallel risks tripping Airtable's rate limit.
+  for(let i=0; i<newCompanies.length; i++){
+    try {
+      await fetch('/api/airtable/company', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newCompanies[i], gridName: grid.name })
+      });
+    } catch(err){
+      console.warn('Airtable company sync failed for', newCompanies[i], err.message);
+    }
+    if(i < newCompanies.length - 1) await sleep(250);
+  }
 }
 
 function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
@@ -3729,6 +3750,41 @@ async function hydrateCompaniesFromAirtable(){
     renderPage();
   } catch(err){
     console.warn('Could not load companies from Airtable:', err.message);
+  }
+}
+
+// Refreshes just one grid's companies/companyLinkedIn from Airtable,
+// filtered server-side to that grid's name (?gridName=) - called from
+// openGrid/openGridFromCampaign whenever a grid is opened, so it reflects
+// Airtable's Companies table as of right now rather than whatever
+// hydrateCompaniesFromAirtable's one-time full-table load at app boot
+// happened to have. Same wholesale-replace convention as that function;
+// renderGridCell/renderGridCellHTML already show every company here with
+// its matching contact, or "No match yet" - nothing extra needed for that
+// once grid.companies is current.
+async function hydrateGridCompaniesFromAirtable(gridId){
+  const grid = state.grids.find(g => g.id === gridId);
+  if(!grid) return;
+  try {
+    const res = await fetch(`/api/airtable/company?gridName=${encodeURIComponent(grid.name)}`);
+    const records = await res.json();
+    if(!res.ok || !Array.isArray(records)) return;
+
+    grid.companies = [];
+    grid.companyLinkedIn = {};
+    records.forEach(r => {
+      const f = r.fields || {};
+      const name = f['Company Name'];
+      if(!name) return;
+      if(!grid.companies.includes(name)) grid.companies.push(name);
+      if(f['Company LinkedIn URL'] || f['LinkedIn Company ID']){
+        grid.companyLinkedIn[name] = { linkedinUrl: f['Company LinkedIn URL'] || '', linkedinSlug: f['LinkedIn Company ID'] || '' };
+      }
+    });
+
+    if(state.currentPage === 'grid' && state.currentGridId === gridId) renderPage();
+  } catch(err){
+    console.warn('Could not load this grid\'s companies from Airtable:', err.message);
   }
 }
 

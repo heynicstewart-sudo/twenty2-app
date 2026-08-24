@@ -300,6 +300,18 @@ async function createOrUpdateAirtableContact({ name, company, role, linkedinUrl,
     throw err;
   }
 
+  // Looked up before the existing-contact check (not just in the create
+  // branch below) so a re-encountered contact whose Company link never got
+  // set - e.g. found via grid search before its company had finished
+  // syncing to Airtable - gets it backfilled too, not just contacts created
+  // fresh from this call.
+  const companySearchRes = await fetch(
+    `${AIRTABLE_URL}/Companies?filterByFormula=${encodeURIComponent(`{Company Name}="${company}"`)}`,
+    { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
+  );
+  const companySearchData = await companySearchRes.json();
+  const companyRecord = companySearchData.records && companySearchData.records[0];
+
   const searchRes = await fetch(
     `${AIRTABLE_URL}/Contacts?filterByFormula=${encodeURIComponent(`{Full Name}="${name}"`)}`,
     { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
@@ -307,9 +319,12 @@ async function createOrUpdateAirtableContact({ name, company, role, linkedinUrl,
   const searchData = await searchRes.json();
   const existing = searchData.records && searchData.records[0];
   if (existing) {
-    if (icpRoleCategory) {
+    const patchFields = {};
+    if (icpRoleCategory) patchFields['ICP Role Category'] = icpRoleCategory;
+    if (companyRecord) patchFields['Company'] = [companyRecord.id];
+    if (Object.keys(patchFields).length) {
       await airtableRequest('PATCH', 'Contacts', {
-        records: [{ id: existing.id, fields: { 'ICP Role Category': icpRoleCategory } }],
+        records: [{ id: existing.id, fields: patchFields }],
         typecast: true
       });
     }
@@ -325,13 +340,6 @@ async function createOrUpdateAirtableContact({ name, company, role, linkedinUrl,
     'ICP Role Category': icpRoleCategory || ''
   };
   if (companyLinkedinUrl) fields['Company LinkedIn URL'] = companyLinkedinUrl;
-
-  const companySearchRes = await fetch(
-    `${AIRTABLE_URL}/Companies?filterByFormula=${encodeURIComponent(`{Company Name}="${company}"`)}`,
-    { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
-  );
-  const companySearchData = await companySearchRes.json();
-  const companyRecord = companySearchData.records && companySearchData.records[0];
   if (companyRecord) fields['Company'] = [companyRecord.id];
 
   const data = await airtableRequest('POST', 'Contacts', {
@@ -393,13 +401,27 @@ const runningGridSearchJobs = new Set();
 // Contacts table too: Contact, Campaign, Sequence Stage "Found" (Campaign
 // Contacts' actual stage field - "Journey Stage" only exists on the
 // Contacts table) and Connection Sent Date stamped to today, same as every
-// other place a contact enters a campaign. getOrCreateCampaignContactRow is
-// create-only-if-missing, so a contact re-found on a later day's search
-// isn't linked twice. Failures here are logged and swallowed rather than
-// failing the cell - the contact itself was already saved successfully by
-// createOrUpdateAirtableContact above.
+// other place a contact enters a campaign.
+//
+// Checks for an existing row for this (contact, campaign) pair first -
+// if one exists with Sequence Stage "Excluded", it's stayed there because
+// someone deliberately removed this person from the campaign, so a later
+// day's grid search re-finding them must not silently re-include them;
+// skip and leave the row untouched. Any other existing row (already
+// further along than "Found") is also left alone -
+// getOrCreateCampaignContactRow is create-only-if-missing, so this only
+// ever creates a fresh row when none exists yet. Failures here are logged
+// and swallowed rather than failing the cell - the contact itself was
+// already saved successfully by createOrUpdateAirtableContact above.
 async function linkGridContactToCampaign(contactId, contactName, campaignRecord, rows) {
   try {
+    const existing = findCampaignContactRow(rows, contactId, campaignRecord.id);
+    if (existing) {
+      if (existing.fields['Sequence Stage'] === 'Excluded') {
+        console.log(`Skipping campaign link for ${contactName} - marked Excluded from ${campaignRecord.fields['Name']}`);
+      }
+      return;
+    }
     const today = new Date().toISOString().slice(0, 10);
     await getOrCreateCampaignContactRow(contactId, contactName, campaignRecord.id, campaignRecord.fields['Name'], rows, {
       'Connection Sent Date': today
@@ -814,14 +836,32 @@ app.post('/api/airtable/company', async (req, res) => {
   }
 });
 
-// Fetch all companies from Airtable, for hydrating grids[].companies fresh
-// on load instead of caching them in localStorage. Each record's "Grid
-// Name" field (see the POST route above) is how the frontend knows which
-// local grid to place it in.
+// Fetch companies from Airtable - the whole table (for
+// hydrateCompaniesFromAirtable's one-time full hydration at app load,
+// grouping every record by its "Grid Name" field into the matching local
+// grid - see the POST route above), or just one grid's via ?gridName=
+// (for hydrateGridCompaniesFromAirtable, re-fetched every time a grid is
+// opened so its company list stays current with Airtable rather than
+// whatever the app-load hydration happened to have).
 app.get('/api/airtable/company', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
+  const gridName = (req.query.gridName || '').trim();
+
   try {
+    if (gridName) {
+      // Raw fetch with filterByFormula, not airtableRequest - that helper
+      // encodeURIComponent()s the whole `table` argument, which would
+      // double-encode a query string appended to it.
+      const filterRes = await fetch(
+        `${AIRTABLE_URL}/Companies?filterByFormula=${encodeURIComponent(`{Grid Name}="${gridName}"`)}`,
+        { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
+      );
+      const filterData = await filterRes.json();
+      if (!filterRes.ok) throw new Error(filterData.error ? JSON.stringify(filterData.error) : `Airtable error ${filterRes.status}`);
+      return res.json(filterData.records || []);
+    }
+
     const data = await airtableRequest('GET', 'Companies');
     res.json(data.records || []);
   } catch (err) {
