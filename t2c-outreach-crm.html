@@ -3308,7 +3308,10 @@ async function syncAllContactsToAirtable(){
   toast(`${syncedCount} contacts and ${companySyncedCount} companies synced to Airtable`, allSynced ? 'success' : 'warn');
 }
 
-const JOURNEY_STAGE_TO_STATE = { 'Identified':'found', 'Connection Pending':'connectionPending', 'Connected':'connected', 'Messaging':'messaging', 'Booked':'booked' };
+// 'Identified' is kept alongside 'Found' for contacts synced before
+// mapStateToStage (search-server.js) was fixed to write 'Found' - both mean
+// the same local 'found' state.
+const JOURNEY_STAGE_TO_STATE = { 'Found':'found', 'Identified':'found', 'Connection Pending':'connectionPending', 'Connected':'connected', 'Messaging':'messaging', 'Booked':'booked' };
 
 // Mirrors the server's parseContactEnrichment (search-server.js) - reads the
 // ENRICHMENT_JSON block persisted at the start of Contacts.AI Summary by

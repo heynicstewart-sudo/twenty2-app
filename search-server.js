@@ -932,13 +932,13 @@ app.patch('/api/airtable/contact/stage', async (req, res) => {
 // Map app state to Airtable Journey Stage values
 function mapStateToStage(state) {
   const map = {
-    'found': 'Identified',
-    'opened': 'Identified',
+    'found': 'Found',
+    'opened': 'Found',
     'connected': 'Connected',
     'messaging': 'Messaging',
     'booked': 'Booked'
   };
-  return map[state] || 'Identified';
+  return map[state] || 'Found';
 }
 
 // ===================== COMPANY LINKEDIN =====================
