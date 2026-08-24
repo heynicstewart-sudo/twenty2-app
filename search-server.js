@@ -4411,7 +4411,7 @@ async function checkContactJobChanges() {
       if (contact.fields['Job Change Signal']) continue;
 
       updates.push({ id: contact.id, fields: {
-        'Job Change Signal': `Serper detected possible title change: ${headline} — verify manually`,
+        'Job Change Signal': `Signal detected possible title change: ${headline} — verify manually`,
         'Job Change Signal Date': new Date().toISOString().slice(0, 10)
       } });
     } catch (err) {
@@ -5959,7 +5959,9 @@ app.get('/api/context/data', async (req, res) => {
 // campaign's, since sending/accepting a LinkedIn connection request is true
 // account-wide, not per campaign:
 // - 'Connection Pending': fired by the Today's Actions "Send connection"
-//   click - advances rows still at Found/"Connection Requested" forward,
+//   click (sequenceStage) and by dragging a Roadmap card into the Connection
+//   Pending column (journeyStage only, via syncJourneyStageForColumn) -
+//   either one advances rows still at Found/"Connection Requested" forward
 //   and stamps Connection Sent Date for the Roadmap day-counter and
 //   Strategy tab timeout check.
 // - 'Connected': fired by the LinkedIn Connections CSV upload card once it
@@ -5985,7 +5987,7 @@ app.patch('/api/context/contact-fields', async (req, res) => {
     }
 
     let campaignContactRowsSynced = 0;
-    if (sequenceStage === 'Connection Pending') {
+    if (sequenceStage === 'Connection Pending' || journeyStage === 'Connection Pending') {
       const rows = await fetchCampaignContactsRows();
       const pendingRows = rows.filter(r => (r.fields['Contact'] || []).includes(contactId) && ['Connection Requested', 'Found'].includes(r.fields['Sequence Stage'] || ''));
       if (pendingRows.length) {
