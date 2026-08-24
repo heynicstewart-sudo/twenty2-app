@@ -2981,11 +2981,19 @@ function openCsvColumnModal(rows){
   const headers = rows[0];
   const dataRows = rows.slice(1);
   window.__csvImportRows = dataRows;
+  const optionsHtml = headers.map((h,i) => `<option value="${i}">${esc(h.trim() || 'Column '+(i+1))}</option>`).join('');
   const body = `
     <div class="field">
       <label>Which column contains the company names?</label>
       <select id="csvCompanyColumn">
-        ${headers.map((h,i) => `<option value="${i}">${esc(h.trim() || 'Column '+(i+1))}</option>`).join('')}
+        ${optionsHtml}
+      </select>
+    </div>
+    <div class="field">
+      <label>Which column contains the job title / contact name?</label>
+      <select id="csvContactColumn">
+        <option value="">— None —</option>
+        ${optionsHtml}
       </select>
     </div>
     <p class="muted" style="font-size:12px;">${dataRows.length} row${dataRows.length===1?'':'s'} found in this file.</p>
@@ -3000,22 +3008,45 @@ function openCsvColumnModal(rows){
 function confirmCsvImport(){
   const grid = currentGrid();
   const colIdx = parseInt(document.getElementById('csvCompanyColumn').value);
+  const contactColValue = document.getElementById('csvContactColumn').value;
+  const contactColIdx = contactColValue !== '' ? parseInt(contactColValue) : null;
   const rows = window.__csvImportRows || [];
   const seen = new Set(grid.companies.map(c => c.toLowerCase()));
+  const seenContacts = new Set(
+    state.contacts.filter(c => c.gridId === grid.id).map(c => c.name.trim().toLowerCase()+'|'+c.company.trim().toLowerCase())
+  );
   let addedCount = 0;
+  let contactsAddedCount = 0;
   rows.forEach(r => {
     const val = (r[colIdx] || '').trim();
     if(!val) return;
     const key = val.toLowerCase();
-    if(seen.has(key)) return;
-    seen.add(key);
-    grid.companies.push(val);
-    addedCount++;
+    if(!seen.has(key)){
+      seen.add(key);
+      grid.companies.push(val);
+      addedCount++;
+    }
+
+    if(contactColIdx === null) return;
+    const contactName = (r[contactColIdx] || '').trim();
+    if(!contactName) return;
+    const contactKey = contactName.toLowerCase()+'|'+key;
+    if(seenContacts.has(contactKey)) return;
+    seenContacts.add(contactKey);
+    state.contacts.push({
+      id: uid('c'), gridId: grid.id, name: contactName, company: val, role: '', url: '',
+      seqId: 'seniorLeaders', state:'found', foundDate: isoDate(TODAY), connReqDate:null, connDate:null, notes:'',
+      thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[]
+    });
+    contactsAddedCount++;
   });
-  if(addedCount) touchGrid(grid.id);
+  if(addedCount || contactsAddedCount) touchGrid(grid.id);
   closeModal();
-  if(addedCount) renderPage();
-  toast(addedCount + ' compan' + (addedCount===1?'y':'ies') + ' added from CSV', addedCount ? 'success' : 'warn');
+  if(addedCount || contactsAddedCount) renderPage();
+  const parts = [];
+  if(addedCount) parts.push(addedCount + ' compan' + (addedCount===1?'y':'ies'));
+  if(contactsAddedCount) parts.push(contactsAddedCount + ' contact' + (contactsAddedCount===1?'':'s'));
+  toast(parts.length ? parts.join(' and ') + ' added from CSV' : 'Nothing new to add from CSV', parts.length ? 'success' : 'warn');
 }
 
 function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
