@@ -735,13 +735,30 @@ let rawState = {
 /* `state` is a deep reactive proxy over `rawState` — setting or deleting any
    property anywhere in the tree (state.contacts[0].thread.cta = 'x', array
    push/splice, etc.) saves the whole app to localStorage immediately, so
-   nothing needs to remember to call a save function by hand. */
+   nothing needs to remember to call a save function by hand.
+
+   Contacts, campaigns, companies (grids[].companies/companyLinkedIn) and
+   touch points (nested under each contact) are Airtable's data, not this
+   app's - they're deliberately excluded from what gets written here and
+   are always re-fetched fresh from Airtable on load instead (see
+   hydrateContactsFromAirtable/hydrateCampaignsFromAirtable/
+   hydrateCompaniesFromAirtable at the bottom of this file), so a stale
+   local cache can never drift from what's actually in Airtable. Only this
+   app's own structural/UI state (grid definitions and role columns,
+   sequences, settings, bookings, activity feed, etc.) is cached here. */
 
 const STORAGE_KEY = 't2c_state';
 
 function persistState(){
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(rawState));
+    const { contacts, campaigns, grids, ...rest } = rawState;
+    const toSave = Object.assign({}, rest, {
+      grids: (grids || []).map(g => {
+        const { companies, companyLinkedIn, ...gridRest } = g;
+        return gridRest;
+      })
+    });
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
   } catch(err){
     console.warn('Could not save state to localStorage:', err.message);
   }
@@ -754,16 +771,18 @@ function loadPersistedState(){
     const defaultSettings = rawState.settings;
     const saved = JSON.parse(raw);
 
-    // Migrate pre-multi-grid saves (flat companies/gridColumns/companyLinkedIn,
-    // no grids array yet) into a single default grid so nothing is lost.
+    // Migrate pre-multi-grid saves (flat gridColumns, no grids array yet)
+    // into a single default grid so the grid's own structure isn't lost.
+    // Any company data on the legacy save is dropped rather than migrated -
+    // companies are no longer read from localStorage at all, see below.
     if(!saved.grids || !saved.grids.length){
       const migratedGridId = 'grid_wa_market_map';
       const migratedGrid = {
         id: migratedGridId,
         name: 'WA Market Map',
-        companies: saved.companies || rawState.grids[0].companies,
+        companies: [],
         columns: saved.gridColumns || rawState.grids[0].columns,
-        companyLinkedIn: saved.companyLinkedIn || {},
+        companyLinkedIn: {},
         createdAt: rawState.grids[0].createdAt,
         updatedAt: isoDate(TODAY)
       };
@@ -772,7 +791,6 @@ function loadPersistedState(){
       delete saved.companies;
       delete saved.gridColumns;
       delete saved.companyLinkedIn;
-      (saved.contacts || []).forEach(c => { if(!c.gridId) c.gridId = migratedGridId; });
     }
 
     Object.assign(rawState, saved);
@@ -782,7 +800,15 @@ function loadPersistedState(){
         products: saved.settings.products || defaultSettings.products
       });
     }
-    (rawState.contacts || []).forEach(c => { if(!c.touchPoints) c.touchPoints = []; });
+
+    // Contacts, campaigns and companies are never restored from localStorage
+    // even if an older cached save still has them (see the comment above) -
+    // hydrateContactsFromAirtable/hydrateCampaignsFromAirtable/
+    // hydrateCompaniesFromAirtable populate all three fresh from Airtable
+    // right after init instead.
+    rawState.contacts = [];
+    rawState.campaigns = [];
+    (rawState.grids || []).forEach(g => { g.companies = []; g.companyLinkedIn = {}; });
     return true;
   } catch(err){
     console.warn('Could not restore saved state from localStorage:', err.message);
@@ -3267,10 +3293,23 @@ function parseContactEnrichment(aiSummaryText){
 
 async function hydrateContactsFromAirtable(){
   try {
-    const res = await fetch('/api/airtable/contact');
-    const records = await res.json();
-    if(!res.ok) throw new Error((records && records.error) || ('Request failed with status '+res.status));
+    const [contactsRes, touchPointsRes] = await Promise.all([
+      fetch('/api/airtable/contact'),
+      fetch('/api/airtable/touchpoint')
+    ]);
+    const records = await contactsRes.json();
+    if(!contactsRes.ok) throw new Error((records && records.error) || ('Request failed with status '+contactsRes.status));
     if(!Array.isArray(records) || !records.length) return;
+
+    const touchPointRecords = touchPointsRes.ok ? await touchPointsRes.json() : [];
+    const touchPointsByContact = {};
+    (Array.isArray(touchPointRecords) ? touchPointRecords : []).forEach(tp => {
+      const f = tp.fields || {};
+      (f['Contact'] || []).forEach(contactId => {
+        if(!touchPointsByContact[contactId]) touchPointsByContact[contactId] = [];
+        touchPointsByContact[contactId].push({ id: tp.id, date: f['Date'] || '', type: f['Type'] || '', notes: f['Summary'] || '' });
+      });
+    });
 
     window.__enrichmentProfiles = window.__enrichmentProfiles || {};
     state.contacts = records.map(r => {
@@ -3294,7 +3333,7 @@ async function hydrateContactsFromAirtable(){
         enrichment,
         thread: { connSent:null, m1:null, m2:null, cta:null, booked:false },
         generated: {},
-        touchPoints: []
+        touchPoints: touchPointsByContact[r.id] || []
       };
     });
 
@@ -3305,31 +3344,123 @@ async function hydrateContactsFromAirtable(){
   }
 }
 
-// Runs on every page load where contacts are already cached locally (so
-// hydrateContactsFromAirtable's full reset doesn't run) - refreshes just
-// the enrichment data from Airtable onto the existing contacts/state
-// without touching locally-tracked thread progress, so enrichment done in
-// another session or another view always shows up here too.
-async function refreshEnrichmentFromAirtable(){
+// Replaces grids[].companies/companyLinkedIn wholesale from Airtable's
+// Companies table, keyed off each record's "Grid Name" field to place it in
+// the matching local grid (creating that grid if it doesn't exist yet - see
+// resolveGridIdByName). Companion to hydrateContactsFromAirtable above;
+// companies are never read from localStorage, see persistState/
+// loadPersistedState.
+async function hydrateCompaniesFromAirtable(){
   try {
-    const res = await fetch('/api/airtable/contact');
+    const res = await fetch('/api/airtable/company');
     const records = await res.json();
     if(!res.ok || !Array.isArray(records)) return;
-    window.__enrichmentProfiles = window.__enrichmentProfiles || {};
-    let changed = false;
+
+    state.grids.forEach(g => { g.companies = []; g.companyLinkedIn = {}; });
+
     records.forEach(r => {
-      const enrichment = parseContactEnrichment((r.fields||{})['AI Summary']);
-      if(!enrichment) return;
-      window.__enrichmentProfiles[r.id] = enrichment;
-      const c = state.contacts.find(x => x.id === r.id);
-      if(c && JSON.stringify(c.enrichment) !== JSON.stringify(enrichment)){
-        c.enrichment = enrichment;
-        changed = true;
+      const f = r.fields || {};
+      const name = f['Company Name'];
+      if(!name) return;
+      const gridId = resolveGridIdByName(f['Grid Name']);
+      const grid = state.grids.find(g => g.id === gridId);
+      if(!grid) return;
+      if(!grid.companies.includes(name)) grid.companies.push(name);
+      if(f['Company LinkedIn URL'] || f['LinkedIn Company ID']){
+        grid.companyLinkedIn[name] = { linkedinUrl: f['Company LinkedIn URL'] || '', linkedinSlug: f['LinkedIn Company ID'] || '' };
       }
     });
-    if(changed) renderPage();
+
+    renderPage();
   } catch(err){
-    console.warn('Could not refresh enrichment from Airtable:', err.message);
+    console.warn('Could not load companies from Airtable:', err.message);
+  }
+}
+
+// Parses the "Message 1 (Type, Timing):\ncontent" blocks formatted by
+// formatSequenceForAirtable back into the {message1:{type,content,timing},
+// followUp1:{...}, followUp2:{...}} shape the campaign preview/detail UI
+// expects. Relies on CAMPAIGN_STAGE_META's labels being the fixed,
+// known set this app itself writes - not a general-purpose parser.
+function parseSequenceFromAirtable(text){
+  const sequence = {};
+  if(!text) return sequence;
+  const labels = CAMPAIGN_STAGE_META.map(([,label]) => label);
+  const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  CAMPAIGN_STAGE_META.forEach(([key,label], i) => {
+    const nextLabels = labels.slice(i+1).map(escapeRe);
+    const lookahead = nextLabels.length ? `(?:\\n\\n(?:${nextLabels.join('|')}) \\(|$)` : '$';
+    const re = new RegExp(`${escapeRe(label)} \\(([^,]*), ([^)]*)\\):\\n([\\s\\S]*?)${lookahead}`);
+    const m = text.match(re);
+    if(m) sequence[key] = { type: m[1].trim(), timing: m[2].trim(), content: m[3].trim() };
+  });
+  return sequence;
+}
+
+// Splits the "brief\n\nPitch angle: ...\n\nObjection handling: ..." blob
+// written by POST /api/airtable/campaign back into its three parts.
+function parseStrategyNotesFromAirtable(text){
+  if(!text) return { strategyBrief:'', pitchAngle:'', objectionHandling:'' };
+  const pitchMatch = text.match(/\n\nPitch angle: ([\s\S]*?)(?=\n\nObjection handling: |$)/);
+  const objMatch = text.match(/\n\nObjection handling: ([\s\S]*)$/);
+  let end = text.length;
+  if(pitchMatch) end = Math.min(end, pitchMatch.index);
+  if(objMatch) end = Math.min(end, objMatch.index);
+  return {
+    strategyBrief: text.slice(0, end).trim(),
+    pitchAngle: pitchMatch ? pitchMatch[1].trim() : '',
+    objectionHandling: objMatch ? objMatch[1].trim() : ''
+  };
+}
+
+// Replaces state.campaigns wholesale from Airtable's Campaigns table. Must
+// run after hydrateContactsFromAirtable, since "Contact IDs" is stored as a
+// comma-joined list of contact names that can only be resolved back to
+// local contact ids once state.contacts is populated. Fields with no home
+// on the real Campaigns table (estimatedConversions, the campaign-builder
+// chat transcript) come back empty - see the equivalent notes on
+// syncCampaignToAirtable/formatSequenceForAirtable. Companion to
+// hydrateContactsFromAirtable/hydrateCompaniesFromAirtable; campaigns are
+// never read from localStorage, see persistState/loadPersistedState.
+async function hydrateCampaignsFromAirtable(){
+  try {
+    const res = await fetch('/api/airtable/campaign');
+    const records = await res.json();
+    if(!res.ok || !Array.isArray(records)) return;
+
+    state.campaigns = records.map(r => {
+      const f = r.fields || {};
+      const contactNames = (f['Contact IDs'] || '').split(',').map(n => n.trim()).filter(Boolean);
+      const contactIds = state.contacts
+        .filter(c => contactNames.some(n => n.toLowerCase() === c.name.trim().toLowerCase()))
+        .map(c => c.id);
+      const { strategyBrief, pitchAngle, objectionHandling } = parseStrategyNotesFromAirtable(f['Strategy Notes']);
+      return {
+        id: r.id,
+        recordId: r.id,
+        createdAt: f['Start Date'] || isoDate(TODAY),
+        updatedAt: f['Start Date'] || isoDate(TODAY),
+        name: f['Name'] || 'Untitled campaign',
+        goal: f['Goal'] || '',
+        product: f['Product'] || '',
+        targetSegmentSummary: f['Target ICP'] || '',
+        contactIds,
+        sequence: parseSequenceFromAirtable(f['Sequence Templates']),
+        strategyBrief,
+        pitchAngle,
+        objectionHandling,
+        successMetric: f['Success Metric'] || '',
+        estimatedConversions: '',
+        status: f['Status'] || 'Draft',
+        ctas: f['CTAs'] || '',
+        contentContext: f['Content Context'] || '',
+        conversationHistory: []
+      };
+    });
+
+    renderPage();
+  } catch(err){
+    console.warn('Could not load campaigns from Airtable:', err.message);
   }
 }
 
@@ -9795,11 +9926,12 @@ syncThemeToggleIcon();
 renderSidebar();
 renderPage();
 
-if(state.contacts.length === 0){
-  hydrateContactsFromAirtable();
-} else {
-  refreshEnrichmentFromAirtable();
-}
+// Contacts, campaigns and companies are never restored from localStorage
+// (see persistState/loadPersistedState) - always fetched fresh here instead.
+// Campaigns hydrate after contacts resolve, since it resolves the "Contact
+// IDs" names it gets from Airtable against state.contacts.
+hydrateContactsFromAirtable().then(hydrateCampaignsFromAirtable);
+hydrateCompaniesFromAirtable();
 </script>
 </body>
 </html>

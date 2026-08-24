@@ -607,9 +607,13 @@ Only surface things that genuinely recur across more than one event where possib
 app.post('/api/airtable/company', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
-  // "gridName" no longer written - see the matching note in
-  // POST /api/airtable/contact above.
-  const { name } = req.body;
+  // "Grid Name" is written here (unlike Contacts - see the matching note in
+  // POST /api/airtable/contact above) because it's the only way company
+  // hydration on load can tell which local grid each company belongs to;
+  // there's no other field on this table that carries that. Backfilled onto
+  // an existing record too if it's missing there, since companies synced
+  // before this field existed would otherwise never pick one up.
+  const { name, gridName } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
 
   try {
@@ -620,15 +624,39 @@ app.post('/api/airtable/company', async (req, res) => {
     const searchData = await searchRes.json();
     const existing = searchData.records && searchData.records[0];
     if (existing) {
+      if (gridName && !existing.fields['Grid Name']) {
+        await airtableRequest('PATCH', 'Companies', {
+          records: [{ id: existing.id, fields: { 'Grid Name': gridName } }]
+        });
+      }
       return res.json({ success: true, skipped: true, recordId: existing.id });
     }
 
+    const fields = { 'Company Name': name };
+    if (gridName) fields['Grid Name'] = gridName;
+
     const data = await airtableRequest('POST', 'Companies', {
-      records: [{ fields: { 'Company Name': name } }]
+      records: [{ fields }]
     });
     res.json({ success: true, skipped: false, recordId: data.records[0].id });
   } catch (err) {
     console.error('Airtable company create error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Fetch all companies from Airtable, for hydrating grids[].companies fresh
+// on load instead of caching them in localStorage. Each record's "Grid
+// Name" field (see the POST route above) is how the frontend knows which
+// local grid to place it in.
+app.get('/api/airtable/company', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  try {
+    const data = await airtableRequest('GET', 'Companies');
+    res.json(data.records || []);
+  } catch (err) {
+    console.error('Airtable company list error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -713,6 +741,20 @@ app.post('/api/airtable/campaign', async (req, res) => {
     res.json({ success: true, updated: false, recordId: data.records[0].id });
   } catch (err) {
     console.error('Airtable campaign upsert error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Fetch all campaigns from Airtable, for hydrating state.campaigns fresh on
+// load instead of caching them in localStorage.
+app.get('/api/airtable/campaign', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  try {
+    const data = await airtableRequest('GET', 'Campaigns');
+    res.json(data.records || []);
+  } catch (err) {
+    console.error('Airtable campaign list error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -834,6 +876,20 @@ app.post('/api/airtable/touchpoint', async (req, res) => {
     detectContentSignals().catch(err => console.warn('Content signal detection trigger failed:', err.message));
   } catch (err) {
     console.error('Airtable touch point error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Fetch all touch points from Airtable, for hydrating each contact's
+// touchPoints array fresh on load instead of caching them in localStorage.
+app.get('/api/airtable/touchpoint', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  try {
+    const data = await airtableRequest('GET', 'Touch Points');
+    res.json(data.records || []);
+  } catch (err) {
+    console.error('Airtable touch point list error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
