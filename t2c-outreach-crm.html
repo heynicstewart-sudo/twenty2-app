@@ -224,11 +224,18 @@ label{font-size:var(--label-size);font-weight:700;color:var(--muted);display:blo
 
 /* Tags / badges */
 .tag{display:inline-flex;align-items:center;padding:3px 9px;border-radius:var(--radius-badge);font-size:11px;font-weight:700;}
-.tag-found{background:var(--surface-2);color:var(--muted);}
+/* Journey Stage colour scheme: Found=blue, Connection pending=amber,
+   Connection made=green, Messaging=purple, Booked=gold. Applied here (the
+   grid's per-contact tag) and mirrored in the .cell-* grid-cell backgrounds
+   and the Roadmap kanban column accents below. 'opened' predates a
+   connection ever being sent and isn't part of that 5-stage scheme, so it
+   keeps its own colour. */
+.tag-found{background:#e2f2fa;color:var(--blue);}
 .tag-opened{background:#fde9d6;color:#a1571c;}
-.tag-connected{background:#e3f5eb;color:#1f7a4f;}
-.tag-messaging{background:#e2f2fa;color:#0d6a96;}
-.tag-booked{background:rgba(139,92,246,0.12);color:var(--purple);}
+.tag-connectionPending{background:#fdf0d9;color:var(--warning);}
+.tag-connected{background:#e3f5eb;color:var(--success);}
+.tag-messaging{background:rgba(139,92,246,0.12);color:var(--purple);}
+.tag-booked{background:#fdf3d0;color:#96751a;}
 .tag-won{background:#e3f5eb;color:#1f7a4f;}
 .tag-lost{background:#fbe4e0;color:#b3413a;}
 .tag-pending{background:#fdf4e6;color:#8a6a1f;}
@@ -252,10 +259,12 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .grid-table tr:last-child td{border-bottom:none;}
 .company-cell{font-weight:700;white-space:nowrap;}
 .grid-cell{border-radius:var(--radius-badge);padding:10px;min-height:64px;}
-.cell-found{background:#fdf8ef;}
+.cell-found{background:#e2f2fa;}
 .cell-opened{background:#fdf1e2;}
+.cell-connectionPending{background:#fdf0d9;}
 .cell-connected{background:#eaf7f0;}
-.cell-messaging{background:#e8f4fa;}
+.cell-messaging{background:rgba(139,92,246,0.08);}
+.cell-booked{background:#fdf3d0;}
 .cell-empty{background:var(--surface-2);color:var(--muted);font-size:12px;display:flex;align-items:center;justify-content:center;min-height:64px;}
 .cell-searching{background:var(--surface-2);color:var(--muted);font-size:12px;display:flex;align-items:center;justify-content:center;min-height:64px;font-style:italic;}
 .cell-name{font-weight:700;font-size:13px;display:flex;align-items:center;gap:4px;}
@@ -278,9 +287,22 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 
 /* Kanban / Roadmap */
 .kanban{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;align-items:start;}
-.kanban-col{background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-card);padding:12px;min-height:200px;}
+.kanban-col{background:var(--surface-2);border:1px solid var(--border);border-top:3px solid var(--border);border-radius:var(--radius-card);padding:12px;min-height:200px;}
 .kanban-col-header{display:flex;justify-content:space-between;align-items:center;font-weight:800;font-size:13px;margin-bottom:10px;padding:0 4px;}
 .kanban-col-header .count{background:var(--border);color:var(--muted);border-radius:var(--radius-badge);padding:1px 8px;font-size:11px;}
+/* Column colour accents, matching the Journey Stage scheme used by the
+   Grid's tags/cells above: Connection pending=amber, Connection made=green,
+   Messaging=purple, Booked=gold. There's no "Found" column on the Roadmap
+   (it starts once a connection is pending), so that colour only appears on
+   the Grid. */
+.kanban-col[data-col="pending"]{border-top-color:var(--warning);}
+.kanban-col[data-col="pending"] .kanban-col-header{color:var(--warning);}
+.kanban-col[data-col="made"]{border-top-color:var(--success);}
+.kanban-col[data-col="made"] .kanban-col-header{color:var(--success);}
+.kanban-col[data-col="messaging"]{border-top-color:var(--purple);}
+.kanban-col[data-col="messaging"] .kanban-col-header{color:var(--purple);}
+.kanban-col[data-col="booked"]{border-top-color:#96751a;}
+.kanban-col[data-col="booked"] .kanban-col-header{color:#96751a;}
 .kanban-cards{display:flex;flex-direction:column;gap:10px;min-height:60px;}
 .kcard{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card);padding:12px;cursor:grab;}
 .kcard.dragging{opacity:0.4;}
@@ -616,7 +638,6 @@ table.spreadsheet-table{border-collapse:collapse;width:100%;min-width:960px;font
 
 const CTA_OPTIONS = ['Change Value Check','Free session','The book','Community Connect event','Other'];
 const TODAY = new Date('2026-08-18T09:00:00');
-const SEARCH_API_URL = 'https://twenty2-app-production.up.railway.app/api/search-contact';
 
 let rawState = {
   currentPage: 'home',
@@ -633,6 +654,14 @@ let rawState = {
     }
   ],
   campaigns: [],
+  // Campaign <-> grid links (campaign id -> array of grid ids). Campaigns
+  // themselves are Airtable's data and get rebuilt from scratch by
+  // hydrateCampaignsFromAirtable on every load (see persistState below), so
+  // any gridIds set directly on a campaign object would be wiped out the
+  // next time that happens. This map is app-owned structural state instead -
+  // it round-trips through localStorage like grids do - and gets re-applied
+  // onto the fresh campaign objects after each hydrate.
+  campaignGridLinks: {},
   seqActiveTab: 'seniorLeaders',
   calMonth: TODAY.getMonth(),
   calYear: TODAY.getFullYear(),
@@ -890,8 +919,9 @@ function getRoadmapColumn(c){
 }
 
 // Days pending is calculated from Airtable's Connection Sent Date (written
-// when "Send connection" is clicked - see handleSendConnectionClick and
-// campaignConnectionSentDateFor) whenever this Roadmap is scoped to a
+// whenever a contact's LinkedIn URL is opened - see
+// handleContactLinkedInOpened and campaignConnectionSentDateFor) whenever
+// this Roadmap is scoped to a
 // campaign, since that's the real source of truth for the fast-action flow.
 // Falls back to the older local-state fields (connReqDate/foundDate) for
 // the account-level Roadmap, which isn't tied to a campaign's Airtable
@@ -2093,8 +2123,13 @@ function renderTodaysActions(){
   const actions = computeTodaysActions();
   return `
   <div class="card" style="margin-bottom:22px;">
-    <div class="section-title"><i class="ti ti-list-check"></i> Today's actions ${actions.length ? `<span class="count-pill has" style="margin-left:6px;">${actions.length}</span>` : ''}</div>
-    ${actions.length ? actions.map(a => renderTodaysActionItem(a)).join('') : '<div class="empty-state">Nothing needs attention today — nice work.</div>'}
+    <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;">
+      <span><i class="ti ti-list-check"></i> Today's actions ${actions.length ? `<span class="count-pill has" style="margin-left:6px;">${actions.length}</span>` : ''}</span>
+      ${actions.length ? `<button class="btn btn-secondary btn-sm" id="markAllDoneBtn" onclick="handleMarkAllActionsDone()"><i class="ti ti-checks"></i> Mark all as done</button>` : ''}
+    </div>
+    <div id="todaysActionsList">
+      ${actions.length ? actions.map(a => renderTodaysActionItem(a)).join('') : '<div class="empty-state">Nothing needs attention today — nice work.</div>'}
+    </div>
   </div>`;
 }
 
@@ -2118,7 +2153,7 @@ function renderTodaysActionItem(a){
   const method = recommendedMethodForAction(a);
   const cachedBrief = window.__contactBriefs && window.__contactBriefs[c.id];
   return `
-  <div class="todo-item">
+  <div class="todo-item" id="todaysAction-${c.id}">
     <div class="todo-item-main">
       <div>
         <div class="todo-item-name">${esc(c.name)}</div>
@@ -2135,6 +2170,7 @@ function renderTodaysActionItem(a){
       <button class="btn btn-secondary btn-sm" onclick="openGenerateModal('${c.id}','${a.stage}', ()=>renderPage())"><i class="ti ti-copy"></i> Draft message</button>
       <button class="btn btn-ghost btn-sm" onclick="toggleQuickTouchPoint('${c.id}')"><i class="ti ti-target-arrow"></i> Log touch point</button>
       <button class="btn btn-accent btn-sm" id="briefBtn-${c.id}" onclick="generateContactBrief('${c.id}')"><i class="ti ti-sparkles"></i> Generate brief</button>
+      <button class="btn btn-ghost btn-sm" onclick="handleMarkActionDone('${c.id}')"><i class="ti ti-check"></i> Mark as done</button>
     </div>
     <div id="quicktp-${c.id}" style="display:none;margin-top:10px;">
       ${touchPointFormHtml(c.id)}
@@ -2172,12 +2208,72 @@ function renderFastActionCard(a){
         <span class="pill" id="actionPill-${c.id}">${esc(a.stageLabel)}</span>
       </div>
     </div>
-    <div class="todo-item-actions" id="fastActionArea-${c.id}">
-      ${a.type === 'Send connection'
-        ? `<a class="btn btn-primary btn-sm" href="${esc(c.url||'#')}" target="_blank" rel="noopener" onclick="handleSendConnectionClick('${c.id}')"><i class="ti ti-brand-linkedin"></i> Send connection</a>`
-        : `<button class="btn btn-primary btn-sm" onclick="handleGenerateFastMessage('${c.id}')"><i class="ti ti-sparkles"></i> Generate message</button>`}
+    <div class="todo-item-actions">
+      <div id="fastActionArea-${c.id}" style="display:contents;">
+        ${a.type === 'Send connection'
+          ? `<a class="btn btn-primary btn-sm" href="${esc(c.url||'#')}" target="_blank" rel="noopener" onclick="handleContactLinkedInOpened('${c.id}')"><i class="ti ti-brand-linkedin"></i> Send connection</a>`
+          : `<button class="btn btn-primary btn-sm" onclick="handleGenerateFastMessage('${c.id}')"><i class="ti ti-sparkles"></i> Generate message</button>`}
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="handleMarkActionDone('${c.id}')"><i class="ti ti-check"></i> Mark as done</button>
     </div>
   </div>`;
+}
+
+// "Mark as done" on a single Today's Actions card - removes it immediately
+// (same optimistic-UI convention as handleContactLinkedInOpened) and, in
+// the background, stamps Connection Sent Date=today on every one of this
+// contact's Campaign Contacts rows via POST /api/context/contact-mark-done.
+// Deliberately doesn't touch Sequence/Journey Stage - the card being
+// dismissed might be any action type, not just a connection request.
+async function handleMarkActionDone(cid){
+  const cardEl = document.getElementById('todaysAction-' + cid);
+  if(cardEl) cardEl.remove();
+  delete (window.__todaysActions || {})[cid];
+
+  try {
+    const res = await fetch('/api/context/contact-mark-done', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contactId: cid })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+  } catch(err){
+    console.warn('Could not mark action done:', err.message);
+    toast('Marked done locally, but could not sync to Airtable: ' + err.message, 'warn');
+  }
+}
+
+// "Mark all as done" - clears every currently-rendered Today's Actions card
+// at once (window.__todaysActions is populated as a side effect of
+// rendering them, see renderTodaysActionItem) and fires the same mark-done
+// request as handleMarkActionDone for each, in parallel.
+async function handleMarkAllActionsDone(){
+  const ids = Object.keys(window.__todaysActions || {});
+  if(!ids.length) return;
+
+  ids.forEach(cid => {
+    const cardEl = document.getElementById('todaysAction-' + cid);
+    if(cardEl) cardEl.remove();
+  });
+  window.__todaysActions = {};
+  const list = document.getElementById('todaysActionsList');
+  if(list) list.innerHTML = '<div class="empty-state">Nothing needs attention today — nice work.</div>';
+  const markAllBtn = document.getElementById('markAllDoneBtn');
+  if(markAllBtn) markAllBtn.remove();
+
+  const results = await Promise.allSettled(ids.map(cid => fetch('/api/context/contact-mark-done', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contactId: cid })
+  }).then(async res => {
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+  })));
+
+  const failed = results.filter(r => r.status === 'rejected').length;
+  if(failed) toast(`Marked ${ids.length} done locally, but ${failed} couldn't sync to Airtable`, 'warn');
+  else toast(`Marked ${ids.length} action${ids.length===1?'':'s'} as done`, 'success');
 }
 
 function toggleQuickTouchPoint(cid){
@@ -2186,18 +2282,37 @@ function toggleQuickTouchPoint(cid){
   el.style.display = el.style.display === 'none' ? 'block' : 'none';
 }
 
-// Fires when the "Send connection" link on a fast-action card is clicked -
-// the href already opens the contact's LinkedIn profile in a new tab
-// natively. Removes the card from Today's Actions immediately (rather than
-// waiting on the round trip below, or leaving it to flip to a "Generate
-// message" card mid-view) and, in the background, advances both their
-// account-level Journey Stage and (via the sequenceStage branch in PATCH
-// /api/context/contact-fields) every campaign they're pending a connection
-// in to "Connection Pending", then refreshes this campaign's cached
-// Sequence Stage map so later renders of Today's Actions reflect it.
-async function handleSendConnectionClick(cid){
+// Fires whenever a contact's LinkedIn URL is opened anywhere in the app -
+// the Today's Actions "Send connection" link, a Grid cell's LinkedIn icon,
+// or any future one (e.g. the Roadmap) - the href already opens their
+// profile in a new tab natively, so this never calls preventDefault(). `e`
+// is optional and only needed when the link sits inside another clickable
+// element (a Grid cell's onclick opens the contact drawer) that a bare
+// click would otherwise also trigger.
+//
+// Removes their Today's Actions card immediately if one is currently
+// rendered (rather than waiting on the round trip below, or leaving it to
+// flip to a "Generate message" card mid-view) and, in the background,
+// advances both their account-level Journey Stage and (via the
+// sequenceStage branch in PATCH /api/context/contact-fields) every
+// campaign they're pending a connection in to "Connection Pending" -
+// which also stamps Connection Sent Date on those Campaign Contacts rows
+// (see search-server.js) - then refreshes this campaign's cached Sequence
+// Stage map and repaints so the Grid cell's colour and Today's Actions both
+// reflect it.
+async function handleContactLinkedInOpened(cid, e){
+  if(e) e.stopPropagation();
   const cardEl = document.getElementById('todaysAction-' + cid);
   if(cardEl) cardEl.remove();
+  delete (window.__todaysActions || {})[cid];
+
+  const c = state.contacts.find(x => x.id === cid);
+  if(!c) return;
+  if(!isAirtableRecordId(cid)){
+    console.warn('Skipping Airtable Journey Stage sync - contact has no Airtable record id yet:', cid);
+    toast('LinkedIn opened, but this contact hasn\'t synced to Airtable yet - press "Sync to Airtable" first.', 'warn');
+    return;
+  }
 
   try {
     const res = await fetch('/api/context/contact-fields', {
@@ -2208,10 +2323,10 @@ async function handleSendConnectionClick(cid){
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
 
-    const c = state.contacts.find(x => x.id === cid);
-    if(c) c.state = 'connectionPending';
-    const campaign = c ? activeCampaignForContact(c) : null;
+    c.state = 'connectionPending';
+    const campaign = activeCampaignForContact(c);
     if(campaign) await loadCampaignSequenceStages(campaign);
+    renderPage();
   } catch(err){
     console.warn('Could not update stage to Connection Pending:', err.message);
     toast('LinkedIn opened, but could not update stage: ' + err.message, 'warn');
@@ -2637,6 +2752,7 @@ function renderGridViewToolbar(gridId){
 }
 
 function renderGridViewArea(grid, cols){
+  ensureGridCampaignDataLoaded(grid.id);
   if(gridViewMode(grid.id) === 'table') return renderContactSpreadsheet(grid);
   return `
   <div class="grid-wrap">
@@ -2653,10 +2769,12 @@ function renderGridViewArea(grid, cols){
     </table>
   </div>
   <div class="legend">
-    <div class="legend-item"><span class="legend-swatch" style="background:#fdf8ef;border:1px solid #e8e0d8;"></span> Found</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#e2f2fa;"></span> Found</div>
     <div class="legend-item"><span class="legend-swatch" style="background:#fdf1e2;"></span> Opened</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#fdf0d9;"></span> Connection pending</div>
     <div class="legend-item"><span class="legend-swatch" style="background:#eaf7f0;"></span> Connected</div>
-    <div class="legend-item"><span class="legend-swatch" style="background:#e8f4fa;"></span> Messaging</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:rgba(139,92,246,0.08);"></span> Messaging</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#fdf3d0;"></span> Booked</div>
   </div>
   `;
 }
@@ -2699,6 +2817,21 @@ function nextMessageDraftFor(c){
   return '';
 }
 
+// Resolves the single campaign a grid is linked to (if any) and kicks off
+// loading its Sequence Stage / Connection Sent Date maps (Airtable's
+// Campaign Contacts - see loadCampaignSequenceStages) if they aren't cached
+// yet. Called once per render from renderGridViewArea, so both view modes
+// share one fetch instead of each cell/row triggering its own -
+// gridSequenceStageMap and gridConnectionSentDateFor below just read
+// whatever's cached so far.
+function ensureGridCampaignDataLoaded(gridId){
+  const camps = campaignsForGrid(gridId);
+  if(camps.length !== 1) return null;
+  const campaign = camps[0];
+  if(!window.__campaignSequenceStages || !window.__campaignSequenceStages[campaign.id]) loadCampaignSequenceStages(campaign);
+  return campaign;
+}
+
 // Sequence Stage is per-campaign (Airtable-backed), matching the convention
 // used by the Roadmap tab (campaignSequenceStageFor / loadCampaignSequenceStages).
 // Only resolvable here when the grid is linked to exactly one campaign.
@@ -2706,11 +2839,7 @@ function gridSequenceStageMap(gridId){
   const camps = campaignsForGrid(gridId);
   if(camps.length !== 1) return null;
   const campaign = camps[0];
-  if(!window.__campaignSequenceStages || !window.__campaignSequenceStages[campaign.id]){
-    loadCampaignSequenceStages(campaign);
-    return {};
-  }
-  return window.__campaignSequenceStages[campaign.id];
+  return window.__campaignSequenceStages ? (window.__campaignSequenceStages[campaign.id] || {}) : {};
 }
 
 function spreadsheetRowData(c, gridId, seqMap){
@@ -2802,18 +2931,52 @@ function findContact(company, role){
   return state.contacts.find(c => c.gridId === gridId && c.company === company && c.role === role);
 }
 
+// Mirrors gridSequenceStageMap's single-linked-campaign resolution, but for
+// Connection Sent Date instead of Sequence Stage - used by the Grid page's
+// day badge (see gridCellDays below). Kept separate from
+// campaignConnectionSentDateFor (used by the Roadmap) since that one reads
+// window.__roadmapCampaignId, a campaign-scoped Roadmap concept the Grid
+// page doesn't have; this resolves the campaign from the grid itself. Pure
+// read, same as gridSequenceStageMap - loading is triggered once per render
+// by ensureGridCampaignDataLoaded (see renderGridViewArea), not per cell.
+function gridConnectionSentDateFor(gridId, contactName){
+  const camps = campaignsForGrid(gridId);
+  if(camps.length !== 1) return null;
+  const campaign = camps[0];
+  const map = window.__campaignConnectionSentDates && window.__campaignConnectionSentDates[campaign.id];
+  return map ? (map[contactName.trim().toLowerCase()] || null) : null;
+}
+
+// 'found'/'opened' predate a connection request ever going out, so the Grid
+// day badge for those still shows days-in-pipeline (days since found).
+// Everything from 'connectionPending' onward has an actual Connection Sent
+// Date (in Airtable, once the grid's linked campaign's Campaign Contacts
+// have loaded - see gridConnectionSentDateFor - falling back to local
+// thread/connReqDate state for a grid not linked to exactly one campaign).
+const CONNECTION_SENT_STATES = ['connectionPending','connected','messaging','booked'];
+
+function gridCellDays(c){
+  const effectiveState = (c.thread && c.thread.booked) ? 'booked' : c.state;
+  if(!CONNECTION_SENT_STATES.includes(effectiveState)) return daysBetween(c.foundDate);
+  const airtableDate = gridConnectionSentDateFor(c.gridId, c.name);
+  if(airtableDate) return daysBetween(airtableDate);
+  if(c.thread && c.thread.connSent) return daysBetween(c.thread.connSent);
+  if(c.connReqDate) return daysBetween(c.connReqDate);
+  return daysBetween(c.foundDate);
+}
+
 function renderGridCell(company, role){
   const c = findContact(company, role);
   if(!c){
     return `<td><div class="cell-empty" data-company="${esc(company)}" data-role="${esc(role)}">No match yet</div></td>`;
   }
-  const days = daysBetween(c.foundDate);
-  const cellClass = c.thread.booked ? 'cell-messaging' : 'cell-'+c.state;
+  const days = gridCellDays(c);
+  const cellClass = c.thread.booked ? 'cell-booked' : 'cell-'+c.state;
   const stateTagClass = c.thread.booked ? 'tag-booked' : 'tag-'+c.state;
   const stateLabel = c.thread.booked ? 'booked' : c.state;
   return `<td>
     <div class="grid-cell ${cellClass}">
-      <div class="cell-name" style="cursor:pointer;" onclick="openContactDrawer('${esc(c.name)}', ${currentGridCampaignName() ? `'${esc(currentGridCampaignName())}'` : 'null'})">${esc(c.name)}${c.url ? ` <a href="${esc(c.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open on LinkedIn" style="margin-left:2px;color:var(--blue);"><i class="ti ti-brand-linkedin"></i></a>` : ''}</div>
+      <div class="cell-name" style="cursor:pointer;" onclick="openContactDrawer('${esc(c.name)}', ${currentGridCampaignName() ? `'${esc(currentGridCampaignName())}'` : 'null'})">${esc(c.name)}${c.url ? ` <a href="${esc(c.url)}" target="_blank" rel="noopener" onclick="handleContactLinkedInOpened('${c.id}', event)" title="Open on LinkedIn" style="margin-left:2px;color:var(--blue);"><i class="ti ti-brand-linkedin"></i></a>` : ''}</div>
       <div class="cell-meta">
         <span class="day-badge ${dayBadgeClass(days)}">${days}d</span>
         <span class="tag ${stateTagClass}">${stateLabel}</span>
@@ -3051,6 +3214,11 @@ function confirmCsvImport(){
 
 function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
 
+// Daily search now runs server-side (POST /api/grid/run-search) instead of
+// this function driving the per-cell search+Airtable-write loop itself -
+// the server writes each match to Airtable as it finds it, and this just
+// starts the job then polls its status until done, patching grid cells in
+// as their results land. See runGridSearchJob in search-server.js.
 async function runDailySearch(){
   const grid = currentGrid();
   const cols = grid.columns;
@@ -3065,46 +3233,133 @@ async function runDailySearch(){
     const td = document.querySelector(`.cell-empty[data-company="${cssEscape(company)}"][data-role="${cssEscape(role)}"]`);
     if(td) td.outerHTML = `<div class="cell-searching" data-company="${esc(company)}" data-role="${esc(role)}"><i class="ti ti-loader-2"></i>&nbsp;Searching...</div>`;
   });
+  renderGridSearchStatus(0, emptyCells.length, 0);
 
-  let foundCount = 0;
-  for(let i=0; i<emptyCells.length; i++){
-    const { company, role } = emptyCells[i];
-    const cellEl = document.querySelector(`.cell-searching[data-company="${cssEscape(company)}"][data-role="${cssEscape(role)}"]`);
-    try {
-      const res = await fetch(`${SEARCH_API_URL}?company=${encodeURIComponent(company)}&jobTitle=${encodeURIComponent(role)}`);
-      if(!res.ok) throw new Error('Search endpoint returned '+res.status);
-      const data = await res.json();
-      if(data.found && data.name && data.url){
-        const seqId = role === 'Digital and Tech' ? 'digitalTech' : 'seniorLeaders';
-        const newContact = {
-          id: uid('c'), gridId: grid.id, name: data.name, company, role, url: data.url,
-          seqId, state:'found', foundDate: isoDate(TODAY), connReqDate:null, connDate:null, notes:'',
-          thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[]
-        };
-        state.contacts.push(newContact);
-        foundCount++;
-        touchGrid(grid.id);
-        if(cellEl) cellEl.outerHTML = renderGridCellHTML(newContact);
-        notifyWebhook(newContact);
-      } else {
-        if(cellEl) cellEl.outerHTML = `<div class="cell-empty" data-company="${esc(company)}" data-role="${esc(role)}" title="Couldn't find a verified LinkedIn profile — try an alternative search method">No confident match — try again</div>`;
-      }
-    } catch(err){
-      console.warn('Search failed for', company, role, err.message);
-      if(cellEl) cellEl.outerHTML = `<div class="cell-empty" data-company="${esc(company)}" data-role="${esc(role)}" title="The search request itself failed — try again">Search error — try again</div>`;
-    }
-    if(i < emptyCells.length - 1) await sleep(300);
+  try {
+    const startRes = await fetch('/api/grid/run-search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // currentGridCampaignName() only resolves when this grid is linked to
+      // exactly one campaign (same convention as gridCellDays/
+      // gridSequenceStageMap above) - lets the server link newly-found
+      // contacts into that campaign's Campaign Contacts table too.
+      body: JSON.stringify({ gridId: grid.id, cells: emptyCells, campaignName: currentGridCampaignName() })
+    });
+    const startData = await startRes.json();
+    if(!startRes.ok || !startData.jobId) throw new Error(startData.error || 'Could not start search');
+    await pollGridSearchJob(startData.jobId, grid, emptyCells);
+  } catch(err){
+    console.warn('Grid search failed to start:', err.message);
+    resetStuckSearchingCells(emptyCells);
+    finishGridSearchUI({ status:'error', error: err.message, foundCount:0, total: emptyCells.length });
   }
+}
 
+// Reverts any cell still showing the "Searching..." spinner back to an
+// empty cell - used when a job fails before (or without ever) reaching
+// every cell, so results never arrive to resolve them via
+// applyGridSearchResult.
+function resetStuckSearchingCells(cells){
+  cells.forEach(({company,role}) => {
+    const el = document.querySelector(`.cell-searching[data-company="${cssEscape(company)}"][data-role="${cssEscape(role)}"]`);
+    if(el) el.outerHTML = `<div class="cell-empty" data-company="${esc(company)}" data-role="${esc(role)}" title="The search request itself failed — try again">Search error — try again</div>`;
+  });
+}
+
+// Status banner shown in #gridNotification while a search job is running -
+// refreshed on every poll tick with the latest completed/total/foundCount.
+function renderGridSearchStatus(completed, total, foundCount){
+  const el = document.getElementById('gridNotification');
+  if(!el) return;
+  el.innerHTML = `<div class="card" style="margin-bottom:14px;"><i class="ti ti-loader-2"></i> Searching ${completed} of ${total} open roles — ${foundCount} found so far...</div>`;
+}
+
+function finishGridSearchUI(job){
+  const btn = document.getElementById('runSearchBtn');
   if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-search"></i> Run daily search'; }
-  document.getElementById('gridNotification').innerHTML = `<div class="card" style="background:#eaf7f0;border-color:#c9e9d7;margin-bottom:14px;"><i class="ti ti-circle-check" style="color:var(--success);"></i> Daily search complete — ${foundCount} new contact${foundCount===1?'':'s'} found across ${emptyCells.length} open roles.</div>`;
-  toast(foundCount+' new contacts found', 'success');
+  const el = document.getElementById('gridNotification');
+  if(!el) return;
+  if(job.status === 'error'){
+    el.innerHTML = `<div class="card" style="background:#fbe3dc;border-color:#f0c6b8;margin-bottom:14px;"><i class="ti ti-alert-circle" style="color:var(--danger);"></i> Daily search failed — ${esc(job.error||'unknown error')}</div>`;
+    toast('Daily search failed: '+(job.error||'unknown error'), 'warn');
+  } else {
+    el.innerHTML = `<div class="card" style="background:#eaf7f0;border-color:#c9e9d7;margin-bottom:14px;"><i class="ti ti-circle-check" style="color:var(--success);"></i> Daily search complete — ${job.foundCount} new contact${job.foundCount===1?'':'s'} found across ${job.total} open roles.</div>`;
+    toast(job.foundCount+' new contacts found', 'success');
+  }
+}
+
+// Applies one cell's result from a run-search job's `results` array onto
+// the grid - same three outcomes (contact found / no confident match /
+// search error) runDailySearch used to render inline.
+function applyGridSearchResult(grid, result){
+  const { company, role, found, name, url, recordId, error } = result;
+  const cellEl = document.querySelector(`.cell-searching[data-company="${cssEscape(company)}"][data-role="${cssEscape(role)}"]`);
+  if(found && name && url){
+    const seqId = role === 'Digital and Tech' ? 'digitalTech' : 'seniorLeaders';
+    const newContact = {
+      // recordId is the Airtable id the server already wrote this contact
+      // under - falling back to a local uid only guards against a
+      // malformed job result, not the normal path.
+      id: recordId || uid('c'), gridId: grid.id, name, company, role, url,
+      seqId, state:'found', foundDate: isoDate(TODAY), connReqDate:null, connDate:null, notes:'',
+      thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[]
+    };
+    state.contacts.push(newContact);
+    touchGrid(grid.id);
+    if(cellEl) cellEl.outerHTML = renderGridCellHTML(newContact);
+    // Already written to Airtable server-side by /api/grid/run-search -
+    // only the Make.com webhook notification still needs to happen here.
+    notifyWebhook(newContact, { skipAirtableSync: true });
+  } else if(error){
+    if(cellEl) cellEl.outerHTML = `<div class="cell-empty" data-company="${esc(company)}" data-role="${esc(role)}" title="The search request itself failed — try again">Search error — try again</div>`;
+  } else {
+    if(cellEl) cellEl.outerHTML = `<div class="cell-empty" data-company="${esc(company)}" data-role="${esc(role)}" title="Couldn't find a verified LinkedIn profile — try an alternative search method">No confident match — try again</div>`;
+  }
+}
+
+// Polls a run-search job until it finishes, applying newly-landed cell
+// results and refreshing the status banner on each tick.
+async function pollGridSearchJob(jobId, grid, cells){
+  const seenKeys = new Set();
+  const stillSearching = () => cells.filter(({company,role}) => !seenKeys.has(company+'|||'+role));
+  for(;;){
+    let res, job;
+    try {
+      res = await fetch(`/api/grid/run-search/${jobId}`);
+      job = await res.json();
+    } catch(err){
+      console.warn('Grid search polling failed:', err.message);
+      await sleep(1500);
+      continue;
+    }
+
+    if(!res.ok){
+      resetStuckSearchingCells(stillSearching());
+      finishGridSearchUI({ status:'error', error: job.error || ('status '+res.status), foundCount:0, total: cells.length });
+      return;
+    }
+
+    (job.results || []).forEach(r => {
+      const key = r.company+'|||'+r.role;
+      if(seenKeys.has(key)) return;
+      seenKeys.add(key);
+      applyGridSearchResult(grid, r);
+    });
+    renderGridSearchStatus(job.completed, job.total, job.foundCount);
+
+    if(job.status === 'done' || job.status === 'error'){
+      if(job.status === 'error') resetStuckSearchingCells(stillSearching());
+      finishGridSearchUI(job);
+      return;
+    }
+    await sleep(1500);
+  }
 }
 
 function renderGridCellHTML(c){
-  const days = daysBetween(c.foundDate);
+  const days = gridCellDays(c);
   return `<td><div class="grid-cell cell-${c.state}">
-      <div class="cell-name" style="cursor:pointer;" onclick="openContactDrawer('${esc(c.name)}', ${currentGridCampaignName() ? `'${esc(currentGridCampaignName())}'` : 'null'})">${esc(c.name)}${c.url ? ` <a href="${esc(c.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open on LinkedIn" style="margin-left:2px;color:var(--blue);"><i class="ti ti-brand-linkedin"></i></a>` : ''}</div>
+      <div class="cell-name" style="cursor:pointer;" onclick="openContactDrawer('${esc(c.name)}', ${currentGridCampaignName() ? `'${esc(currentGridCampaignName())}'` : 'null'})">${esc(c.name)}${c.url ? ` <a href="${esc(c.url)}" target="_blank" rel="noopener" onclick="handleContactLinkedInOpened('${c.id}', event)" title="Open on LinkedIn" style="margin-left:2px;color:var(--blue);"><i class="ti ti-brand-linkedin"></i></a>` : ''}</div>
       <div class="cell-meta">
         <span class="day-badge ${dayBadgeClass(days)}">${days}d</span>
         <span class="tag tag-${c.state}">${c.state}</span>
@@ -3160,7 +3415,11 @@ function companyIndustry(company){
   return COMPANY_INDUSTRIES[company] || 'Other';
 }
 
-function notifyWebhook(contact) {
+// skipAirtableSync lets a caller that already has this contact in Airtable
+// (e.g. applyGridSearchResult, whose contact was written server-side by
+// /api/grid/run-search) skip the redundant round trip - the webhook still
+// fires either way.
+function notifyWebhook(contact, opts) {
   // Post to Make.com webhook if configured
   const url = ((state.settings.integrations && state.settings.integrations.makeWebhookUrl) || '').trim();
   if (url) {
@@ -3180,7 +3439,7 @@ function notifyWebhook(contact) {
   }
 
   // Sync to Airtable via server proxy
-  syncContactToAirtable(contact);
+  if (!(opts && opts.skipAirtableSync)) syncContactToAirtable(contact);
 }
 
 function syncContactToAirtable(contact) {
@@ -3488,7 +3747,12 @@ async function hydrateCampaignsFromAirtable(){
         status: f['Status'] || 'Draft',
         ctas: f['CTAs'] || '',
         contentContext: f['Content Context'] || '',
-        conversationHistory: []
+        conversationHistory: [],
+        // Re-applied from campaignGridLinks (app-owned structural state, see
+        // rawState) since this whole campaign object was just rebuilt fresh
+        // from Airtable and never carries gridIds itself - grids that no
+        // longer exist locally are dropped defensively.
+        gridIds: (state.campaignGridLinks[r.id] || []).filter(gid => state.grids.some(g => g.id === gid))
       };
     });
 
@@ -5789,6 +6053,15 @@ function campaignsForGrid(gridId){
   return state.campaigns.filter(c => (c.gridIds||[]).includes(gridId));
 }
 
+// Mirrors a campaign's gridIds into campaignGridLinks (see rawState above)
+// so the link survives hydrateCampaignsFromAirtable rebuilding
+// state.campaigns from scratch. Call this alongside every mutation of
+// campaign.gridIds instead of relying on the array on the campaign object
+// alone.
+function persistCampaignGridLinks(campaign){
+  state.campaignGridLinks[campaign.id] = (campaign.gridIds || []).slice();
+}
+
 function renderCampaignGridTab(campaign){
   const grids = (campaign.gridIds||[]).map(id => state.grids.find(g=>g.id===id)).filter(Boolean);
   return `
@@ -5829,6 +6102,7 @@ function createGridForCampaign(campaignId){
   const grid = createGrid(name);
   if(!campaign.gridIds) campaign.gridIds = [];
   campaign.gridIds.push(grid.id);
+  persistCampaignGridLinks(campaign);
   toast('Grid "'+name+'" created and linked to '+campaign.name, 'success');
   openGridFromCampaign(grid.id, campaign.id);
 }
@@ -5862,6 +6136,7 @@ function confirmImportGrids(){
   if(!checked.length){ toast('No grids selected', 'warn'); return; }
   if(!campaign.gridIds) campaign.gridIds = [];
   checked.forEach(id => { if(!campaign.gridIds.includes(id)) campaign.gridIds.push(id); });
+  persistCampaignGridLinks(campaign);
   const newContactNames = checked.flatMap(gridId => gridContacts(gridId).map(c => c.name));
   linkContactsToCampaignAirtable(campaign, newContactNames);
   closeModal();
@@ -5873,6 +6148,7 @@ function unlinkGridFromCampaign(campaignId, gridId){
   const campaign = state.campaigns.find(c => c.id === campaignId);
   if(!campaign || !campaign.gridIds) return;
   campaign.gridIds = campaign.gridIds.filter(id => id !== gridId);
+  persistCampaignGridLinks(campaign);
   renderPage();
   toast('Grid unlinked from campaign', 'success');
 }
@@ -5926,7 +6202,10 @@ async function loadCampaignSequenceStages(campaign){
     window.__campaignConnectionSentDates[campaign.id] = {};
   }
   if(window.__campaignView === 'detail' && window.__campaignDetailId === campaign.id && window.__campaignDetailTab === 'roadmap') renderPage();
-  if(state.currentPage === 'grid' && gridViewMode(currentGrid().id) === 'table') renderPage();
+  // Both Grid view modes depend on this now - Table already did (sequence
+  // stage column), and Grid does too since gridConnectionSentDateFor started
+  // backing its day badge with Connection Sent Date.
+  if(state.currentPage === 'grid') renderPage();
   if(state.currentPage === 'home') renderPage();
 }
 

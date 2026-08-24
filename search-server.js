@@ -4,6 +4,7 @@ const cors = require('cors');
 const path = require('path');
 const cron = require('node-cron');
 const mammoth = require('mammoth');
+const crypto = require('crypto');
 
 const app = express();
 
@@ -58,6 +59,44 @@ function isConfidentMatch(result, companyWords, titleWords){
   return hasTitle && hasCompany && isValidName(extractName(result.title));
 }
 
+// Shared LinkedIn search - used by GET /api/search-contact (client-driven,
+// one cell at a time) and POST /api/grid/run-search (server-driven, a whole
+// grid's empty cells in one job). Throws with a `.status` of 500 when
+// SERPER_API_KEY is missing, matching the response GET /api/search-contact
+// always returned for that case; a plain Error otherwise.
+async function searchContactViaSerper(company, jobTitle){
+  if(!process.env.SERPER_API_KEY){
+    const err = new Error('SERPER_API_KEY is not configured');
+    err.status = 500;
+    throw err;
+  }
+
+  const query = `${company} ${jobTitle} linkedin`;
+  const serperRes = await fetch(SERPER_URL, {
+    method: 'POST',
+    headers: {
+      'X-API-KEY': process.env.SERPER_API_KEY,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ q: query })
+  });
+
+  if(!serperRes.ok){
+    throw new Error(`Serper API error: ${serperRes.status}`);
+  }
+
+  const data = await serperRes.json();
+  const results = data.organic || [];
+
+  const companyWords = company.toLowerCase().split(/\s+/).filter(Boolean);
+  const titleWords = jobTitle.toLowerCase().split(/\s+/).filter(Boolean);
+
+  const match = results.find(r => isConfidentMatch(r, companyWords, titleWords));
+  if(!match) return { found: false };
+
+  return { found: true, name: extractName(match.title), url: match.link };
+}
+
 app.get('/api/search-contact', async (req, res) => {
   const company = (req.query.company || '').trim();
   const jobTitle = (req.query.jobTitle || '').trim();
@@ -65,46 +104,13 @@ app.get('/api/search-contact', async (req, res) => {
   if(!company || !jobTitle){
     return res.status(400).json({ found: false, error: 'company and jobTitle query params are required' });
   }
-  if(!process.env.SERPER_API_KEY){
-    return res.status(500).json({ found: false, error: 'SERPER_API_KEY is not configured' });
-  }
-
-  const query = `${company} ${jobTitle} linkedin`;
 
   try {
-    const serperRes = await fetch(SERPER_URL, {
-      method: 'POST',
-      headers: {
-        'X-API-KEY': process.env.SERPER_API_KEY,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ q: query })
-    });
-
-    if(!serperRes.ok){
-      throw new Error(`Serper API error: ${serperRes.status}`);
-    }
-
-    const data = await serperRes.json();
-    const results = data.organic || [];
-
-    const companyWords = company.toLowerCase().split(/\s+/).filter(Boolean);
-    const titleWords = jobTitle.toLowerCase().split(/\s+/).filter(Boolean);
-
-    const match = results.find(r => isConfidentMatch(r, companyWords, titleWords));
-
-    if(!match){
-      return res.json({ found: false });
-    }
-
-    return res.json({
-      name: extractName(match.title),
-      url: match.link,
-      found: true
-    });
+    const result = await searchContactViaSerper(company, jobTitle);
+    return res.json(result);
   } catch(err){
     console.error('Search error for', company, jobTitle, '-', err.message);
-    return res.status(500).json({ found: false, error: 'search_failed' });
+    return res.status(err.status || 500).json({ found: false, error: err.status ? err.message : 'search_failed' });
   }
 });
 
@@ -275,68 +281,219 @@ app.get('/api/airtable/contact', async (req, res) => {
   }
 });
 
+// Shared create-or-update-a-Contact logic - used by POST /api/airtable/contact
+// (client-driven, one contact at a time) and POST /api/grid/run-search
+// (server-driven, writing each match to Airtable as the grid search finds
+// it). Throws with a `.status` of 400 for a missing name/company, matching
+// the response POST /api/airtable/contact always returned for that case; a
+// plain Error otherwise.
+//
+// Note: "gridName" was previously written to a "Grid Name" field that
+// does not exist on the real Contacts table - removed rather than added,
+// per instruction not to create missing fields. Grid membership is still
+// tracked locally in the app's own state; it just isn't mirrored to
+// Airtable right now.
+async function createOrUpdateAirtableContact({ name, company, role, linkedinUrl, state: contactState, icpRoleCategory, notes, companyLinkedinUrl }) {
+  if (!name || !company) {
+    const err = new Error('name and company are required');
+    err.status = 400;
+    throw err;
+  }
+
+  const searchRes = await fetch(
+    `${AIRTABLE_URL}/Contacts?filterByFormula=${encodeURIComponent(`{Full Name}="${name}"`)}`,
+    { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
+  );
+  const searchData = await searchRes.json();
+  const existing = searchData.records && searchData.records[0];
+  if (existing) {
+    if (icpRoleCategory) {
+      await airtableRequest('PATCH', 'Contacts', {
+        records: [{ id: existing.id, fields: { 'ICP Role Category': icpRoleCategory } }],
+        typecast: true
+      });
+    }
+    return { success: true, skipped: true, recordId: existing.id };
+  }
+
+  const fields = {
+    'Full Name': name,
+    'Job Title': role || '',
+    'LinkedIn URL': linkedinUrl || '',
+    'Journey Stage': mapStateToStage(contactState),
+    'Notes': notes || '',
+    'ICP Role Category': icpRoleCategory || ''
+  };
+  if (companyLinkedinUrl) fields['Company LinkedIn URL'] = companyLinkedinUrl;
+
+  const companySearchRes = await fetch(
+    `${AIRTABLE_URL}/Companies?filterByFormula=${encodeURIComponent(`{Company Name}="${company}"`)}`,
+    { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
+  );
+  const companySearchData = await companySearchRes.json();
+  const companyRecord = companySearchData.records && companySearchData.records[0];
+  if (companyRecord) fields['Company'] = [companyRecord.id];
+
+  const data = await airtableRequest('POST', 'Contacts', {
+    records: [{ fields }],
+    typecast: true
+  });
+
+  if (linkedinUrl) {
+    trigifyCreateContactSearch(data.records[0].id, name, linkedinUrl)
+      .catch(err => console.warn('Could not create Trigify search for new contact (non-fatal):', err.message));
+  }
+
+  return { success: true, skipped: false, recordId: data.records[0].id };
+}
+
 // Create or update a contact in Airtable
 app.post('/api/airtable/contact', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
-  // Note: "gridName" was previously written to a "Grid Name" field that
-  // does not exist on the real Contacts table - removed rather than added,
-  // per instruction not to create missing fields. Grid membership is still
-  // tracked locally in the app's own state; it just isn't mirrored to
-  // Airtable right now.
-  const { name, company, role, linkedinUrl, state: contactState, icpRoleCategory, notes, companyLinkedinUrl } = req.body;
-  if (!name || !company) return res.status(400).json({ error: 'name and company are required' });
-
   try {
-    const searchRes = await fetch(
-      `${AIRTABLE_URL}/Contacts?filterByFormula=${encodeURIComponent(`{Full Name}="${name}"`)}`,
-      { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
-    );
-    const searchData = await searchRes.json();
-    const existing = searchData.records && searchData.records[0];
-    if (existing) {
-      if (icpRoleCategory) {
-        await airtableRequest('PATCH', 'Contacts', {
-          records: [{ id: existing.id, fields: { 'ICP Role Category': icpRoleCategory } }],
-          typecast: true
-        });
-      }
-      return res.json({ success: true, skipped: true, recordId: existing.id });
-    }
-
-    const fields = {
-      'Full Name': name,
-      'Job Title': role || '',
-      'LinkedIn URL': linkedinUrl || '',
-      'Journey Stage': mapStateToStage(contactState),
-      'Notes': notes || '',
-      'ICP Role Category': icpRoleCategory || ''
-    };
-    if (companyLinkedinUrl) fields['Company LinkedIn URL'] = companyLinkedinUrl;
-
-    const companySearchRes = await fetch(
-      `${AIRTABLE_URL}/Companies?filterByFormula=${encodeURIComponent(`{Company Name}="${company}"`)}`,
-      { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
-    );
-    const companySearchData = await companySearchRes.json();
-    const companyRecord = companySearchData.records && companySearchData.records[0];
-    if (companyRecord) fields['Company'] = [companyRecord.id];
-
-    const data = await airtableRequest('POST', 'Contacts', {
-      records: [{ fields }],
-      typecast: true
-    });
-
-    if (linkedinUrl) {
-      trigifyCreateContactSearch(data.records[0].id, name, linkedinUrl)
-        .catch(err => console.warn('Could not create Trigify search for new contact (non-fatal):', err.message));
-    }
-
-    res.json({ success: true, skipped: false, recordId: data.records[0].id });
+    const result = await createOrUpdateAirtableContact(req.body);
+    res.json(result);
   } catch (err) {
+    if (err.status === 400) return res.status(400).json({ error: err.message });
     console.error('Airtable contact create error:', err.message);
     res.status(500).json({ error: err.message });
   }
+});
+
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+// ===================== GRID DAILY SEARCH (server-side) =====================
+// Runs the same search + Airtable-write that the client used to drive one
+// cell at a time (see runDailySearch in t2c-outreach-crm.html), but as a
+// single server-side job over a whole grid's empty cells - each match is
+// written to Airtable as it's found, not batched at the end. Grids
+// themselves are a client-only concept (see the persistState comment in
+// t2c-outreach-crm.html - grid definitions live in localStorage, never
+// this server), so the client sends the exact {company, role} cells to
+// search rather than this route trying to resolve a gridId into companies/
+// roles on its own; gridId here is just an opaque label carried on the job.
+//
+// Jobs live in memory only (no restart-survival, same tradeoff as every
+// other piece of ephemeral server state in this file) and are swept up a
+// while after finishing so this map can't grow unbounded.
+const gridSearchJobs = new Map();
+const GRID_SEARCH_JOB_TTL_MS = 15 * 60 * 1000;
+
+// If this grid belongs to a campaign (campaignName, resolved client-side
+// via currentGridCampaignName() - a grid linked to more than one campaign
+// sends none, same ambiguity rule the rest of the app already uses for
+// this), links a newly-found contact into that campaign's Campaign
+// Contacts table too: Contact, Campaign, Sequence Stage "Found" (Campaign
+// Contacts' actual stage field - "Journey Stage" only exists on the
+// Contacts table) and Connection Sent Date stamped to today, same as every
+// other place a contact enters a campaign. getOrCreateCampaignContactRow is
+// create-only-if-missing, so a contact re-found on a later day's search
+// isn't linked twice. Failures here are logged and swallowed rather than
+// failing the cell - the contact itself was already saved successfully by
+// createOrUpdateAirtableContact above.
+async function linkGridContactToCampaign(contactId, contactName, campaignRecord, rows) {
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    await getOrCreateCampaignContactRow(contactId, contactName, campaignRecord.id, campaignRecord.fields['Name'], rows, {
+      'Connection Sent Date': today
+    });
+  } catch (err) {
+    console.warn('Could not link grid-found contact to campaign:', err.message);
+  }
+}
+
+async function runGridSearchJob(job, cells, campaignName) {
+  // findCampaignRecordByName, not findRecordByFieldName - a campaign name
+  // containing a double quote would break the latter's filterByFormula
+  // string interpolation and silently resolve to "not found" (see that
+  // function's own comment for the full story).
+  const campaignRecord = campaignName ? await findCampaignRecordByName(campaignName) : null;
+  const campaignContactRows = campaignRecord ? await fetchCampaignContactsRows() : null;
+
+  for (const { company, role } of cells) {
+    let result;
+    try {
+      const searchResult = await searchContactViaSerper(company, role);
+      if (searchResult.found) {
+        const contactResult = await createOrUpdateAirtableContact({
+          name: searchResult.name,
+          company,
+          role,
+          linkedinUrl: searchResult.url,
+          state: 'found',
+          icpRoleCategory: role
+        });
+        if (campaignRecord) {
+          await linkGridContactToCampaign(contactResult.recordId, searchResult.name, campaignRecord, campaignContactRows);
+        }
+        job.foundCount++;
+        result = { company, role, found: true, name: searchResult.name, url: searchResult.url, recordId: contactResult.recordId };
+      } else {
+        result = { company, role, found: false };
+      }
+    } catch (err) {
+      console.warn('Grid search failed for', company, role, '-', err.message);
+      result = { company, role, found: false, error: err.message };
+    }
+    job.results.push(result);
+    job.completed++;
+    if (job.completed < job.total) await sleep(300);
+  }
+  job.status = 'done';
+  job.finishedAt = Date.now();
+  setTimeout(() => gridSearchJobs.delete(job.id), GRID_SEARCH_JOB_TTL_MS);
+}
+
+// Kicks off a grid's daily search server-side and returns a jobId
+// immediately - the client polls GET /api/grid/run-search/:jobId for
+// progress instead of holding one long request open.
+app.post('/api/grid/run-search', (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.SERPER_API_KEY) return res.status(500).json({ error: 'SERPER_API_KEY is not configured' });
+
+  const { gridId, cells, campaignName } = req.body;
+  if (!gridId) return res.status(400).json({ error: 'gridId is required' });
+  if (!Array.isArray(cells) || !cells.length) return res.status(400).json({ error: 'cells (array of {company, role}) is required' });
+
+  const jobId = crypto.randomUUID();
+  const job = {
+    id: jobId,
+    gridId,
+    status: 'running',
+    total: cells.length,
+    completed: 0,
+    foundCount: 0,
+    results: [],
+    error: null,
+    startedAt: Date.now()
+  };
+  gridSearchJobs.set(jobId, job);
+
+  runGridSearchJob(job, cells, campaignName).catch(err => {
+    console.error('Grid search job failed:', err.message);
+    job.status = 'error';
+    job.error = err.message;
+  });
+
+  res.json({ jobId, total: cells.length });
+});
+
+// Poll a grid search job's progress - completed/total/foundCount for a
+// status indicator, and results (one entry per cell processed so far) for
+// the client to reconcile grid cells against as they land.
+app.get('/api/grid/run-search/:jobId', (req, res) => {
+  const job = gridSearchJobs.get(req.params.jobId);
+  if (!job) return res.status(404).json({ error: 'job not found' });
+  res.json({
+    jobId: job.id,
+    status: job.status,
+    total: job.total,
+    completed: job.completed,
+    foundCount: job.foundCount,
+    results: job.results,
+    error: job.error
+  });
 });
 
 // Create a Contact from a website lead webhook (e.g. an AI profile/scorecard
@@ -5463,21 +5620,24 @@ function findCampaignContactRow(rows, contactId, campaignRecordId) {
 
 // Looks for an existing junction row for this (contact, campaign) pair in
 // the already-fetched `rows`, creating one at the default first stage
-// ("Found") if none exists yet.
-async function getOrCreateCampaignContactRow(contactId, contactName, campaignRecordId, campaignName, rows) {
+// ("Found") if none exists yet. `extraFields` merges additional fields onto
+// the created row only (e.g. Connection Sent Date from the grid-search
+// linker below) - never touches an existing row, same as the rest of this
+// function's create-only-if-missing behaviour.
+async function getOrCreateCampaignContactRow(contactId, contactName, campaignRecordId, campaignName, rows, extraFields) {
   const existing = findCampaignContactRow(rows, contactId, campaignRecordId);
   if (existing) return existing;
   const addedDate = new Date().toISOString().slice(0, 10);
   const data = await airtableRequest('POST', CAMPAIGN_CONTACTS_TABLE, {
     records: [{
-      fields: {
+      fields: Object.assign({
         'Name': `${contactName} — ${campaignName}`,
         'Contact': [contactId],
         'Campaign': [campaignRecordId],
         'Sequence Stage': 'Found',
         'Stage History': appendStageHistory('', 'Found', addedDate),
         'Added Date': addedDate
-      }
+      }, extraFields || {})
     }]
   });
   return data.records[0];
@@ -6112,6 +6272,39 @@ app.patch('/api/context/contact-fields', async (req, res) => {
     res.json({ success: true, campaignContactRowsSynced });
   } catch (err) {
     console.error('Context contact-fields update error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// "Mark as done" on a Today's Actions card (t2c-outreach-crm.html,
+// handleMarkActionDone/handleMarkAllActionsDone) - a blunt "I've dealt with
+// this, dismiss it" signal. Unlike PATCH /api/context/contact-fields above,
+// it never touches Sequence Stage or Journey Stage (the card might be any
+// action type - Draft message, Follow up, Reply back, not just a
+// connection request), it just stamps Connection Sent Date=today on every
+// Campaign Contacts row for this contact, same account-wide convention
+// (sending/accepting a connection, or here, working an action, isn't
+// scoped to one campaign) the 'Connection Pending' branch above uses for
+// the same field.
+app.post('/api/context/contact-mark-done', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const { contactId } = req.body;
+  if (!contactId) return res.status(400).json({ error: 'contactId is required' });
+
+  try {
+    const rows = await fetchCampaignContactsRows();
+    const matchingRows = rows.filter(r => (r.fields['Contact'] || []).includes(contactId));
+    if (matchingRows.length) {
+      const today = new Date().toISOString().slice(0, 10);
+      await airtableBatchPatch(CAMPAIGN_CONTACTS_TABLE, matchingRows.map(r => ({
+        id: r.id,
+        fields: { 'Connection Sent Date': today }
+      })));
+    }
+    res.json({ success: true, campaignContactRowsSynced: matchingRows.length });
+  } catch (err) {
+    console.error('Contact mark-done error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
