@@ -6116,6 +6116,57 @@ app.post('/api/campaign/:id/contacts/:contactId/mark-sent', async (req, res) => 
   }
 });
 
+// "Skip" on a Grid/Roadmap contact card (t2c-outreach-crm.html,
+// handleSkipContact) - sets this contact's Campaign Contacts row for the
+// given campaign to Sequence Stage "Excluded", the same value
+// linkGridContactToCampaign checks for and refuses to overwrite, so a
+// later day's grid search re-finding this person won't silently re-include
+// them. Patches the row if one already exists (any prior stage), or
+// creates it outright at "Excluded" if this contact was never linked to
+// the campaign in the first place - either way there's a row recording
+// the exclusion afterward.
+app.post('/api/campaign/:id/contacts/:contactId/exclude', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const campaignName = decodeURIComponent(req.params.id);
+  const contactId = req.params.contactId;
+
+  try {
+    const campaignRecord = await findCampaignRecordByName(campaignName);
+    if (!campaignRecord) return res.status(404).json({ error: `Campaign "${campaignName}" not found` });
+
+    const contactRecord = await airtableGetRecord('Contacts', contactId);
+    if (!contactRecord) return res.status(404).json({ error: 'Contact not found' });
+
+    const rows = await fetchCampaignContactsRows();
+    const existing = findCampaignContactRow(rows, contactId, campaignRecord.id);
+    const today = new Date().toISOString().slice(0, 10);
+
+    if (existing) {
+      await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, {
+        records: [{
+          id: existing.id,
+          fields: {
+            'Sequence Stage': 'Excluded',
+            'Stage History': appendStageHistory(existing.fields['Stage History'], 'Excluded', today)
+          }
+        }],
+        typecast: true
+      });
+    } else {
+      await getOrCreateCampaignContactRow(contactId, (contactRecord.fields || {})['Full Name'] || contactId, campaignRecord.id, campaignName, rows, {
+        'Sequence Stage': 'Excluded',
+        'Stage History': appendStageHistory('', 'Excluded', today)
+      });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Exclude contact error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Necessary supporting infrastructure, not itself one of the requested
 // changes: the only existing way to write Next Message Draft onto a
 // Campaign Contacts row was buried inside the server-side generate-message

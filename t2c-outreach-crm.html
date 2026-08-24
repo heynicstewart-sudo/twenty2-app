@@ -2343,6 +2343,63 @@ async function handleContactLinkedInOpened(cid, e){
   }
 }
 
+// Resolves which campaign a Skip click should exclude the contact from -
+// the Grid's linked campaign when on the Grid page (currentGridCampaignName,
+// only resolves when the grid is linked to exactly one), the Roadmap's
+// scoped campaign when viewing one (window.__roadmapCampaignId), or
+// whichever live campaign the contact is actually in otherwise (same
+// fallback handleContactLinkedInOpened uses).
+function campaignForSkipContext(c){
+  if(window.__roadmapCampaignId){
+    const camp = state.campaigns.find(x => x.id === window.__roadmapCampaignId);
+    if(camp) return camp;
+  }
+  if(state.currentPage === 'grid'){
+    const gridCampaignName = currentGridCampaignName();
+    const camp = gridCampaignName ? state.campaigns.find(x => x.name === gridCampaignName) : null;
+    if(camp) return camp;
+  }
+  return activeCampaignForContact(c);
+}
+
+// "Skip" on a Grid cell or Roadmap card (renderGridCell/renderGridCellHTML/
+// renderKCard) - removes the contact from state.contacts immediately, which
+// clears them from every Grid/Roadmap view at once since both render
+// straight off it, and in the background excludes them from the relevant
+// campaign's Campaign Contacts row (Sequence Stage "Excluded") via POST
+// .../exclude - the same value linkGridContactToCampaign already checks
+// for and refuses to overwrite, so a later day's grid search re-finding
+// this person won't silently re-add them.
+async function handleSkipContact(cid, e){
+  if(e) e.stopPropagation();
+  const c = state.contacts.find(x => x.id === cid);
+  if(!c) return;
+  const campaign = campaignForSkipContext(c);
+
+  state.contacts = state.contacts.filter(x => x.id !== cid);
+  renderPage();
+
+  if(!campaign){
+    toast(`${c.name} skipped, but no linked campaign was found to exclude them from in Airtable`, 'warn');
+    return;
+  }
+  if(!isAirtableRecordId(cid)){
+    console.warn('Skipping Airtable exclude - contact has no Airtable record id yet:', cid);
+    toast(`${c.name} skipped locally, but hasn't synced to Airtable yet - press "Sync to Airtable" first.`, 'warn');
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/contacts/${cid}/exclude`, { method: 'POST' });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    toast(`${c.name} skipped and excluded from ${campaign.name}`, 'success');
+  } catch(err){
+    console.warn('Could not exclude contact from campaign:', err.message);
+    toast(`${c.name} skipped locally, but could not exclude them in Airtable: ` + err.message, 'warn');
+  }
+}
+
 // "Generate message" on a fast-action card - drafts the next message in
 // this contact's specific campaign sequence (not an account-level
 // template) via POST /api/campaign/:name/contacts/:id/generate-message,
@@ -2990,6 +3047,7 @@ function renderGridCell(company, role){
       <div class="cell-meta">
         <span class="day-badge ${dayBadgeClass(days)}">${days}d</span>
         <span class="tag ${stateTagClass}">${stateLabel}</span>
+        <button class="btn btn-ghost btn-sm" style="padding:2px 6px;" onclick="handleSkipContact('${c.id}', event)" title="Skip - exclude from this campaign"><i class="ti ti-player-skip-forward"></i></button>
       </div>
     </div>
   </td>`;
@@ -3446,6 +3504,7 @@ function renderGridCellHTML(c){
       <div class="cell-meta">
         <span class="day-badge ${dayBadgeClass(days)}">${days}d</span>
         <span class="tag tag-${c.state}">${c.state}</span>
+        <button class="btn btn-ghost btn-sm" style="padding:2px 6px;" onclick="handleSkipContact('${c.id}', event)" title="Skip - exclude from this campaign"><i class="ti ti-player-skip-forward"></i></button>
       </div>
   </div></td>`.replace('<td><div','<div').replace('</div></td>','</div>');
 }
@@ -4103,6 +4162,7 @@ function renderKCard(c, colKey){
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
         <span class="day-badge ${dayBadgeClass(days)}">${days}d</span>
         <span class="tp-badge" title="Touch points logged"><i class="ti ti-target-arrow"></i> ${(c.touchPoints||[]).length}</span>
+        <button class="btn btn-ghost btn-sm" style="padding:2px 6px;" onclick="event.stopPropagation();handleSkipContact('${c.id}')" title="Skip - exclude from this campaign"><i class="ti ti-player-skip-forward"></i></button>
       </div>
     </div>
     ${flagged ? `<div class="kcard-flag"><span><i class="ti ti-flag-3"></i> Delete? ${days} days pending</span><button class="btn btn-danger btn-sm" onclick="event.stopPropagation();removeDeadContact('${c.id}')">Remove</button></div>` : ''}
