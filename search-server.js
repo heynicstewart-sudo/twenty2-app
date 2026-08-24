@@ -380,6 +380,12 @@ function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 const gridSearchJobs = new Map();
 const GRID_SEARCH_JOB_TTL_MS = 15 * 60 * 1000;
 
+// gridIds with a job currently in flight - checked by POST /api/grid/run-search
+// to reject a second concurrent search for the same grid (see the 409 below).
+// Released in a .finally() once the job settles, success or failure, so a
+// crashed/errored job can't strand a grid locked forever.
+const runningGridSearchJobs = new Set();
+
 // If this grid belongs to a campaign (campaignName, resolved client-side
 // via currentGridCampaignName() - a grid linked to more than one campaign
 // sends none, same ambiguity rule the rest of the app already uses for
@@ -455,6 +461,9 @@ app.post('/api/grid/run-search', (req, res) => {
   const { gridId, cells, campaignName } = req.body;
   if (!gridId) return res.status(400).json({ error: 'gridId is required' });
   if (!Array.isArray(cells) || !cells.length) return res.status(400).json({ error: 'cells (array of {company, role}) is required' });
+  if (runningGridSearchJobs.has(gridId)) {
+    return res.status(409).json({ error: 'A daily search is already running for this grid' });
+  }
 
   const jobId = crypto.randomUUID();
   const job = {
@@ -469,12 +478,15 @@ app.post('/api/grid/run-search', (req, res) => {
     startedAt: Date.now()
   };
   gridSearchJobs.set(jobId, job);
+  runningGridSearchJobs.add(gridId);
 
-  runGridSearchJob(job, cells, campaignName).catch(err => {
-    console.error('Grid search job failed:', err.message);
-    job.status = 'error';
-    job.error = err.message;
-  });
+  runGridSearchJob(job, cells, campaignName)
+    .catch(err => {
+      console.error('Grid search job failed:', err.message);
+      job.status = 'error';
+      job.error = err.message;
+    })
+    .finally(() => runningGridSearchJobs.delete(gridId));
 
   res.json({ jobId, total: cells.length });
 });

@@ -384,6 +384,13 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .toast.warn{background:var(--warning);}
 @keyframes slideIn{from{transform:translateX(30px);opacity:0;}to{transform:translateX(0);opacity:1;}}
 
+/* Persistent grid search status - lives outside #pageContent (see body
+   markup) so it survives renderPage() swapping pages out, unlike the
+   Grid page's own #gridNotification banner. Shown while a run-search job
+   is in flight, hidden the moment it finishes - see
+   renderGridSearchStatus/finishGridSearchUI. */
+.grid-search-status-bar{position:fixed;bottom:20px;right:20px;z-index:150;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card);box-shadow:var(--shadow-lg);padding:12px 16px;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:8px;max-width:320px;}
+
 /* Sequences */
 .seq-tabs{display:flex;gap:8px;margin-bottom:18px;border-bottom:1px solid var(--border);}
 .seq-tab{padding:10px 16px;font-weight:700;font-size:13px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;}
@@ -632,6 +639,7 @@ table.spreadsheet-table{border-collapse:collapse;width:100%;min-width:960px;font
 </div>
 
 <div class="toast-container" id="toastContainer"></div>
+<div id="gridSearchStatusBar" class="grid-search-status-bar" style="display:none;"></div>
 
 <script>
 /* ===================== STATE & SEED DATA ===================== */
@@ -2649,7 +2657,7 @@ function renderGrid(){
       <input id="newColInput" placeholder="e.g. Head of Delivery">
     </div>
     <button class="btn btn-secondary" onclick="addGridColumn()"><i class="ti ti-plus"></i> Add column</button>
-    <button class="btn btn-primary" id="runSearchBtn" onclick="runDailySearch()"><i class="ti ti-search"></i> Run daily search</button>
+    <button class="btn btn-primary" id="runSearchBtn" onclick="runDailySearch()" ${isGridSearchRunning(grid.id) ? 'disabled' : ''}><i class="ti ti-search"></i> ${isGridSearchRunning(grid.id) ? 'Searching...' : 'Run daily search'}</button>
     <button class="btn btn-ghost" onclick="resetGrid()"><i class="ti ti-refresh"></i> Reset</button>
     <button class="btn btn-secondary" onclick="exportContactsCsv()"><i class="ti ti-file-download"></i> Export contacts</button>
     <button class="btn btn-secondary" id="syncAirtableBtn" onclick="syncAllContactsToAirtable()"><i class="ti ti-cloud-upload"></i> Sync to Airtable</button>
@@ -3214,6 +3222,23 @@ function confirmCsvImport(){
 
 function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
 
+// Which grids currently have a run-search job in flight (client's view of
+// the server-side per-grid lock - see runningGridSearchJobs in
+// search-server.js). Drives the "Run daily search" button's disabled state
+// at render time (see renderGrid) so it stays disabled across navigation
+// away from and back to this grid, not just for the duration of the tab
+// that started it.
+function isGridSearchRunning(gridId){
+  return !!(window.__runningGridSearchGridIds && window.__runningGridSearchGridIds.has(gridId));
+}
+function markGridSearchRunning(gridId){
+  window.__runningGridSearchGridIds = window.__runningGridSearchGridIds || new Set();
+  window.__runningGridSearchGridIds.add(gridId);
+}
+function markGridSearchFinished(gridId){
+  if(window.__runningGridSearchGridIds) window.__runningGridSearchGridIds.delete(gridId);
+}
+
 // Daily search now runs server-side (POST /api/grid/run-search) instead of
 // this function driving the per-cell search+Airtable-write loop itself -
 // the server writes each match to Airtable as it finds it, and this just
@@ -3221,6 +3246,7 @@ function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
 // as their results land. See runGridSearchJob in search-server.js.
 async function runDailySearch(){
   const grid = currentGrid();
+  if(isGridSearchRunning(grid.id)) return;
   const cols = grid.columns;
   const emptyCells = [];
   grid.companies.forEach(company => cols.forEach(role => { if(!findContact(company, role)) emptyCells.push({company, role}); }));
@@ -3246,12 +3272,16 @@ async function runDailySearch(){
       body: JSON.stringify({ gridId: grid.id, cells: emptyCells, campaignName: currentGridCampaignName() })
     });
     const startData = await startRes.json();
+    // A 409 here means the server's own per-grid lock rejected it (already
+    // running for this gridId, possibly started from another tab/session) -
+    // surfaces through the same error path as any other start failure.
     if(!startRes.ok || !startData.jobId) throw new Error(startData.error || 'Could not start search');
+    markGridSearchRunning(grid.id);
     await pollGridSearchJob(startData.jobId, grid, emptyCells);
   } catch(err){
     console.warn('Grid search failed to start:', err.message);
     resetStuckSearchingCells(emptyCells);
-    finishGridSearchUI({ status:'error', error: err.message, foundCount:0, total: emptyCells.length });
+    finishGridSearchUI(grid.id, { status:'error', error: err.message, foundCount:0, total: emptyCells.length });
   }
 }
 
@@ -3266,25 +3296,51 @@ function resetStuckSearchingCells(cells){
   });
 }
 
-// Status banner shown in #gridNotification while a search job is running -
-// refreshed on every poll tick with the latest completed/total/foundCount.
+// Status shown two places while a search job is running: the Grid page's
+// own #gridNotification banner (only present while actually viewing that
+// grid) and #gridSearchStatusBar, a fixed element outside #pageContent
+// (see body markup) that survives renderPage() swapping pages out, so the
+// indicator stays visible if the user navigates away mid-search. Refreshed
+// on every poll tick with the latest completed/total/foundCount.
 function renderGridSearchStatus(completed, total, foundCount){
+  const message = `Searching ${completed} of ${total} open roles — ${foundCount} found so far...`;
   const el = document.getElementById('gridNotification');
-  if(!el) return;
-  el.innerHTML = `<div class="card" style="margin-bottom:14px;"><i class="ti ti-loader-2"></i> Searching ${completed} of ${total} open roles — ${foundCount} found so far...</div>`;
+  if(el) el.innerHTML = `<div class="card" style="margin-bottom:14px;"><i class="ti ti-loader-2"></i> ${message}</div>`;
+  const bar = document.getElementById('gridSearchStatusBar');
+  if(bar){
+    bar.style.display = 'flex';
+    bar.innerHTML = `<i class="ti ti-loader-2"></i> ${message}`;
+  }
 }
 
-function finishGridSearchUI(job){
+// Releases the per-grid lock (isGridSearchRunning) and hides the persistent
+// status bar - called once a job is done, whether it succeeded, errored, or
+// never started at all. Only touches the on-page #runSearchBtn/
+// #gridNotification when still viewing this same grid (a job for a
+// different grid finishing shouldn't reset the button/banner on whichever
+// grid happens to be open right now).
+function finishGridSearchUI(gridId, job){
+  markGridSearchFinished(gridId);
+
+  const bar = document.getElementById('gridSearchStatusBar');
+  if(bar){ bar.style.display = 'none'; bar.innerHTML = ''; }
+
+  if(job.status === 'error'){
+    toast('Daily search failed: '+(job.error||'unknown error'), 'warn');
+  } else {
+    toast(job.foundCount+' new contacts found', 'success');
+  }
+
+  const grid = currentGrid();
+  if(!grid || grid.id !== gridId) return;
   const btn = document.getElementById('runSearchBtn');
   if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-search"></i> Run daily search'; }
   const el = document.getElementById('gridNotification');
   if(!el) return;
   if(job.status === 'error'){
     el.innerHTML = `<div class="card" style="background:#fbe3dc;border-color:#f0c6b8;margin-bottom:14px;"><i class="ti ti-alert-circle" style="color:var(--danger);"></i> Daily search failed — ${esc(job.error||'unknown error')}</div>`;
-    toast('Daily search failed: '+(job.error||'unknown error'), 'warn');
   } else {
     el.innerHTML = `<div class="card" style="background:#eaf7f0;border-color:#c9e9d7;margin-bottom:14px;"><i class="ti ti-circle-check" style="color:var(--success);"></i> Daily search complete — ${job.foundCount} new contact${job.foundCount===1?'':'s'} found across ${job.total} open roles.</div>`;
-    toast(job.foundCount+' new contacts found', 'success');
   }
 }
 
@@ -3335,7 +3391,7 @@ async function pollGridSearchJob(jobId, grid, cells){
 
     if(!res.ok){
       resetStuckSearchingCells(stillSearching());
-      finishGridSearchUI({ status:'error', error: job.error || ('status '+res.status), foundCount:0, total: cells.length });
+      finishGridSearchUI(grid.id, { status:'error', error: job.error || ('status '+res.status), foundCount:0, total: cells.length });
       return;
     }
 
@@ -3349,7 +3405,7 @@ async function pollGridSearchJob(jobId, grid, cells){
 
     if(job.status === 'done' || job.status === 'error'){
       if(job.status === 'error') resetStuckSearchingCells(stillSearching());
-      finishGridSearchUI(job);
+      finishGridSearchUI(grid.id, job);
       return;
     }
     await sleep(1500);
