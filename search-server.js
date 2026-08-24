@@ -5797,6 +5797,20 @@ app.post('/api/campaign/:id/contacts/:contactId/generate-message', async (req, r
     // message (messageNumber 1) - pitching the offer on first touch reads
     // as a cold sales blast rather than a peer-to-peer opener.
     const offer = messageNumber >= 2 ? await getActiveOfferForCampaign(campaignRecord.id) : null;
+
+    // Marcus's own edits are the best signal for what "good" looks like -
+    // pull his 5 most recently sent messages that he rewrote before sending
+    // (Draft Outcome "Sent edited", as opposed to "Sent verbatim") across all
+    // contacts/campaigns, most recent row first, as style examples.
+    const recentEditedExamples = rows
+      .filter(r => r.fields['Draft Outcome'] === 'Sent edited' && r.fields['Final Message Sent'])
+      .sort((a, b) => new Date(b.createdTime) - new Date(a.createdTime))
+      .slice(0, 5)
+      .map(r => r.fields['Final Message Sent']);
+    const examplesNote = recentEditedExamples.length
+      ? `\n\nHere are up to 5 examples of messages Marcus personally edited before sending (most recent first) - match their tone and style:\n${recentEditedExamples.map((m, i) => `${i + 1}. ${m}`).join('\n\n')}`
+      : '';
+
     const prompt = `You are drafting LinkedIn outreach message ${messageNumber} of 3 for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM.
 
 Campaign: "${campaignName}". Goal: ${camp['Goal'] || 'not recorded'}. Product: ${camp['Product'] || 'not recorded'}. Target ICP: ${camp['Target ICP'] || 'not recorded'}. Strategy notes: ${camp['Strategy Notes'] || 'none recorded'}.
@@ -5805,7 +5819,7 @@ Contact: ${cf['Full Name'] || 'Unknown'}, ${cf['Job Title'] || ''}. AI summary: 
 Recent posts (last 30 days only): ${recentPosts}
 ${offer && offer.summary ? `\nThis campaign's offer: ${offer.summary}\nWeave the offer above into this message naturally, in your own words - do not paste it verbatim.` : ''}
 
-Write only message ${messageNumber} in this contact's sequence for this specific campaign, following on naturally from the conversation so far (if any). UK English, no em dashes, peer to peer tone, 3-4 sentences, signed off "Twenty2 Collective". Return only the message text, no preamble.`;
+Write only message ${messageNumber} in this contact's sequence for this specific campaign, following on naturally from the conversation so far (if any). UK English, no em dashes, peer to peer tone, 3-4 sentences, signed off "Twenty2 Collective". Return only the message text, no preamble.${examplesNote}`;
 
     const message = await callClaudeText(prompt, 400);
     await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, { records: [{ id: row.id, fields: { 'Next Message Draft': message } }] });
@@ -5855,7 +5869,11 @@ app.post('/api/campaign/:id/contacts/:contactId/mark-sent', async (req, res) => 
     // draftOutcome ('Sent verbatim'/'Sent edited') tells us whether Marcus sent
     // the AI draft as-is or rewrote it - feedback signal for how good the
     // draft actually was, diffed client-side against the draft this row held
-    // before this send.
+    // before this send. Final Message Sent records what actually went out
+    // (as opposed to Next Message Draft, which is the pre-edit AI draft and
+    // gets cleared above) - generate-message reads recent "Sent edited" rows
+    // back out of this field as style examples.
+    stageFields['Final Message Sent'] = message;
     if (draftOutcome) stageFields['Draft Outcome'] = draftOutcome;
     await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, {
       records: [{
