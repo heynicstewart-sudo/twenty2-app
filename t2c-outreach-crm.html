@@ -3315,10 +3315,15 @@ function renderGridSearchStatus(completed, total, foundCount){
 
 // Releases the per-grid lock (isGridSearchRunning) and hides the persistent
 // status bar - called once a job is done, whether it succeeded, errored, or
-// never started at all. Only touches the on-page #runSearchBtn/
-// #gridNotification when still viewing this same grid (a job for a
-// different grid finishing shouldn't reset the button/banner on whichever
-// grid happens to be open right now).
+// never started at all. If the user is currently looking at this same grid,
+// does a full renderPage() rather than just patching #runSearchBtn in place
+// - patching alone would leave cells whose result arrived while the user
+// was elsewhere (so applyGridSearchResult's .cell-searching target never
+// existed to patch) stuck showing "No match yet" even though state.contacts
+// already has them; a fresh render reads the grid straight from
+// state.contacts instead. A job finishing for a grid that isn't the one
+// currently open (or while on a different page entirely) never touches the
+// DOM at all here.
 function finishGridSearchUI(gridId, job){
   markGridSearchFinished(gridId);
 
@@ -3331,10 +3336,11 @@ function finishGridSearchUI(gridId, job){
     toast(job.foundCount+' new contacts found', 'success');
   }
 
+  if(state.currentPage !== 'grid') return;
   const grid = currentGrid();
   if(!grid || grid.id !== gridId) return;
-  const btn = document.getElementById('runSearchBtn');
-  if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-search"></i> Run daily search'; }
+
+  renderPage();
   const el = document.getElementById('gridNotification');
   if(!el) return;
   if(job.status === 'error'){
