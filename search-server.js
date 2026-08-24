@@ -6,6 +6,26 @@ const cron = require('node-cron');
 const mammoth = require('mammoth');
 
 const app = express();
+
+const BASIC_AUTH_USER = process.env.RAILWAY_BASIC_AUTH_USER;
+const BASIC_AUTH_PASS = process.env.RAILWAY_BASIC_AUTH_PASS;
+
+if (BASIC_AUTH_USER && BASIC_AUTH_PASS) {
+  app.use((req, res, next) => {
+    const header = req.headers.authorization || '';
+    const [scheme, encoded] = header.split(' ');
+    const decoded = scheme === 'Basic' && encoded ? Buffer.from(encoded, 'base64').toString('utf8') : '';
+    const sepIndex = decoded.indexOf(':');
+    const user = sepIndex === -1 ? decoded : decoded.slice(0, sepIndex);
+    const pass = sepIndex === -1 ? '' : decoded.slice(sepIndex + 1);
+
+    if (user === BASIC_AUTH_USER && pass === BASIC_AUTH_PASS) return next();
+
+    res.set('WWW-Authenticate', 'Basic realm="Restricted"');
+    res.status(401).send('Authentication required');
+  });
+}
+
 app.use(cors());
 app.use(express.json());
 
