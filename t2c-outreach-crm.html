@@ -5813,11 +5813,56 @@ async function openContactDrawer(name, campaignName){
   }
 }
 
+let __tpRenderCounter = 0;
+
+function touchPointTypeBadgeColors(type){
+  const key = (type || '').toLowerCase().trim();
+  if(key === 'meeting') return { bg:'#faf0dc', color:'#8a6a1f' };
+  if(key.startsWith('linkedin')) return { bg:'#e3edfb', color:'#2d5da8' };
+  if(key === 'email') return { bg:'#e2f3e6', color:'#2c7a43' };
+  if(key === 'call' || key === 'phone call') return { bg:'#f1e6fa', color:'#7a3fa8' };
+  return { bg:'#eeeeee', color:'#666666' };
+}
+
+function toggleTouchPointBody(domId, link){
+  const container = document.getElementById(domId);
+  if(!container) return;
+  const shortEl = container.querySelector('.tp-body-short');
+  const fullEl = container.querySelector('.tp-body-full');
+  if(!shortEl || !fullEl) return;
+  const expanded = fullEl.style.display !== 'none';
+  fullEl.style.display = expanded ? 'none' : '';
+  shortEl.style.display = expanded ? '' : 'none';
+  link.textContent = expanded ? 'Show more' : 'Show less';
+}
+
 function renderDrawerTouchPoint(tp, campaignName){
   const isOther = !!(campaignName && tp.campaignName && tp.campaignName !== campaignName);
+  const domId = `tpBody_${__tpRenderCounter++}`;
+
+  let body = (tp.notes || '').replace(/^\s*\[Campaign:[^\]]*\]\s*/i, '');
+
+  const extracted = [];
+  body = body.replace(/^(Objections raised|Next steps agreed|Sentiment):[ \t]*(.*)$/gim, (match, label, value) => {
+    extracted.push({ label, value: value.trim() });
+    return '';
+  }).replace(/\n{2,}/g, '\n').trim();
+
+  const TRUNCATE_LEN = 80;
+  const isLong = body.length > TRUNCATE_LEN;
+  const shortBody = isLong ? body.slice(0, TRUNCATE_LEN).trim() + '…' : body;
+  const badge = touchPointTypeBadgeColors(tp.type);
+
   return `<div class="tp-item ${isOther?'other':''}">
-    <div style="display:flex;justify-content:space-between;"><strong>${esc(tp.type||'Touch point')}</strong><span class="muted">${fmtDate(tp.date)}</span></div>
-    <div style="margin-top:2px;">${esc((tp.notes||'').slice(0,140))}${(tp.notes||'').length>140?'…':''}</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <span style="display:inline-flex;padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:700;background:${badge.bg};color:${badge.color};">${esc(tp.type||'Touch point')}</span>
+      <span class="muted">${fmtDate(tp.date)}</span>
+    </div>
+    ${body ? `<div style="margin-top:4px;" id="${domId}">
+      <span class="tp-body-short">${esc(shortBody)}</span>
+      ${isLong ? `<span class="tp-body-full" style="display:none;">${esc(body)}</span> <a href="#" onclick="event.preventDefault();toggleTouchPointBody('${domId}', this);" style="font-size:11px;font-weight:700;margin-left:2px;">Show more</a>` : ''}
+    </div>` : ''}
+    ${extracted.length ? extracted.map(e=>`<div style="margin-top:3px;font-size:11.5px;"><strong>${esc(e.label)}:</strong> ${esc(e.value)}</div>`).join('') : ''}
     ${tp.campaignName ? `<div class="muted" style="font-size:10.5px;margin-top:3px;">${esc(tp.campaignName)}${isOther && tp.relevantToCurrentCampaign ? ' · surfaced: related to this campaign' : ''}</div>` : ''}
   </div>`;
 }
