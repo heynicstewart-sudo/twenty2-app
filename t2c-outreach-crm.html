@@ -3776,6 +3776,26 @@ function addGridCompany(){
   }
 }
 
+// Same write addGridCompany makes by hand above, but silent and a no-op if
+// the company is already on the grid - used by the Apollo import flow so a
+// contact whose company isn't on the grid yet still lands in the right row
+// immediately, instead of only existing in state.contacts with nowhere to
+// display until someone adds the company manually.
+function ensureGridCompany(grid, companyName){
+  if(!companyName || grid.companies.includes(companyName)) return;
+  grid.companies.push(companyName);
+  touchGrid(grid.id);
+
+  const companyFields = { name: companyName, gridName: grid.name };
+  if(airtableWriteGuard('company', companyFields, ['name'])){
+    fetch('/api/airtable/company', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(companyFields)
+    }).catch(err => console.warn('Airtable company sync failed:', err.message));
+  }
+}
+
 function companyLinkedInUrl(company){
   const linkMap = currentGrid().companyLinkedIn;
   return (linkMap[company] && linkMap[company].linkedinUrl) || '';
@@ -4019,14 +4039,18 @@ function openAddContactModal(){
 // Shared by both modal actions below - builds the local contact object
 // (same shape applyGridSearchResult uses for a grid-search match) and syncs
 // it to Airtable via the existing per-contact upsert (syncContactToAirtable),
-// same as every other place a contact enters this app.
-function createManualGridContact(name, role, company, linkedinUrl){
+// same as every other place a contact enters this app. apolloTitle is
+// optional - only the Apollo import flow passes it (Apollo's own verbose
+// title, kept separate from `role`, which is the grid column/searched job
+// title written to the real Job Title field - see confirmApolloImport).
+function createManualGridContact(name, role, company, linkedinUrl, apolloTitle){
   const grid = currentGrid();
   const seqId = role === 'Digital and Tech' ? 'digitalTech' : 'seniorLeaders';
   const contact = {
     id: uid('c'), gridId: grid.id, name, company, role, url: linkedinUrl,
     seqId, state:'found', foundDate: isoDate(TODAY), connReqDate:null, connDate:null, notes:'',
-    thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[]
+    thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[],
+    apolloTitle: apolloTitle || ''
   };
   state.contacts.push(contact);
   touchGrid(grid.id);
@@ -4137,6 +4161,10 @@ async function runApolloSearch(){
     if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
 
     window.__apolloResults = data.results || [];
+    // Kept for confirmApolloImport - the grid column/Job Title an imported
+    // contact should get is what was searched for (e.g. "Change Manager"),
+    // not Apollo's own verbose title per-result (see apolloTitle below).
+    window.__apolloSearchedJobTitle = jobTitle;
     renderApolloResults();
   } catch(err){
     if(resultsEl) resultsEl.innerHTML = `<p class="muted" style="font-size:12.5px;">Could not search Apollo: ${esc(err.message)}</p>`;
@@ -4176,7 +4204,12 @@ function toggleApolloSelectAll(checked){
 
 // Reuses createManualGridContact - same local contact shape and Airtable
 // sync as manually typing a contact into "Add contact" above, so an
-// imported result behaves identically everywhere else in the app.
+// imported result behaves identically everywhere else in the app. Job
+// Title is written as the grid column/searched title rather than Apollo's
+// own verbose title (e.g. "Change Manager, WA Operations Transformation
+// Programme") - that goes to the separate Apollo Title field instead, via
+// createManualGridContact's apolloTitle param - so the grid's role-based
+// matching keeps working the same way it does for every other contact.
 function confirmApolloImport(){
   const results = window.__apolloResults || [];
   const checked = Array.from(document.querySelectorAll('.apollo-result-checkbox:checked'))
@@ -4184,10 +4217,14 @@ function confirmApolloImport(){
     .filter(Boolean);
   if(!checked.length){ toast('No contacts selected', 'warn'); return; }
 
+  const grid = currentGrid();
+  const searchedJobTitle = window.__apolloSearchedJobTitle || '';
+
   let imported = 0, skipped = 0;
   checked.forEach(r => {
     if(!r.name || !r.company){ skipped++; return; }
-    createManualGridContact(r.name, r.jobTitle || '', r.company, r.linkedinUrl || '');
+    ensureGridCompany(grid, r.company);
+    createManualGridContact(r.name, searchedJobTitle, r.company, r.linkedinUrl || '', r.jobTitle || '');
     imported++;
   });
 
@@ -4514,7 +4551,8 @@ function syncContactToAirtable(contact) {
     icpRoleCategory: contact.role,
     notes: contact.notes || '',
     companyLinkedinUrl: grid ? ((grid.companyLinkedIn[contact.company] && grid.companyLinkedIn[contact.company].linkedinUrl) || '') : '',
-    gridName: gridNameForContact(contact)
+    gridName: gridNameForContact(contact),
+    apolloTitle: contact.apolloTitle || ''
   };
   if(!airtableWriteGuard('contact', contactFields, ['name','company'])) return;
   fetch('/api/airtable/contact', {

@@ -355,7 +355,7 @@ app.get('/api/airtable/contact', async (req, res) => {
 // per instruction not to create missing fields. Grid membership is still
 // tracked locally in the app's own state; it just isn't mirrored to
 // Airtable right now.
-async function createOrUpdateAirtableContact({ name, company, role, linkedinUrl, state: contactState, icpRoleCategory, notes, companyLinkedinUrl }) {
+async function createOrUpdateAirtableContact({ name, company, role, linkedinUrl, state: contactState, icpRoleCategory, notes, companyLinkedinUrl, apolloTitle }) {
   if (!name || !company) {
     const err = new Error('name and company are required');
     err.status = 400;
@@ -390,6 +390,17 @@ async function createOrUpdateAirtableContact({ name, company, role, linkedinUrl,
         typecast: true
       });
     }
+    // Separate best-effort write, same reasoning as the Apollo Title write
+    // on the create branch below - the real Contacts table's exact field
+    // set isn't confirmed to include it, so it's never bundled into the
+    // patch above where a missing field would fail the whole write.
+    if (apolloTitle) {
+      try {
+        await airtableRequest('PATCH', 'Contacts', { records: [{ id: existing.id, fields: { 'Apollo Title': apolloTitle } }], typecast: true });
+      } catch (apolloTitleErr) {
+        console.warn('Best-effort Apollo Title field write failed:', apolloTitleErr.message);
+      }
+    }
     return { success: true, skipped: true, recordId: existing.id };
   }
 
@@ -408,12 +419,25 @@ async function createOrUpdateAirtableContact({ name, company, role, linkedinUrl,
     records: [{ fields }],
     typecast: true
   });
+  const recordId = data.records[0].id;
+
+  // Best-effort, same reasoning as the Rep field write on Touch Points
+  // (POST /api/airtable/touchpoint) - Apollo's raw title goes here instead
+  // of the main create above so an unrecognised field name never fails the
+  // primary contact creation, just this secondary write.
+  if (apolloTitle) {
+    try {
+      await airtableRequest('PATCH', 'Contacts', { records: [{ id: recordId, fields: { 'Apollo Title': apolloTitle } }], typecast: true });
+    } catch (apolloTitleErr) {
+      console.warn('Best-effort Apollo Title field write failed:', apolloTitleErr.message);
+    }
+  }
 
   // Trigify monitor creation happens later, in PATCH /api/context/
   // contact-fields once this contact actually reaches Sequence Stage
   // "Connected" - not here at creation, so a contact that's found but never
   // connects with never gets an unnecessary Trigify search opened for them.
-  return { success: true, skipped: false, recordId: data.records[0].id };
+  return { success: true, skipped: false, recordId };
 }
 
 // Create or update a contact in Airtable
@@ -2535,9 +2559,13 @@ app.post('/api/apollo/search-contacts', async (req, res) => {
     const apolloBody = { per_page: 25 };
     const titles = splitList(jobTitle);
     const locations = splitLocations(location);
+    const keywordTags = splitList(keywords);
     if (titles.length) apolloBody.person_titles = titles;
     if (locations.length) apolloBody.person_locations = locations;
-    if (keywords && keywords.trim()) apolloBody.q_keywords = keywords.trim();
+    // Sent as separate array entries (OR'd by Apollo) rather than one
+    // q_keywords string, which Apollo would otherwise treat as a single
+    // phrase to match rather than a set of alternative industry keywords.
+    if (keywordTags.length) apolloBody['organization_keyword_tags[]'] = keywordTags;
 
     const apolloRes = await fetch('https://api.apollo.io/api/v1/mixed_people/api_search', {
       method: 'POST',
@@ -2560,10 +2588,14 @@ app.post('/api/apollo/search-contacts', async (req, res) => {
     // linkedin_url comes straight off each person's free profile fields
     // returned by the plain search call - email/phone are deliberately
     // never read here, since revealing those on Apollo requires a separate
-    // paid "match"/enrich call this route never makes.
+    // paid "match"/enrich call this route never makes. The search response
+    // splits the name across first_name and last_name_obfuscated (rather
+    // than a single last_name) - combined here into one display name, with
+    // p.name/p.last_name as a fallback for whichever shape a given result
+    // actually comes back in.
     const results = people
       .map(p => ({
-        name: p.name || [p.first_name, p.last_name].filter(Boolean).join(' ').trim(),
+        name: [p.first_name, p.last_name_obfuscated || p.last_name].filter(Boolean).join(' ').trim() || p.name || '',
         jobTitle: p.title || '',
         company: (p.organization && p.organization.name) || p.organization_name || '',
         linkedinUrl: p.linkedin_url || ''
