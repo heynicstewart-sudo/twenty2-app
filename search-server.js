@@ -208,8 +208,8 @@ async function airtableFetchAllPaginated(table, extraQueryString) {
 // campaign resolution uses it too.
 async function findCampaignRecordByName(campaignName) {
   if (!campaignName) return null;
-  const data = await airtableRequest('GET', 'Campaigns');
-  return (data.records || []).find(r => (r.fields['Name'] || '') === campaignName) || null;
+  const records = await airtableFetchAllRecords('Campaigns');
+  return records.find(r => (r.fields['Name'] || '') === campaignName) || null;
 }
 
 function isAirtableRecordId(id) {
@@ -701,14 +701,14 @@ app.get('/api/leads/website', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
   try {
-    const [contactsData, companiesData] = await Promise.all([
-      airtableRequest('GET', 'Contacts'),
-      airtableRequest('GET', 'Companies')
+    const [contactRecords, companyRecords] = await Promise.all([
+      airtableFetchAllRecords('Contacts'),
+      airtableFetchAllRecords('Companies')
     ]);
     const companiesById = {};
-    (companiesData.records || []).forEach(r => { companiesById[r.id] = r; });
+    companyRecords.forEach(r => { companiesById[r.id] = r; });
 
-    const leads = (contactsData.records || [])
+    const leads = contactRecords
       .filter(r => r.fields['Journey Stage'] === 'Website Lead')
       .map(r => {
         const cf = r.fields || {};
@@ -1079,8 +1079,8 @@ app.get('/api/airtable/campaign', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
   try {
-    const data = await airtableRequest('GET', 'Campaigns');
-    res.json(data.records || []);
+    const records = await airtableFetchAllRecords('Campaigns');
+    res.json(records);
   } catch (err) {
     console.error('Airtable campaign list error:', err.message);
     res.status(500).json({ error: err.message });
@@ -1145,8 +1145,8 @@ app.delete('/api/campaign/:id', async (req, res) => {
 app.get('/api/airtable/grid', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   try {
-    const data = await airtableRequest('GET', 'Grids');
-    res.json(data.records || []);
+    const records = await airtableFetchAllRecords('Grids');
+    res.json(records);
   } catch (err) {
     console.error('Airtable grid list error:', err.message);
     res.status(500).json({ error: err.message });
@@ -1217,8 +1217,8 @@ app.delete('/api/airtable/grid/:gridId', async (req, res) => {
 app.get('/api/airtable/sequence', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   try {
-    const data = await airtableRequest('GET', 'Sequences');
-    res.json(data.records || []);
+    const records = await airtableFetchAllRecords('Sequences');
+    res.json(records);
   } catch (err) {
     console.error('Airtable sequence list error:', err.message);
     res.status(500).json({ error: err.message });
@@ -1274,8 +1274,8 @@ app.post('/api/airtable/sequence', async (req, res) => {
 app.get('/api/airtable/booking', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   try {
-    const data = await airtableRequest('GET', 'Bookings');
-    res.json(data.records || []);
+    const records = await airtableFetchAllRecords('Bookings');
+    res.json(records);
   } catch (err) {
     console.error('Airtable booking list error:', err.message);
     res.status(500).json({ error: err.message });
@@ -1308,8 +1308,8 @@ app.post('/api/airtable/booking', async (req, res) => {
 app.get('/api/airtable/dead-contact', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   try {
-    const data = await airtableRequest('GET', 'Dead Contacts');
-    res.json(data.records || []);
+    const records = await airtableFetchAllRecords('Dead Contacts');
+    res.json(records);
   } catch (err) {
     console.error('Airtable dead contact list error:', err.message);
     res.status(500).json({ error: err.message });
@@ -1438,8 +1438,8 @@ app.get('/api/airtable/touchpoint', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
   try {
-    const data = await airtableRequest('GET', 'Touch Points');
-    res.json(data.records || []);
+    const records = await airtableFetchAllRecords('Touch Points');
+    res.json(records);
   } catch (err) {
     console.error('Airtable touch point list error:', err.message);
     res.status(500).json({ error: err.message });
@@ -1597,8 +1597,8 @@ app.get('/api/enrich/linkedin-org-id', async (req, res) => {
 
 async function fetchLearningData() {
   try {
-    const data = await airtableRequest('GET', 'Learning Data');
-    return (data.records || []).map(r => ({
+    const records = await airtableFetchAllRecords('Learning Data');
+    return records.map(r => ({
       type: r.fields['Type'] || '',
       analysis: r.fields['Analysis'] || '',
       recordCount: r.fields['Record Count'] || 0,
@@ -1634,8 +1634,8 @@ function learningDataContext(learningData) {
 // four pillar scores, both leaks and the three insight titles - so the
 // intelligence prompt can pitch message drafts/suggestions at their actual
 // CVC report rather than generic outreach.
-function cvcProfilesContext(contactsData) {
-  const lines = (contactsData.records || [])
+function cvcProfilesContext(contactRecords) {
+  const lines = contactRecords
     .filter(r => r.fields['Journey Stage'] === 'Website Lead')
     .map(r => {
       let cvc;
@@ -1688,8 +1688,8 @@ app.post('/api/track/conversion', async (req, res) => {
 
 async function fetchConversions() {
   try {
-    const data = await airtableRequest('GET', 'Conversions');
-    return (data.records || []).map(r => ({
+    const records = await airtableFetchAllRecords('Conversions');
+    return records.map(r => ({
       contactName: r.fields['Contact Name'] || '',
       company: r.fields['Company'] || '',
       icpRole: r.fields['ICP Role'] || '',
@@ -1769,8 +1769,8 @@ app.get('/api/track/insights', async (req, res) => {
 
 async function fetchCampaigns() {
   try {
-    const data = await airtableRequest('GET', 'Campaigns');
-    return (data.records || []).map(r => ({
+    const records = await airtableFetchAllRecords('Campaigns');
+    return records.map(r => ({
       name: r.fields['Name'] || '',
       status: r.fields['Status'] || '',
       product: r.fields['Product'] || '',
@@ -1809,16 +1809,16 @@ app.get('/api/intelligence/health', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
   try {
-    const [contactsData, touchPointsData, campaigns] = await Promise.all([
-      airtableRequest('GET', 'Contacts'),
-      airtableRequest('GET', 'Touch Points'),
+    const [contactRecords, touchPointRecords, campaigns] = await Promise.all([
+      airtableFetchAllRecords('Contacts'),
+      airtableFetchAllRecords('Touch Points'),
       fetchCampaigns()
     ]);
 
-    const contacts = (contactsData.records || []).map(r => ({
+    const contacts = contactRecords.map(r => ({
       journeyStage: r.fields['Journey Stage'] || ''
     }));
-    const touchPoints = (touchPointsData.records || []).map(r => ({
+    const touchPoints = touchPointRecords.map(r => ({
       date: r.fields['Date'] || ''
     }));
 
@@ -1903,8 +1903,8 @@ function computeCampaignPerformance(campaigns, contacts, touchPoints, conversion
 // Data/Conversions.
 async function fetchSalesLog() {
   try {
-    const data = await airtableRequest('GET', 'Sales Log');
-    return (data.records || []).map(r => ({
+    const records = await airtableFetchAllRecords('Sales Log');
+    return records.map(r => ({
       campaign: r.fields['Campaign'] || '',
       type: r.fields['Type'] || '',
       scriptAdherence: r.fields['Script Adherence'] || '',
@@ -1923,8 +1923,8 @@ async function fetchSalesLog() {
 // content analysis" job and written to the Content Performance table.
 async function fetchContentPerformance() {
   try {
-    const data = await airtableRequest('GET', 'Content Performance');
-    return (data.records || []).map(r => ({
+    const records = await airtableFetchAllRecords('Content Performance');
+    return records.map(r => ({
       date: r.fields['Date'] || '',
       likes: r.fields['Likes'] || 0,
       comments: r.fields['Comments'] || 0,
@@ -1971,9 +1971,9 @@ app.post('/api/intelligence', async (req, res) => {
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
 
   try {
-    const [contactsData, touchPointsData, learningData, conversions, campaigns, salesLog, contentPerformance] = await Promise.all([
-      airtableRequest('GET', 'Contacts'),
-      airtableRequest('GET', 'Touch Points'),
+    const [contactRecords, touchPointRecords, learningData, conversions, campaigns, salesLog, contentPerformance] = await Promise.all([
+      airtableFetchAllRecords('Contacts'),
+      airtableFetchAllRecords('Touch Points'),
       fetchLearningData(),
       fetchConversions(),
       fetchCampaigns(),
@@ -1983,7 +1983,7 @@ app.post('/api/intelligence', async (req, res) => {
     // Note: there is no "Signals" table or concept anywhere in this app's
     // schema yet, so there is nothing to fetch for it - not fabricating one.
 
-    const contacts = (contactsData.records || []).map(r => ({
+    const contacts = contactRecords.map(r => ({
       id: r.id,
       name: r.fields['Full Name'] || '',
       company: r.fields['Company'] || '',
@@ -1994,7 +1994,7 @@ app.post('/api/intelligence', async (req, res) => {
       notes: r.fields['Notes'] || ''
     }));
 
-    const touchPoints = (touchPointsData.records || []).map(r => ({
+    const touchPoints = touchPointRecords.map(r => ({
       contact: (r.fields['Contact'] || [])[0] || null,
       date: r.fields['Date'] || '',
       type: r.fields['Type'] || '',
@@ -2027,7 +2027,7 @@ CONVERSIONS - actual meetings booked, logged with what led to them (${conversion
 ${conversionsContext(conversions)}
 
 WEBSITE LEAD PROFILES - Change Value Check reports for contacts who came in via the website (use the full breakdown - archetype, all four pillar scores, both leaks and the report's insight titles - to calibrate campaignSuggestions and messageDrafts for these specific contacts, rather than generic messaging). Primary leak maps to T2C's service offerings: a people leak maps to People Capability, a productivity leak maps to Operational Excellence, and a performance leak maps to Strategy and Governance - use this mapping to recommend the most relevant T2C product for each contact and tailor their message draft's outreach angle around that specific service and leak, not a generic pitch:
-${cvcProfilesContext(contactsData)}
+${cvcProfilesContext(contactRecords)}
 
 SALES CALL FEEDBACK - script adherence, objections raised and CTAs actually used, scored from real call transcripts (${salesLog.length} on file - use this to sharpen objection-handling and pitch-angle suggestions with what's actually happening on calls, not theory):
 ${salesLogContext(salesLog)}
@@ -2417,12 +2417,12 @@ app.post('/api/enrich/contact', async (req, res) => {
 // contacts and drafting the sequence from the full conversation.
 
 async function fetchCampaignContext() {
-  const [contactsData, touchPointsData] = await Promise.all([
-    airtableRequest('GET', 'Contacts'),
-    airtableRequest('GET', 'Touch Points')
+  const [contactRecords, touchPointRecords] = await Promise.all([
+    airtableFetchAllRecords('Contacts'),
+    airtableFetchAllRecords('Touch Points')
   ]);
 
-  const contacts = (contactsData.records || []).map(r => ({
+  const contacts = contactRecords.map(r => ({
     name: r.fields['Full Name'] || '',
     company: Array.isArray(r.fields['Company']) ? '' : (r.fields['Company'] || ''),
     role: r.fields['Job Title'] || '',
@@ -2430,7 +2430,7 @@ async function fetchCampaignContext() {
     notes: r.fields['Notes'] || ''
   })).filter(c => c.name);
 
-  const touchPoints = (touchPointsData.records || []).map(r => ({
+  const touchPoints = touchPointRecords.map(r => ({
     type: r.fields['Type'] || '',
     outcome: r.fields['Outcome'] || '',
     painPoints: r.fields['Pain Points'] || []
@@ -2757,9 +2757,9 @@ app.get('/api/campaign/:id/analytics', async (req, res) => {
   const campaignIdOrName = decodeURIComponent(req.params.id);
 
   try {
-    const [contactsData, touchPointsData, conversions, campaigns, campaignRecord] = await Promise.all([
-      airtableRequest('GET', 'Contacts'),
-      airtableRequest('GET', 'Touch Points'),
+    const [contactRecords, touchPointRecords, conversions, campaigns, campaignRecord] = await Promise.all([
+      airtableFetchAllRecords('Contacts'),
+      airtableFetchAllRecords('Touch Points'),
       fetchConversions(),
       fetchCampaigns(),
       resolveCampaignRecord(campaignIdOrName)
@@ -2772,8 +2772,8 @@ app.get('/api/campaign/:id/analytics', async (req, res) => {
     const campaign = campaigns.find(c => c.name === campaignName);
     if (!campaignRecord || !campaign) return res.status(404).json({ error: 'Campaign not found in Airtable' });
 
-    const contacts = (contactsData.records || []).map(r => ({ id: r.id, name: r.fields['Full Name'] || '' }));
-    const touchPoints = (touchPointsData.records || []).map(r => ({
+    const contacts = contactRecords.map(r => ({ id: r.id, name: r.fields['Full Name'] || '' }));
+    const touchPoints = touchPointRecords.map(r => ({
       contact: (r.fields['Contact'] || [])[0] || null,
       date: r.fields['Date'] || '',
       outcome: r.fields['Outcome'] || ''
@@ -2796,9 +2796,9 @@ app.get('/api/campaign/:id/insights', async (req, res) => {
   const campaignIdOrName = decodeURIComponent(req.params.id);
 
   try {
-    const [contactsData, touchPointsData, conversions, campaigns, learningData, campaignRecord] = await Promise.all([
-      airtableRequest('GET', 'Contacts'),
-      airtableRequest('GET', 'Touch Points'),
+    const [contactRecords, touchPointRecords, conversions, campaigns, learningData, campaignRecord] = await Promise.all([
+      airtableFetchAllRecords('Contacts'),
+      airtableFetchAllRecords('Touch Points'),
       fetchConversions(),
       fetchCampaigns(),
       fetchLearningData(),
@@ -2812,14 +2812,14 @@ app.get('/api/campaign/:id/insights', async (req, res) => {
     const campaign = campaigns.find(c => c.name === campaignName);
     if (!campaignRecord || !campaign) return res.status(404).json({ error: 'Campaign not found in Airtable' });
 
-    const contacts = (contactsData.records || []).map(r => ({
+    const contacts = contactRecords.map(r => ({
       id: r.id,
       name: r.fields['Full Name'] || '',
       role: r.fields['Job Title'] || '',
       company: r.fields['Company'] || '',
       journeyStage: r.fields['Journey Stage'] || ''
     }));
-    const touchPoints = (touchPointsData.records || []).map(r => ({
+    const touchPoints = touchPointRecords.map(r => ({
       contact: (r.fields['Contact'] || [])[0] || null,
       date: r.fields['Date'] || '',
       type: r.fields['Type'] || '',
@@ -3072,13 +3072,13 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 async function refreshContactAndCompanySummaries(contactId, companyId, extraContextLine) {
   try {
     if (contactId) {
-      const [contactRecord, touchPointsData] = await Promise.all([
+      const [contactRecord, touchPointRecords] = await Promise.all([
         airtableGetRecord('Contacts', contactId),
-        airtableRequest('GET', 'Touch Points')
+        airtableFetchAllRecords('Touch Points')
       ]);
       if (contactRecord) {
         const f = contactRecord.fields || {};
-        const touchPoints = (touchPointsData.records || [])
+        const touchPoints = touchPointRecords
           .filter(r => (r.fields['Contact'] || []).includes(contactId))
           .map(r => ({ date: r.fields['Date'] || '', type: r.fields['Type'] || '', notes: r.fields['Summary'] || '' }))
           .sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -3139,18 +3139,18 @@ app.get('/api/campaign/:id/sales-overview', async (req, res) => {
     const campaignRecord = await resolveCampaignRecord(campaignIdOrName);
     if (!campaignRecord) return res.status(404).json({ error: 'Campaign not found' });
 
-    const [ccRows, dealsData, tpData, contactsData, companiesData, repsData] = await Promise.all([
+    const [ccRows, dealRecords, tpRecords, contactRecords, companyRecords, repRecords] = await Promise.all([
       fetchCampaignContactsRows(),
-      airtableRequest('GET', 'Deals'),
-      airtableRequest('GET', 'Touch Points'),
-      airtableRequest('GET', 'Contacts'),
-      airtableRequest('GET', 'Companies'),
-      airtableRequest('GET', 'Reps')
+      airtableFetchAllRecords('Deals'),
+      airtableFetchAllRecords('Touch Points'),
+      airtableFetchAllRecords('Contacts'),
+      airtableFetchAllRecords('Companies'),
+      airtableFetchAllRecords('Reps')
     ]);
 
-    const contactsById = {}; (contactsData.records || []).forEach(r => { contactsById[r.id] = r; });
-    const companiesById = {}; (companiesData.records || []).forEach(r => { companiesById[r.id] = r; });
-    const repsById = {}; (repsData.records || []).forEach(r => { repsById[r.id] = r; });
+    const contactsById = {}; contactRecords.forEach(r => { contactsById[r.id] = r; });
+    const companiesById = {}; companyRecords.forEach(r => { companiesById[r.id] = r; });
+    const repsById = {}; repRecords.forEach(r => { repsById[r.id] = r; });
 
     const myCcRows = ccRows.filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id));
     const myContactIds = new Set(myCcRows.map(r => (r.fields['Contact'] || [])[0]).filter(Boolean));
@@ -3173,7 +3173,7 @@ app.get('/api/campaign/:id/sales-overview', async (req, res) => {
       };
     }).filter(c => c.contactId);
 
-    const deals = (dealsData.records || [])
+    const deals = dealRecords
       .filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id))
       .map(r => {
         const contactId = (r.fields['Contact'] || [])[0] || null;
@@ -3198,7 +3198,7 @@ app.get('/api/campaign/:id/sales-overview', async (req, res) => {
         };
       });
 
-    const touchPoints = (tpData.records || [])
+    const touchPoints = tpRecords
       .filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id) || (r.fields['Contact'] || []).some(cid => myContactIds.has(cid)))
       .map(r => ({
         contactId: (r.fields['Contact'] || [])[0] || null,
@@ -3211,7 +3211,7 @@ app.get('/api/campaign/:id/sales-overview', async (req, res) => {
         replied: touchPointIsReply(r.fields)
       }));
 
-    const reps = (repsData.records || []).map(r => ({ id: r.id, name: r.fields['Name'] || '', email: r.fields['Email'] || '' }));
+    const reps = repRecords.map(r => ({ id: r.id, name: r.fields['Name'] || '', email: r.fields['Email'] || '' }));
     const ctas = parseCtaList(campaignRecord.fields['CTAs']);
 
     res.json({ campaignContacts, deals, touchPoints, reps, ctas, generatedAt: new Date().toISOString() });
@@ -3232,19 +3232,19 @@ app.get('/api/campaign/:id/conversion-intelligence', async (req, res) => {
     const campaignRecord = await resolveCampaignRecord(campaignIdOrName);
     if (!campaignRecord) return res.status(404).json({ error: 'Campaign not found' });
 
-    const [ccRows, dealsData, tpData, contactsData] = await Promise.all([
+    const [ccRows, dealRecords, tpRecords, contactRecords] = await Promise.all([
       fetchCampaignContactsRows(),
-      airtableRequest('GET', 'Deals'),
-      airtableRequest('GET', 'Touch Points'),
-      airtableRequest('GET', 'Contacts')
+      airtableFetchAllRecords('Deals'),
+      airtableFetchAllRecords('Touch Points'),
+      airtableFetchAllRecords('Contacts')
     ]);
 
-    const contactsById = {}; (contactsData.records || []).forEach(r => { contactsById[r.id] = r; });
+    const contactsById = {}; contactRecords.forEach(r => { contactsById[r.id] = r; });
 
     const myCcRows = ccRows.filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id));
     const myContactIds = new Set(myCcRows.map(r => (r.fields['Contact'] || [])[0]).filter(Boolean));
-    const myDeals = (dealsData.records || []).filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id));
-    const myTouchPoints = (tpData.records || []).filter(r =>
+    const myDeals = dealRecords.filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id));
+    const myTouchPoints = tpRecords.filter(r =>
       (r.fields['Campaign'] || []).includes(campaignRecord.id) || (r.fields['Contact'] || []).some(cid => myContactIds.has(cid))
     );
 
@@ -3360,14 +3360,14 @@ const CONNECTED_OR_LATER_STAGES = ['Connected', 'Message 1 Sent', 'Pending Reply
 app.get('/api/sales/insights', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   try {
-    const [campaignsData, ccRows, dealsData, tpData] = await Promise.all([
-      airtableRequest('GET', 'Campaigns'),
+    const [campaignRecords, ccRows, dealRecords, tpRecords] = await Promise.all([
+      airtableFetchAllRecords('Campaigns'),
       fetchCampaignContactsRows(),
-      airtableRequest('GET', 'Deals'),
-      airtableRequest('GET', 'Touch Points')
+      airtableFetchAllRecords('Deals'),
+      airtableFetchAllRecords('Touch Points')
     ]);
 
-    const campaigns = (campaignsData.records || [])
+    const campaigns = campaignRecords
       .filter(r => (r.fields['Status'] || '') !== 'Draft')
       .map(r => ({ id: r.id, name: r.fields['Name'] || '', status: r.fields['Status'] || '' }));
 
@@ -3377,9 +3377,9 @@ app.get('/api/sales/insights', async (req, res) => {
 
     const summary = campaigns.map(c => {
       const myCc = ccRows.filter(r => (r.fields['Campaign'] || []).includes(c.id));
-      const myDeals = (dealsData.records || []).filter(r => (r.fields['Campaign'] || []).includes(c.id));
+      const myDeals = dealRecords.filter(r => (r.fields['Campaign'] || []).includes(c.id));
       const myContactIds = new Set(myCc.map(r => (r.fields['Contact'] || [])[0]).filter(Boolean));
-      const myTouchPoints = (tpData.records || []).filter(r => (r.fields['Campaign'] || []).includes(c.id) || (r.fields['Contact'] || []).some(cid => myContactIds.has(cid)));
+      const myTouchPoints = tpRecords.filter(r => (r.fields['Campaign'] || []).includes(c.id) || (r.fields['Contact'] || []).some(cid => myContactIds.has(cid)));
 
       const connections = myCc.filter(r => CONNECTED_OR_LATER_STAGES.includes(r.fields['Sequence Stage'] || '')).length;
       const messagesSent = myTouchPoints.filter(r => !touchPointIsReply(r.fields)).length;
@@ -3444,8 +3444,8 @@ function offerFromRecord(r) {
 // "active" (Status = Active, most recently created if more than one).
 async function getActiveOfferForCampaign(campaignRecordId) {
   if (!campaignRecordId) return null;
-  const data = await airtableRequest('GET', OFFERS_TABLE);
-  const records = (data.records || [])
+  const allRecords = await airtableFetchAllRecords(OFFERS_TABLE);
+  const records = allRecords
     .filter(r => (r.fields['Campaign'] || []).includes(campaignRecordId) && r.fields['Status'] === 'Active')
     .sort((a, b) => new Date(b.createdTime) - new Date(a.createdTime));
   return records.length ? offerFromRecord(records[0]) : null;
@@ -3478,19 +3478,19 @@ app.post('/api/offers/generate', async (req, res) => {
   if (!icp) return res.status(400).json({ error: 'icp is required' });
 
   try {
-    const [offersData, campaignsData] = await Promise.all([
-      airtableRequest('GET', OFFERS_TABLE),
-      airtableRequest('GET', 'Campaigns')
+    const [offerRecords, campaignRecords] = await Promise.all([
+      airtableFetchAllRecords(OFFERS_TABLE),
+      airtableFetchAllRecords('Campaigns')
     ]);
     const campaignById = {};
-    (campaignsData.records || []).forEach(r => { campaignById[r.id] = r; });
+    campaignRecords.forEach(r => { campaignById[r.id] = r; });
 
     // "Similar ICP" = at least one significant (4+ letter) word shared with
     // the target ICP text - a lightweight filter, not a rigid taxonomy,
     // since ICP Type is free text.
     const icpWords = new Set((icp.toLowerCase().match(/[a-z]{4,}/g) || []));
 
-    const pastOffers = (offersData.records || [])
+    const pastOffers = offerRecords
       .filter(r => (r.fields['Campaign'] || [])[0] !== campaignId)
       .filter(r => r.fields['Dream Outcome'] || r.fields['Offer Summary'])
       .map(r => {
@@ -3599,8 +3599,8 @@ app.post('/api/offers/save', async (req, res) => {
   }
 
   try {
-    const existing = await airtableRequest('GET', OFFERS_TABLE);
-    const activeForCampaign = (existing.records || []).filter(r => (r.fields['Campaign'] || []).includes(campaignId) && r.fields['Status'] === 'Active');
+    const existing = await airtableFetchAllRecords(OFFERS_TABLE);
+    const activeForCampaign = existing.filter(r => (r.fields['Campaign'] || []).includes(campaignId) && r.fields['Status'] === 'Active');
     if (activeForCampaign.length) {
       await airtableRequest('PATCH', OFFERS_TABLE, {
         records: activeForCampaign.map(r => ({ id: r.id, fields: { 'Status': 'Retired' } }))
@@ -3658,8 +3658,8 @@ app.patch('/api/offers/:id', async (req, res) => {
 // table once instead of once per campaign.
 async function updateOfferMetricsForCampaign(campaignId, ccRows, tpRecords, offerRecords) {
   const rows = ccRows || await fetchCampaignContactsRows();
-  const touchPoints = tpRecords || (await airtableRequest('GET', 'Touch Points')).records || [];
-  const offers = offerRecords || (await airtableRequest('GET', OFFERS_TABLE)).records || [];
+  const touchPoints = tpRecords || (await airtableFetchAllRecords('Touch Points'));
+  const offers = offerRecords || (await airtableFetchAllRecords(OFFERS_TABLE));
 
   const myCc = rows.filter(r => (r.fields['Campaign'] || []).includes(campaignId));
   if (!myCc.length) return null;
@@ -3711,15 +3711,15 @@ app.post('/api/offers/update-metrics', async (req, res) => {
 // Daily sweep for the cron job below - fetches each shared table once,
 // then updates every campaign's Active offer metrics from it.
 async function updateAllOfferMetrics() {
-  const [campaignsData, ccRows, tpData, offersData] = await Promise.all([
-    airtableRequest('GET', 'Campaigns'),
+  const [campaignRecords, ccRows, tpRecords, offerRecords] = await Promise.all([
+    airtableFetchAllRecords('Campaigns'),
     fetchCampaignContactsRows(),
-    airtableRequest('GET', 'Touch Points'),
-    airtableRequest('GET', OFFERS_TABLE)
+    airtableFetchAllRecords('Touch Points'),
+    airtableFetchAllRecords(OFFERS_TABLE)
   ]);
-  for (const campaign of (campaignsData.records || [])) {
+  for (const campaign of campaignRecords) {
     try {
-      await updateOfferMetricsForCampaign(campaign.id, ccRows, tpData.records || [], offersData.records || []);
+      await updateOfferMetricsForCampaign(campaign.id, ccRows, tpRecords, offerRecords);
     } catch (err) {
       console.warn(`Offer metrics update failed for campaign ${campaign.id} (non-fatal):`, err.message);
     }
@@ -3818,8 +3818,8 @@ app.post('/api/deals/:dealId/notes', async (req, res) => {
 app.get('/api/reps', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   try {
-    const data = await airtableRequest('GET', 'Reps');
-    res.json({ reps: (data.records || []).map(r => ({ id: r.id, name: r.fields['Name'] || '', email: r.fields['Email'] || '' })) });
+    const records = await airtableFetchAllRecords('Reps');
+    res.json({ reps: records.map(r => ({ id: r.id, name: r.fields['Name'] || '', email: r.fields['Email'] || '' })) });
   } catch (err) {
     console.error('List reps error:', err.message);
     res.status(500).json({ error: err.message });
@@ -3866,20 +3866,20 @@ app.get('/api/calendar/events', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   const assigneeId = (req.query.assigneeId || '').trim();
   try {
-    const [dealsData, remindersData, contactsData, companiesData, campaignsData, repsData] = await Promise.all([
-      airtableRequest('GET', 'Deals'),
-      airtableRequest('GET', 'Reminders'),
-      airtableRequest('GET', 'Contacts'),
-      airtableRequest('GET', 'Companies'),
-      airtableRequest('GET', 'Campaigns'),
-      airtableRequest('GET', 'Reps')
+    const [dealRecords, reminderRecords, contactRecords, companyRecords, campaignRecords, repRecords] = await Promise.all([
+      airtableFetchAllRecords('Deals'),
+      airtableFetchAllRecords('Reminders'),
+      airtableFetchAllRecords('Contacts'),
+      airtableFetchAllRecords('Companies'),
+      airtableFetchAllRecords('Campaigns'),
+      airtableFetchAllRecords('Reps')
     ]);
-    const contactsById = {}; (contactsData.records || []).forEach(r => { contactsById[r.id] = r; });
-    const companiesById = {}; (companiesData.records || []).forEach(r => { companiesById[r.id] = r; });
-    const campaignsById = {}; (campaignsData.records || []).forEach(r => { campaignsById[r.id] = r; });
-    const repsById = {}; (repsData.records || []).forEach(r => { repsById[r.id] = r; });
+    const contactsById = {}; contactRecords.forEach(r => { contactsById[r.id] = r; });
+    const companiesById = {}; companyRecords.forEach(r => { companiesById[r.id] = r; });
+    const campaignsById = {}; campaignRecords.forEach(r => { campaignsById[r.id] = r; });
+    const repsById = {}; repRecords.forEach(r => { repsById[r.id] = r; });
 
-    let events = (dealsData.records || [])
+    let events = dealRecords
       .filter(r => ['Pending', 'Started'].includes(r.fields['Outcome']))
       .map(r => {
         const contactId = (r.fields['Contact'] || [])[0] || null;
@@ -3905,7 +3905,7 @@ app.get('/api/calendar/events', async (req, res) => {
       })
       .filter(ev => ev.date);
 
-    const reminderEvents = (remindersData.records || [])
+    const reminderEvents = reminderRecords
       .map(r => {
         const contactId = (r.fields['Contact'] || [])[0] || null;
         const companyId = (r.fields['Company'] || [])[0] || null;
@@ -4008,20 +4008,20 @@ async function detectContentSignals() {
     const cutoff = daysAgoDate(30);
     const recentCutoff = daysAgoDate(7);
 
-    const [tpData, dealsData, contactsData, companiesData, existingSignalsData] = await Promise.all([
-      airtableRequest('GET', 'Touch Points'),
-      airtableRequest('GET', 'Deals'),
-      airtableRequest('GET', 'Contacts'),
-      airtableRequest('GET', 'Companies'),
-      airtableRequest('GET', CONTENT_SIGNALS_TABLE)
+    const [tpRecords, dealRecords, contactRecords, companyRecords, existingSignalRecords] = await Promise.all([
+      airtableFetchAllRecords('Touch Points'),
+      airtableFetchAllRecords('Deals'),
+      airtableFetchAllRecords('Contacts'),
+      airtableFetchAllRecords('Companies'),
+      airtableFetchAllRecords(CONTENT_SIGNALS_TABLE)
     ]);
 
     const contactsById = {};
-    (contactsData.records || []).forEach(r => { contactsById[r.id] = r; });
+    contactRecords.forEach(r => { contactsById[r.id] = r; });
     const companiesById = {};
-    (companiesData.records || []).forEach(r => { companiesById[r.id] = r; });
+    companyRecords.forEach(r => { companiesById[r.id] = r; });
 
-    const recentTouchPoints = (tpData.records || [])
+    const recentTouchPoints = tpRecords
       .filter(r => r.fields['Date'] && new Date(r.fields['Date']) >= cutoff)
       .map(r => {
         const contactId = (r.fields['Contact'] || [])[0] || null;
@@ -4038,7 +4038,7 @@ async function detectContentSignals() {
       .filter(tp => tp.summary && tp.contactName);
 
     const recentDealNotes = [];
-    (dealsData.records || []).forEach(r => {
+    dealRecords.forEach(r => {
       const contactId = (r.fields['Contact'] || [])[0] || null;
       const companyId = (r.fields['Company'] || [])[0] || null;
       const contact = contactId ? contactsById[contactId] : null;
@@ -4057,7 +4057,7 @@ async function detectContentSignals() {
 
     if (recentTouchPoints.length + recentDealNotes.length < 2) return { created: 0 };
 
-    const recentSignalThemes = (existingSignalsData.records || [])
+    const recentSignalThemes = existingSignalRecords
       .filter(r => r.fields['Detected Date'] && new Date(r.fields['Detected Date']) >= recentCutoff)
       .map(r => r.fields['Theme'] || '')
       .filter(Boolean);
@@ -4093,9 +4093,9 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 
     const campaignContactRows = await fetchCampaignContactsRows();
     const contactsByName = {};
-    (contactsData.records || []).forEach(r => { if (r.fields['Full Name']) contactsByName[r.fields['Full Name']] = r; });
+    contactRecords.forEach(r => { if (r.fields['Full Name']) contactsByName[r.fields['Full Name']] = r; });
     const companiesByName = {};
-    (companiesData.records || []).forEach(r => { if (r.fields['Company Name']) companiesByName[r.fields['Company Name']] = r; });
+    companyRecords.forEach(r => { if (r.fields['Company Name']) companiesByName[r.fields['Company Name']] = r; });
 
     const today = new Date().toISOString().slice(0, 10);
     const records = toWrite.map(c => {
@@ -4153,16 +4153,16 @@ app.get('/api/content/signals', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   const campaignName = (req.query.campaignName || '').trim();
   try {
-    const [data, contactsData, companiesData, campaignRecord] = await Promise.all([
-      airtableRequest('GET', CONTENT_SIGNALS_TABLE),
-      airtableRequest('GET', 'Contacts'),
-      airtableRequest('GET', 'Companies'),
+    const [signalRecords, contactRecords, companyRecords, campaignRecord] = await Promise.all([
+      airtableFetchAllRecords(CONTENT_SIGNALS_TABLE),
+      airtableFetchAllRecords('Contacts'),
+      airtableFetchAllRecords('Companies'),
       campaignName ? findCampaignRecordByName(campaignName) : Promise.resolve(null)
     ]);
-    const contactsById = {}; (contactsData.records || []).forEach(r => { contactsById[r.id] = r.fields['Full Name'] || ''; });
-    const companiesById = {}; (companiesData.records || []).forEach(r => { companiesById[r.id] = r.fields['Company Name'] || ''; });
+    const contactsById = {}; contactRecords.forEach(r => { contactsById[r.id] = r.fields['Full Name'] || ''; });
+    const companiesById = {}; companyRecords.forEach(r => { companiesById[r.id] = r.fields['Company Name'] || ''; });
 
-    let records = (data.records || []).filter(r => (r.fields['Status'] || 'New') !== 'Dismissed');
+    let records = signalRecords.filter(r => (r.fields['Status'] || 'New') !== 'Dismissed');
     if (campaignName) records = records.filter(r => campaignRecord && (r.fields['Campaign'] || []).includes(campaignRecord.id));
 
     const signals = records
@@ -4203,19 +4203,19 @@ app.get('/api/content/drafts', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   const { campaignName, format, status } = req.query;
   try {
-    const [data, companiesData, campaignsData, campaignRecord] = await Promise.all([
-      airtableRequest('GET', CONTENT_TABLE),
-      airtableRequest('GET', 'Companies'),
-      airtableRequest('GET', 'Campaigns'),
+    const [contentRecords, companyRecords, campaignRecords, campaignRecord] = await Promise.all([
+      airtableFetchAllRecords(CONTENT_TABLE),
+      airtableFetchAllRecords('Companies'),
+      airtableFetchAllRecords('Campaigns'),
       campaignName ? findCampaignRecordByName(campaignName) : Promise.resolve(null)
     ]);
-    const companiesById = {}; (companiesData.records || []).forEach(r => { companiesById[r.id] = r.fields['Company Name'] || ''; });
-    const campaignsById = {}; (campaignsData.records || []).forEach(r => { campaignsById[r.id] = r.fields['Name'] || ''; });
+    const companiesById = {}; companyRecords.forEach(r => { companiesById[r.id] = r.fields['Company Name'] || ''; });
+    const campaignsById = {}; campaignRecords.forEach(r => { campaignsById[r.id] = r.fields['Name'] || ''; });
 
     // Rows from the old, dead legacy content feature never have a Format
     // (they use the unrelated Content Type field instead) - filtering on
     // Format truthy is how this Draft Centre stays clear of them.
-    let records = (data.records || []).filter(r => r.fields['Format']);
+    let records = contentRecords.filter(r => r.fields['Format']);
     if (campaignName) records = records.filter(r => campaignRecord && (r.fields['Campaign'] || []).includes(campaignRecord.id));
     if (format) records = records.filter(r => r.fields['Format'] === format);
     if (status) records = records.filter(r => r.fields['Status'] === status);
@@ -4467,9 +4467,9 @@ app.post('/api/content/cadence', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
   try {
-    const [campaigns, contactsData] = await Promise.all([fetchCampaigns(), airtableRequest('GET', 'Contacts')]);
+    const [campaigns, contactRecords] = await Promise.all([fetchCampaigns(), airtableFetchAllRecords('Contacts')]);
     const activeCampaigns = campaigns.filter(c => c.status === 'Live');
-    const prompt = `T2C Outreach has ${activeCampaigns.length} active (Live) campaign(s) out of ${campaigns.length} total, and ${(contactsData.records || []).length} contacts in the pipeline.
+    const prompt = `T2C Outreach has ${activeCampaigns.length} active (Live) campaign(s) out of ${campaigns.length} total, and ${contactRecords.length} contacts in the pipeline.
 
 Active campaigns: ${activeCampaigns.map(c => c.name).join(', ') || 'none'}.
 
@@ -5002,20 +5002,20 @@ app.get('/api/contacts/recent-posts-signals', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
   try {
-    const [contactsData, companiesData] = await Promise.all([
-      airtableRequest('GET', 'Contacts'),
-      airtableRequest('GET', 'Companies')
+    const [contactRecords, companyRecords] = await Promise.all([
+      airtableFetchAllRecords('Contacts'),
+      airtableFetchAllRecords('Companies')
     ]);
 
     const companyNameById = {};
-    (companiesData.records || []).forEach(c => { companyNameById[c.id] = c.fields['Company Name'] || ''; });
+    companyRecords.forEach(c => { companyNameById[c.id] = c.fields['Company Name'] || ''; });
 
     // Every contact with a Trigify Search ID and post activity, not just
     // those in an active (Live) campaign - the previous Live-campaign
     // filter meant a job change or other signal on a contact between
     // campaigns (or not yet assigned to one) never surfaced here.
     const signals = [];
-    (contactsData.records || []).forEach(r => {
+    contactRecords.forEach(r => {
       if (!r.fields['Trigify Search ID']) return;
       const posts = parseRecentPosts(r.fields['Recent Posts']);
       if (!posts.length) return;
@@ -5059,15 +5059,15 @@ app.get('/api/contacts/:id/recent-posts', async (req, res) => {
 app.get('/api/contacts/job-change-signals', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   try {
-    const [contactsData, companiesData] = await Promise.all([
-      airtableRequest('GET', 'Contacts'),
-      airtableRequest('GET', 'Companies')
+    const [contactRecords, companyRecords] = await Promise.all([
+      airtableFetchAllRecords('Contacts'),
+      airtableFetchAllRecords('Companies')
     ]);
 
     const companyNameById = {};
-    (companiesData.records || []).forEach(c => { companyNameById[c.id] = c.fields['Company Name'] || ''; });
+    companyRecords.forEach(c => { companyNameById[c.id] = c.fields['Company Name'] || ''; });
 
-    const signals = (contactsData.records || [])
+    const signals = contactRecords
       .filter(r => r.fields['Job Change Signal'] && isWithinLastDays(r.fields['Job Change Signal Date'], 14))
       .map(r => ({
         contactId: r.id,
@@ -5103,12 +5103,12 @@ function extractHeadlineFromSerpTitle(title, fullName) {
 
 // Shared by the manual POST route and the Sunday 7am cron job below.
 async function checkContactJobChanges() {
-  const [contacts, companiesData] = await Promise.all([
+  const [contacts, companyRecords] = await Promise.all([
     airtableFetchAllRecords('Contacts'),
-    airtableRequest('GET', 'Companies')
+    airtableFetchAllRecords('Companies')
   ]);
   const companiesById = {};
-  (companiesData.records || []).forEach(r => { companiesById[r.id] = r.fields['Company Name'] || ''; });
+  companyRecords.forEach(r => { companiesById[r.id] = r.fields['Company Name'] || ''; });
 
   const targets = contacts.filter(c => c.fields['LinkedIn URL'] && c.fields['Job Title']);
   const updates = [];
@@ -5563,17 +5563,17 @@ app.get('/api/contacts/profile', async (req, res) => {
     if (!contactRecord) return res.status(404).json({ error: 'Contact not found' });
     const cf = contactRecord.fields || {};
 
-    const [companiesData, campaignsData, ccRows, tpData, dealsData, campaignRecord] = await Promise.all([
-      airtableRequest('GET', 'Companies'),
-      airtableRequest('GET', 'Campaigns'),
+    const [companyRecords, campaignRecords, ccRows, tpRecords, dealRecords, campaignRecord] = await Promise.all([
+      airtableFetchAllRecords('Companies'),
+      airtableFetchAllRecords('Campaigns'),
       fetchCampaignContactsRows(),
-      airtableRequest('GET', 'Touch Points'),
-      airtableRequest('GET', 'Deals'),
+      airtableFetchAllRecords('Touch Points'),
+      airtableFetchAllRecords('Deals'),
       campaignName ? findCampaignRecordByName(campaignName) : Promise.resolve(null)
     ]);
 
-    const companiesById = {}; (companiesData.records || []).forEach(r => { companiesById[r.id] = r; });
-    const campaignsById = {}; (campaignsData.records || []).forEach(r => { campaignsById[r.id] = r; });
+    const companiesById = {}; companyRecords.forEach(r => { companiesById[r.id] = r; });
+    const campaignsById = {}; campaignRecords.forEach(r => { campaignsById[r.id] = r; });
 
     const companyId = (cf['Company'] || [])[0] || null;
     const company = companyId ? companiesById[companyId] : null;
@@ -5592,7 +5592,7 @@ app.get('/api/contacts/profile', async (req, res) => {
       if (row) sequenceStage = row.fields['Sequence Stage'] || '';
     }
 
-    let touchPoints = (tpData.records || [])
+    let touchPoints = tpRecords
       .filter(r => (r.fields['Contact'] || []).includes(contactRecord.id))
       .map(r => {
         const campId = (r.fields['Campaign'] || [])[0] || null;
@@ -5631,7 +5631,7 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
       }
     }
 
-    const deals = (dealsData.records || [])
+    const deals = dealRecords
       .filter(r => (r.fields['Contact'] || []).includes(contactRecord.id))
       .map(r => {
         const campId = (r.fields['Campaign'] || [])[0] || null;
@@ -5870,21 +5870,21 @@ app.get('/api/companies/profile', async (req, res) => {
     if (!companyRecord) return res.status(404).json({ error: 'Company not found' });
     const cf = companyRecord.fields || {};
 
-    const [contactsData, tpData, dealsData, signalsData] = await Promise.all([
-      airtableRequest('GET', 'Contacts'),
-      airtableRequest('GET', 'Touch Points'),
-      airtableRequest('GET', 'Deals'),
-      airtableRequest('GET', 'Content Signals')
+    const [contactRecords, tpRecords, dealRecords, signalRecords] = await Promise.all([
+      airtableFetchAllRecords('Contacts'),
+      airtableFetchAllRecords('Touch Points'),
+      airtableFetchAllRecords('Deals'),
+      airtableFetchAllRecords('Content Signals')
     ]);
 
     const myContactIds = new Set(cf['Contacts'] || []);
-    const contactsById = {}; (contactsData.records || []).forEach(r => { contactsById[r.id] = r; });
+    const contactsById = {}; contactRecords.forEach(r => { contactsById[r.id] = r; });
 
-    const keyContacts = (contactsData.records || [])
+    const keyContacts = contactRecords
       .filter(r => myContactIds.has(r.id))
       .map(r => ({ id: r.id, name: r.fields['Full Name'] || '', journeyStage: r.fields['Journey Stage'] || '' }));
 
-    const touchPoints = (tpData.records || [])
+    const touchPoints = tpRecords
       .filter(r => (r.fields['Contact'] || []).some(cid => myContactIds.has(cid)))
       .map(r => {
         const contactId = (r.fields['Contact'] || [])[0] || null;
@@ -5893,11 +5893,11 @@ app.get('/api/companies/profile', async (req, res) => {
       })
       .sort((a, b) => new Date(b.date) - new Date(a.date));
 
-    const deals = (dealsData.records || [])
+    const deals = dealRecords
       .filter(r => (r.fields['Company'] || []).includes(companyRecord.id))
       .map(r => ({ id: r.id, outcome: r.fields['Outcome'] || '', dealValue: r.fields['Deal Value'] || 0, date: r.fields['Date'] || '', notes: r.fields['Notes'] || '' }));
 
-    const contentSignals = (signalsData.records || [])
+    const contentSignals = signalRecords
       .filter(r => (r.fields['Related Companies'] || []).includes(companyRecord.id))
       .map(r => ({ id: r.id, theme: r.fields['Theme'] || '', detectedDate: r.fields['Detected Date'] || '' }));
 
@@ -6252,12 +6252,12 @@ app.get('/api/campaign/:id/campaign-contacts', async (req, res) => {
     const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
     if (!campaignRecord) return res.json({ rows: [] });
 
-    const [rows, contactsData] = await Promise.all([
+    const [rows, contactRecords] = await Promise.all([
       fetchCampaignContactsRows(),
-      airtableRequest('GET', 'Contacts')
+      airtableFetchAllRecords('Contacts')
     ]);
     const nameById = {};
-    (contactsData.records || []).forEach(r => { nameById[r.id] = r.fields['Full Name'] || ''; });
+    contactRecords.forEach(r => { nameById[r.id] = r.fields['Full Name'] || ''; });
 
     const result = rows
       .filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id))
@@ -6300,12 +6300,12 @@ app.post('/api/campaign/:id/check-timeouts', async (req, res) => {
     const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
     if (!campaignRecord) return res.status(404).json({ error: `Campaign "${campaignName}" not found` });
 
-    const [rows, contactsData] = await Promise.all([
+    const [rows, contactRecords] = await Promise.all([
       fetchCampaignContactsRows(),
-      airtableRequest('GET', 'Contacts')
+      airtableFetchAllRecords('Contacts')
     ]);
     const nameById = {};
-    (contactsData.records || []).forEach(r => { nameById[r.id] = r.fields['Full Name'] || ''; });
+    contactRecords.forEach(r => { nameById[r.id] = r.fields['Full Name'] || ''; });
 
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - timeoutDays);
@@ -6685,20 +6685,20 @@ app.get('/api/context/data', async (req, res) => {
   const campaignName = (req.query.campaignName || '').trim();
 
   try {
-    const [companiesData, contactsData, touchPointsData, campaignContactRows, campaignRecord] = await Promise.all([
-      airtableRequest('GET', 'Companies'),
-      airtableRequest('GET', 'Contacts'),
-      airtableRequest('GET', 'Touch Points'),
+    const [companyRecords, contactRecords, touchPointRecords, campaignContactRows, campaignRecord] = await Promise.all([
+      airtableFetchAllRecords('Companies'),
+      airtableFetchAllRecords('Contacts'),
+      airtableFetchAllRecords('Touch Points'),
       fetchCampaignContactsRows(),
       campaignName ? findRecordByFieldName('Campaigns', 'Name', campaignName) : Promise.resolve(null)
     ]);
 
-    const companies = (companiesData.records || [])
+    const companies = companyRecords
       .map(r => ({ id: r.id, name: r.fields['Company Name'] || '' }))
       .filter(c => c.name);
 
     const touchPointsByContact = {};
-    (touchPointsData.records || []).forEach(r => {
+    touchPointRecords.forEach(r => {
       (r.fields['Contact'] || []).forEach(cid => {
         if (!touchPointsByContact[cid]) touchPointsByContact[cid] = [];
         touchPointsByContact[cid].push({ date: r.fields['Date'] || '', type: r.fields['Type'] || '', notes: r.fields['Summary'] || '' });
@@ -6713,7 +6713,7 @@ app.get('/api/context/data', async (req, res) => {
       });
     });
 
-    const contacts = (contactsData.records || [])
+    const contacts = contactRecords
       .map(r => {
         const companyIds = r.fields['Company'] || [];
         const recentTouchPoints = (touchPointsByContact[r.id] || [])
@@ -6894,8 +6894,8 @@ app.post('/api/context/debrief-questions', async (req, res) => {
     if (!contactRecord) return res.status(404).json({ error: 'Contact not found in Airtable' });
     const f = contactRecord.fields || {};
 
-    const touchPointsData = await airtableRequest('GET', 'Touch Points');
-    const recentTouchPoints = (touchPointsData.records || [])
+    const touchPointRecords = await airtableFetchAllRecords('Touch Points');
+    const recentTouchPoints = touchPointRecords
       .filter(r => (r.fields['Contact'] || []).includes(contactId))
       .map(r => ({ date: r.fields['Date'] || '', type: r.fields['Type'] || '', notes: r.fields['Summary'] || '' }))
       .sort((a, b) => new Date(b.date) - new Date(a.date))
@@ -6933,13 +6933,13 @@ app.post('/api/context/update-summaries', async (req, res) => {
   }
 
   try {
-    const [contactsData, touchPointsData, campaignRecord] = await Promise.all([
-      airtableRequest('GET', 'Contacts'),
-      airtableRequest('GET', 'Touch Points'),
+    const [contactRecords, touchPointRecords, campaignRecord] = await Promise.all([
+      airtableFetchAllRecords('Contacts'),
+      airtableFetchAllRecords('Touch Points'),
       campaignName ? findRecordByFieldName('Campaigns', 'Name', campaignName) : Promise.resolve(null)
     ]);
     const contactsById = {};
-    (contactsData.records || []).forEach(r => { contactsById[r.id] = r; });
+    contactRecords.forEach(r => { contactsById[r.id] = r; });
     // Sequence Stage is per-campaign now (Campaign Contacts), so it's only
     // fetched and included in the prompt when this update was triggered
     // from a specific campaign's Intelligence tab.
@@ -6950,7 +6950,7 @@ app.post('/api/context/update-summaries', async (req, res) => {
       const record = contactsById[contactId];
       if (!record) continue;
       const f = record.fields || {};
-      const touchPoints = (touchPointsData.records || [])
+      const touchPoints = touchPointRecords
         .filter(r => (r.fields['Contact'] || []).includes(contactId))
         .map(r => ({ date: r.fields['Date'] || '', type: r.fields['Type'] || '', notes: r.fields['Summary'] || '', outcome: r.fields['Outcome'] || '' }))
         .sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -6984,10 +6984,10 @@ Rewrite the AI Summary as a concise intelligence brief for Marcus to read before
       const companyRecord = await airtableGetRecord('Companies', companyId);
       if (companyRecord) {
         const cf = companyRecord.fields || {};
-        const companyContactIds = (contactsData.records || [])
+        const companyContactIds = contactRecords
           .filter(r => (r.fields['Company'] || []).includes(companyId))
           .map(r => r.id);
-        const companyTouchPoints = (touchPointsData.records || [])
+        const companyTouchPoints = touchPointRecords
           .filter(r => (r.fields['Contact'] || []).some(cid => companyContactIds.includes(cid)))
           .map(r => ({ date: r.fields['Date'] || '', type: r.fields['Type'] || '', notes: r.fields['Summary'] || '' }))
           .sort((a, b) => new Date(b.date) - new Date(a.date));
