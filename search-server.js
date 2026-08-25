@@ -74,9 +74,9 @@ async function searchContactViaSerper(company, jobTitle){
   // Twenty2 Collective is a Perth, WA outreach agency - "Australia" in the
   // query text nudges Google toward AU-based profiles when a role/company
   // combination is ambiguous (a common job title at a company with offices
-  // in multiple countries), and gl:'au' biases Serper/Google's own ranking
-  // toward Australian search results the same way browsing from Australia
-  // would.
+  // in multiple countries), and gl:'au' plus location:'Australia' bias
+  // Serper/Google's own ranking toward Australian search results the same
+  // way browsing from Australia would.
   const query = `${company} ${jobTitle} linkedin Australia`;
   const serperRes = await fetch(SERPER_URL, {
     method: 'POST',
@@ -84,7 +84,7 @@ async function searchContactViaSerper(company, jobTitle){
       'X-API-KEY': process.env.SERPER_API_KEY,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({ q: query, gl: 'au' })
+    body: JSON.stringify({ q: query, gl: 'au', location: 'Australia' })
   });
 
   if(!serperRes.ok){
@@ -2309,13 +2309,13 @@ async function researchContactEnrichment(name, company, linkedinUrl) {
   const [profileSearch, newsSearch] = await Promise.all([
     // "Australia" only added to the name-fallback query (no slug yet) -
     // pointless noise on a site:linkedin.com/in/<slug> exact-URL lookup,
-    // which is already unambiguous. gl:'au' is applied either way, same AU
-    // bias as searchContactViaSerper above, since it's harmless even on an
-    // exact-slug lookup.
+    // which is already unambiguous. gl:'au' and location:'Australia' are
+    // applied either way, same AU bias as searchContactViaSerper above,
+    // since it's harmless even on an exact-slug lookup.
     fetch(SERPER_URL, {
       method: 'POST',
       headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ q: slug ? `site:linkedin.com/in/${slug}` : `${name} LinkedIn Australia`, gl: 'au' })
+      body: JSON.stringify({ q: slug ? `site:linkedin.com/in/${slug}` : `${name} LinkedIn Australia`, gl: 'au', location: 'Australia' })
     }).then(r => r.json()),
     fetch(SERPER_URL, {
       method: 'POST',
@@ -5131,14 +5131,15 @@ async function checkContactJobChanges() {
     if (!companyName) continue;
 
     try {
-      // Same AU bias as searchContactViaSerper/researchContactEnrichment
-      // above - the exact-quoted name+company already narrows this a lot,
-      // but a common name at a company with offices outside Australia can
-      // still surface the wrong person's profile.
+      // Same AU bias (gl:'au' + location:'Australia') as
+      // searchContactViaSerper/researchContactEnrichment above - the
+      // exact-quoted name+company already narrows this a lot, but a common
+      // name at a company with offices outside Australia can still surface
+      // the wrong person's profile.
       const serperRes = await fetch(SERPER_URL, {
         method: 'POST',
         headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ q: `"${name}" "${companyName}" site:linkedin.com Australia`, gl: 'au' })
+        body: JSON.stringify({ q: `"${name}" "${companyName}" site:linkedin.com Australia`, gl: 'au', location: 'Australia' })
       });
       if (!serperRes.ok) continue;
       const data = await serperRes.json();
@@ -6599,6 +6600,7 @@ app.post('/api/campaign/:id/contacts/:contactId/exclude', async (req, res) => {
 
   const campaignName = decodeURIComponent(req.params.id);
   const contactId = req.params.contactId;
+  const { reason, note } = req.body || {};
 
   try {
     const campaignRecord = await findCampaignRecordByName(campaignName);
@@ -6611,22 +6613,20 @@ app.post('/api/campaign/:id/contacts/:contactId/exclude', async (req, res) => {
     const existing = findCampaignContactRow(rows, contactId, campaignRecord.id);
     const today = new Date().toISOString().slice(0, 10);
 
+    const excludeFields = {
+      'Sequence Stage': 'Excluded',
+      'Stage History': appendStageHistory(existing ? existing.fields['Stage History'] : '', 'Excluded', today)
+    };
+    if (reason) excludeFields['Skip Reason'] = reason;
+    if (note) excludeFields['Skip Note'] = note;
+
     if (existing) {
       await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, {
-        records: [{
-          id: existing.id,
-          fields: {
-            'Sequence Stage': 'Excluded',
-            'Stage History': appendStageHistory(existing.fields['Stage History'], 'Excluded', today)
-          }
-        }],
+        records: [{ id: existing.id, fields: excludeFields }],
         typecast: true
       });
     } else {
-      await getOrCreateCampaignContactRow(contactId, (contactRecord.fields || {})['Full Name'] || contactId, campaignRecord.id, campaignName, rows, {
-        'Sequence Stage': 'Excluded',
-        'Stage History': appendStageHistory('', 'Excluded', today)
-      });
+      await getOrCreateCampaignContactRow(contactId, (contactRecord.fields || {})['Full Name'] || contactId, campaignRecord.id, campaignName, rows, excludeFields);
     }
 
     trigifyDeleteContactSearch(contactId)
@@ -6804,15 +6804,18 @@ app.get('/api/context/data', async (req, res) => {
 app.patch('/api/context/contact-fields', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
-  const { contactId, journeyStage, sequenceStage } = req.body;
+  const { contactId, journeyStage, sequenceStage, jobTitle } = req.body;
   if (!contactId) return res.status(400).json({ error: 'contactId is required' });
-  if (!journeyStage && !['Connection Pending', 'Connected'].includes(sequenceStage)) {
-    return res.status(400).json({ error: 'journeyStage is required, or sequenceStage must be "Connection Pending" or "Connected"' });
+  if (!journeyStage && !jobTitle && !['Connection Pending', 'Connected'].includes(sequenceStage)) {
+    return res.status(400).json({ error: 'journeyStage or jobTitle is required, or sequenceStage must be "Connection Pending" or "Connected"' });
   }
 
   try {
-    if (journeyStage) {
-      await airtableRequest('PATCH', 'Contacts', { records: [{ id: contactId, fields: { 'Journey Stage': journeyStage } }], typecast: true });
+    if (journeyStage || jobTitle) {
+      const contactFields = {};
+      if (journeyStage) contactFields['Journey Stage'] = journeyStage;
+      if (jobTitle) contactFields['Job Title'] = jobTitle;
+      await airtableRequest('PATCH', 'Contacts', { records: [{ id: contactId, fields: contactFields }], typecast: true });
     }
 
     let campaignContactRowsSynced = 0;

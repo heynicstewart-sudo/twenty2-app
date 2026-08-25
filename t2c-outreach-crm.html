@@ -2447,40 +2447,124 @@ function campaignForSkipContext(c){
 }
 
 // "Skip" on a Grid cell or Roadmap card (renderGridCell/renderGridCellHTML/
-// renderKCard) - removes the contact from state.contacts immediately, which
-// clears them from every Grid/Roadmap view at once since both render
-// straight off it, and in the background excludes them from the relevant
-// campaign's Campaign Contacts row (Sequence Stage "Excluded") via POST
-// .../exclude - the same value linkGridContactToCampaign already checks
-// for and refuses to overwrite, so a later day's grid search re-finding
-// this person won't silently re-add them.
-async function handleSkipContact(cid, e){
+// renderKCard) - opens a reason modal (openSkipReasonModal) rather than
+// skipping immediately, so the actual exclude (removing from
+// state.contacts, POST .../exclude with Sequence Stage "Excluded") only
+// happens once the user picks a reason in confirmSkipContact below.
+function handleSkipContact(cid, e){
   if(e) e.stopPropagation();
   const c = state.contacts.find(x => x.id === cid);
   if(!c) return;
-  const campaign = campaignForSkipContext(c);
+  openSkipReasonModal(cid);
+}
 
+function openSkipReasonModal(cid){
+  const c = state.contacts.find(x => x.id === cid);
+  if(!c) return;
+  const optionLabelStyle = 'text-transform:none;font-weight:600;color:var(--text);display:flex;align-items:center;gap:8px;margin-bottom:0;cursor:pointer;';
+  const body = `
+    <div class="field">
+      <label>Why are you skipping ${esc(c.name)}?</label>
+      <div style="display:flex;flex-direction:column;gap:12px;margin-top:8px;">
+        <div>
+          <label style="${optionLabelStyle}"><input type="radio" name="skipReason" value="wrongTitle" style="width:auto;" onchange="updateSkipReasonFields()"> Wrong job title for this campaign</label>
+          <input type="text" id="skipWrongTitle" placeholder="Correct job title" style="margin-top:6px;display:none;">
+        </div>
+        <div>
+          <label style="${optionLabelStyle}"><input type="radio" name="skipReason" value="alreadyConnected" style="width:auto;" onchange="updateSkipReasonFields()"> Already connected</label>
+        </div>
+        <div>
+          <label style="${optionLabelStyle}"><input type="radio" name="skipReason" value="hasHistory" style="width:auto;" onchange="updateSkipReasonFields()"> Already has messaging history</label>
+          <select id="skipHistoryStage" style="margin-top:6px;display:none;">
+            <option value="Messaging">Messaging</option>
+            <option value="Warm">Warm</option>
+            <option value="Campaign Ready">Campaign Ready</option>
+          </select>
+        </div>
+        <div>
+          <label style="${optionLabelStyle}"><input type="radio" name="skipReason" value="other" style="width:auto;" onchange="updateSkipReasonFields()"> Other</label>
+          <textarea id="skipOtherNote" rows="2" placeholder="Note" style="margin-top:6px;display:none;"></textarea>
+        </div>
+      </div>
+    </div>
+  `;
+  const footer = `
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-danger" onclick="confirmSkipContact('${cid}')"><i class="ti ti-player-skip-forward"></i> Skip contact</button>
+  `;
+  openModal(`Skip contact`, body, footer);
+}
+
+function updateSkipReasonFields(){
+  const checked = document.querySelector('input[name="skipReason"]:checked');
+  document.getElementById('skipWrongTitle').style.display = checked && checked.value === 'wrongTitle' ? 'block' : 'none';
+  document.getElementById('skipHistoryStage').style.display = checked && checked.value === 'hasHistory' ? 'block' : 'none';
+  document.getElementById('skipOtherNote').style.display = checked && checked.value === 'other' ? 'block' : 'none';
+}
+
+async function confirmSkipContact(cid){
+  const c = state.contacts.find(x => x.id === cid);
+  if(!c) return;
+  const reasonEl = document.querySelector('input[name="skipReason"]:checked');
+  if(!reasonEl){ toast('Pick a reason first', 'warn'); return; }
+  const reason = reasonEl.value;
+
+  let reasonLabel, note = '', newJobTitle = '';
+  if(reason === 'wrongTitle'){
+    newJobTitle = (document.getElementById('skipWrongTitle').value || '').trim();
+    if(!newJobTitle){ toast('Enter the correct job title', 'warn'); return; }
+    reasonLabel = 'Wrong job title for this campaign';
+    note = `Job title updated to "${newJobTitle}"`;
+  } else if(reason === 'alreadyConnected'){
+    reasonLabel = 'Already connected';
+  } else if(reason === 'hasHistory'){
+    reasonLabel = 'Already has messaging history';
+    note = document.getElementById('skipHistoryStage').value;
+  } else {
+    reasonLabel = 'Other';
+    note = (document.getElementById('skipOtherNote').value || '').trim();
+  }
+
+  closeModal();
+
+  const campaign = campaignForSkipContext(c);
   state.contacts = state.contacts.filter(x => x.id !== cid);
   renderPage();
 
-  if(!campaign){
-    toast(`${c.name} skipped, but no linked campaign was found to exclude them from in Airtable`, 'warn');
-    return;
-  }
   if(!isAirtableRecordId(cid)){
-    console.warn('Skipping Airtable exclude - contact has no Airtable record id yet:', cid);
+    console.warn('Skipping Airtable writes - contact has no Airtable record id yet:', cid);
     toast(`${c.name} skipped locally, but hasn't synced to Airtable yet - press "Sync to Airtable" first.`, 'warn');
     return;
   }
 
   try {
-    const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/contacts/${cid}/exclude`, { method: 'POST' });
+    if(reason === 'wrongTitle'){
+      await fetch('/api/context/contact-fields', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contactId: cid, jobTitle: newJobTitle })
+      });
+    } else if(reason === 'alreadyConnected'){
+      await fetch('/api/context/contact-fields', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contactId: cid, journeyStage: 'Connected' })
+      });
+    }
+
+    if(!campaign){
+      toast(`${c.name} skipped, but no linked campaign was found to exclude them from in Airtable`, 'warn');
+      return;
+    }
+
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/contacts/${cid}/exclude`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: reasonLabel, note })
+    });
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
     toast(`${c.name} skipped and excluded from ${campaign.name}`, 'success');
   } catch(err){
-    console.warn('Could not exclude contact from campaign:', err.message);
-    toast(`${c.name} skipped locally, but could not exclude them in Airtable: ` + err.message, 'warn');
+    console.warn('Could not process skip:', err.message);
+    toast(`${c.name} skipped locally, but could not update Airtable: ` + err.message, 'warn');
   }
 }
 
