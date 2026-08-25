@@ -974,12 +974,16 @@ function createGrid(name){
 // definitions (name/columns) used to be the one piece of grid state that
 // only ever lived in this browser's localStorage - see persistState.
 //
-// Guarded like hydrateContactsFromAirtable: an empty/missing response
-// leaves state.grids untouched rather than wiping it to []. That matters
-// more here than almost anywhere else in this file - if the one-time
-// migration (pushLocalDataToAirtableConfirmed) hasn't run yet on a given
-// deploy, the Grids table is legitimately empty, and wiping state.grids to
-// [] on every load until someone runs it would make every grid vanish.
+// Only a genuine failure (a non-OK response, or a malformed body that
+// isn't even an array) leaves state.grids untouched - a *successful*
+// response with zero records is real information (Airtable's Grids table
+// really is empty right now) and state.grids gets set to [] same as any
+// other result, on purpose. Earlier this only checked records.length too,
+// which meant an empty-but-successful response looked identical to a
+// failed one and left the hardcoded seed grid (rawState's 'WA Market Map')
+// stuck on screen forever on any deploy where Airtable's Grids table was
+// legitimately empty - indistinguishable from real data to anyone looking
+// at the app. Distinguishing the two cases is the whole point now.
 //
 // Carries each grid's companies/companyLinkedIn over from whatever was
 // already in state.grids rather than replacing them - those two fields
@@ -990,7 +994,7 @@ async function hydrateGridsFromAirtable(){
   try {
     const res = await fetch('/api/airtable/grid');
     const records = await res.json();
-    if(!res.ok || !Array.isArray(records) || !records.length) return;
+    if(!res.ok || !Array.isArray(records)) return;
 
     const existingById = {};
     state.grids.forEach(g => { existingById[g.id] = g; });
@@ -3933,7 +3937,11 @@ async function hydrateContactsFromAirtable(){
     ]);
     const records = await contactsRes.json();
     if(!contactsRes.ok) throw new Error((records && records.error) || ('Request failed with status '+contactsRes.status));
-    if(!Array.isArray(records) || !records.length) return;
+    // Only a genuine failure (thrown above, caught below) leaves
+    // state.contacts untouched - a successful response with zero records
+    // is real information (Airtable's Contacts table really is empty) and
+    // clears the hardcoded seed contacts the same as any other result.
+    if(!Array.isArray(records)) return;
 
     const touchPointRecords = touchPointsRes.ok ? await touchPointsRes.json() : [];
     const touchPointsByContact = {};
@@ -4828,15 +4836,14 @@ function syncDeadContactToAirtable(deadContact){
 
 // Replaces state.deadContacts wholesale from Airtable's Dead Contacts
 // table - same "server is the source of truth" convention as the other
-// hydrate*FromAirtable functions. Guarded like hydrateContactsFromAirtable:
-// an empty/missing response leaves state.deadContacts untouched instead of
-// wiping it to [], so a not-yet-migrated deploy doesn't blank the archive
-// list on every load.
+// hydrate*FromAirtable functions. Only a genuine failure (non-OK response,
+// or a malformed non-array body) leaves state.deadContacts untouched - a
+// successful empty response clears it same as any other result.
 async function hydrateDeadContactsFromAirtable(){
   try {
     const res = await fetch('/api/airtable/dead-contact');
     const records = await res.json();
-    if(!res.ok || !Array.isArray(records) || !records.length) return;
+    if(!res.ok || !Array.isArray(records)) return;
 
     state.deadContacts = records.map(r => {
       const f = r.fields || {};
@@ -5455,15 +5462,15 @@ function syncBookingToAirtable(booking){
   }).catch(err => console.warn('Airtable booking sync failed:', err.message));
 }
 
-// Replaces state.bookings wholesale from Airtable's Bookings table. Guarded
-// like hydrateContactsFromAirtable: an empty/missing response leaves
-// state.bookings untouched instead of wiping it to [], so a not-yet-migrated
-// deploy doesn't blank the Analytics booking dashboards on every load.
+// Replaces state.bookings wholesale from Airtable's Bookings table. Only a
+// genuine failure (non-OK response, or a malformed non-array body) leaves
+// state.bookings untouched - a successful empty response clears it same as
+// any other result.
 async function hydrateBookingsFromAirtable(){
   try {
     const res = await fetch('/api/airtable/booking');
     const records = await res.json();
-    if(!res.ok || !Array.isArray(records) || !records.length) return;
+    if(!res.ok || !Array.isArray(records)) return;
 
     state.bookings = records.map(r => {
       const f = r.fields || {};
@@ -5590,15 +5597,15 @@ function syncSequenceToAirtable(seq){
   }).catch(err => console.warn('Airtable sequence sync failed:', err.message));
 }
 
-// Replaces state.sequences wholesale from Airtable's Sequences table.
-// Guarded like hydrateContactsFromAirtable: an empty/missing response
-// leaves state.sequences untouched instead of wiping it to [], so a
-// not-yet-migrated deploy doesn't blank the Sequences page on every load.
+// Replaces state.sequences wholesale from Airtable's Sequences table. Only
+// a genuine failure (non-OK response, or a malformed non-array body) leaves
+// state.sequences untouched - a successful empty response clears it same as
+// any other result.
 async function hydrateSequencesFromAirtable(){
   try {
     const res = await fetch('/api/airtable/sequence');
     const records = await res.json();
-    if(!res.ok || !Array.isArray(records) || !records.length) return;
+    if(!res.ok || !Array.isArray(records)) return;
 
     state.sequences = records.filter(r => r.fields && r.fields['Sequence ID']).map(r => {
       const f = r.fields;
