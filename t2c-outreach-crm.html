@@ -1249,6 +1249,7 @@ function afterRender(page){
   if(page === 'intelligence' && (window.__intelSubTab||'intelligence') === 'context') ensureContextDataLoaded();
   if(page === 'home') ensureTodaysActionsSequenceStagesLoaded();
   if(page === 'logger' && window.__repsCache === undefined) loadRepsCache();
+  if(page === 'logger' && window.__loggerCampaigns === undefined) loadLoggerCampaigns();
   if(page === 'calendar'){
     const salesTab = window.__salesSubTab || 'overview';
     if(salesTab === 'calendar'){
@@ -2076,6 +2077,28 @@ const LOGGER_TYPES = [
   { key:'event', label:'Event / Networking', icon:'ti-confetti', airtableType:'Event', kind:'plain' }
 ];
 
+// Post-create "Add to campaign" step's stage options - a simplified subset
+// of the full Sequence Stage vocabulary (see LOGGER_JOURNEY_STAGE_TO_SEQUENCE_STAGE
+// in search-server.js for how "Connection Made" maps to "Connected" on write).
+const LOGGER_JOURNEY_STAGE_OPTIONS = ['Found', 'Connection Pending', 'Connection Made'];
+
+// Fetched fresh from Airtable's Campaigns table on Logger load (not reused
+// from state.campaigns) for the post-create "Add to campaign" step's
+// dropdown - same undefined-sentinel/re-render-if-still-on-page pattern as
+// loadRepsCache above.
+async function loadLoggerCampaigns(){
+  try {
+    const res = await fetch('/api/airtable/campaign');
+    const records = await res.json();
+    if(!res.ok || !Array.isArray(records)) throw new Error((records && records.error) || ('Request failed with status '+res.status));
+    window.__loggerCampaigns = records.map(r => ({ id: r.id, name: (r.fields && r.fields['Name']) || 'Untitled campaign' }));
+  } catch(err){
+    console.warn('Could not load campaigns for Logger:', err.message);
+    window.__loggerCampaigns = [];
+  }
+  if(state.currentPage === 'logger') renderPage();
+}
+
 function initLogger(){
   window.__logger = {
     type: null,
@@ -2086,7 +2109,15 @@ function initLogger(){
     repId: '',
     convoText: '',
     convoImage: null,
-    convoParsed: null
+    convoParsed: null,
+    // Post-create "Add to campaign" step - shown instead of the rest of the
+    // card right after a brand new contact is added inline (see
+    // loggerCreateInlineContact), not as part of the normal touch-point-
+    // logging flow.
+    showCampaignStep: false,
+    newContactName: '',
+    campaignStepCampaignId: '',
+    campaignStepStage: 'Found'
   };
 }
 
@@ -2097,11 +2128,13 @@ function renderLoggerPage(){
   <div class="section-title" style="font-size:20px;margin-bottom:2px;">Logger</div>
   <div class="muted" style="margin-bottom:16px;">Quickly capture any touch point - LinkedIn messages, calls, meetings, proposals, research and more - straight into Airtable.</div>
   <div class="card">
+    ${l.showCampaignStep ? renderLoggerCampaignStep() : `
     ${renderLoggerTypeSelector()}
     ${l.type ? renderLoggerContactSelector() : ''}
     ${l.type && l.contactId ? renderLoggerMetaRow() : ''}
     ${l.type && l.contactId ? renderLoggerTypeFields() : ''}
     ${l.type && l.contactId ? `<button class="btn btn-primary" id="loggerSaveBtn" onclick="submitLoggerEntry()"><i class="ti ti-device-floppy"></i> Save touch point</button>` : ''}
+    `}
   </div>
   `;
 }
@@ -2209,9 +2242,71 @@ async function loggerCreateInlineContact(){
     window.__logger.contactId = data.recordId;
     window.__logger.showAddContact = false;
     toast(name + ' added', 'success');
+
+    // Offer the quick "add to campaign" step instead of continuing into
+    // touch-point logging for them - see initLogger's showCampaignStep.
+    window.__logger.newContactName = name;
+    window.__logger.showCampaignStep = true;
+    window.__logger.campaignStepCampaignId = '';
+    window.__logger.campaignStepStage = 'Found';
     renderPage();
   } catch(err){
     toast('Could not add contact: ' + err.message, 'warn');
+  }
+}
+
+/* ---- Post-create "Add to campaign" step ---- */
+
+function renderLoggerCampaignStep(){
+  const l = window.__logger;
+  const campaigns = window.__loggerCampaigns || [];
+  return `
+  <div class="field"><label>${esc(l.newContactName || 'Contact')} added. Add to a campaign?</label>
+    <select id="loggerCampaignStepCampaign" onchange="window.__logger.campaignStepCampaignId=this.value;">
+      <option value="">Select a campaign...</option>
+      ${campaigns.map(c => `<option value="${esc(c.id)}" ${l.campaignStepCampaignId===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}
+    </select>
+  </div>
+  <div class="field"><label>Journey Stage</label>
+    <select id="loggerCampaignStepStage" onchange="window.__logger.campaignStepStage=this.value;">
+      ${LOGGER_JOURNEY_STAGE_OPTIONS.map(s => `<option value="${esc(s)}" ${l.campaignStepStage===s?'selected':''}>${esc(s)}</option>`).join('')}
+    </select>
+  </div>
+  <div style="display:flex;gap:8px;">
+    <button class="btn btn-secondary btn-sm" onclick="skipLoggerCampaignStep()"><i class="ti ti-arrow-right"></i> Skip</button>
+    <button class="btn btn-primary btn-sm" id="loggerAddToCampaignBtn" onclick="confirmLoggerAddToCampaign()"><i class="ti ti-rocket"></i> Add to campaign</button>
+  </div>
+  `;
+}
+
+function skipLoggerCampaignStep(){
+  initLogger();
+  renderPage();
+}
+
+async function confirmLoggerAddToCampaign(){
+  const l = window.__logger;
+  if(!l.campaignStepCampaignId){ toast('Select a campaign first', 'warn'); return; }
+
+  const btn = document.getElementById('loggerAddToCampaignBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Adding...'; }
+
+  try {
+    const res = await fetch('/api/logger/add-to-campaign', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ contactId: l.contactId, campaignId: l.campaignStepCampaignId, stage: l.campaignStepStage })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+    if(!data.success) throw new Error(data.reason || 'Could not add to campaign');
+
+    toast((l.newContactName || 'Contact') + ' added to campaign', 'success');
+    initLogger();
+    renderPage();
+  } catch(err){
+    toast('Could not add to campaign: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-rocket"></i> Add to campaign'; }
   }
 }
 

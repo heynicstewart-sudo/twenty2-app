@@ -1567,6 +1567,72 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
   }
 });
 
+// Logger tab's post-create "Add to campaign" step - offered right after a
+// brand new contact is added inline, so a rep who's just met someone can
+// enrol them in a campaign immediately instead of doing it later from the
+// campaign's own Roadmap tab. Kept as its own route rather than reusing
+// POST /api/campaign/:id/contacts/link, which several other callers
+// already rely on always defaulting a new row to "Found" - this one needs
+// to honour whichever of the 3 stages the rep picked.
+// "Connection Made" maps to the Sequence Stage vocabulary's "Connected" so
+// the created row stays readable by every other Sequence-Stage-aware
+// feature (Today's Actions, funnel counts, etc.) rather than introducing a
+// stage value nothing else recognises.
+const LOGGER_JOURNEY_STAGE_TO_SEQUENCE_STAGE = {
+  'Found': 'Found',
+  'Connection Pending': 'Connection Pending',
+  'Connection Made': 'Connected'
+};
+
+app.post('/api/logger/add-to-campaign', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const { contactId, campaignId, stage } = req.body || {};
+  if (!contactId || !campaignId || !stage) return res.status(400).json({ error: 'contactId, campaignId and stage are required' });
+  const sequenceStage = LOGGER_JOURNEY_STAGE_TO_SEQUENCE_STAGE[stage];
+  if (!sequenceStage) return res.status(400).json({ error: 'stage must be Found, Connection Pending or Connection Made' });
+
+  try {
+    const [contactRecord, campaignRecord, rows] = await Promise.all([
+      airtableGetRecord('Contacts', contactId),
+      airtableGetRecord('Campaigns', campaignId),
+      fetchCampaignContactsRows()
+    ]);
+    if (!contactRecord) return res.json({ success: false, reason: 'Contact not found in Airtable' });
+    if (!campaignRecord) return res.json({ success: false, reason: 'Campaign not found in Airtable' });
+
+    const contactName = contactRecord.fields['Full Name'] || '';
+    const campaignName = campaignRecord.fields['Name'] || '';
+    const dateLabel = new Date().toISOString().slice(0, 10);
+
+    const existing = findCampaignContactRow(rows, contactId, campaignId);
+    let recordId;
+    if (existing) {
+      await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, {
+        records: [{
+          id: existing.id,
+          fields: {
+            'Sequence Stage': sequenceStage,
+            'Stage History': appendStageHistory(existing.fields['Stage History'], sequenceStage, dateLabel)
+          }
+        }]
+      });
+      recordId = existing.id;
+    } else {
+      const created = await getOrCreateCampaignContactRow(contactId, contactName, campaignId, campaignName, rows, {
+        'Sequence Stage': sequenceStage,
+        'Stage History': appendStageHistory('', sequenceStage, dateLabel)
+      });
+      recordId = created.id;
+    }
+
+    res.json({ success: true, recordId });
+  } catch (err) {
+    console.error('Logger add-to-campaign error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Update a contact's journey stage
 app.patch('/api/airtable/contact/stage', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
