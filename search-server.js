@@ -1327,124 +1327,6 @@ app.post('/api/airtable/activity', async (req, res) => {
   }
 });
 
-// ===================== ONE-TIME LOCAL DATA MIGRATION =====================
-// Bulk-seeds Grids/Sequences/Bookings/Dead Contacts/Activity and the
-// Settings singleton row from whichever browser currently holds the real
-// working data - see pushLocalDataToAirtableConfirmed() in
-// t2c-outreach-crm.html. Meant to run exactly once, after the tables above
-// exist but before any browser starts relying on them for real. Not a
-// general-purpose import feature - delete this route and its client-side
-// button once the migration has actually run in production.
-//
-// Airtable caps a single write batch at 10 records (same limit
-// airtableBatchPatch works around above); unlike that helper this chunks
-// POST creates, which nothing else in this file has needed to do before,
-// so a sleep(300) is added between batches - the migration is the one place
-// in this app that could plausibly write dozens-to-hundreds of records in
-// one shot (an established user's activity/booking history), unlike the
-// steady-state per-action writes elsewhere which are always one record.
-async function airtableBulkCreate(table, recordsFields) {
-  for (let i = 0; i < recordsFields.length; i += 10) {
-    const batch = recordsFields.slice(i, i + 10);
-    await airtableRequest('POST', table, { records: batch.map(fields => ({ fields })), typecast: true });
-    if (i + 10 < recordsFields.length) await sleep(300);
-  }
-}
-
-app.post('/api/airtable/migrate-local-data', async (req, res) => {
-  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
-
-  try {
-    // Blunt one-shot guard: if Grids already has rows, this has already run
-    // (or someone's already using the shared tables for real) - refuse
-    // rather than risk duplicating everything. Not a general idempotency
-    // mechanism, just enough for a migration that only ever needs to run
-    // once.
-    const existingGrids = await airtableRequest('GET', 'Grids');
-    if ((existingGrids.records || []).length) {
-      return res.json({ success: false, message: 'Migration already appears to have run (Grids table is non-empty) - refusing to duplicate. Clear the target tables manually in Airtable first if you really want to re-run this.' });
-    }
-
-    const { grids, bookings, deadContacts, activity, sequences, settings, lastAnalysis } = req.body || {};
-
-    await airtableBulkCreate('Grids', (grids || []).filter(g => g && g.id && g.name).map(g => ({
-      'Grid ID': g.id,
-      'Name': g.name,
-      'Columns': (g.columns || []).join(', '),
-      'Created At': g.createdAt || '',
-      'Updated At': g.updatedAt || ''
-    })));
-
-    await airtableBulkCreate('Sequences', (sequences || []).filter(s => s && s.id && s.name).map(s => ({
-      'Sequence ID': s.id,
-      'Name': s.name,
-      'Roles': (s.roles || []).join(', '),
-      'Voice': s.voice || '',
-      'Connect Template': (s.stages && s.stages.connect) || '',
-      'Message 1 Template': (s.stages && s.stages.m1) || '',
-      'Message 2 Template': (s.stages && s.stages.m2) || '',
-      'CTA Template': (s.stages && s.stages.cta) || ''
-    })));
-
-    await airtableBulkCreate('Bookings', (bookings || []).filter(b => b && b.name && b.company).map(b => ({
-      'Contact Name': b.name,
-      'Company': b.company,
-      'Service': b.service || '',
-      'Date': b.date || '',
-      'CTA': b.cta || '',
-      'Notes': b.notes || ''
-    })));
-
-    await airtableBulkCreate('Dead Contacts', (deadContacts || []).filter(d => d && d.name && d.company).map(d => ({
-      'Name': d.name,
-      'Company': d.company,
-      'Role': d.role || '',
-      'Days': typeof d.days === 'number' ? d.days : 0,
-      'Removed': d.removed || ''
-    })));
-
-    await airtableBulkCreate('Activity', (activity || []).filter(a => a && a.type && a.text).map(a => ({
-      'Type': a.type,
-      'Text': a.text,
-      'Date': a.date || ''
-    })));
-
-    if (settings || lastAnalysis) {
-      const settingsRecord = await getOrCreateSettingsRecord();
-      const s = settings || {};
-      const fields = {};
-      if (typeof s.timeoutDays === 'number') fields['Timeout Days'] = s.timeoutDays;
-      if (s.timeoutAction) fields['Timeout Action'] = s.timeoutAction;
-      if (s.services !== undefined) fields['Services JSON'] = JSON.stringify(s.services);
-      if (s.accounts !== undefined) fields['Accounts JSON'] = JSON.stringify(s.accounts);
-      if (s.strategy !== undefined) fields['Strategy JSON'] = JSON.stringify(s.strategy);
-      if (s.leadMagnets !== undefined) fields['Lead Magnets JSON'] = JSON.stringify(s.leadMagnets);
-      if (s.products !== undefined) fields['Products JSON'] = JSON.stringify(s.products);
-      if (s.integrations && s.integrations.makeWebhookUrl !== undefined) fields['Make Webhook URL'] = s.integrations.makeWebhookUrl;
-      if (s.integrations && s.integrations.clayApiKey !== undefined) fields['Clay API Key'] = s.integrations.clayApiKey;
-      if (lastAnalysis) fields['Last Analysis JSON'] = JSON.stringify(lastAnalysis);
-      if (Object.keys(fields).length) {
-        await airtableRequest('PATCH', SETTINGS_TABLE, { records: [{ id: settingsRecord.id, fields }] });
-      }
-    }
-
-    res.json({
-      success: true,
-      results: {
-        grids: (grids || []).length,
-        sequences: (sequences || []).length,
-        bookings: (bookings || []).length,
-        deadContacts: (deadContacts || []).length,
-        activity: (activity || []).length,
-        settings: !!(settings || lastAnalysis)
-      }
-    });
-  } catch (err) {
-    console.error('Migrate local data error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // Log a touch point in Airtable
 // contactName/company (single, by name) are the original call shape used
 // throughout the rest of the app. contactRecordIds/companyRecordId (direct
@@ -7433,10 +7315,14 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 
 // ===================== WIPE DATA (Settings > Danger zone) =====================
 // Tables cleared by "Reset all data": the per-contact working data the app
-// generates during outreach. Campaigns, Reps, Content Settings and Content
-// are deliberately excluded - those are configuration/deliverables the user
-// set up on purpose, not data a local-state reset should also destroy.
-const WIPE_DATA_TABLES = ['Contacts', 'Companies', 'Touch Points', CAMPAIGN_CONTACTS_TABLE, 'Deals', CONTENT_SIGNALS_TABLE, 'Learning Data'];
+// generates during outreach. Bookings/Dead Contacts/Activity joined this
+// list once they moved from per-browser localStorage to shared Airtable
+// tables - the Danger Zone button already promised to clear them, and
+// leaving them out here would mean it silently stopped doing that. Grids,
+// Sequences and Settings stay excluded on purpose, same bucket as
+// Campaigns/Reps/Content Settings/Content below - configuration the user
+// set up, not data a reset should also destroy.
+const WIPE_DATA_TABLES = ['Contacts', 'Companies', 'Touch Points', CAMPAIGN_CONTACTS_TABLE, 'Deals', CONTENT_SIGNALS_TABLE, 'Learning Data', 'Bookings', 'Dead Contacts', 'Activity'];
 
 // Fetches every record id in a table, following Airtable's `offset` pagination
 // cursor. The plain `airtableRequest('GET', table)` used elsewhere in this
