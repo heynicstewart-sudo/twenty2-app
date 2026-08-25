@@ -847,6 +847,7 @@ app.get('/api/airtable/company', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
   const gridName = (req.query.gridName || '').trim();
+  const sortQs = `sort[0][field]=${encodeURIComponent('Company Name')}&sort[0][direction]=asc`;
 
   try {
     if (gridName) {
@@ -854,7 +855,7 @@ app.get('/api/airtable/company', async (req, res) => {
       // encodeURIComponent()s the whole `table` argument, which would
       // double-encode a query string appended to it.
       const filterRes = await fetch(
-        `${AIRTABLE_URL}/Companies?filterByFormula=${encodeURIComponent(`{Grid Name}="${gridName}"`)}`,
+        `${AIRTABLE_URL}/Companies?filterByFormula=${encodeURIComponent(`{Grid Name}="${gridName}"`)}&${sortQs}`,
         { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
       );
       const filterData = await filterRes.json();
@@ -862,8 +863,15 @@ app.get('/api/airtable/company', async (req, res) => {
       return res.json(filterData.records || []);
     }
 
-    const data = await airtableRequest('GET', 'Companies');
-    res.json(data.records || []);
+    // Same raw-fetch reasoning as above - airtableRequest only takes a bare
+    // table name (which it encodeURIComponent()s whole), so it can't carry
+    // an appended sort query string either.
+    const sortedRes = await fetch(`${AIRTABLE_URL}/Companies?${sortQs}`, {
+      headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` }
+    });
+    const sortedData = await sortedRes.json();
+    if (!sortedRes.ok) throw new Error(sortedData.error ? JSON.stringify(sortedData.error) : `Airtable error ${sortedRes.status}`);
+    res.json(sortedData.records || []);
   } catch (err) {
     console.error('Airtable company list error:', err.message);
     res.status(500).json({ error: err.message });
