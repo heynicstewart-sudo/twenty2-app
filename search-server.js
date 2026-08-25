@@ -430,6 +430,27 @@ async function linkGridContactToCampaign(contactId, contactName, campaignRecord,
   }
 }
 
+// Airtable-only existence check for the grid-deleted-mid-run guard in
+// runGridSearchJob below - distinct from findRecordByFieldName because that
+// helper doesn't check res.ok, so a transient Airtable error (rate limit,
+// auth blip) comes back indistinguishable from "genuinely zero records" and
+// would wrongly cancel an otherwise-healthy job. Here, only a confirmed OK
+// response with zero matches counts as "really gone"; any fetch failure
+// defaults to "assume it still exists" and lets the job keep running.
+async function gridStillExistsInAirtable(gridId) {
+  try {
+    const res = await fetch(
+      `${AIRTABLE_URL}/Grids?filterByFormula=${encodeURIComponent(`{Grid ID}="${gridId}"`)}`,
+      { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
+    );
+    if (!res.ok) return true;
+    const data = await res.json();
+    return !!(data.records && data.records.length);
+  } catch (err) {
+    return true;
+  }
+}
+
 async function runGridSearchJob(job, cells, campaignName) {
   // findCampaignRecordByName, not findRecordByFieldName - a campaign name
   // containing a double quote would break the latter's filterByFormula
@@ -438,7 +459,28 @@ async function runGridSearchJob(job, cells, campaignName) {
   const campaignRecord = campaignName ? await findCampaignRecordByName(campaignName) : null;
   const campaignContactRows = campaignRecord ? await fetchCampaignContactsRows() : null;
 
-  for (const { company, role } of cells) {
+  const finish = (status, error) => {
+    job.status = status;
+    if (error) job.error = error;
+    job.finishedAt = Date.now();
+    setTimeout(() => gridSearchJobs.delete(job.id), GRID_SEARCH_JOB_TTL_MS);
+  };
+
+  // How often (in cells processed) to re-check job.cancelled (set by POST
+  // /api/grid/cancel-search) and that the grid still exists in Airtable -
+  // not every single cell, since the existence check is an extra Airtable
+  // call that only matters in the rare case of a cancel/delete mid-run.
+  const CHECK_EVERY = 5;
+
+  for (let i = 0; i < cells.length; i++) {
+    if (job.cancelled) return finish('cancelled');
+
+    if (i > 0 && i % CHECK_EVERY === 0 && !(await gridStillExistsInAirtable(job.gridId))) {
+      console.warn(`Grid search job ${job.id}: grid ${job.gridId} no longer exists in Airtable, stopping.`);
+      return finish('cancelled', 'Grid no longer exists');
+    }
+
+    const { company, role } = cells[i];
     let result;
     try {
       const searchResult = await searchContactViaSerper(company, role);
@@ -467,9 +509,7 @@ async function runGridSearchJob(job, cells, campaignName) {
     job.completed++;
     if (job.completed < job.total) await sleep(300);
   }
-  job.status = 'done';
-  job.finishedAt = Date.now();
-  setTimeout(() => gridSearchJobs.delete(job.id), GRID_SEARCH_JOB_TTL_MS);
+  finish('done');
 }
 
 // Kicks off a grid's daily search server-side and returns a jobId
@@ -496,6 +536,7 @@ app.post('/api/grid/run-search', (req, res) => {
     foundCount: 0,
     results: [],
     error: null,
+    cancelled: false,
     startedAt: Date.now()
   };
   gridSearchJobs.set(jobId, job);
@@ -527,6 +568,23 @@ app.get('/api/grid/run-search/:jobId', (req, res) => {
     results: job.results,
     error: job.error
   });
+});
+
+// Stops a running search job for the given gridId - called from the Cancel
+// button on the grid search status indicator (t2c-outreach-crm.html,
+// cancelGridSearch). Doesn't kill anything mid-flight: runGridSearchJob's
+// loop only checks job.cancelled once per cell (same cadence as its grid-
+// existence check above), so the cell already in progress still finishes
+// and gets saved before the job actually stops.
+app.post('/api/grid/cancel-search', (req, res) => {
+  const { gridId } = req.body;
+  if (!gridId) return res.status(400).json({ error: 'gridId is required' });
+
+  const job = [...gridSearchJobs.values()].find(j => j.gridId === gridId && j.status === 'running');
+  if (!job) return res.json({ success: false, message: 'No running search found for this grid' });
+
+  job.cancelled = true;
+  res.json({ success: true, jobId: job.id });
 });
 
 // Create a Contact from a website lead webhook (e.g. an AI profile/scorecard

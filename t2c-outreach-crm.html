@@ -3451,7 +3451,7 @@ async function runDailySearch(){
     const td = document.querySelector(`.cell-empty[data-company="${cssEscape(company)}"][data-role="${cssEscape(role)}"]`);
     if(td) td.outerHTML = `<div class="cell-searching" data-company="${esc(company)}" data-role="${esc(role)}"><i class="ti ti-loader-2"></i>&nbsp;Searching...</div>`;
   });
-  renderGridSearchStatus(0, emptyCells.length, 0);
+  renderGridSearchStatus(0, emptyCells.length, 0, grid.id);
 
   try {
     const startRes = await fetch('/api/grid/run-search', {
@@ -3494,14 +3494,15 @@ function resetStuckSearchingCells(cells){
 // (see body markup) that survives renderPage() swapping pages out, so the
 // indicator stays visible if the user navigates away mid-search. Refreshed
 // on every poll tick with the latest completed/total/foundCount.
-function renderGridSearchStatus(completed, total, foundCount){
+function renderGridSearchStatus(completed, total, foundCount, gridId){
   const message = `Searching ${completed} of ${total} open roles — ${foundCount} found so far...`;
+  const cancelBtn = `<button class="btn btn-ghost btn-sm" style="margin-left:10px;" onclick="cancelGridSearch('${gridId}')"><i class="ti ti-player-stop"></i> Cancel</button>`;
   const el = document.getElementById('gridNotification');
-  if(el) el.innerHTML = `<div class="card" style="margin-bottom:14px;"><i class="ti ti-loader-2"></i> ${message}</div>`;
+  if(el) el.innerHTML = `<div class="card" style="margin-bottom:14px;display:flex;align-items:center;"><i class="ti ti-loader-2"></i>&nbsp;${message}${cancelBtn}</div>`;
   const bar = document.getElementById('gridSearchStatusBar');
   if(bar){
     bar.style.display = 'flex';
-    bar.innerHTML = `<i class="ti ti-loader-2"></i> ${message}`;
+    bar.innerHTML = `<i class="ti ti-loader-2"></i> ${message}${cancelBtn}`;
   }
 }
 
@@ -3524,6 +3525,8 @@ function finishGridSearchUI(gridId, job){
 
   if(job.status === 'error'){
     toast('Daily search failed: '+(job.error||'unknown error'), 'warn');
+  } else if(job.status === 'cancelled'){
+    toast(job.error === 'Grid no longer exists' ? 'Search stopped - grid no longer exists' : 'Search cancelled', 'warn');
   } else {
     toast(job.foundCount+' new contacts found', 'success');
   }
@@ -3537,9 +3540,26 @@ function finishGridSearchUI(gridId, job){
   if(!el) return;
   if(job.status === 'error'){
     el.innerHTML = `<div class="card" style="background:#fbe3dc;border-color:#f0c6b8;margin-bottom:14px;"><i class="ti ti-alert-circle" style="color:var(--danger);"></i> Daily search failed — ${esc(job.error||'unknown error')}</div>`;
+  } else if(job.status === 'cancelled'){
+    el.innerHTML = `<div class="card" style="background:#f5f1e8;border-color:#e5dcc8;margin-bottom:14px;"><i class="ti ti-player-stop"></i> Search stopped — ${esc(job.error === 'Grid no longer exists' ? 'this grid no longer exists' : 'cancelled')}. ${job.foundCount} new contact${job.foundCount===1?'':'s'} found before stopping.</div>`;
   } else {
     el.innerHTML = `<div class="card" style="background:#eaf7f0;border-color:#c9e9d7;margin-bottom:14px;"><i class="ti ti-circle-check" style="color:var(--success);"></i> Daily search complete — ${job.foundCount} new contact${job.foundCount===1?'':'s'} found across ${job.total} open roles.</div>`;
   }
+}
+
+// Tells the server to stop a running search job for this grid - see POST
+// /api/grid/cancel-search. Doesn't stop anything client-side itself:
+// pollGridSearchJob keeps polling as normal and finishGridSearchUI runs
+// once the job actually reports status "cancelled" (the cell already in
+// flight server-side finishes first), same as a natural completion.
+function cancelGridSearch(gridId){
+  fetch('/api/grid/cancel-search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ gridId })
+  }).then(res => res.json()).then(data => {
+    if(!data.success) toast(data.message || 'Could not cancel search', 'warn');
+  }).catch(err => console.warn('Cancel grid search failed:', err.message));
 }
 
 // Applies one cell's result from a run-search job's `results` array onto
@@ -3599,10 +3619,10 @@ async function pollGridSearchJob(jobId, grid, cells){
       seenKeys.add(key);
       applyGridSearchResult(grid, r);
     });
-    renderGridSearchStatus(job.completed, job.total, job.foundCount);
+    renderGridSearchStatus(job.completed, job.total, job.foundCount, grid.id);
 
-    if(job.status === 'done' || job.status === 'error'){
-      if(job.status === 'error') resetStuckSearchingCells(stillSearching());
+    if(job.status === 'done' || job.status === 'error' || job.status === 'cancelled'){
+      if(job.status === 'error' || job.status === 'cancelled') resetStuckSearchingCells(stillSearching());
       finishGridSearchUI(grid.id, job);
       return;
     }
