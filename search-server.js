@@ -4708,9 +4708,21 @@ async function trigifyCreateProfileMonitor(name, profileUrl, { maxResults, frequ
 // monitor, called from POST /api/airtable/contact right after a new
 // contact is created. No-ops quietly if Trigify isn't configured - the
 // contact save itself must never fail because of this.
+//
+// Checks for an existing search on this profile URL first (via
+// trigifyFindExistingSearch's GET /v1/searches lookup, the same one
+// trigifyEnsureMarcusSearch/the Trigify backfill route already use
+// reactively after a 409) instead of always attempting a create - a
+// duplicate contact save, or a contact re-added after being removed and
+// re-found, would otherwise either 409 (previously left silently
+// unregistered, since the caller only logs-and-swallows this function's
+// errors) or create a second search for the same profile.
 async function trigifyCreateContactSearch(contactId, contactName, linkedinUrl) {
   if (!TRIGIFY_API_KEY || !AIRTABLE_API_KEY) return;
-  const searchId = await trigifyCreateProfileMonitor(`T2C — ${contactName}`, linkedinUrl, { maxResults: 10, frequency: 'DAILY' });
+  const normalizedUrl = normalizeLinkedInUrl(linkedinUrl);
+  const searchName = `T2C — ${contactName}`;
+  const existingId = await trigifyFindExistingSearch(normalizedUrl, searchName);
+  const searchId = existingId || await trigifyCreateProfileMonitor(searchName, normalizedUrl, { maxResults: 10, frequency: 'DAILY' });
   await airtableRequest('PATCH', 'Contacts', { records: [{ id: contactId, fields: { 'Trigify Search ID': searchId } }] });
 }
 
