@@ -4980,65 +4980,13 @@ app.post('/api/trigify/setup-contact-search', async (req, res) => {
   }
 });
 
-// One-time backfill for contacts found before automatic Trigify
-// registration existed on contact creation (POST /api/airtable/contact) -
-// registers everyone with a LinkedIn URL but no Trigify Search ID yet via
-// the same trigifyCreateContactSearch() that on-create hook uses, so
-// there's one registration implementation instead of two.
-app.get('/api/trigify/backfill-contacts', async (req, res) => {
-  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
-  if (!TRIGIFY_API_KEY) return res.status(500).json({ error: 'TRIGIFY_API_KEY not configured' });
-
-  try {
-    const contacts = await airtableFetchAllRecords('Contacts');
-    const targets = contacts.filter(c => c.fields['LinkedIn URL'] && !c.fields['Trigify Search ID']);
-    console.log(`Trigify backfill: ${targets.length} contact(s) need a Trigify search out of ${contacts.length} total.`);
-
-    let registered = 0;
-    const errors = [];
-    for (let i = 0; i < targets.length; i++) {
-      const contact = targets[i];
-      const name = contact.fields['Full Name'] || contact.id;
-      const normalizedUrl = normalizeLinkedInUrl(contact.fields['LinkedIn URL']);
-      try {
-        await trigifyCreateContactSearch(contact.id, name, normalizedUrl);
-        registered++;
-        console.log(`Trigify backfill (${i + 1}/${targets.length}): registered ${name}`);
-      } catch (err) {
-        // Trigify 409s "This profile is already being monitored" when a
-        // search for this profile already exists (e.g. from an earlier,
-        // partially-failed backfill run) - look up the existing search id
-        // instead of leaving the contact unregistered, same fallback
-        // trigifyEnsureMarcusSearch uses for Marcus's own search.
-        if (err.status === 409 && /already being monitored/i.test(err.body || '')) {
-          try {
-            const existingId = await trigifyFindExistingSearch(normalizedUrl, `T2C — ${name}`);
-            if (existingId) {
-              await airtableRequest('PATCH', 'Contacts', { records: [{ id: contact.id, fields: { 'Trigify Search ID': existingId } }] });
-              registered++;
-              console.log(`Trigify backfill (${i + 1}/${targets.length}): already monitored, linked existing search for ${name}`);
-            } else {
-              errors.push(`${name}: already monitored, but no matching search was found in GET /v1/searches`);
-              console.warn(`Trigify backfill (${i + 1}/${targets.length}): already monitored but no matching search found for ${name}`);
-            }
-          } catch (lookupErr) {
-            errors.push(`${name}: ${lookupErr.message}`);
-            console.warn(`Trigify backfill (${i + 1}/${targets.length}): failed to look up existing search for ${name} - ${lookupErr.message}`);
-          }
-        } else {
-          errors.push(`${name}: ${err.message}`);
-          console.warn(`Trigify backfill (${i + 1}/${targets.length}): failed for ${name} - ${err.message}`);
-        }
-      }
-    }
-
-    console.log(`Trigify backfill complete: ${registered} registered, ${errors.length} failed.`);
-    res.json({ success: true, checked: contacts.length, targeted: targets.length, registered, errors });
-  } catch (err) {
-    console.error('Trigify backfill-contacts error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
+// Removed: GET /api/trigify/backfill-contacts used to register every
+// contact with a LinkedIn URL and no Trigify Search ID yet, regardless of
+// Sequence Stage - that's no longer correct now that monitor creation only
+// happens once a contact reaches "Connected" (see PATCH /api/context/
+// contact-fields and trigifyCreateContactSearch's comment above), so
+// leaving this callable risked accidentally opening monitors for
+// found-but-never-connected contacts again.
 
 app.get('/api/trigify/sync-contact-posts', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
