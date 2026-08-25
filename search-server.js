@@ -916,7 +916,7 @@ app.post('/api/airtable/campaign', async (req, res) => {
   // so they're folded into the existing "Strategy Notes" field as
   // labelled sections rather than dropped - that field already exists and
   // is semantically the right home for them.
-  const { name, goal, product, targetIcp, contactIds, sequenceTemplates, strategyNotes, pitchAngle, objectionHandling, successMetric, startDate, status, ctas, contentContext } = req.body;
+  const { name, goal, product, targetIcp, contactIds, gridIds, sequenceTemplates, strategyNotes, pitchAngle, objectionHandling, successMetric, startDate, status, ctas, contentContext } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
 
   try {
@@ -940,6 +940,7 @@ app.post('/api/airtable/campaign', async (req, res) => {
       if (product) patchFields['Product'] = product;
       if (targetIcp) patchFields['Target ICP'] = targetIcp;
       if (Array.isArray(contactIds) && contactIds.length) patchFields['Contact IDs'] = contactIds.join(', ');
+      if (Array.isArray(gridIds) && gridIds.length) patchFields['Grid IDs'] = gridIds.join(', ');
       if (sequenceTemplates) patchFields['Sequence Templates'] = sequenceTemplates;
       if (strategyNotesJoined) patchFields['Strategy Notes'] = strategyNotesJoined;
       if (successMetric) patchFields['Success Metric'] = successMetric;
@@ -960,6 +961,7 @@ app.post('/api/airtable/campaign', async (req, res) => {
       'Product': product || '',
       'Target ICP': targetIcp || '',
       'Contact IDs': (contactIds || []).join(', '),
+      'Grid IDs': (gridIds || []).join(', '),
       'Sequence Templates': sequenceTemplates || '',
       'Strategy Notes': strategyNotesJoined,
       'Success Metric': successMetric || '',
@@ -1032,6 +1034,230 @@ app.delete('/api/campaign/:id', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('Delete campaign error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===================== GRIDS (shared) =====================
+// Grid definitions (name/columns) used to live only in each browser's own
+// localStorage - see persistState/loadPersistedState in
+// t2c-outreach-crm.html - so two people on two browsers never saw the same
+// grid list. This table is the shared source of truth for that now.
+// Looked up by the app's own opaque `Grid ID` (a uid('grid') value), not by
+// Name, for the same reason findCampaignRecordByName above avoids
+// filterByFormula on Campaigns' Name field - a freely-renamed grid could
+// contain a double quote and silently break the match.
+app.get('/api/airtable/grid', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const data = await airtableRequest('GET', 'Grids');
+    res.json(data.records || []);
+  } catch (err) {
+    console.error('Airtable grid list error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/airtable/grid', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { gridId, name, columns, createdAt, updatedAt } = req.body;
+  if (!gridId) return res.status(400).json({ error: 'gridId is required' });
+
+  try {
+    const existing = await findRecordByFieldName('Grids', 'Grid ID', gridId);
+
+    if (existing) {
+      // Only include fields this request actually supplied - same "don't
+      // blank a real field just because this write didn't touch it"
+      // convention as POST /api/airtable/campaign above.
+      const patchFields = {};
+      if (name) patchFields['Name'] = name;
+      if (Array.isArray(columns) && columns.length) patchFields['Columns'] = columns.join(', ');
+      if (updatedAt) patchFields['Updated At'] = updatedAt;
+      if (Object.keys(patchFields).length) {
+        await airtableRequest('PATCH', 'Grids', { records: [{ id: existing.id, fields: patchFields }] });
+      }
+      return res.json({ success: true, updated: true, recordId: existing.id });
+    }
+
+    if (!name) return res.status(400).json({ error: 'name is required to create a grid' });
+    const fields = {
+      'Grid ID': gridId,
+      'Name': name,
+      'Columns': (columns || []).join(', '),
+      'Created At': createdAt || '',
+      'Updated At': updatedAt || createdAt || ''
+    };
+    const data = await airtableRequest('POST', 'Grids', { records: [{ fields }] });
+    res.json({ success: true, updated: false, recordId: data.records[0].id });
+  } catch (err) {
+    console.error('Airtable grid upsert error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/airtable/grid/:gridId', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const gridId = decodeURIComponent(req.params.gridId);
+
+  try {
+    const existing = await findRecordByFieldName('Grids', 'Grid ID', gridId);
+    if (!existing) return res.json({ success: true, alreadyDeleted: true });
+
+    const url = `${AIRTABLE_URL}/Grids?records[]=${encodeURIComponent(existing.id)}`;
+    const resp = await fetch(url, { method: 'DELETE', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } });
+    if (!resp.ok) { const err = await resp.text(); throw new Error(`Airtable error ${resp.status}: ${err}`); }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Delete grid error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===================== SEQUENCES (shared) =====================
+// Same "opaque stable ID over display name" lookup convention as Grids
+// above - sequence names are freely user-edited (renameSeq) and could
+// contain a quote.
+app.get('/api/airtable/sequence', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const data = await airtableRequest('GET', 'Sequences');
+    res.json(data.records || []);
+  } catch (err) {
+    console.error('Airtable sequence list error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/airtable/sequence', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { sequenceId, name, roles, voice, connect, m1, m2, cta } = req.body;
+  if (!sequenceId) return res.status(400).json({ error: 'sequenceId is required' });
+
+  try {
+    const existing = await findRecordByFieldName('Sequences', 'Sequence ID', sequenceId);
+
+    if (existing) {
+      const patchFields = {};
+      if (name) patchFields['Name'] = name;
+      if (Array.isArray(roles) && roles.length) patchFields['Roles'] = roles.join(', ');
+      if (voice) patchFields['Voice'] = voice;
+      if (connect) patchFields['Connect Template'] = connect;
+      if (m1) patchFields['Message 1 Template'] = m1;
+      if (m2) patchFields['Message 2 Template'] = m2;
+      if (cta) patchFields['CTA Template'] = cta;
+      if (Object.keys(patchFields).length) {
+        await airtableRequest('PATCH', 'Sequences', { records: [{ id: existing.id, fields: patchFields }] });
+      }
+      return res.json({ success: true, updated: true, recordId: existing.id });
+    }
+
+    if (!name) return res.status(400).json({ error: 'name is required to create a sequence' });
+    const fields = {
+      'Sequence ID': sequenceId,
+      'Name': name,
+      'Roles': (roles || []).join(', '),
+      'Voice': voice || '',
+      'Connect Template': connect || '',
+      'Message 1 Template': m1 || '',
+      'Message 2 Template': m2 || '',
+      'CTA Template': cta || ''
+    };
+    const data = await airtableRequest('POST', 'Sequences', { records: [{ fields }] });
+    res.json({ success: true, updated: false, recordId: data.records[0].id });
+  } catch (err) {
+    console.error('Airtable sequence upsert error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===================== BOOKINGS (shared) =====================
+// Always a create - the app never edits a booking in place today (only
+// ever pushes new ones from confirmBooking), so there's no upsert-by-key
+// need the way Grids/Sequences/Campaigns have.
+app.get('/api/airtable/booking', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const data = await airtableRequest('GET', 'Bookings');
+    res.json(data.records || []);
+  } catch (err) {
+    console.error('Airtable booking list error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/airtable/booking', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { contactName, company, service, date, cta, notes } = req.body;
+  if (!contactName || !company) return res.status(400).json({ error: 'contactName and company are required' });
+
+  try {
+    const fields = {
+      'Contact Name': contactName,
+      'Company': company,
+      'Service': service || '',
+      'Date': date || '',
+      'CTA': cta || '',
+      'Notes': notes || ''
+    };
+    const data = await airtableRequest('POST', 'Bookings', { records: [{ fields }] });
+    res.json({ success: true, recordId: data.records[0].id });
+  } catch (err) {
+    console.error('Airtable booking create error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===================== DEAD CONTACTS (shared) =====================
+app.get('/api/airtable/dead-contact', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const data = await airtableRequest('GET', 'Dead Contacts');
+    res.json(data.records || []);
+  } catch (err) {
+    console.error('Airtable dead contact list error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/airtable/dead-contact', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { name, company, role, days, removed } = req.body;
+  if (!name || !company) return res.status(400).json({ error: 'name and company are required' });
+
+  try {
+    const fields = {
+      'Name': name,
+      'Company': company,
+      'Role': role || '',
+      'Days': typeof days === 'number' ? days : 0,
+      'Removed': removed || ''
+    };
+    const data = await airtableRequest('POST', 'Dead Contacts', { records: [{ fields }] });
+    res.json({ success: true, recordId: data.records[0].id });
+  } catch (err) {
+    console.error('Airtable dead contact create error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===================== ACTIVITY (shared, write-only) =====================
+// No GET route - nothing in the app renders an activity feed today (6
+// scattered .unshift() call sites write it, nothing reads it back). This
+// just gives those existing writes a shared home instead of each browser's
+// own localStorage, per the locked "migrate as-is, write-only" decision.
+app.post('/api/airtable/activity', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { type, text, date } = req.body;
+  if (!type || !text) return res.status(400).json({ error: 'type and text are required' });
+
+  try {
+    const fields = { 'Type': type, 'Text': text, 'Date': date || '' };
+    const data = await airtableRequest('POST', 'Activity', { records: [{ fields }] });
+    res.json({ success: true, recordId: data.records[0].id });
+  } catch (err) {
+    console.error('Airtable activity create error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -4230,6 +4456,95 @@ app.post('/api/settings/linkedin-url', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('Save primary LinkedIn URL error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===================== APP CONFIG (shared Settings page state) =====================
+// The Settings page's timeout/services/accounts/strategy/leadMagnets/
+// products config used to live only in each browser's localStorage - see
+// persistState/loadPersistedState in t2c-outreach-crm.html. Reuses the same
+// Settings singleton row as the LinkedIn URL route above
+// (getSettingsRecord/getOrCreateSettingsRecord). The nested array/object
+// sub-settings (services/accounts/strategy/leadMagnets/products) are stored
+// as JSON text fields rather than split into their own tables - this is
+// ~13 small setters for a handful of internal users, not a case that needs
+// a real relational schema per sub-setting.
+app.get('/api/settings/app-config', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const record = await getSettingsRecord();
+    res.json(record ? record.fields : {});
+  } catch (err) {
+    console.error('Get app-config error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/settings/app-config', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { timeoutDays, timeoutAction, services, accounts, strategy, leadMagnets, products, makeWebhookUrl, clayApiKey } = req.body;
+
+  try {
+    const settingsRecord = await getOrCreateSettingsRecord();
+    const fields = {};
+    if (typeof timeoutDays === 'number') fields['Timeout Days'] = timeoutDays;
+    if (timeoutAction) fields['Timeout Action'] = timeoutAction;
+    // Presence, not truthiness, for the JSON blobs below - an empty array
+    // is a legitimate "user cleared this list" state, not "wasn't
+    // supplied". Safe here because saveSettings() (the only caller) always
+    // sends the complete settings object, never a partial one - unlike
+    // every other endpoint in this file, an empty value here is real intent
+    // to write, not evidence of an unhydrated/partial payload.
+    if (services !== undefined) fields['Services JSON'] = JSON.stringify(services);
+    if (accounts !== undefined) fields['Accounts JSON'] = JSON.stringify(accounts);
+    if (strategy !== undefined) fields['Strategy JSON'] = JSON.stringify(strategy);
+    if (leadMagnets !== undefined) fields['Lead Magnets JSON'] = JSON.stringify(leadMagnets);
+    if (products !== undefined) fields['Products JSON'] = JSON.stringify(products);
+    if (makeWebhookUrl !== undefined) fields['Make Webhook URL'] = makeWebhookUrl;
+    if (clayApiKey !== undefined) fields['Clay API Key'] = clayApiKey;
+
+    if (Object.keys(fields).length) {
+      await airtableRequest('PATCH', SETTINGS_TABLE, { records: [{ id: settingsRecord.id, fields }] });
+    }
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Save app-config error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Separate from app-config above since it's written from a completely
+// different place in the app (runAnalysis(), not saveSettings()) with
+// different call frequency - bundling it in would mean every analysis run
+// re-sends the whole settings object for no reason.
+app.get('/api/settings/last-analysis', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const record = await getSettingsRecord();
+    const raw = record && record.fields['Last Analysis JSON'];
+    let analysis = null;
+    if (raw) { try { analysis = JSON.parse(raw); } catch (e) { analysis = null; } }
+    res.json({ analysis });
+  } catch (err) {
+    console.error('Get last-analysis error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/settings/last-analysis', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { analysis } = req.body;
+  if (!analysis) return res.status(400).json({ error: 'analysis is required' });
+
+  try {
+    const settingsRecord = await getOrCreateSettingsRecord();
+    await airtableRequest('PATCH', SETTINGS_TABLE, {
+      records: [{ id: settingsRecord.id, fields: { 'Last Analysis JSON': JSON.stringify(analysis) } }]
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Save last-analysis error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
