@@ -2179,7 +2179,11 @@ function renderLoggerContactSelector(){
       <div class="field"><input id="loggerNewContactCompany" placeholder="Company"></div>
     </div>
     <div class="row">
-      <div class="field"><input id="loggerNewContactRole" placeholder="Job title (optional)"></div>
+      <div class="field">
+        <input id="loggerNewContactRole" placeholder="Job title" list="loggerJobTitleOptions" oninput="checkLoggerJobTitleSuggestion()">
+        <datalist id="loggerJobTitleOptions">${loggerDistinctJobTitles().map(t => `<option value="${esc(t)}">`).join('')}</datalist>
+        <div id="loggerJobTitleSuggestion" style="font-size:11.5px;margin-top:4px;"></div>
+      </div>
       <div class="field"><input id="loggerNewContactUrl" placeholder="LinkedIn URL (optional)"></div>
     </div>
     <div style="display:flex;gap:8px;margin-bottom:14px;">
@@ -2216,16 +2220,86 @@ function loggerClearContact(){
   renderPage();
 }
 
+// Distinct Job Title values already on file, from the same state.contacts
+// the contact search above reads (no extra fetch needed - it's already
+// loaded whenever the Logger tab is usable at all). Feeds both the
+// datalist on the job title input and the fuzzy "did you mean" check
+// below, so a typo doesn't quietly create a near-duplicate title.
+function loggerDistinctJobTitles(){
+  const seen = new Set();
+  const titles = [];
+  state.contacts.forEach(c => {
+    const t = (c.role || '').trim();
+    if(t && !seen.has(t.toLowerCase())){ seen.add(t.toLowerCase()); titles.push(t); }
+  });
+  return titles.sort((a,b) => a.localeCompare(b));
+}
+
+// Plain Levenshtein edit distance - small and self-contained rather than
+// pulling in a fuzzy-match library for one field.
+function levenshteinDistance(a, b){
+  a = a.toLowerCase(); b = b.toLowerCase();
+  const m = a.length, n = b.length;
+  if(!m) return n;
+  if(!n) return m;
+  const dp = Array.from({length: m+1}, () => new Array(n+1).fill(0));
+  for(let i=0;i<=m;i++) dp[i][0] = i;
+  for(let j=0;j<=n;j++) dp[0][j] = j;
+  for(let i=1;i<=m;i++){
+    for(let j=1;j<=n;j++){
+      dp[i][j] = a[i-1]===b[j-1] ? dp[i-1][j-1] : 1 + Math.min(dp[i-1][j-1], dp[i-1][j], dp[i][j-1]);
+    }
+  }
+  return dp[m][n];
+}
+
+// Flags an existing job title that's close-but-not-identical to what was
+// just typed (e.g. "Change Mananger" vs an on-file "Change Manager") so the
+// rep can correct it before it becomes a near-duplicate value in Airtable.
+// Doesn't fire for a short/empty query or an already-exact match (case
+// insensitive) - nothing useful to suggest in either case.
+function checkLoggerJobTitleSuggestion(){
+  const el = document.getElementById('loggerJobTitleSuggestion');
+  if(!el) return;
+  const typed = (document.getElementById('loggerNewContactRole')?.value || '').trim();
+  if(typed.length < 3){ el.innerHTML = ''; return; }
+
+  const existing = loggerDistinctJobTitles();
+  if(existing.some(t => t.toLowerCase() === typed.toLowerCase())){ el.innerHTML = ''; return; }
+
+  let best = null, bestSimilarity = 0;
+  existing.forEach(t => {
+    const distance = levenshteinDistance(typed, t);
+    const similarity = 1 - distance / Math.max(typed.length, t.length);
+    if(similarity > bestSimilarity){ bestSimilarity = similarity; best = t; }
+  });
+
+  el.innerHTML = (best && bestSimilarity >= 0.75)
+    ? `<span class="muted">Did you mean <a href="#" onclick="acceptLoggerJobTitleSuggestion('${esc(best).replace(/'/g,"\\'")}');return false;" style="font-weight:700;">${esc(best)}</a>?</span>`
+    : '';
+}
+
+function acceptLoggerJobTitleSuggestion(title){
+  const input = document.getElementById('loggerNewContactRole');
+  if(input) input.value = title;
+  const el = document.getElementById('loggerJobTitleSuggestion');
+  if(el) el.innerHTML = '';
+}
+
 // Same create-or-update contact route the Grid "Add contact" modal uses
 // (POST /api/airtable/contact) - if the name+company already exists in
 // Airtable this just resolves to that existing record rather than
-// duplicating it.
+// duplicating it. Job title is required (unlike the Grid's own "Add
+// contact" modal) - Logger is meant for fast one-off capture, where a
+// blank title is the easiest way for data to get messy fast; if it
+// genuinely doesn't match anything on file yet, that's fine, it's created
+// as a new value (the create call below already passes typecast:true).
 async function loggerCreateInlineContact(){
   const name = (document.getElementById('loggerNewContactName')?.value || '').trim();
   const company = (document.getElementById('loggerNewContactCompany')?.value || '').trim();
   const role = (document.getElementById('loggerNewContactRole')?.value || '').trim();
   const linkedinUrl = (document.getElementById('loggerNewContactUrl')?.value || '').trim();
-  if(!name || !company){ toast('Name and company are required', 'warn'); return; }
+  if(!name || !company || !role){ toast('Name, company and job title are required', 'warn'); return; }
 
   try {
     const res = await fetch('/api/airtable/contact', {
