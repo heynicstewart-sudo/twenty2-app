@@ -3206,15 +3206,48 @@ function gridCellDays(c){
   return daysBetween(c.foundDate);
 }
 
+// Campaign Contacts' Sequence Stage (Airtable) is the source of truth for
+// where a contact actually is - normalized here to the Grid's own cell-*/
+// tag-* vocabulary (found/connectionPending/connected/messaging/booked).
+// Covers the DM-screenshot flow's richer "Pending Reply MN"/"Ready for
+// Message N+1" labels (search-server.js SEQUENCE_STAGE_ADVANCE) as
+// "messaging" too. Returns null for a stage with no sensible mapping
+// (Excluded, Timed Out, or none loaded yet) so callers fall back to c.state.
+function sequenceStageToGridState(stage){
+  if(!stage) return null;
+  if(stage === 'Connected') return 'connected';
+  if(stage === 'Connection Pending') return 'connectionPending';
+  if(stage === 'Found' || stage === 'Connection Requested') return 'found';
+  if(/^Message \d Sent$/.test(stage) || /^Pending Reply/.test(stage) || /^Ready for Message/.test(stage)) return 'messaging';
+  return null;
+}
+
+// Grid cell status badge/colour - was reading c.state alone, which only
+// ever reflects Contacts.Journey Stage as of hydration (see
+// JOURNEY_STAGE_TO_STATE) and local client-side mutations, so editing
+// Sequence Stage directly in Airtable's Campaign Contacts had no path to
+// the Grid view at all, even after a hard refresh. Now prefers the grid's
+// linked campaign's live Sequence Stage (same map gridConnectionSentDateFor
+// already reads for the day badge), falling back to c.state when the grid
+// isn't linked to exactly one campaign or the contact has no Campaign
+// Contacts row yet.
+function gridCellState(c){
+  if(c.thread && c.thread.booked) return 'booked';
+  const seqMap = gridSequenceStageMap(c.gridId);
+  const seqStage = seqMap ? seqMap[c.name.trim().toLowerCase()] : null;
+  return sequenceStageToGridState(seqStage) || c.state;
+}
+
 function renderGridCell(company, role){
   const c = findContact(company, role);
   if(!c){
     return `<td><div class="cell-empty" data-company="${esc(company)}" data-role="${esc(role)}">No match yet</div></td>`;
   }
   const days = gridCellDays(c);
-  const cellClass = c.thread.booked ? 'cell-booked' : 'cell-'+c.state;
-  const stateTagClass = c.thread.booked ? 'tag-booked' : 'tag-'+c.state;
-  const stateLabel = c.thread.booked ? 'booked' : c.state;
+  const effectiveState = gridCellState(c);
+  const cellClass = 'cell-'+effectiveState;
+  const stateTagClass = 'tag-'+effectiveState;
+  const stateLabel = effectiveState;
   return `<td>
     <div class="grid-cell ${cellClass}">
       <div class="cell-name" style="cursor:pointer;" onclick="openContactDrawer('${esc(c.name)}', ${currentGridCampaignName() ? `'${esc(currentGridCampaignName())}'` : 'null'})">${esc(c.name)}${c.url ? ` <a href="${esc(c.url)}" target="_blank" rel="noopener" onclick="handleContactLinkedInOpened('${c.id}', event)" title="Open on LinkedIn" style="margin-left:2px;color:var(--blue);"><i class="ti ti-brand-linkedin"></i></a>` : ''}</div>
@@ -3798,11 +3831,12 @@ async function pollGridSearchJob(jobId, grid, cells){
 
 function renderGridCellHTML(c){
   const days = gridCellDays(c);
-  return `<td><div class="grid-cell cell-${c.state}">
+  const effectiveState = gridCellState(c);
+  return `<td><div class="grid-cell cell-${effectiveState}">
       <div class="cell-name" style="cursor:pointer;" onclick="openContactDrawer('${esc(c.name)}', ${currentGridCampaignName() ? `'${esc(currentGridCampaignName())}'` : 'null'})">${esc(c.name)}${c.url ? ` <a href="${esc(c.url)}" target="_blank" rel="noopener" onclick="handleContactLinkedInOpened('${c.id}', event)" title="Open on LinkedIn" style="margin-left:2px;color:var(--blue);"><i class="ti ti-brand-linkedin"></i></a>` : ''}</div>
       <div class="cell-meta">
         <span class="day-badge ${dayBadgeClass(days)}">${days}d</span>
-        <span class="tag tag-${c.state}">${c.state}</span>
+        <span class="tag tag-${effectiveState}">${effectiveState}</span>
         <button class="btn btn-ghost btn-sm" style="padding:2px 6px;" onclick="handleSkipContact('${c.id}', event)" title="Skip - exclude from this campaign"><i class="ti ti-player-skip-forward"></i></button>
       </div>
   </div></td>`.replace('<td><div','<div').replace('</div></td>','</div>');
