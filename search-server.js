@@ -1390,7 +1390,7 @@ app.post('/api/airtable/activity', async (req, res) => {
 app.post('/api/airtable/touchpoint', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
-  const { contactName, contactNames, contactRecordIds, date, type, notes, outcome, communicationMethod, aiBrief, campaignId, campaignName } = req.body;
+  const { contactName, contactNames, contactRecordIds, date, type, notes, outcome, communicationMethod, aiBrief, campaignId, campaignName, repId } = req.body;
   if (!type) return res.status(400).json({ error: 'type is required' });
 
   try {
@@ -1416,7 +1416,11 @@ app.post('/api/airtable/touchpoint', async (req, res) => {
     if (aiBrief) fields['Outreach Brief'] = aiBrief;
     if (contactIds.length) fields['Contact'] = contactIds;
 
-    const data = await airtableRequest('POST', 'Touch Points', { records: [{ fields }] });
+    // typecast:true lets new Type values (e.g. from the Logger tab's wider
+    // touch point type list) create themselves as select options instead of
+    // erroring - same as the typecast:true POST to this table already used
+    // by POST /api/context/parse-screenshot below.
+    const data = await airtableRequest('POST', 'Touch Points', { records: [{ fields }], typecast: true });
     const recordId = data.records[0].id;
 
     if (campaignName) {
@@ -1427,6 +1431,17 @@ app.post('/api/airtable/touchpoint', async (req, res) => {
         }
       } catch (tagErr) {
         console.warn('Best-effort Campaign field write on Touch Points failed:', tagErr.message);
+      }
+    }
+
+    // Best-effort, same reasoning as the Campaign tag write above - the real
+    // Touch Points table's exact field set isn't confirmed to include a Rep
+    // link, so this never blocks the primary save if it doesn't exist.
+    if (repId) {
+      try {
+        await airtableRequest('PATCH', 'Touch Points', { records: [{ id: recordId, fields: { 'Rep': [repId] } }] });
+      } catch (repErr) {
+        console.warn('Best-effort Rep field write on Touch Points failed:', repErr.message);
       }
     }
 
@@ -1448,6 +1463,56 @@ app.get('/api/airtable/touchpoint', async (req, res) => {
     res.json(records);
   } catch (err) {
     console.error('Airtable touch point list error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Logger tab (main nav) - reads a pasted LinkedIn message/conversation or a
+// screenshot of one and extracts a summary, sentiment, objections and next
+// steps, for the rep to review/edit before saving the touch point. Same
+// Claude Vision pattern as POST /api/context/parse-connections-screenshot
+// above, but this one has no Airtable side effects of its own - the contact
+// is already chosen by the rep in the Logger UI (unlike parse-screenshot,
+// which has to identify the contact from the screenshot itself), and saving
+// the resulting touch point goes through the existing POST
+// /api/airtable/touchpoint route instead of writing anything here.
+app.post('/api/logger/parse-conversation', async (req, res) => {
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  const { image, text } = req.body || {};
+  if (!image && !text) return res.status(400).json({ error: 'image or text is required' });
+
+  try {
+    const prompt = `You are reading a LinkedIn message or conversation for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM. A sales rep is logging it as a touch point against a contact they've already selected.
+
+${text ? `Here is the pasted conversation text:\n${text}` : 'Read the attached screenshot of the conversation.'}
+
+Extract:
+- summary: a concise 2-3 sentence summary of what was discussed.
+- sentiment: the sentiment of the contact's side of the conversation, exactly one of "Positive", "Neutral", "Negative" if they have replied. If there's no reply from them yet (only outbound messages), set this to null.
+- objections: any objections or concerns they raised, in their own words where possible. Empty string if none.
+- nextSteps: any next steps agreed or implied. Empty string if none.
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "summary": string, "sentiment": string|null, "objections": string, "nextSteps": string }`;
+
+    const content = image
+      ? [
+          { type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.base64 } },
+          { type: 'text', text: prompt }
+        ]
+      : prompt;
+
+    const parsed = await callClaudeJson(content, 600);
+    res.json({
+      success: true,
+      summary: parsed.summary || '',
+      sentiment: parsed.sentiment || null,
+      objections: parsed.objections || '',
+      nextSteps: parsed.nextSteps || ''
+    });
+  } catch (err) {
+    console.error('Logger parse-conversation error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -2417,6 +2482,71 @@ app.post('/api/enrich/contact', async (req, res) => {
     res.json({ success: true, profile });
   } catch (err) {
     console.error('Enrichment error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===================== APOLLO.IO =====================
+// Grid toolbar's "Search Apollo" modal - a prospecting search distinct from
+// the Serper-based searchContactViaSerper above (which finds one named
+// person at one named company). This searches broadly across Apollo's
+// database by job title / location / industry keywords and returns
+// candidates to review before importing.
+
+app.post('/api/apollo/search-contacts', async (req, res) => {
+  if (!process.env.APOLLO_API_KEY) return res.status(500).json({ error: 'APOLLO_API_KEY not configured' });
+
+  const { jobTitle, location, keywords } = req.body || {};
+  if (!jobTitle && !location && !keywords) {
+    return res.status(400).json({ error: 'jobTitle, location or keywords is required' });
+  }
+
+  // Each field accepts a comma-separated list - Apollo's person_titles/
+  // person_locations params are arrays, matched as OR within each field.
+  const splitList = v => (v || '').split(',').map(s => s.trim()).filter(Boolean);
+
+  try {
+    const apolloBody = { per_page: 25 };
+    const titles = splitList(jobTitle);
+    const locations = splitList(location);
+    if (titles.length) apolloBody.person_titles = titles;
+    if (locations.length) apolloBody.person_locations = locations;
+    if (keywords && keywords.trim()) apolloBody.q_keywords = keywords.trim();
+
+    const apolloRes = await fetch('https://api.apollo.io/api/v1/mixed_people/search', {
+      method: 'POST',
+      headers: {
+        'x-api-key': process.env.APOLLO_API_KEY,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify(apolloBody)
+    });
+
+    if (!apolloRes.ok) {
+      const errText = await apolloRes.text();
+      throw new Error(`Apollo API error ${apolloRes.status}: ${errText}`);
+    }
+
+    const data = await apolloRes.json();
+    const people = data.people || [];
+
+    // linkedin_url comes straight off each person's free profile fields
+    // returned by the plain search call - email/phone are deliberately
+    // never read here, since revealing those on Apollo requires a separate
+    // paid "match"/enrich call this route never makes.
+    const results = people
+      .map(p => ({
+        name: p.name || [p.first_name, p.last_name].filter(Boolean).join(' ').trim(),
+        jobTitle: p.title || '',
+        company: (p.organization && p.organization.name) || p.organization_name || '',
+        linkedinUrl: p.linkedin_url || ''
+      }))
+      .filter(r => r.name);
+
+    res.json({ success: true, results });
+  } catch (err) {
+    console.error('Apollo search-contacts error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

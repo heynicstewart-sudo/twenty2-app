@@ -524,6 +524,12 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .checkbox-row{display:flex;gap:14px;flex-wrap:wrap;}
 .checkbox-item{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;}
 .checkbox-item input{width:auto;}
+.logger-type-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;margin-bottom:16px;}
+.logger-type-btn{display:flex;align-items:center;gap:8px;padding:11px 13px;border-radius:var(--radius-card);border:1px solid var(--border);background:var(--surface-2);cursor:pointer;font-size:12.5px;font-weight:700;transition:border-color .15s,background .15s;}
+.logger-type-btn:hover{border-color:var(--accent);}
+.logger-type-btn.active{border-color:var(--accent);background:var(--accent-dim);color:var(--primary);}
+.logger-result-row{padding:8px 10px;border-radius:var(--radius-badge);cursor:pointer;font-size:12.5px;border:1px solid transparent;}
+.logger-result-row:hover{background:var(--accent-dim);border-color:var(--border);}
 .magnet-row{display:flex;align-items:center;gap:12px;border:1px solid var(--border);border-radius:var(--radius-card);padding:12px 14px;margin-bottom:10px;}
 .toggle-switch{width:38px;height:22px;border-radius:20px;background:var(--border);position:relative;cursor:pointer;flex:none;}
 .toggle-switch.on{background:var(--success);}
@@ -1169,6 +1175,7 @@ function goToRunIntelligence(){
 
 const NAV = [
   { id:'home', label:'Home', icon:'ti-home' },
+  { id:'logger', label:'Logger', icon:'ti-clipboard-text' },
   { id:'campaigns', label:'Campaigns', icon:'ti-rocket' },
   { id:'calendar', label:'Sales', icon:'ti-calendar' },
   { id:'intelligence', label:'Engine', icon:'ti-brain' },
@@ -1196,7 +1203,7 @@ function navigate(page){
 
 function renderPage(){
   const el = document.getElementById('pageContent');
-  const renderers = { home: renderHome, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, research: renderResearch, settings: renderSettings };
+  const renderers = { home: renderHome, logger: renderLoggerPage, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, research: renderResearch, settings: renderSettings };
   el.innerHTML = renderers[state.currentPage]();
   afterRender(state.currentPage);
 }
@@ -1241,6 +1248,7 @@ function afterRender(page){
   }
   if(page === 'intelligence' && (window.__intelSubTab||'intelligence') === 'context') ensureContextDataLoaded();
   if(page === 'home') ensureTodaysActionsSequenceStagesLoaded();
+  if(page === 'logger' && window.__repsCache === undefined) loadRepsCache();
   if(page === 'calendar'){
     const salesTab = window.__salesSubTab || 'overview';
     if(salesTab === 'calendar'){
@@ -2042,6 +2050,453 @@ async function submitContextHistoricalUpload(){
   } catch(err){
     if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;">Could not extract: ${esc(err.message)}</p>`;
     toast('Could not save historical context: ' + err.message, 'warn');
+  }
+}
+
+/* ===================== LOGGER PAGE ===================== */
+// Main-nav quick capture tool - logs any touch point straight to Airtable
+// without needing to go through a grid/campaign/company first, unlike the
+// Context tab's Touch Point Logger above (which is company-first). Reuses
+// the same backend routes that logger writes through: POST
+// /api/airtable/touchpoint for the actual Touch Points record and POST
+// /api/context/update-summaries to fold it into the Contact's AI Summary
+// afterwards - same two-call sequence saveContextTouchPoint() above uses.
+// Only genuinely new server-side piece is POST /api/logger/parse-conversation,
+// which reads a pasted LinkedIn message/screenshot with Claude Vision.
+
+const LOGGER_TYPES = [
+  { key:'linkedin_message', label:'LinkedIn Message', icon:'ti-brand-linkedin', airtableType:'LinkedIn Message', kind:'linkedin' },
+  { key:'linkedin_conversation', label:'LinkedIn Conversation', icon:'ti-messages', airtableType:'LinkedIn Conversation', kind:'linkedin' },
+  { key:'call', label:'Phone Call', icon:'ti-phone', airtableType:'Call', kind:'call' },
+  { key:'meeting', label:'Meeting', icon:'ti-users', airtableType:'Meeting', kind:'call' },
+  { key:'proposal', label:'Sales Proposal', icon:'ti-file-invoice', airtableType:'Sales Proposal', kind:'proposal' },
+  { key:'research', label:'Research', icon:'ti-microscope', airtableType:'Research', kind:'research' },
+  { key:'email', label:'Email', icon:'ti-mail', airtableType:'Email', kind:'plain' },
+  { key:'inbound_lead', label:'Inbound Lead', icon:'ti-inbox', airtableType:'Inbound Lead', kind:'plain' },
+  { key:'event', label:'Event / Networking', icon:'ti-confetti', airtableType:'Event', kind:'plain' }
+];
+
+function initLogger(){
+  window.__logger = {
+    type: null,
+    contactId: null,
+    showAddContact: false,
+    campaignId: '',
+    date: isoDate(TODAY),
+    repId: '',
+    convoText: '',
+    convoImage: null,
+    convoParsed: null
+  };
+}
+
+function renderLoggerPage(){
+  if(!window.__logger) initLogger();
+  const l = window.__logger;
+  return `
+  <div class="section-title" style="font-size:20px;margin-bottom:2px;">Logger</div>
+  <div class="muted" style="margin-bottom:16px;">Quickly capture any touch point - LinkedIn messages, calls, meetings, proposals, research and more - straight into Airtable.</div>
+  <div class="card">
+    ${renderLoggerTypeSelector()}
+    ${l.type ? renderLoggerContactSelector() : ''}
+    ${l.type && l.contactId ? renderLoggerMetaRow() : ''}
+    ${l.type && l.contactId ? renderLoggerTypeFields() : ''}
+    ${l.type && l.contactId ? `<button class="btn btn-primary" id="loggerSaveBtn" onclick="submitLoggerEntry()"><i class="ti ti-device-floppy"></i> Save touch point</button>` : ''}
+  </div>
+  `;
+}
+
+function renderLoggerTypeSelector(){
+  const l = window.__logger;
+  return `
+  <div class="field"><label>Touch point type</label></div>
+  <div class="logger-type-grid">
+    ${LOGGER_TYPES.map(t => `<div class="logger-type-btn ${l.type===t.key?'active':''}" onclick="loggerSelectType('${t.key}')"><i class="ti ${t.icon}"></i> ${t.label}</div>`).join('')}
+  </div>
+  `;
+}
+
+function loggerSelectType(key){
+  const l = window.__logger;
+  if(l.type === key) return;
+  l.type = key;
+  l.convoText = '';
+  l.convoImage = null;
+  l.convoParsed = null;
+  renderPage();
+}
+
+/* ---- Contact selector: search existing, or add inline ---- */
+
+function renderLoggerContactSelector(){
+  const l = window.__logger;
+  if(l.contactId){
+    const c = state.contacts.find(x => x.id === l.contactId);
+    return `
+    <div class="field"><label>Contact</label>
+      <div><span class="pill">${esc(c ? c.name : 'Unknown contact')}${c && c.company ? ` <span class="muted">(${esc(c.company)})</span>` : ''}</span>
+      <button class="btn btn-ghost btn-sm" onclick="loggerClearContact()"><i class="ti ti-x"></i></button></div>
+    </div>`;
+  }
+  if(l.showAddContact){
+    return `
+    <div class="field"><label>Add a new contact</label></div>
+    <div class="row">
+      <div class="field"><input id="loggerNewContactName" placeholder="Full name"></div>
+      <div class="field"><input id="loggerNewContactCompany" placeholder="Company"></div>
+    </div>
+    <div class="row">
+      <div class="field"><input id="loggerNewContactRole" placeholder="Job title (optional)"></div>
+      <div class="field"><input id="loggerNewContactUrl" placeholder="LinkedIn URL (optional)"></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:14px;">
+      <button class="btn btn-secondary btn-sm" onclick="window.__logger.showAddContact=false;renderPage();"><i class="ti ti-arrow-left"></i> Back to search</button>
+      <button class="btn btn-primary btn-sm" onclick="loggerCreateInlineContact()"><i class="ti ti-user-plus"></i> Add contact</button>
+    </div>`;
+  }
+  return `
+  <div class="field"><label>Contact</label>
+    <input id="loggerContactSearch" placeholder="Search contacts by name or company..." oninput="renderLoggerContactResults()">
+  </div>
+  <div id="loggerContactResults"></div>
+  <button class="btn btn-secondary btn-sm" style="margin-bottom:14px;" onclick="window.__logger.showAddContact=true;renderPage();"><i class="ti ti-user-plus"></i> Add a new contact</button>
+  `;
+}
+
+function renderLoggerContactResults(){
+  const el = document.getElementById('loggerContactResults');
+  if(!el) return;
+  const q = (document.getElementById('loggerContactSearch')?.value || '').trim().toLowerCase();
+  if(!q){ el.innerHTML = ''; return; }
+  const matches = state.contacts.filter(c => c.name.toLowerCase().includes(q) || (c.company||'').toLowerCase().includes(q)).slice(0, 8);
+  el.innerHTML = matches.length
+    ? matches.map(c => `<div class="logger-result-row" onclick="loggerSelectContact('${c.id}')">${esc(c.name)}${c.company ? ` <span class="muted">— ${esc(c.company)}${c.role ? ', '+esc(c.role) : ''}</span>` : ''}</div>`).join('')
+    : '<p class="muted" style="font-size:12px;">No matches - use "Add a new contact" below.</p>';
+}
+
+function loggerSelectContact(contactId){
+  window.__logger.contactId = contactId;
+  renderPage();
+}
+function loggerClearContact(){
+  window.__logger.contactId = null;
+  renderPage();
+}
+
+// Same create-or-update contact route the Grid "Add contact" modal uses
+// (POST /api/airtable/contact) - if the name+company already exists in
+// Airtable this just resolves to that existing record rather than
+// duplicating it.
+async function loggerCreateInlineContact(){
+  const name = (document.getElementById('loggerNewContactName')?.value || '').trim();
+  const company = (document.getElementById('loggerNewContactCompany')?.value || '').trim();
+  const role = (document.getElementById('loggerNewContactRole')?.value || '').trim();
+  const linkedinUrl = (document.getElementById('loggerNewContactUrl')?.value || '').trim();
+  if(!name || !company){ toast('Name and company are required', 'warn'); return; }
+
+  try {
+    const res = await fetch('/api/airtable/contact', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ name, company, role, linkedinUrl })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+
+    if(!state.contacts.some(c => c.id === data.recordId)){
+      state.contacts.push({ id: data.recordId, name, company, role, url: linkedinUrl });
+    }
+    window.__logger.contactId = data.recordId;
+    window.__logger.showAddContact = false;
+    toast(name + ' added', 'success');
+    renderPage();
+  } catch(err){
+    toast('Could not add contact: ' + err.message, 'warn');
+  }
+}
+
+/* ---- Campaign / date / rep ---- */
+
+function renderLoggerMetaRow(){
+  const l = window.__logger;
+  const reps = window.__repsCache || [];
+  return `
+  <div class="toolbar">
+    <div class="field"><label>Campaign</label>
+      <select id="loggerCampaign" onchange="window.__logger.campaignId=this.value;">
+        <option value="">General touch point (no campaign)</option>
+        ${state.campaigns.map(c => `<option value="${esc(c.id)}" ${l.campaignId===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="field"><label>Date</label><input type="date" id="loggerDate" value="${esc(l.date)}" onchange="window.__logger.date=this.value;"></div>
+    <div class="field"><label>Rep</label>
+      <select id="loggerRep" onchange="window.__logger.repId=this.value;">
+        <option value="">Unassigned</option>
+        ${reps.map(r => `<option value="${esc(r.id)}" ${l.repId===r.id?'selected':''}>${esc(r.name)}</option>`).join('')}
+      </select>
+    </div>
+  </div>
+  `;
+}
+
+/* ---- Type-specific follow-up questions ---- */
+
+function renderLoggerTypeFields(){
+  const l = window.__logger;
+  const typeDef = LOGGER_TYPES.find(t => t.key === l.type);
+  if(!typeDef) return '';
+  let html = '';
+  if(typeDef.kind === 'linkedin') html = renderLoggerLinkedInFields();
+  else if(typeDef.kind === 'call') html = renderLoggerCallFields();
+  else if(typeDef.kind === 'proposal') html = renderLoggerProposalFields();
+  else if(typeDef.kind === 'research') html = renderLoggerResearchFields();
+  return `
+  ${html}
+  <div class="field"><label>Additional notes</label><textarea id="loggerNotes" rows="3" placeholder="Anything else worth capturing..."></textarea></div>
+  `;
+}
+
+function renderLoggerLinkedInFields(){
+  const l = window.__logger;
+  if(l.convoParsed){
+    const p = l.convoParsed;
+    return `
+    <p style="font-size:12px;margin-bottom:10px;"><i class="ti ti-sparkles"></i> Parsed by the Engine - review and edit below. <button class="btn btn-ghost btn-sm" onclick="loggerClearConvoParse()"><i class="ti ti-refresh"></i> Re-parse</button></p>
+    <div class="field"><label>Summary</label><textarea id="loggerLiSummary" rows="3">${esc(p.summary)}</textarea></div>
+    <div class="field"><label>Sentiment</label>
+      <select id="loggerLiSentiment">
+        <option value="" ${!p.sentiment?'selected':''}>No reply yet</option>
+        <option value="Positive" ${p.sentiment==='Positive'?'selected':''}>Positive</option>
+        <option value="Neutral" ${p.sentiment==='Neutral'?'selected':''}>Neutral</option>
+        <option value="Negative" ${p.sentiment==='Negative'?'selected':''}>Negative</option>
+      </select>
+    </div>
+    <div class="field"><label>Objections</label><textarea id="loggerLiObjections" rows="2">${esc(p.objections)}</textarea></div>
+    <div class="field"><label>Next steps</label><textarea id="loggerLiNextSteps" rows="2">${esc(p.nextSteps)}</textarea></div>
+    `;
+  }
+  return `
+  <div class="learning-panel" ${dropZoneAttrs('loggerConvoInput')} style="margin-bottom:14px;">
+    <h4><i class="ti ti-message-circle"></i> Paste the conversation or upload a screenshot</h4>
+    <input type="file" id="loggerConvoInput" accept="image/*" style="display:none;" onchange="handleLoggerConvoUpload(event)">
+    <button class="btn btn-secondary btn-sm" onclick="document.getElementById('loggerConvoInput').click()"><i class="ti ti-upload"></i> Upload screenshot</button>
+    <div id="loggerConvoPreview" style="font-size:11.5px;margin-top:8px;"></div>
+    <div class="field" style="margin-top:10px;"><label>Or paste text</label><textarea id="loggerConvoText" rows="4" placeholder="Paste the conversation...">${esc(l.convoText)}</textarea></div>
+    <button class="btn btn-primary btn-sm" style="margin-top:8px;" id="loggerParseBtn" onclick="runLoggerParseConversation()"><i class="ti ti-sparkles"></i> Parse with the Engine</button>
+  </div>
+  `;
+}
+
+function handleLoggerConvoUpload(event){
+  const file = event.target.files && event.target.files[0];
+  event.target.value = '';
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const match = String(reader.result).match(/^data:([^;]+);base64,(.*)$/);
+    if(match){
+      window.__logger.convoImage = { mediaType: match[1], base64: match[2] };
+      const el = document.getElementById('loggerConvoPreview');
+      if(el) el.innerHTML = `<span class="tag tag-connected">${esc(file.name)} attached</span> <button class="btn btn-ghost btn-sm" onclick="clearLoggerConvoImage()"><i class="ti ti-x"></i></button>`;
+    }
+  };
+  reader.onerror = () => toast('Could not read that file', 'warn');
+  reader.readAsDataURL(file);
+}
+function clearLoggerConvoImage(){
+  window.__logger.convoImage = null;
+  const el = document.getElementById('loggerConvoPreview');
+  if(el) el.innerHTML = '';
+}
+
+async function runLoggerParseConversation(){
+  const l = window.__logger;
+  const image = l.convoImage;
+  const text = (document.getElementById('loggerConvoText')?.value || '').trim();
+  if(!image && !text){ toast('Paste some text or upload a screenshot first', 'warn'); return; }
+  l.convoText = text;
+
+  const btn = document.getElementById('loggerParseBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Reading...'; }
+
+  try {
+    const res = await fetch('/api/logger/parse-conversation', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ image: image || undefined, text: image ? undefined : text })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+
+    l.convoParsed = { summary: data.summary, sentiment: data.sentiment, objections: data.objections, nextSteps: data.nextSteps };
+    l.convoImage = null;
+    renderPage();
+  } catch(err){
+    toast('Could not parse: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-sparkles"></i> Parse with the Engine'; }
+  }
+}
+function loggerClearConvoParse(){
+  window.__logger.convoParsed = null;
+  renderPage();
+}
+
+function renderLoggerCallFields(){
+  return `
+  <div class="field"><label>How did it go?</label><textarea id="loggerHowItWent" rows="3" placeholder="What happened, how it felt..."></textarea></div>
+  <div class="field"><label>Objections raised</label><textarea id="loggerObjections" rows="2"></textarea></div>
+  <div class="field"><label>Next steps agreed</label><textarea id="loggerNextSteps" rows="2"></textarea></div>
+  <div class="row">
+    <div class="field"><label>Sentiment</label>
+      <select id="loggerSentiment">
+        <option value="">Not sure yet</option>
+        <option value="Positive">Positive</option>
+        <option value="Neutral">Neutral</option>
+        <option value="Negative">Negative</option>
+      </select>
+    </div>
+    <div class="field"><label>Follow-up date</label><input type="date" id="loggerFollowUpDate"></div>
+  </div>
+  `;
+}
+
+function renderLoggerProposalFields(){
+  return `
+  <div class="row">
+    <div class="field"><label>Which offer</label><input id="loggerOffer" placeholder="e.g. Change Value Check" list="loggerOfferOptions"></div>
+    <div class="field"><label>Decision timeline</label><input id="loggerDecisionTimeline" placeholder="e.g. by end of September"></div>
+  </div>
+  <datalist id="loggerOfferOptions">${CTA_OPTIONS.map(c => `<option value="${esc(c)}">`).join('')}</datalist>
+  <div class="field"><label>Value discussed</label><textarea id="loggerValueDiscussed" rows="2" placeholder="Pricing, ROI, scope..."></textarea></div>
+  <div class="field"><label>Stakeholders involved</label><input id="loggerStakeholders" placeholder="Who's involved in the decision"></div>
+  `;
+}
+
+function renderLoggerResearchFields(){
+  return `
+  <div class="field"><label>What was found</label><textarea id="loggerFindings" rows="3"></textarea></div>
+  <div class="field"><label>Relevance to campaign</label><textarea id="loggerRelevance" rows="2"></textarea></div>
+  `;
+}
+
+/* ---- Submit ---- */
+
+// Folds whichever type-specific fields were filled in into one notes block,
+// same "join whatever has an answer" convention as the Context tab's debrief
+// Q&A (saveContextTouchPoint above) - written as-is into Touch Points'
+// Summary field via POST /api/airtable/touchpoint; the Claude-generated
+// polish then happens in the Contact's AI Summary via
+// POST /api/context/update-summaries right after.
+function buildLoggerNotesText(typeDef){
+  const l = window.__logger;
+  const lines = [];
+  const val = id => (document.getElementById(id)?.value || '').trim();
+
+  if(typeDef.kind === 'linkedin'){
+    if(l.convoParsed){
+      const summary = val('loggerLiSummary') || l.convoParsed.summary;
+      const sentiment = document.getElementById('loggerLiSentiment')?.value || '';
+      const objections = val('loggerLiObjections');
+      const nextSteps = val('loggerLiNextSteps');
+      if(summary) lines.push(summary);
+      if(sentiment) lines.push(`Sentiment: ${sentiment}`);
+      if(objections) lines.push(`Objections: ${objections}`);
+      if(nextSteps) lines.push(`Next steps: ${nextSteps}`);
+    } else {
+      const text = val('loggerConvoText');
+      if(text) lines.push(text);
+    }
+  } else if(typeDef.kind === 'call'){
+    const howItWent = val('loggerHowItWent');
+    const objections = val('loggerObjections');
+    const nextSteps = val('loggerNextSteps');
+    const sentiment = document.getElementById('loggerSentiment')?.value || '';
+    const followUpDate = document.getElementById('loggerFollowUpDate')?.value || '';
+    if(howItWent) lines.push(howItWent);
+    if(objections) lines.push(`Objections raised: ${objections}`);
+    if(nextSteps) lines.push(`Next steps agreed: ${nextSteps}`);
+    if(sentiment) lines.push(`Sentiment: ${sentiment}`);
+    if(followUpDate) lines.push(`Follow-up date: ${followUpDate}`);
+  } else if(typeDef.kind === 'proposal'){
+    const offer = val('loggerOffer');
+    const valueDiscussed = val('loggerValueDiscussed');
+    const decisionTimeline = val('loggerDecisionTimeline');
+    const stakeholders = val('loggerStakeholders');
+    if(offer) lines.push(`Offer: ${offer}`);
+    if(valueDiscussed) lines.push(`Value discussed: ${valueDiscussed}`);
+    if(decisionTimeline) lines.push(`Decision timeline: ${decisionTimeline}`);
+    if(stakeholders) lines.push(`Stakeholders: ${stakeholders}`);
+  } else if(typeDef.kind === 'research'){
+    const findings = val('loggerFindings');
+    const relevance = val('loggerRelevance');
+    if(findings) lines.push(findings);
+    if(relevance) lines.push(`Relevance: ${relevance}`);
+  }
+
+  const notes = val('loggerNotes');
+  if(notes) lines.push(notes);
+
+  return lines.join('\n\n');
+}
+
+async function submitLoggerEntry(){
+  const l = window.__logger;
+  const typeDef = LOGGER_TYPES.find(t => t.key === l.type);
+  if(!typeDef || !l.contactId) return;
+
+  const notes = buildLoggerNotesText(typeDef);
+  if(!notes.trim()){ toast('Add some detail before saving - notes are empty', 'warn'); return; }
+
+  const campaign = l.campaignId ? state.campaigns.find(c => c.id === l.campaignId) : null;
+  let outcome;
+  if(typeDef.kind === 'linkedin' && l.convoParsed){
+    const sentiment = document.getElementById('loggerLiSentiment')?.value;
+    outcome = sentiment ? 'Replied' : 'No reply';
+  }
+
+  const payload = {
+    contactRecordIds: [l.contactId],
+    type: typeDef.airtableType,
+    date: l.date || isoDate(TODAY),
+    notes,
+    outcome,
+    campaignId: campaign ? campaign.id : undefined,
+    campaignName: campaign ? campaign.name : undefined,
+    repId: l.repId || undefined
+  };
+  if(!airtableWriteGuard('logger-touchpoint', payload, ['type'])) return;
+
+  // Toggled directly on the button rather than via renderPage() - a full
+  // re-render would wipe every uncontrolled text/textarea field above (they
+  // only exist in the DOM, read by id in buildLoggerNotesText at submit
+  // time), which would silently discard everything the rep just typed if
+  // the save then fails and they need to retry.
+  const btn = document.getElementById('loggerSaveBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Saving...'; }
+
+  try {
+    const res = await fetch('/api/airtable/touchpoint', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+
+    const contactName = (state.contacts.find(c => c.id === l.contactId) || {}).name || 'contact';
+    toast('Touch point logged for ' + contactName, 'success');
+
+    fetch('/api/context/update-summaries', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ contactIds: [l.contactId], campaignName: campaign ? campaign.name : undefined })
+    }).catch(err => console.warn('AI Summary refresh failed (non-fatal):', err.message));
+
+    initLogger();
+    renderPage();
+  } catch(err){
+    toast('Could not save touch point: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-device-floppy"></i> Save touch point'; }
   }
 }
 
@@ -2891,6 +3346,7 @@ function renderGrid(){
     <button class="btn btn-secondary" onclick="addGridColumn()"><i class="ti ti-plus"></i> Add column</button>
     <button class="btn btn-primary" id="runSearchBtn" onclick="runDailySearch()" ${isGridSearchRunning(grid.id) ? 'disabled' : ''}><i class="ti ti-search"></i> ${isGridSearchRunning(grid.id) ? 'Searching...' : 'Run daily search'}</button>
     <button class="btn btn-secondary" onclick="openAddContactModal()"><i class="ti ti-user-plus"></i> Add contact</button>
+    <button class="btn btn-secondary" onclick="openApolloSearchModal()"><i class="ti ti-building-skyscraper"></i> Search Apollo</button>
     <button class="btn btn-ghost" onclick="resetGrid()"><i class="ti ti-refresh"></i> Reset</button>
     <button class="btn btn-secondary" onclick="exportContactsCsv()"><i class="ti ti-file-download"></i> Export contacts</button>
     <button class="btn btn-secondary" id="syncAirtableBtn" onclick="syncAllContactsToAirtable()"><i class="ti ti-cloud-upload"></i> Sync to Airtable</button>
@@ -2913,7 +3369,7 @@ function renderGrid(){
     <button class="btn btn-accent" id="readConnectionsBtn" style="margin-top:14px;" onclick="readConnectionsScreenshot()"><i class="ti ti-wand"></i> Read screenshot(s)</button>
   </div>
 
-  <div class="status-bar"><span class="live-dot"></span> Live · ${gridContacts(grid.id).length} contacts tracked across ${grid.companies.length} companies</div>
+  <div class="status-bar"><span class="live-dot"></span> Live · ${gridContacts(grid.id).filter(c => !isContactExcludedFromGrid(c)).length} contacts tracked across ${grid.companies.length} companies</div>
   `;
 }
 
@@ -3083,6 +3539,23 @@ function gridSequenceStageMap(gridId){
   return window.__campaignSequenceStages ? (window.__campaignSequenceStages[campaign.id] || {}) : {};
 }
 
+// Sequence Stage "Excluded" means a contact was deliberately removed from
+// this grid's linked campaign (see confirmSkipContact/handleSkipContact).
+// That used to only splice the contact out of state.contacts client-side,
+// so it silently reappeared in the grid after the next
+// hydrateGridsFromAirtable/page refresh since Airtable's Contacts row (and
+// the contact itself) still exists - only its per-campaign Sequence Stage
+// is "Excluded". Filtering on the live Airtable-backed map here (same one
+// gridCellState/gridSequenceStageMap read) keeps it hidden across refreshes.
+// Only resolvable when the grid is linked to exactly one campaign, same
+// convention as gridSequenceStageMap - a grid with no single linked
+// campaign has no "Excluded" concept to filter on.
+function isContactExcludedFromGrid(c){
+  const seqMap = gridSequenceStageMap(c.gridId);
+  if(!seqMap) return false;
+  return seqMap[c.name.trim().toLowerCase()] === 'Excluded';
+}
+
 function spreadsheetRowData(c, gridId, seqMap){
   const counts = touchPointCounts(c);
   const last = lastContactDate(c);
@@ -3114,7 +3587,7 @@ function sortSpreadsheet(gridId, key){
 }
 
 function renderContactSpreadsheet(grid){
-  const contacts = gridContacts(grid.id);
+  const contacts = gridContacts(grid.id).filter(c => !isContactExcludedFromGrid(c));
   const visibleKeys = new Set(gridVisibleColumns(grid.id));
   const columns = SPREADSHEET_COLUMNS.filter(c => visibleKeys.has(c.key));
   const seqMap = gridSequenceStageMap(grid.id);
@@ -3167,9 +3640,17 @@ function renderContactSpreadsheet(grid){
   `;
 }
 
+// Ignores a contact whose Sequence Stage is "Excluded" (see
+// isContactExcludedFromGrid) so that company/role slot reads as unfilled -
+// lets runDailySearch, which decides which cells to search off of
+// !findContact(...), attempt a replacement instead of treating the excluded
+// row as still occupying the pair. The Excluded person themselves stays
+// hidden too (same contract renderGridCell/renderContactSpreadsheet rely on)
+// since callers here never see them at all.
 function findContact(company, role){
   const gridId = currentGrid().id;
-  return state.contacts.find(c => c.gridId === gridId && c.company === company && c.role === role);
+  const c = state.contacts.find(c => c.gridId === gridId && c.company === company && c.role === role);
+  return (c && isContactExcludedFromGrid(c)) ? undefined : c;
 }
 
 // Mirrors gridSequenceStageMap's single-linked-campaign resolution, but for
@@ -3609,6 +4090,111 @@ async function searchContactDetailsConfirmed(){
   closeModal();
   renderPage();
   openContactDrawer(name, currentGridCampaignName());
+}
+
+/* ---- Search Apollo modal (Grid toolbar) - prospecting search against the
+   Apollo people database, distinct from the single-person Serper lookup
+   ("Run daily search"/"Search for details" above). Results are reviewed
+   and selectively imported via the same createManualGridContact used by
+   the manual "Add contact" modal, so an imported contact behaves exactly
+   like one typed in by hand - same local shape, same Airtable sync. ---- */
+
+function openApolloSearchModal(){
+  window.__apolloResults = [];
+  const body = `
+    <div class="field"><label>Job title</label><input id="apolloJobTitle" placeholder="e.g. Transformation Lead, Head of Delivery"></div>
+    <div class="field"><label>Location</label><input id="apolloLocation" placeholder="e.g. Perth, Australia"></div>
+    <div class="field"><label>Industry / keywords</label><input id="apolloKeywords" placeholder="e.g. mining, energy"></div>
+    <p class="muted" style="font-size:11.5px;margin-bottom:10px;">Job title and location accept comma-separated lists.</p>
+    <button class="btn btn-primary btn-sm" id="apolloSearchBtn" onclick="runApolloSearch()"><i class="ti ti-search"></i> Search Apollo</button>
+    <div id="apolloResultsArea" style="margin-top:14px;"></div>
+  `;
+  const footer = `
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="confirmApolloImport()"><i class="ti ti-download"></i> Import selected</button>
+  `;
+  openModal('Search Apollo', body, footer);
+}
+
+async function runApolloSearch(){
+  const jobTitle = (document.getElementById('apolloJobTitle')?.value || '').trim();
+  const location = (document.getElementById('apolloLocation')?.value || '').trim();
+  const keywords = (document.getElementById('apolloKeywords')?.value || '').trim();
+  if(!jobTitle && !location && !keywords){ toast('Add at least a job title, location or keyword to search', 'warn'); return; }
+
+  const btn = document.getElementById('apolloSearchBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Searching...'; }
+  const resultsEl = document.getElementById('apolloResultsArea');
+  if(resultsEl) resultsEl.innerHTML = '<div class="muted"><i class="ti ti-loader-2"></i> Searching Apollo...</div>';
+
+  try {
+    const res = await fetch('/api/apollo/search-contacts', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ jobTitle, location, keywords })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+
+    window.__apolloResults = data.results || [];
+    renderApolloResults();
+  } catch(err){
+    if(resultsEl) resultsEl.innerHTML = `<p class="muted" style="font-size:12.5px;">Could not search Apollo: ${esc(err.message)}</p>`;
+    toast('Apollo search failed: ' + err.message, 'warn');
+  } finally {
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-search"></i> Search Apollo'; }
+  }
+}
+
+function renderApolloResults(){
+  const el = document.getElementById('apolloResultsArea');
+  if(!el) return;
+  const results = window.__apolloResults || [];
+  if(!results.length){ el.innerHTML = '<p class="muted" style="font-size:12.5px;">No results. Try broadening the search.</p>'; return; }
+  el.innerHTML = `
+    <label class="checkbox-item" style="margin-bottom:8px;">
+      <input type="checkbox" id="apolloSelectAll" onchange="toggleApolloSelectAll(this.checked)"><span>Select all (${results.length})</span>
+    </label>
+    <div style="max-height:280px;overflow-y:auto;">
+      ${results.map((r,i) => `
+        <label class="checkbox-item" style="align-items:flex-start;padding:6px 0;border-bottom:1px solid var(--border);font-weight:400;">
+          <input type="checkbox" class="apollo-result-checkbox" value="${i}" style="margin-top:3px;">
+          <span>
+            <strong>${esc(r.name)}</strong><br>
+            <span class="muted" style="font-size:12px;">${esc(r.jobTitle || '—')} &middot; ${esc(r.company || '—')}</span><br>
+            ${r.linkedinUrl ? `<a href="${esc(r.linkedinUrl)}" target="_blank" rel="noopener" style="font-size:11.5px;">${esc(r.linkedinUrl)}</a>` : '<span class="muted" style="font-size:11.5px;">No LinkedIn URL found</span>'}
+          </span>
+        </label>
+      `).join('')}
+    </div>
+  `;
+}
+
+function toggleApolloSelectAll(checked){
+  document.querySelectorAll('.apollo-result-checkbox').forEach(el => { el.checked = checked; });
+}
+
+// Reuses createManualGridContact - same local contact shape and Airtable
+// sync as manually typing a contact into "Add contact" above, so an
+// imported result behaves identically everywhere else in the app.
+function confirmApolloImport(){
+  const results = window.__apolloResults || [];
+  const checked = Array.from(document.querySelectorAll('.apollo-result-checkbox:checked'))
+    .map(el => results[Number(el.value)])
+    .filter(Boolean);
+  if(!checked.length){ toast('No contacts selected', 'warn'); return; }
+
+  let imported = 0, skipped = 0;
+  checked.forEach(r => {
+    if(!r.name || !r.company){ skipped++; return; }
+    createManualGridContact(r.name, r.jobTitle || '', r.company, r.linkedinUrl || '');
+    imported++;
+  });
+
+  closeModal();
+  renderPage();
+  if(imported) toast(`${imported} contact${imported===1?'':'s'} imported from Apollo`, 'success');
+  if(skipped) toast(`${skipped} skipped - missing name or company`, 'warn');
 }
 
 function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
@@ -8641,7 +9227,7 @@ async function loadRepsCache(){
   } catch(err){
     window.__repsCache = [];
   }
-  if(state.currentPage === 'calendar') renderPage();
+  if(state.currentPage === 'calendar' || state.currentPage === 'logger') renderPage();
 }
 
 function setCalendarAssignee(repId){
