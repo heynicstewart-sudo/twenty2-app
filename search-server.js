@@ -2565,7 +2565,7 @@ app.post('/api/apollo/search-contacts', async (req, res) => {
   const splitLocations = v => (v || '').split(';').map(s => s.trim()).filter(Boolean);
 
   try {
-    const apolloBody = { per_page: 25 };
+    const apolloBody = { per_page: 100 };
     const titles = splitList(jobTitle);
     const locations = splitLocations(location);
     const keywordTags = splitList(keywords);
@@ -2576,23 +2576,38 @@ app.post('/api/apollo/search-contacts', async (req, res) => {
     // phrase to match rather than a set of alternative industry keywords.
     if (keywordTags.length) apolloBody['organization_keyword_tags[]'] = keywordTags;
 
-    const apolloRes = await fetch('https://api.apollo.io/api/v1/mixed_people/api_search', {
-      method: 'POST',
-      headers: {
-        'x-api-key': process.env.APOLLO_API_KEY,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      },
-      body: JSON.stringify(apolloBody)
-    });
+    // Apollo caps a single page at 100 results and reports how many pages
+    // exist via response.pagination.total_pages - walked here the same way
+    // airtableFetchAllPaginated walks Airtable's offset cursor, so a broad
+    // search doesn't silently truncate at the first page. MAX_PAGES is a
+    // sane cap (2,000 results) against a pathologically broad search
+    // hammering Apollo's API indefinitely, not a limit expected to be hit
+    // in normal use.
+    const MAX_PAGES = 20;
+    let people = [];
+    let page = 1;
+    let totalPages = 1;
+    do {
+      const apolloRes = await fetch('https://api.apollo.io/api/v1/mixed_people/api_search', {
+        method: 'POST',
+        headers: {
+          'x-api-key': process.env.APOLLO_API_KEY,
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({ ...apolloBody, page })
+      });
 
-    if (!apolloRes.ok) {
-      const errText = await apolloRes.text();
-      throw new Error(`Apollo API error ${apolloRes.status}: ${errText}`);
-    }
+      if (!apolloRes.ok) {
+        const errText = await apolloRes.text();
+        throw new Error(`Apollo API error ${apolloRes.status}: ${errText}`);
+      }
 
-    const data = await apolloRes.json();
-    const people = data.people || [];
+      const data = await apolloRes.json();
+      people = people.concat(data.people || []);
+      totalPages = (data.pagination && data.pagination.total_pages) || 1;
+      page++;
+    } while (page <= totalPages && page <= MAX_PAGES);
 
     // linkedin_url comes straight off each person's free profile fields
     // returned by the plain search call - email/phone are deliberately
