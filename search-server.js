@@ -2501,14 +2501,23 @@ app.post('/api/apollo/search-contacts', async (req, res) => {
     return res.status(400).json({ error: 'jobTitle, location or keywords is required' });
   }
 
-  // Each field accepts a comma-separated list - Apollo's person_titles/
-  // person_locations params are arrays, matched as OR within each field.
+  // Job titles accept a comma-separated list - Apollo's person_titles param
+  // is an array, matched as OR within the field.
   const splitList = v => (v || '').split(',').map(s => s.trim()).filter(Boolean);
+
+  // Locations use semicolons instead, since a single location is itself
+  // often a comma-separated "City, Country" string (e.g. "Perth,
+  // Australia") - comma-splitting would break that one location into two
+  // fragments. Semicolons let multiple full locations be listed together,
+  // e.g. "Perth, Australia; Sydney, Australia" -> ["Perth, Australia",
+  // "Sydney, Australia"], matching Apollo's person_locations array as
+  // intended (one full location string per entry) instead of over-splitting.
+  const splitLocations = v => (v || '').split(';').map(s => s.trim()).filter(Boolean);
 
   try {
     const apolloBody = { per_page: 25 };
     const titles = splitList(jobTitle);
-    const locations = splitList(location);
+    const locations = splitLocations(location);
     if (titles.length) apolloBody.person_titles = titles;
     if (locations.length) apolloBody.person_locations = locations;
     if (keywords && keywords.trim()) apolloBody.q_keywords = keywords.trim();

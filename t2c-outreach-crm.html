@@ -4103,9 +4103,9 @@ function openApolloSearchModal(){
   window.__apolloResults = [];
   const body = `
     <div class="field"><label>Job title</label><input id="apolloJobTitle" placeholder="e.g. Transformation Lead, Head of Delivery"></div>
-    <div class="field"><label>Location</label><input id="apolloLocation" placeholder="e.g. Perth, Australia"></div>
+    <div class="field"><label>Location</label><input id="apolloLocation" placeholder="e.g. Perth, Australia; Sydney, Australia"></div>
     <div class="field"><label>Industry / keywords</label><input id="apolloKeywords" placeholder="e.g. mining, energy"></div>
-    <p class="muted" style="font-size:11.5px;margin-bottom:10px;">Job title and location accept comma-separated lists.</p>
+    <p class="muted" style="font-size:11.5px;margin-bottom:10px;">Job title accepts a comma-separated list. For multiple locations, separate them with semicolons.</p>
     <button class="btn btn-primary btn-sm" id="apolloSearchBtn" onclick="runApolloSearch()"><i class="ti ti-search"></i> Search Apollo</button>
     <div id="apolloResultsArea" style="margin-top:14px;"></div>
   `;
