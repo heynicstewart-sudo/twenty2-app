@@ -2587,6 +2587,20 @@ async function submitLoggerEntry(){
       body: JSON.stringify({ contactIds: [l.contactId], campaignName: campaign ? campaign.name : undefined })
     }).catch(err => console.warn('AI Summary refresh failed (non-fatal):', err.message));
 
+    // Logging a touch point tags the Touch Point record itself with the
+    // campaign (server-side, in POST /api/airtable/touchpoint) but doesn't
+    // by itself enrol the contact in that campaign - reuses the existing
+    // "Add contacts" link route (already a no-op if a Campaign Contacts row
+    // for this pair exists) so a contact touched under a campaign always
+    // ends up tracked in that campaign's Roadmap/funnel too.
+    if(campaign){
+      fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/contacts/link`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ contactNames: [contactName] })
+      }).catch(err => console.warn('Campaign Contact link failed (non-fatal):', err.message));
+    }
+
     initLogger();
     renderPage();
   } catch(err){
