@@ -261,7 +261,13 @@ async function resolveCampaignRecord(idOrName) {
 // array of content blocks (for vision/PDF document prompts). Every new
 // Claude-calling route added in the Context tab work uses this instead of
 // re-inlining the fetch/parse boilerplate that the older routes each have.
-async function callClaudeMessages(content, maxTokens) {
+async function callClaudeMessages(content, maxTokens, system) {
+  const body = {
+    model: 'claude-opus-4-6',
+    max_tokens: maxTokens,
+    messages: [{ role: 'user', content }]
+  };
+  if (system) body.system = system;
   const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -269,11 +275,7 @@ async function callClaudeMessages(content, maxTokens) {
       'anthropic-version': '2023-06-01',
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({
-      model: 'claude-opus-4-6',
-      max_tokens: maxTokens,
-      messages: [{ role: 'user', content }]
-    })
+    body: JSON.stringify(body)
   });
   if (!aiRes.ok) {
     const errText = await aiRes.text();
@@ -297,6 +299,15 @@ async function callClaudeJson(content, maxTokens) {
   } catch (parseErr) {
     throw new Error('Could not parse Claude response as JSON');
   }
+}
+
+// Strips a ```json ... ``` or ``` ... ``` fence Claude sometimes wraps a
+// response in despite being told not to, so callers doing their own
+// JSON.parse (rather than callClaudeJson's object-shaped regex above) don't
+// choke on the fence markers. Used by the Logger routes below, which parse
+// bare-array/object responses directly.
+function stripCodeFences(text) {
+  return String(text || '').trim().replace(/^```[a-zA-Z]*\s*/, '').replace(/```\s*$/, '').trim();
 }
 
 // ===================== MIDDLEWARE =====================
@@ -1613,14 +1624,23 @@ app.get('/api/airtable/touchpoint', async (req, res) => {
 // which has to identify the contact from the screenshot itself), and saving
 // the resulting touch point goes through the existing POST
 // /api/airtable/touchpoint route instead of writing anything here.
+// System prompt is kept separate from the extraction instructions below so
+// the "return only JSON, exactly this shape" rule reads as a hard format
+// constraint rather than one more bullet Claude might drop under load - the
+// explicit example gives it a concrete shape to pattern-match against
+// instead of just a schema description.
+const LOGGER_PARSE_CONVERSATION_SYSTEM = `You extract structured data from a LinkedIn conversation for a sales CRM. Respond with ONLY a single JSON object - no preamble, no commentary, no markdown code fences, and no fields beyond the ones described. Example of the exact shape to return:
+{ "summary": "Discussed pricing for the Change Value Check offer; contact was receptive but wants board sign-off.", "sentiment": "Positive", "objections": "Needs board approval before committing.", "nextSteps": "Send a proposal by Friday." }`;
+
+const LOGGER_FRIENDLY_PARSE_ERROR = "We couldn't read that — try rewording or breaking it into shorter entries";
+
 app.post('/api/logger/parse-conversation', async (req, res) => {
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
 
   const { image, text } = req.body || {};
   if (!image && !text) return res.status(400).json({ error: 'image or text is required' });
 
-  try {
-    const prompt = `You are reading a LinkedIn message or conversation for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM. A sales rep is logging it as a touch point against a contact they've already selected.
+  const prompt = `You are reading a LinkedIn message or conversation for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM. A sales rep is logging it as a touch point against a contact they've already selected.
 
 ${text ? `Here is the pasted conversation text:\n${text}` : 'Read the attached screenshot of the conversation.'}
 
@@ -1628,19 +1648,35 @@ Extract:
 - summary: a concise 2-3 sentence summary of what was discussed.
 - sentiment: the sentiment of the contact's side of the conversation, exactly one of "Positive", "Neutral", "Negative" if they have replied. If there's no reply from them yet (only outbound messages), set this to null.
 - objections: any objections or concerns they raised, in their own words where possible. Empty string if none.
-- nextSteps: any next steps agreed or implied. Empty string if none.
+- nextSteps: any next steps agreed or implied. Empty string if none.`;
 
-Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
-{ "summary": string, "sentiment": string|null, "objections": string, "nextSteps": string }`;
+  const content = image
+    ? [
+        { type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.base64 } },
+        { type: 'text', text: prompt }
+      ]
+    : prompt;
 
-    const content = image
-      ? [
-          { type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.base64 } },
-          { type: 'text', text: prompt }
-        ]
-      : prompt;
+  // Every failure mode here - Claude API error, a fence/preamble it ignored
+  // the system prompt about, malformed JSON, or valid JSON in the wrong
+  // shape - collapses to the same safe { error: true, message } object
+  // rather than a 500, so the frontend can show one friendly inline message
+  // instead of a crash or a generic toast.
+  try {
+    const raw = await callClaudeMessages(content, 600, LOGGER_PARSE_CONVERSATION_SYSTEM);
 
-    const parsed = await callClaudeJson(content, 600);
+    let parsed;
+    try {
+      parsed = JSON.parse(stripCodeFences(raw));
+    } catch (parseErr) {
+      console.error('Logger parse-conversation: malformed JSON from Claude:', raw);
+      return res.json({ error: true, message: LOGGER_FRIENDLY_PARSE_ERROR });
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      console.error('Logger parse-conversation: unexpected structure from Claude:', parsed);
+      return res.json({ error: true, message: LOGGER_FRIENDLY_PARSE_ERROR });
+    }
+
     res.json({
       success: true,
       summary: parsed.summary || '',
@@ -1650,7 +1686,7 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
     });
   } catch (err) {
     console.error('Logger parse-conversation error:', err.message);
-    res.status(500).json({ error: err.message });
+    res.json({ error: true, message: LOGGER_FRIENDLY_PARSE_ERROR });
   }
 });
 
@@ -1674,9 +1710,15 @@ app.post('/api/logger/extract-touchpoints', async (req, res) => {
   const { image, text } = req.body || {};
   if (!image && !text) return res.status(400).json({ error: 'image or text is required' });
 
-  try {
-    const today = new Date().toISOString().slice(0, 10);
-    const prompt = `You are reading a free-text dump from a sales rep at T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM, summarising several interactions from their day in one go - e.g. "Had a call with Stuart at Woodside, sent a LinkedIn message to Craig at BHP, met Elle at a networking event".
+  const today = new Date().toISOString().slice(0, 10);
+
+  // Bare JSON array, not the previous { touchPoints: [...] } wrapper - one
+  // less shape for Claude to drift from, and the explicit example below
+  // gives it something concrete to match rather than just a schema.
+  const system = `You extract touch points from a sales rep's free-text activity dump for a CRM. Respond with ONLY a JSON array - no preamble, no commentary, no markdown code fences, no wrapping object, and no fields beyond the ones described. Example of the exact shape to return:
+[ { "contactName": "Craig Humphrey", "company": "BHP", "type": "Call", "summary": "Caught up on the Q3 roadmap.", "date": "${today}" } ]`;
+
+  const prompt = `You are reading a free-text dump from a sales rep at T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM, summarising several interactions from their day in one go - e.g. "Had a call with Stuart at Woodside, sent a LinkedIn message to Craig at BHP, met Elle at a networking event".
 
 ${text ? `Here is the dump:\n${text}` : 'Read the attached screenshot, which may cover more than one interaction.'}
 
@@ -1685,20 +1727,31 @@ Extract every distinct touch point mentioned. For each one:
 - company: their company, if mentioned. Empty string if not.
 - type: exactly one of ${LOGGER_EXTRACT_TYPES.map(t => `"${t}"`).join(', ')} - whichever best matches what's described.
 - summary: a concise one-sentence summary of what happened.
-- date: in YYYY-MM-DD format. Today's date is ${today}. Resolve any relative date mentioned (e.g. "yesterday", "Tuesday") against today; if no date is mentioned at all, use today's date.
+- date: in YYYY-MM-DD format. Today's date is ${today}. Resolve any relative date mentioned (e.g. "yesterday", "Tuesday") against today; if no date is mentioned at all, use today's date.`;
 
-Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
-{ "touchPoints": [ { "contactName": string, "company": string, "type": string, "summary": string, "date": string } ] }`;
+  const content = image
+    ? [
+        { type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.base64 } },
+        { type: 'text', text: prompt }
+      ]
+    : prompt;
 
-    const content = image
-      ? [
-          { type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.base64 } },
-          { type: 'text', text: prompt }
-        ]
-      : prompt;
+  try {
+    const raw = await callClaudeMessages(content, 1200, system);
 
-    const parsed = await callClaudeJson(content, 1200);
-    const touchPoints = (Array.isArray(parsed.touchPoints) ? parsed.touchPoints : [])
+    let parsedArray;
+    try {
+      parsedArray = JSON.parse(stripCodeFences(raw));
+    } catch (parseErr) {
+      console.error('Logger extract-touchpoints: malformed JSON from Claude:', raw);
+      return res.json({ error: true, message: LOGGER_FRIENDLY_PARSE_ERROR });
+    }
+    if (!Array.isArray(parsedArray)) {
+      console.error('Logger extract-touchpoints: unexpected structure from Claude:', parsedArray);
+      return res.json({ error: true, message: LOGGER_FRIENDLY_PARSE_ERROR });
+    }
+
+    const touchPoints = parsedArray
       .filter(t => t && t.contactName)
       .map(t => ({
         contactName: String(t.contactName).trim(),
@@ -1711,7 +1764,7 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
     res.json({ success: true, touchPoints });
   } catch (err) {
     console.error('Logger extract-touchpoints error:', err.message);
-    res.status(500).json({ error: err.message });
+    res.json({ error: true, message: LOGGER_FRIENDLY_PARSE_ERROR });
   }
 });
 

@@ -2110,6 +2110,7 @@ function initLogger(){
     convoText: '',
     convoImage: null,
     convoParsed: null,
+    convoParseError: null,
     // Post-create "Add to campaign" step - shown instead of the rest of the
     // card right after a brand new contact is added inline (see
     // loggerCreateInlineContact), not as part of the normal touch-point-
@@ -2485,6 +2486,7 @@ function renderLoggerLinkedInFields(){
     <div id="loggerConvoPreview" style="font-size:11.5px;margin-top:8px;"></div>
     <div class="field" style="margin-top:10px;"><label>Or paste text</label><textarea id="loggerConvoText" rows="4" placeholder="Paste the conversation...">${esc(l.convoText)}</textarea></div>
     <button class="btn btn-primary btn-sm" style="margin-top:8px;" id="loggerParseBtn" onclick="runLoggerParseConversation()"><i class="ti ti-sparkles"></i> Parse with the Engine</button>
+    ${l.convoParseError ? `<div class="card" style="background:#fbe3dc;border-color:#f0c6b8;margin-top:10px;"><i class="ti ti-alert-circle" style="color:var(--danger);"></i> ${esc(l.convoParseError)}</div>` : ''}
   </div>
   `;
 }
@@ -2517,6 +2519,7 @@ async function runLoggerParseConversation(){
   const text = (document.getElementById('loggerConvoText')?.value || '').trim();
   if(!image && !text){ toast('Paste some text or upload a screenshot first', 'warn'); return; }
   l.convoText = text;
+  l.convoParseError = null;
 
   const btn = document.getElementById('loggerParseBtn');
   if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Reading...'; }
@@ -2528,7 +2531,16 @@ async function runLoggerParseConversation(){
       body: JSON.stringify({ image: image || undefined, text: image ? undefined : text })
     });
     const data = await res.json();
-    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+    // A non-ok status here is a setup/input problem (missing API key, no
+    // text/image sent) - still toast-worthy. A soft { error: true, message }
+    // on an ok response means Claude ran but the extraction itself didn't
+    // work out - that gets the friendlier inline treatment instead.
+    if(!res.ok) throw new Error(typeof data.error === 'string' ? data.error : ('Request failed with status '+res.status));
+    if(data.error){
+      l.convoParseError = data.message || "We couldn't read that — try rewording or breaking it into shorter entries";
+      renderPage();
+      return;
+    }
 
     l.convoParsed = { summary: data.summary, sentiment: data.sentiment, objections: data.objections, nextSteps: data.nextSteps };
     l.convoImage = null;
@@ -2725,7 +2737,8 @@ function initLoggerAI(){
   window.__loggerAI = {
     dumpText: '',
     dumpImage: null,
-    extracted: []
+    extracted: [],
+    parseError: null
   };
 }
 
@@ -2743,6 +2756,7 @@ function renderLoggerAIMode(){
       <div id="loggerAIImagePreview" style="font-size:11.5px;margin-top:8px;"></div>
     </div>
     <button class="btn btn-primary" id="loggerAIParseBtn" onclick="runLoggerAIExtract()"><i class="ti ti-sparkles"></i> Extract touch points</button>
+    ${ai.parseError ? `<div class="card" style="background:#fbe3dc;border-color:#f0c6b8;margin-top:10px;"><i class="ti ti-alert-circle" style="color:var(--danger);"></i> ${esc(ai.parseError)}</div>` : ''}
   </div>
   <div id="loggerAIResults">${renderLoggerAIResults()}</div>
   `;
@@ -2772,9 +2786,12 @@ function clearLoggerAIImage(){
 
 // Best-guess existing-contact match for one AI-extracted touch point - an
 // exact name match first (narrowed by company when both share one), then
-// the same Levenshtein fuzzy check the job title suggestion above uses, so
-// an obvious hit doesn't need the rep to search by hand. Anything below the
-// similarity floor is left unmatched rather than risking a wrong contact.
+// the same Levenshtein fuzzy check the job title suggestion above uses.
+// Never auto-applied - the caller surfaces this as a "Did you mean...?"
+// suggestion on the confirmation card (see renderLoggerAICard) that the rep
+// has to explicitly accept, since a wrong silent match would file the touch
+// point against the wrong person. Anything below the similarity floor is
+// left unmatched rather than risking a wrong contact.
 function loggerFindBestContactMatch(name, company){
   if(!name) return null;
   const typedName = name.trim().toLowerCase();
@@ -2800,6 +2817,7 @@ async function runLoggerAIExtract(){
   const ai = window.__loggerAI;
   const text = (document.getElementById('loggerAIDumpText')?.value || '').trim();
   ai.dumpText = text;
+  ai.parseError = null;
   if(!text && !ai.dumpImage){ toast('Paste a summary or upload a screenshot first', 'warn'); return; }
 
   const btn = document.getElementById('loggerAIParseBtn');
@@ -2812,14 +2830,31 @@ async function runLoggerAIExtract(){
       body: JSON.stringify({ text: text || undefined, image: ai.dumpImage || undefined })
     });
     const data = await res.json();
-    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
-
-    const results = data.touchPoints || [];
-    if(!results.length){
-      toast('No touch points found in that - try adding more detail', 'warn');
-      if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-sparkles"></i> Extract touch points'; }
+    // Same split as runLoggerParseConversation above: a non-ok status is a
+    // setup/input problem (toast), a soft { error: true, message } on an ok
+    // response is Claude having run but not produced something usable
+    // (friendly inline error instead).
+    if(!res.ok) throw new Error(typeof data.error === 'string' ? data.error : ('Request failed with status '+res.status));
+    if(data.error){
+      ai.parseError = data.message || "We couldn't read that — try rewording or breaking it into shorter entries";
+      renderPage();
       return;
     }
+
+    // Belt-and-braces validation on top of the server's own filtering - an
+    // item missing a contact name or touch point type isn't something the
+    // confirmation card below can do anything useful with, so it's dropped
+    // here rather than reaching the UI half-formed.
+    const rawResults = data.touchPoints || [];
+    const isUsable = r => r && String(r.contactName || '').trim() && String(r.type || '').trim();
+    const results = rawResults.filter(isUsable);
+    const skippedCount = rawResults.length - results.length;
+
+    if(!results.length){
+      toast(skippedCount ? `Found ${skippedCount} entr${skippedCount===1?'y':'ies'} but none had both a contact name and touch point type` : 'No touch points found in that - try adding more detail', 'warn');
+      return;
+    }
+    if(skippedCount) toast(`Skipped ${skippedCount} entr${skippedCount===1?'y':'ies'} missing a contact name or touch point type`, 'warn');
 
     const validTypes = new Set(LOGGER_TYPES.map(t => t.airtableType));
     ai.extracted = results.map((r, i) => ({
@@ -2830,13 +2865,15 @@ async function runLoggerAIExtract(){
       summary: r.summary || '',
       date: r.date || isoDate(TODAY),
       matchedContactId: null,
+      suggestedContactId: null,
+      suggestionDismissed: false,
       showCreateNew: false,
       campaignId: '',
       confirmed: false
     }));
     ai.extracted.forEach(item => {
       const match = loggerFindBestContactMatch(item.contactName, item.company);
-      if(match) item.matchedContactId = match.id;
+      if(match) item.suggestedContactId = match.id;
     });
 
     ai.dumpText = '';
@@ -2861,12 +2898,22 @@ function renderLoggerAICard(item){
     return `<div class="card" style="margin-bottom:12px;background:#eaf7f0;border-color:#c9e9d7;"><i class="ti ti-circle-check" style="color:var(--success);"></i> Logged for ${esc(contactName)}</div>`;
   }
   const matchedContact = item.matchedContactId ? state.contacts.find(c => c.id === item.matchedContactId) : null;
+  const suggestedContact = (!matchedContact && item.suggestedContactId && !item.suggestionDismissed)
+    ? state.contacts.find(c => c.id === item.suggestedContactId) : null;
   return `
   <div class="card" style="margin-bottom:12px;" data-logger-ai-id="${item.localId}">
     <div class="field"><label>Contact</label>
       ${matchedContact
         ? `<div><span class="pill">${esc(matchedContact.name)}${matchedContact.company ? ` <span class="muted">(${esc(matchedContact.company)})</span>` : ''}</span> <button class="btn btn-ghost btn-sm" onclick="loggerAIClearMatch('${item.localId}')"><i class="ti ti-x"></i></button></div>`
-        : renderLoggerAIContactPicker(item)}
+        : suggestedContact
+          ? `<div>
+               <div class="muted" style="font-size:13px;margin-bottom:6px;">Did you mean <strong>${esc(suggestedContact.name)}</strong>${suggestedContact.company ? ` at ${esc(suggestedContact.company)}` : ''}?</div>
+               <div style="display:flex;gap:8px;">
+                 <button class="btn btn-primary btn-sm" onclick="loggerAIAcceptSuggestion('${item.localId}')"><i class="ti ti-check"></i> Yes</button>
+                 <button class="btn btn-secondary btn-sm" onclick="loggerAIRejectSuggestion('${item.localId}')"><i class="ti ti-user-plus"></i> No, create new</button>
+               </div>
+             </div>`
+          : renderLoggerAIContactPicker(item)}
     </div>
     <div class="row">
       <div class="field"><label>Type</label>
@@ -2918,7 +2965,23 @@ function loggerAISelectContact(localId, contactId){
 }
 function loggerAIClearMatch(localId){
   const item = window.__loggerAI.extracted.find(i => i.localId === localId);
-  if(item) item.matchedContactId = null;
+  if(item){ item.matchedContactId = null; item.suggestionDismissed = true; }
+  renderPage();
+}
+
+// "Yes" on the "Did you mean...?" suggestion - promotes it to the confirmed
+// match, same as picking a contact by hand in the search results below.
+function loggerAIAcceptSuggestion(localId){
+  const item = window.__loggerAI.extracted.find(i => i.localId === localId);
+  if(item && item.suggestedContactId) item.matchedContactId = item.suggestedContactId;
+  renderPage();
+}
+// "No, create new" - dismisses the suggestion and drops straight into the
+// existing create-new-contact form (same one the picker's own "Create new
+// contact" button opens) rather than making the rep click through to it.
+function loggerAIRejectSuggestion(localId){
+  const item = window.__loggerAI.extracted.find(i => i.localId === localId);
+  if(item){ item.suggestionDismissed = true; item.showCreateNew = true; }
   renderPage();
 }
 
