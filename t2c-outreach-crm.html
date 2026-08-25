@@ -662,14 +662,6 @@ let rawState = {
     }
   ],
   campaigns: [],
-  // Campaign <-> grid links (campaign id -> array of grid ids). Campaigns
-  // themselves are Airtable's data and get rebuilt from scratch by
-  // hydrateCampaignsFromAirtable on every load (see persistState below), so
-  // any gridIds set directly on a campaign object would be wiped out the
-  // next time that happens. This map is app-owned structural state instead -
-  // it round-trips through localStorage like grids do - and gets re-applied
-  // onto the fresh campaign objects after each hydrate.
-  campaignGridLinks: {},
   seqActiveTab: 'seniorLeaders',
   calMonth: TODAY.getMonth(),
   calYear: TODAY.getFullYear(),
@@ -920,6 +912,22 @@ function airtableWriteGuard(label, fields, requiredKeys){
   return true;
 }
 
+// Write-only mirror of state.activity into Airtable's Activity table - see
+// the 6 call sites that push a new activity entry (Roadmap connect/reply
+// actions, bookings, message generation). No hydrate counterpart: nothing
+// in the app renders an activity feed back today, so this just gives those
+// existing local-only writes a shared home instead of each browser's own
+// localStorage.
+function syncActivityToAirtable(entry){
+  const fields = { type: entry.type, text: entry.text, date: entry.date };
+  if(!airtableWriteGuard('activity', fields, ['type','text'])) return;
+  fetch('/api/airtable/activity', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(fields)
+  }).catch(err => console.warn('Airtable activity sync failed:', err.message));
+}
+
 function toast(msg, type){
   const c = document.getElementById('toastContainer');
   const el = document.createElement('div');
@@ -987,13 +995,78 @@ function allGridColumns(){
 
 function touchGrid(gridId){
   const grid = state.grids.find(g => g.id === gridId);
-  if(grid) grid.updatedAt = isoDate(TODAY);
+  if(grid){
+    grid.updatedAt = isoDate(TODAY);
+    syncGridToAirtable(grid);
+  }
 }
 
 function createGrid(name){
   const grid = { id: uid('grid'), name, companies: [], columns: [], companyLinkedIn: {}, createdAt: isoDate(TODAY), updatedAt: isoDate(TODAY) };
   state.grids.push(grid);
+  syncGridToAirtable(grid);
   return grid;
+}
+
+// Replaces state.grids wholesale from Airtable's Grids table - the same
+// "server is the source of truth, refetch fresh on load" convention as
+// hydrateCompaniesFromAirtable/hydrateCampaignsFromAirtable below. Grid
+// definitions (name/columns) used to be the one piece of grid state that
+// only ever lived in this browser's localStorage - see persistState.
+//
+// Guarded like hydrateContactsFromAirtable: an empty/missing response
+// leaves state.grids untouched rather than wiping it to []. That matters
+// more here than almost anywhere else in this file - if the one-time
+// migration (pushLocalDataToAirtableConfirmed) hasn't run yet on a given
+// deploy, the Grids table is legitimately empty, and wiping state.grids to
+// [] on every load until someone runs it would make every grid vanish.
+//
+// Carries each grid's companies/companyLinkedIn over from whatever was
+// already in state.grids rather than replacing them - those two fields
+// come from Companies' "Grid Name" field via hydrateCompaniesFromAirtable/
+// hydrateGridCompaniesFromAirtable, not this table, and aren't part of
+// this response.
+async function hydrateGridsFromAirtable(){
+  try {
+    const res = await fetch('/api/airtable/grid');
+    const records = await res.json();
+    if(!res.ok || !Array.isArray(records) || !records.length) return;
+
+    const existingById = {};
+    state.grids.forEach(g => { existingById[g.id] = g; });
+
+    state.grids = records.filter(r => r.fields && r.fields['Grid ID']).map(r => {
+      const f = r.fields;
+      const prior = existingById[f['Grid ID']];
+      return {
+        id: f['Grid ID'],
+        name: f['Name'] || '',
+        columns: (f['Columns'] || '').split(',').map(c => c.trim()).filter(Boolean),
+        companies: prior ? prior.companies : [],
+        companyLinkedIn: prior ? prior.companyLinkedIn : {},
+        createdAt: f['Created At'] || '',
+        updatedAt: f['Updated At'] || ''
+      };
+    });
+
+    if(state.grids.length && !state.grids.some(g => g.id === state.currentGridId)){
+      state.currentGridId = state.grids[0].id;
+    }
+
+    renderPage();
+  } catch(err){
+    console.warn('Could not load grids from Airtable:', err.message);
+  }
+}
+
+function syncGridToAirtable(grid){
+  const fields = { gridId: grid.id, name: grid.name, columns: grid.columns, createdAt: grid.createdAt, updatedAt: grid.updatedAt };
+  if(!airtableWriteGuard('grid', fields, ['gridId','name'])) return;
+  fetch('/api/airtable/grid', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(fields)
+  }).catch(err => console.warn('Airtable grid sync failed:', err.message));
 }
 
 function resolveGridIdByName(name){
@@ -1080,6 +1153,9 @@ async function deleteGridConfirmed(gridId){
     });
     const json = await res.json();
     if(!res.ok || !json.success) throw new Error(json.error || 'Delete failed');
+
+    fetch(`/api/airtable/grid/${encodeURIComponent(gridId)}`, { method: 'DELETE' })
+      .catch(err => console.warn('Airtable grid delete failed:', err.message));
 
     state.contacts = state.contacts.filter(c => c.gridId !== gridId);
     state.grids = state.grids.filter(g => g.id !== gridId);
@@ -3931,14 +4007,16 @@ function parseStrategyNotesFromAirtable(text){
 }
 
 // Replaces state.campaigns wholesale from Airtable's Campaigns table. Must
-// run after hydrateContactsFromAirtable, since "Contact IDs" is stored as a
-// comma-joined list of contact names that can only be resolved back to
-// local contact ids once state.contacts is populated. Fields with no home
-// on the real Campaigns table (estimatedConversions, the campaign-builder
-// chat transcript) come back empty - see the equivalent notes on
-// syncCampaignToAirtable/formatSequenceForAirtable. Companion to
-// hydrateContactsFromAirtable/hydrateCompaniesFromAirtable; campaigns are
-// never read from localStorage, see persistState/loadPersistedState.
+// run after both hydrateContactsFromAirtable and hydrateGridsFromAirtable,
+// since "Contact IDs"/"Grid IDs" are stored as comma-joined lists (of
+// contact names / grid ids respectively) that can only be resolved back to
+// local ids once state.contacts/state.grids are populated. Fields with no
+// home on the real Campaigns table (estimatedConversions, the
+// campaign-builder chat transcript) come back empty - see the equivalent
+// notes on syncCampaignToAirtable/formatSequenceForAirtable. Companion to
+// hydrateContactsFromAirtable/hydrateCompaniesFromAirtable/
+// hydrateGridsFromAirtable; campaigns are never read from localStorage, see
+// persistState/loadPersistedState.
 async function hydrateCampaignsFromAirtable(){
   try {
     const res = await fetch('/api/airtable/campaign');
@@ -3951,6 +4029,10 @@ async function hydrateCampaignsFromAirtable(){
       const contactIds = state.contacts
         .filter(c => contactNames.some(n => n.toLowerCase() === c.name.trim().toLowerCase()))
         .map(c => c.id);
+      // Grid ids that no longer exist locally are dropped defensively, same
+      // as the campaignGridLinks version this replaced used to do.
+      const gridIds = (f['Grid IDs'] || '').split(',').map(id => id.trim()).filter(Boolean)
+        .filter(gid => state.grids.some(g => g.id === gid));
       const { strategyBrief, pitchAngle, objectionHandling } = parseStrategyNotesFromAirtable(f['Strategy Notes']);
       return {
         id: r.id,
@@ -3962,6 +4044,7 @@ async function hydrateCampaignsFromAirtable(){
         product: f['Product'] || '',
         targetSegmentSummary: f['Target ICP'] || '',
         contactIds,
+        gridIds,
         sequence: parseSequenceFromAirtable(f['Sequence Templates']),
         strategyBrief,
         pitchAngle,
@@ -3971,12 +4054,7 @@ async function hydrateCampaignsFromAirtable(){
         status: f['Status'] || 'Draft',
         ctas: f['CTAs'] || '',
         contentContext: f['Content Context'] || '',
-        conversationHistory: [],
-        // Re-applied from campaignGridLinks (app-owned structural state, see
-        // rawState) since this whole campaign object was just rebuilt fresh
-        // from Airtable and never carries gridIds itself - grids that no
-        // longer exist locally are dropped defensively.
-        gridIds: (state.campaignGridLinks[r.id] || []).filter(gid => state.grids.some(g => g.id === gid))
+        conversationHistory: []
       };
     });
 
@@ -4130,7 +4208,9 @@ function markContactsConnected(contacts){
     c.connReqDate = c.connReqDate || isoDate(TODAY);
     c.connDate = isoDate(TODAY);
     c.thread.connSent = isoDate(TODAY);
-    state.activity.unshift({ type:'connected', text:`${c.name} (${c.company}) accepted your connection`, date: isoDate(TODAY) });
+    const activityEntry = { type:'connected', text:`${c.name} (${c.company}) accepted your connection`, date: isoDate(TODAY) };
+    state.activity.unshift(activityEntry);
+    syncActivityToAirtable(activityEntry);
     notifyWebhook(c);
   });
 }
@@ -4607,7 +4687,9 @@ async function markSent(cid, key){
   const c = state.contacts.find(x=>x.id===cid);
   c.thread[key] = { sent: isoDate(TODAY), replied:false };
   if(c.state !== 'messaging') c.state = 'messaging';
-  state.activity.unshift({ type:'message', text:`${key==='m1'?'Message 1':'Message 2'} sent to ${c.name} (${c.company})`, date: isoDate(TODAY) });
+  const activityEntry = { type:'message', text:`${key==='m1'?'Message 1':'Message 2'} sent to ${c.name} (${c.company})`, date: isoDate(TODAY) };
+  state.activity.unshift(activityEntry);
+  syncActivityToAirtable(activityEntry);
   notifyWebhook(c);
   toast('Marked as sent', 'success');
   renderPage();
@@ -4650,10 +4732,51 @@ function removeDeadContact(cid){
   const idx = state.contacts.findIndex(c=>c.id===cid);
   if(idx===-1) return;
   const c = state.contacts[idx];
-  state.deadContacts.push({ name:c.name, company:c.company, role:c.role, days:getPendingDays(c), removed:isoDate(TODAY) });
+  const deadContact = { name:c.name, company:c.company, role:c.role, days:getPendingDays(c), removed:isoDate(TODAY) };
+  state.deadContacts.push(deadContact);
+  syncDeadContactToAirtable(deadContact);
   state.contacts.splice(idx,1);
   toast(c.name+' moved to archive','warn');
   renderPage();
+}
+
+function syncDeadContactToAirtable(deadContact){
+  const fields = { name: deadContact.name, company: deadContact.company, role: deadContact.role, days: deadContact.days, removed: deadContact.removed };
+  if(!airtableWriteGuard('dead-contact', fields, ['name','company'])) return;
+  fetch('/api/airtable/dead-contact', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(fields)
+  }).catch(err => console.warn('Airtable dead contact sync failed:', err.message));
+}
+
+// Replaces state.deadContacts wholesale from Airtable's Dead Contacts
+// table - same "server is the source of truth" convention as the other
+// hydrate*FromAirtable functions. Guarded like hydrateContactsFromAirtable:
+// an empty/missing response leaves state.deadContacts untouched instead of
+// wiping it to [], so a not-yet-migrated deploy doesn't blank the archive
+// list on every load.
+async function hydrateDeadContactsFromAirtable(){
+  try {
+    const res = await fetch('/api/airtable/dead-contact');
+    const records = await res.json();
+    if(!res.ok || !Array.isArray(records) || !records.length) return;
+
+    state.deadContacts = records.map(r => {
+      const f = r.fields || {};
+      return {
+        name: f['Name'] || '',
+        company: f['Company'] || '',
+        role: f['Role'] || '',
+        days: typeof f['Days'] === 'number' ? f['Days'] : 0,
+        removed: f['Removed'] || ''
+      };
+    });
+
+    renderPage();
+  } catch(err){
+    console.warn('Could not load dead contacts from Airtable:', err.message);
+  }
 }
 
 /* Roadmap drag/drop */
@@ -4716,7 +4839,9 @@ async function onColDrop(e, colKey){
     c.connReqDate = c.connReqDate || isoDate(TODAY);
     c.connDate = isoDate(TODAY);
     c.thread.connSent = isoDate(TODAY);
-    state.activity.unshift({ type:'connected', text:`${c.name} (${c.company}) accepted your connection`, date: isoDate(TODAY) });
+    const activityEntry = { type:'connected', text:`${c.name} (${c.company}) accepted your connection`, date: isoDate(TODAY) };
+    state.activity.unshift(activityEntry);
+    syncActivityToAirtable(activityEntry);
     notifyWebhook(c);
     renderPage();
   } else if(colKey === 'messaging'){
@@ -5192,8 +5317,12 @@ async function confirmBooking(cid){
   c.thread.bookedNotes = notes;
   c.thread.cta = cta;
   c.state = 'messaging';
-  state.bookings.push({ contactId:c.id, name:c.name, company:c.company, service, date, cta, notes });
-  state.activity.unshift({ type:'booked', text:`${c.name} (${c.company}) booked ${service}`, date: isoDate(TODAY) });
+  const booking = { contactId:c.id, name:c.name, company:c.company, service, date, cta, notes };
+  state.bookings.push(booking);
+  syncBookingToAirtable(booking);
+  const activityEntry = { type:'booked', text:`${c.name} (${c.company}) booked ${service}`, date: isoDate(TODAY) };
+  state.activity.unshift(activityEntry);
+  syncActivityToAirtable(activityEntry);
   notifyWebhook(c);
   closeModal();
   toast(c.name+' booked for '+service, 'success');
@@ -5240,6 +5369,46 @@ async function confirmBooking(cid){
   }
 }
 
+function syncBookingToAirtable(booking){
+  const fields = { contactName: booking.name, company: booking.company, service: booking.service, date: booking.date, cta: booking.cta, notes: booking.notes };
+  if(!airtableWriteGuard('booking', fields, ['contactName','company'])) return;
+  fetch('/api/airtable/booking', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(fields)
+  }).catch(err => console.warn('Airtable booking sync failed:', err.message));
+}
+
+// Replaces state.bookings wholesale from Airtable's Bookings table. Guarded
+// like hydrateContactsFromAirtable: an empty/missing response leaves
+// state.bookings untouched instead of wiping it to [], so a not-yet-migrated
+// deploy doesn't blank the Analytics booking dashboards on every load.
+async function hydrateBookingsFromAirtable(){
+  try {
+    const res = await fetch('/api/airtable/booking');
+    const records = await res.json();
+    if(!res.ok || !Array.isArray(records) || !records.length) return;
+
+    state.bookings = records.map(r => {
+      const f = r.fields || {};
+      const contact = state.contacts.find(c => c.name === f['Contact Name']);
+      return {
+        contactId: contact ? contact.id : null,
+        name: f['Contact Name'] || '',
+        company: f['Company'] || '',
+        service: f['Service'] || '',
+        date: f['Date'] || '',
+        cta: f['CTA'] || '',
+        notes: f['Notes'] || ''
+      };
+    });
+
+    renderPage();
+  } catch(err){
+    console.warn('Could not load bookings from Airtable:', err.message);
+  }
+}
+
 /* ===================== SEQUENCES PAGE ===================== */
 
 function renderSequences(){
@@ -5260,7 +5429,9 @@ function addSequence(){
   const name = prompt('New sequence name:');
   if(!name) return;
   const id = uid('seq');
-  state.sequences.push({ id, name, roles:[], voice:'Peer to peer', stages:{ connect:'', m1:'', m2:'', cta:'' } });
+  const seq = { id, name, roles:[], voice:'Peer to peer', stages:{ connect:'', m1:'', m2:'', cta:'' } };
+  state.sequences.push(seq);
+  syncSequenceToAirtable(seq);
   state.seqActiveTab = id;
   renderPage();
   toast('Sequence "'+name+'" created','success');
@@ -5329,9 +5500,55 @@ function renderFlowNode(seq, st){
   </div>`;
 }
 
-function renameSeq(id, val){ state.sequences.find(s=>s.id===id).name = val; }
-function setSeqVoice(id, val){ state.sequences.find(s=>s.id===id).voice = val; }
-function setStageTemplate(seqId, stageKey, val){ state.sequences.find(s=>s.id===seqId).stages[stageKey] = val; }
+function renameSeq(id, val){ const seq = state.sequences.find(s=>s.id===id); seq.name = val; syncSequenceToAirtable(seq); }
+function setSeqVoice(id, val){ const seq = state.sequences.find(s=>s.id===id); seq.voice = val; syncSequenceToAirtable(seq); }
+function setStageTemplate(seqId, stageKey, val){ const seq = state.sequences.find(s=>s.id===seqId); seq.stages[stageKey] = val; syncSequenceToAirtable(seq); }
+
+function syncSequenceToAirtable(seq){
+  const fields = { sequenceId: seq.id, name: seq.name, roles: seq.roles, voice: seq.voice, connect: seq.stages.connect, m1: seq.stages.m1, m2: seq.stages.m2, cta: seq.stages.cta };
+  if(!airtableWriteGuard('sequence', fields, ['sequenceId','name'])) return;
+  fetch('/api/airtable/sequence', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(fields)
+  }).catch(err => console.warn('Airtable sequence sync failed:', err.message));
+}
+
+// Replaces state.sequences wholesale from Airtable's Sequences table.
+// Guarded like hydrateContactsFromAirtable: an empty/missing response
+// leaves state.sequences untouched instead of wiping it to [], so a
+// not-yet-migrated deploy doesn't blank the Sequences page on every load.
+async function hydrateSequencesFromAirtable(){
+  try {
+    const res = await fetch('/api/airtable/sequence');
+    const records = await res.json();
+    if(!res.ok || !Array.isArray(records) || !records.length) return;
+
+    state.sequences = records.filter(r => r.fields && r.fields['Sequence ID']).map(r => {
+      const f = r.fields;
+      return {
+        id: f['Sequence ID'],
+        name: f['Name'] || '',
+        roles: (f['Roles'] || '').split(',').map(r => r.trim()).filter(Boolean),
+        voice: f['Voice'] || 'Peer to peer',
+        stages: {
+          connect: f['Connect Template'] || '',
+          m1: f['Message 1 Template'] || '',
+          m2: f['Message 2 Template'] || '',
+          cta: f['CTA Template'] || ''
+        }
+      };
+    });
+
+    if(state.sequences.length && !state.sequences.some(s => s.id === state.seqActiveTab)){
+      state.seqActiveTab = state.sequences[0].id;
+    }
+
+    renderPage();
+  } catch(err){
+    console.warn('Could not load sequences from Airtable:', err.message);
+  }
+}
 
 async function generateTemplate(seqId, stageKey){
   const seq = state.sequences.find(s=>s.id===seqId);
@@ -5641,8 +5858,8 @@ async function saveGeneratedMessage(cid, stageKey){
   c.generated[stageKey] = output;
   c.notes = document.getElementById('genNotes').value;
   if(stageKey==='connect'){ c.connReqDate = c.connReqDate || isoDate(TODAY); }
-  if(stageKey==='m1'){ c.connDate = c.connDate || isoDate(TODAY); c.thread.connSent = c.thread.connSent || isoDate(TODAY); c.thread.m1 = { sent: isoDate(TODAY), replied:false }; c.state='messaging'; state.activity.unshift({ type:'message', text:`Message 1 sent to ${c.name} (${c.company})`, date: isoDate(TODAY) }); }
-  if(stageKey==='m2'){ c.thread.m2 = { sent: isoDate(TODAY), replied:false }; state.activity.unshift({ type:'message', text:`Message 2 sent to ${c.name} (${c.company})`, date: isoDate(TODAY) }); }
+  if(stageKey==='m1'){ c.connDate = c.connDate || isoDate(TODAY); c.thread.connSent = c.thread.connSent || isoDate(TODAY); c.thread.m1 = { sent: isoDate(TODAY), replied:false }; c.state='messaging'; const activityEntry = { type:'message', text:`Message 1 sent to ${c.name} (${c.company})`, date: isoDate(TODAY) }; state.activity.unshift(activityEntry); syncActivityToAirtable(activityEntry); }
+  if(stageKey==='m2'){ c.thread.m2 = { sent: isoDate(TODAY), replied:false }; const activityEntry = { type:'message', text:`Message 2 sent to ${c.name} (${c.company})`, date: isoDate(TODAY) }; state.activity.unshift(activityEntry); syncActivityToAirtable(activityEntry); }
   if(stageKey==='cta'){ c.thread.cta = c.thread.cta || CTA_OPTIONS[0]; }
   notifyWebhook(c);
   closeModal();
@@ -6287,15 +6504,6 @@ function campaignsForGrid(gridId){
   return state.campaigns.filter(c => (c.gridIds||[]).includes(gridId));
 }
 
-// Mirrors a campaign's gridIds into campaignGridLinks (see rawState above)
-// so the link survives hydrateCampaignsFromAirtable rebuilding
-// state.campaigns from scratch. Call this alongside every mutation of
-// campaign.gridIds instead of relying on the array on the campaign object
-// alone.
-function persistCampaignGridLinks(campaign){
-  state.campaignGridLinks[campaign.id] = (campaign.gridIds || []).slice();
-}
-
 function renderCampaignGridTab(campaign){
   const grids = (campaign.gridIds||[]).map(id => state.grids.find(g=>g.id===id)).filter(Boolean);
   return `
@@ -6336,7 +6544,7 @@ function createGridForCampaign(campaignId){
   const grid = createGrid(name);
   if(!campaign.gridIds) campaign.gridIds = [];
   campaign.gridIds.push(grid.id);
-  persistCampaignGridLinks(campaign);
+  syncCampaignToAirtable(campaign);
   toast('Grid "'+name+'" created and linked to '+campaign.name, 'success');
   openGridFromCampaign(grid.id, campaign.id);
 }
@@ -6370,7 +6578,7 @@ function confirmImportGrids(){
   if(!checked.length){ toast('No grids selected', 'warn'); return; }
   if(!campaign.gridIds) campaign.gridIds = [];
   checked.forEach(id => { if(!campaign.gridIds.includes(id)) campaign.gridIds.push(id); });
-  persistCampaignGridLinks(campaign);
+  syncCampaignToAirtable(campaign);
   const newContactNames = checked.flatMap(gridId => gridContacts(gridId).map(c => c.name));
   linkContactsToCampaignAirtable(campaign, newContactNames);
   closeModal();
@@ -6382,7 +6590,7 @@ function unlinkGridFromCampaign(campaignId, gridId){
   const campaign = state.campaigns.find(c => c.id === campaignId);
   if(!campaign || !campaign.gridIds) return;
   campaign.gridIds = campaign.gridIds.filter(id => id !== gridId);
-  persistCampaignGridLinks(campaign);
+  syncCampaignToAirtable(campaign);
   renderPage();
   toast('Grid unlinked from campaign', 'success');
 }
@@ -7968,6 +8176,7 @@ function syncCampaignToAirtable(campaign, onSynced){
       product: campaign.product || '',
       targetIcp: campaign.targetSegmentSummary,
       contactIds: contactNames,
+      gridIds: campaign.gridIds || [],
       sequenceTemplates: formatSequenceForAirtable(campaign.sequence),
       strategyNotes: campaign.strategyBrief,
       pitchAngle: campaign.pitchAngle || '',
@@ -8513,6 +8722,7 @@ async function runAnalysis(){
   parsed.runAt = TODAY.toLocaleString('en-AU',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
   parsed.notesCount = insights.conversionCount ?? 0;
   state.lastAnalysis = parsed;
+  syncLastAnalysisToAirtable(parsed);
 
   resultEl.innerHTML = renderAnalysisBlocks(parsed);
   toast('Strategy analysis complete', 'success');
@@ -10504,10 +10714,85 @@ function saveSettings(){
   s.strategy.voiceInstructions = document.getElementById('strVoice').value;
   s.integrations.makeWebhookUrl = document.getElementById('makeWebhookUrl').value.trim();
   s.integrations.clayApiKey = document.getElementById('clayApiKey').value.trim();
+  syncSettingsToAirtable();
   const flash = document.getElementById('saveFlash');
   flash.style.display = 'inline-flex';
   setTimeout(()=>{ flash.style.display='none'; }, 2200);
   toast('Settings saved', 'success');
+}
+
+// Sends the complete current state.settings object to the shared Settings
+// row. Only called from the tail of saveSettings() above, not from every
+// individual services/accounts/leadMagnets/products setter (addService,
+// toggleAccountColumn, addProduct, etc.) - those mutate state.settings
+// directly and rely on the user clicking "Save settings" to actually push
+// the result to Airtable, same as timeoutDays/strategy/integrations always
+// have. No airtableWriteGuard here - this is a singleton row, not a
+// created-per-entity write with an identifying field to blank-check.
+function syncSettingsToAirtable(){
+  const s = state.settings;
+  fetch('/api/settings/app-config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      timeoutDays: s.timeoutDays,
+      timeoutAction: s.timeoutAction,
+      services: s.services,
+      accounts: s.accounts,
+      strategy: s.strategy,
+      leadMagnets: s.leadMagnets,
+      products: s.products,
+      makeWebhookUrl: s.integrations.makeWebhookUrl,
+      clayApiKey: s.integrations.clayApiKey
+    })
+  }).catch(err => console.warn('Airtable settings sync failed:', err.message));
+}
+
+// Merges Airtable's Settings row into state.settings rather than
+// wholesale-replacing it, so any key the server doesn't know about (or a
+// not-yet-migrated deploy with an empty response) falls back to the
+// defaults already seeded in rawState instead of disappearing.
+async function hydrateSettingsFromAirtable(){
+  try {
+    const res = await fetch('/api/settings/app-config');
+    const f = await res.json();
+    if(!res.ok || !f || !Object.keys(f).length) return;
+
+    const s = state.settings;
+    if(typeof f['Timeout Days'] === 'number') s.timeoutDays = f['Timeout Days'];
+    if(f['Timeout Action']) s.timeoutAction = f['Timeout Action'];
+    if(f['Services JSON']) { try { s.services = JSON.parse(f['Services JSON']); } catch(e){} }
+    if(f['Accounts JSON']) { try { s.accounts = JSON.parse(f['Accounts JSON']); } catch(e){} }
+    if(f['Strategy JSON']) { try { s.strategy = JSON.parse(f['Strategy JSON']); } catch(e){} }
+    if(f['Lead Magnets JSON']) { try { s.leadMagnets = JSON.parse(f['Lead Magnets JSON']); } catch(e){} }
+    if(f['Products JSON']) { try { s.products = JSON.parse(f['Products JSON']); } catch(e){} }
+    if(f['Make Webhook URL'] !== undefined) s.integrations.makeWebhookUrl = f['Make Webhook URL'];
+    if(f['Clay API Key'] !== undefined) s.integrations.clayApiKey = f['Clay API Key'];
+
+    renderPage();
+  } catch(err){
+    console.warn('Could not load settings from Airtable:', err.message);
+  }
+}
+
+function syncLastAnalysisToAirtable(analysis){
+  fetch('/api/settings/last-analysis', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ analysis })
+  }).catch(err => console.warn('Airtable last-analysis sync failed:', err.message));
+}
+
+async function hydrateLastAnalysisFromAirtable(){
+  try {
+    const res = await fetch('/api/settings/last-analysis');
+    const data = await res.json();
+    if(!res.ok || !data.analysis) return;
+    state.lastAnalysis = data.analysis;
+    renderPage();
+  } catch(err){
+    console.warn('Could not load last analysis from Airtable:', err.message);
+  }
 }
 
 /* ===================== THEME (light/dark mode) ===================== */
@@ -10545,12 +10830,31 @@ syncThemeToggleIcon();
 renderSidebar();
 renderPage();
 
-// Contacts, campaigns and companies are never restored from localStorage
-// (see persistState/loadPersistedState) - always fetched fresh here instead.
-// Campaigns hydrate after contacts resolve, since it resolves the "Contact
-// IDs" names it gets from Airtable against state.contacts.
-hydrateContactsFromAirtable().then(hydrateCampaignsFromAirtable);
-hydrateCompaniesFromAirtable();
+// Contacts, campaigns, companies, grids, sequences, settings, bookings,
+// dead contacts and last analysis are never restored from localStorage
+// (see persistState/loadPersistedState) - always fetched fresh here
+// instead. Grids hydrate first: both hydrateContactsFromAirtable and
+// hydrateCompaniesFromAirtable resolve each record's grid by name via
+// resolveGridIdByName, which creates (and syncs back to Airtable) a new
+// local grid if it doesn't find a match - running those before state.grids
+// is populated from Airtable would spuriously create duplicate grids for
+// ones that already exist there but just haven't loaded yet. Campaigns
+// hydrate after both contacts and grids resolve, since it resolves the
+// "Contact IDs"/"Grid IDs" it gets from Airtable against state.contacts/
+// state.grids. Bookings resolve contactId against state.contacts the same
+// way, so it's chained after contacts too. Sequences/Settings/Last
+// Analysis/Dead Contacts are all independent of the rest.
+hydrateGridsFromAirtable().then(() => {
+  hydrateContactsFromAirtable().then(() => {
+    hydrateCampaignsFromAirtable();
+    hydrateBookingsFromAirtable();
+  });
+  hydrateCompaniesFromAirtable();
+});
+hydrateSequencesFromAirtable();
+hydrateSettingsFromAirtable();
+hydrateLastAnalysisFromAirtable();
+hydrateDeadContactsFromAirtable();
 </script>
 </body>
 </html>
