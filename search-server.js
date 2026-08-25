@@ -925,6 +925,34 @@ app.post('/api/airtable/campaign', async (req, res) => {
     const strategyNotesParts = [strategyNotes || ''];
     if (pitchAngle) strategyNotesParts.push(`Pitch angle: ${pitchAngle}`);
     if (objectionHandling) strategyNotesParts.push(`Objection handling: ${objectionHandling}`);
+    const strategyNotesJoined = strategyNotesParts.filter(Boolean).join('\n\n');
+
+    if (existing) {
+      // Only overwrite fields this request actually supplied a non-empty
+      // value for - same "don't blank a real field just because this
+      // particular write didn't touch it" convention already used by
+      // /api/airtable/contact/stage and /api/airtable/company/linkedin
+      // below. A blanket overwrite here previously meant any campaign sync
+      // (e.g. just editing a sequence stage) would wipe Contact IDs back to
+      // empty if state.contacts hadn't finished loading client-side yet.
+      const patchFields = {};
+      if (goal) patchFields['Goal'] = goal;
+      if (product) patchFields['Product'] = product;
+      if (targetIcp) patchFields['Target ICP'] = targetIcp;
+      if (Array.isArray(contactIds) && contactIds.length) patchFields['Contact IDs'] = contactIds.join(', ');
+      if (sequenceTemplates) patchFields['Sequence Templates'] = sequenceTemplates;
+      if (strategyNotesJoined) patchFields['Strategy Notes'] = strategyNotesJoined;
+      if (successMetric) patchFields['Success Metric'] = successMetric;
+      if (startDate) patchFields['Start Date'] = startDate;
+      if (status) patchFields['Status'] = status;
+      if (ctas) patchFields['CTAs'] = ctas;
+      if (contentContext) patchFields['Content Context'] = contentContext;
+
+      if (Object.keys(patchFields).length) {
+        await airtableRequest('PATCH', 'Campaigns', { records: [{ id: existing.id, fields: patchFields }] });
+      }
+      return res.json({ success: true, updated: true, recordId: existing.id });
+    }
 
     const fields = {
       'Name': name,
@@ -933,19 +961,13 @@ app.post('/api/airtable/campaign', async (req, res) => {
       'Target ICP': targetIcp || '',
       'Contact IDs': (contactIds || []).join(', '),
       'Sequence Templates': sequenceTemplates || '',
-      'Strategy Notes': strategyNotesParts.filter(Boolean).join('\n\n'),
+      'Strategy Notes': strategyNotesJoined,
       'Success Metric': successMetric || '',
       'Start Date': startDate || '',
       'Status': status || 'Draft',
       'CTAs': ctas || '',
       'Content Context': contentContext || ''
     };
-
-    if (existing) {
-      await airtableRequest('PATCH', 'Campaigns', { records: [{ id: existing.id, fields }] });
-      return res.json({ success: true, updated: true, recordId: existing.id });
-    }
-
     const data = await airtableRequest('POST', 'Campaigns', { records: [{ fields }] });
     res.json({ success: true, updated: false, recordId: data.records[0].id });
   } catch (err) {
@@ -6936,8 +6958,19 @@ async function wipeAirtableTable(table) {
 // fetchCampaignContactsRows/Learning Data elsewhere) - a table that doesn't
 // exist in a given base, or one Airtable call that fails, shouldn't stop the
 // rest of the wipe from completing.
+//
+// Requires an exact confirmation phrase in the body, not just a bare POST -
+// this route is irreversible and, unlike every other write route in this
+// file, isn't scoped to one record. The Settings > Danger zone UI is the
+// only caller that knows the phrase; anything else hitting this route with
+// no body (a scanner, a stray retry, a CSRF'd request) gets rejected before
+// it touches Airtable.
+const WIPE_DATA_CONFIRM_PHRASE = 'WIPE ALL DATA';
 app.post('/api/wipe-data', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if ((req.body || {}).confirm !== WIPE_DATA_CONFIRM_PHRASE) {
+    return res.status(400).json({ error: 'Missing or incorrect confirmation phrase' });
+  }
 
   const results = {};
   for (const table of WIPE_DATA_TABLES) {

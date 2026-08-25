@@ -902,6 +902,24 @@ function firstName(name){ return name.split(' ')[0]; }
 function uid(prefix){ return prefix + '_' + Math.random().toString(36).slice(2,9); }
 function esc(str){ return (str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
+// Refuses to fire an Airtable write whose required identifying field(s) are
+// blank - a blank name/company is either a caller bug or a race against
+// still-loading state, and would otherwise let the server upsert logic
+// silently create a junk record or, on an existing record, wipe a real
+// field back to empty. Every fetch('/api/airtable/...', {method:'POST'|
+// 'PATCH', ...}) call site should be gated behind this.
+function airtableWriteGuard(label, fields, requiredKeys){
+  for(const key of requiredKeys){
+    const val = fields[key];
+    const blank = val === null || val === undefined || (typeof val === 'string' && !val.trim());
+    if(blank){
+      console.warn(`Airtable write blocked (${label}): "${key}" is empty`, fields);
+      return false;
+    }
+  }
+  return true;
+}
+
 function toast(msg, type){
   const c = document.getElementById('toastContainer');
   const el = document.createElement('div');
@@ -1490,16 +1508,20 @@ async function saveContextTouchPoint(){
   renderPage();
 
   try {
+    const tpFields = {
+      contactRecordIds: l.contactIds,
+      companyRecordId: l.companyId,
+      type, date, notes,
+      campaignId: window.__ctxCampaignTag ? window.__ctxCampaignTag.id : undefined,
+      campaignName: window.__ctxCampaignTag ? window.__ctxCampaignTag.name : undefined
+    };
+    if(!(l.contactIds||[]).length) throw new Error('No contact selected for this touch point');
+    if(!airtableWriteGuard('touchpoint', tpFields, ['type'])) throw new Error('Touch point is missing required data');
+
     const res = await fetch('/api/airtable/touchpoint', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({
-        contactRecordIds: l.contactIds,
-        companyRecordId: l.companyId,
-        type, date, notes,
-        campaignId: window.__ctxCampaignTag ? window.__ctxCampaignTag.id : undefined,
-        campaignName: window.__ctxCampaignTag ? window.__ctxCampaignTag.name : undefined
-      })
+      body: JSON.stringify(tpFields)
     });
     const result = await res.json();
     if(!res.ok) throw new Error(result.error || ('Request failed with status '+res.status));
@@ -2551,10 +2573,8 @@ async function generateContactBrief(cid){
   if(!c.touchPoints) c.touchPoints = [];
   c.touchPoints.push({ id: uid('tp'), date, type: tpType, communicationMethod: method, notes: 'Engine-generated brief', painPoints: [], aiBrief: result });
 
-  fetch('/api/airtable/touchpoint', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+  {
+    const briefTpFields = {
       contactName: c.name,
       company: c.company,
       date,
@@ -2563,8 +2583,15 @@ async function generateContactBrief(cid){
       outcome: 'No reply',
       communicationMethod: method,
       aiBrief: result
-    })
-  }).catch(err => console.warn('Airtable brief sync failed:', err.message));
+    };
+    if(airtableWriteGuard('touchpoint', briefTpFields, ['contactName','type'])){
+      fetch('/api/airtable/touchpoint', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(briefTpFields)
+      }).catch(err => console.warn('Airtable brief sync failed:', err.message));
+    }
+  }
 
   toast('Brief generated', 'success');
 }
@@ -3076,11 +3103,16 @@ function addGridCompany(){
   renderPage();
   toast('"'+val+'" added to the grid','success');
 
-  fetch('/api/airtable/company', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: val, gridName: grid.name })
-  }).catch(err => console.warn('Airtable company sync failed:', err.message));
+  {
+    const companyFields = { name: val, gridName: grid.name };
+    if(airtableWriteGuard('company', companyFields, ['name'])){
+      fetch('/api/airtable/company', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(companyFields)
+      }).catch(err => console.warn('Airtable company sync failed:', err.message));
+    }
+  }
 }
 
 function companyLinkedInUrl(company){
@@ -3150,12 +3182,15 @@ async function fetchLinkedInOrgIds(){
       const res = await fetch(`/api/enrich/linkedin-org-id?slug=${encodeURIComponent(slug)}`);
       const data = await res.json();
       if(data.found && data.orgId){
-        await fetch('/api/airtable/company/linkedin', {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ companyName, linkedinSlug: data.orgId })
-        });
-        foundCount++;
+        const linkedinFields = { companyName, linkedinSlug: data.orgId };
+        if(airtableWriteGuard('company/linkedin', linkedinFields, ['companyName','linkedinSlug'])){
+          await fetch('/api/airtable/company/linkedin', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(linkedinFields)
+          });
+          foundCount++;
+        }
       }
     } catch(err){
       console.warn('LinkedIn org ID lookup failed for', companyName, err.message);
@@ -3286,11 +3321,13 @@ async function confirmCsvImport(){
   // once than the single-company input ever would, so firing them all in
   // parallel risks tripping Airtable's rate limit.
   for(let i=0; i<newCompanies.length; i++){
+    const csvCompanyFields = { name: newCompanies[i], gridName: grid.name };
+    if(!airtableWriteGuard('company', csvCompanyFields, ['name'])) continue;
     try {
       await fetch('/api/airtable/company', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newCompanies[i], gridName: grid.name })
+        body: JSON.stringify(csvCompanyFields)
       });
     } catch(err){
       console.warn('Airtable company sync failed for', newCompanies[i], err.message);
@@ -3586,20 +3623,22 @@ function notifyWebhook(contact, opts) {
 
 function syncContactToAirtable(contact) {
   const grid = state.grids.find(g => g.id === contact.gridId);
+  const contactFields = {
+    name: contact.name,
+    company: contact.company,
+    role: contact.role,
+    linkedinUrl: contact.url,
+    state: contact.state,
+    icpRoleCategory: contact.role,
+    notes: contact.notes || '',
+    companyLinkedinUrl: grid ? ((grid.companyLinkedIn[contact.company] && grid.companyLinkedIn[contact.company].linkedinUrl) || '') : '',
+    gridName: gridNameForContact(contact)
+  };
+  if(!airtableWriteGuard('contact', contactFields, ['name','company'])) return;
   fetch('/api/airtable/contact', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      name: contact.name,
-      company: contact.company,
-      role: contact.role,
-      linkedinUrl: contact.url,
-      state: contact.state,
-      icpRoleCategory: contact.role,
-      notes: contact.notes || '',
-      companyLinkedinUrl: grid ? ((grid.companyLinkedIn[contact.company] && grid.companyLinkedIn[contact.company].linkedinUrl) || '') : '',
-      gridName: gridNameForContact(contact)
-    })
+    body: JSON.stringify(contactFields)
   })
     .then(res => res.json())
     // contact.id starts out as a local uid('c') placeholder (see
@@ -3612,14 +3651,16 @@ function syncContactToAirtable(contact) {
 }
 
 function syncStageToAirtable(contact) {
+  const stageFields = {
+    contactName: contact.name,
+    company: contact.company,
+    state: contact.state
+  };
+  if(!airtableWriteGuard('contact/stage', stageFields, ['contactName'])) return;
   fetch('/api/airtable/contact/stage', {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contactName: contact.name,
-      company: contact.company,
-      state: contact.state
-    })
+    body: JSON.stringify(stageFields)
   }).catch(err => console.warn('Airtable stage sync failed:', err.message));
 }
 
@@ -3636,21 +3677,23 @@ async function syncAllContactsToAirtable(){
   for(let i=0; i<contacts.length; i++){
     const contact = contacts[i];
     btn.innerHTML = `<i class="ti ti-loader-2"></i> Syncing contact ${i+1}/${contacts.length}...`;
+    const bulkContactFields = {
+      name: contact.name,
+      company: contact.company,
+      role: contact.role,
+      linkedinUrl: contact.url,
+      state: contact.state,
+      icpRoleCategory: contact.role,
+      notes: contact.notes || '',
+      companyLinkedinUrl: companyLinkedInUrl(contact.company),
+      gridName: grid.name
+    };
+    if(!airtableWriteGuard('contact', bulkContactFields, ['name','company'])) continue;
     try {
       const res = await fetch('/api/airtable/contact', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: contact.name,
-          company: contact.company,
-          role: contact.role,
-          linkedinUrl: contact.url,
-          state: contact.state,
-          icpRoleCategory: contact.role,
-          notes: contact.notes || '',
-          companyLinkedinUrl: companyLinkedInUrl(contact.company),
-          gridName: grid.name
-        })
+        body: JSON.stringify(bulkContactFields)
       });
       if(res.ok){
         syncedCount++;
@@ -3670,11 +3713,13 @@ async function syncAllContactsToAirtable(){
   for(let i=0; i<grid.companies.length; i++){
     const company = grid.companies[i];
     btn.innerHTML = `<i class="ti ti-loader-2"></i> Syncing company ${i+1}/${grid.companies.length}...`;
+    const bulkCompanyFields = { name: company, gridName: grid.name };
+    if(!airtableWriteGuard('company', bulkCompanyFields, ['name'])) continue;
     try {
       const res = await fetch('/api/airtable/company', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: company, gridName: grid.name })
+        body: JSON.stringify(bulkCompanyFields)
       });
       if(res.ok) companySyncedCount++;
     } catch(err){
@@ -3691,11 +3736,13 @@ async function syncAllContactsToAirtable(){
     const companyName = linkedCompanyNames[i];
     const entry = grid.companyLinkedIn[companyName];
     btn.innerHTML = `<i class="ti ti-loader-2"></i> Syncing LinkedIn ${i+1}/${linkedCompanyNames.length}...`;
+    const bulkLinkedinFields = { companyName, linkedinUrl: entry.linkedinUrl, linkedinSlug: entry.linkedinSlug };
+    if(!airtableWriteGuard('company/linkedin', bulkLinkedinFields, ['companyName','linkedinSlug'])) continue;
     try {
       await fetch('/api/airtable/company/linkedin', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ companyName, linkedinUrl: entry.linkedinUrl, linkedinSlug: entry.linkedinSlug })
+        body: JSON.stringify(bulkLinkedinFields)
       });
     } catch(err){
       console.warn('Airtable company LinkedIn sync failed for', companyName, err.message);
@@ -4465,19 +4512,22 @@ function addTouchPoint(cid) {
   }
 
   // Sync touch point to Airtable (outcome "Replied" gets flagged on the record server-side)
-  fetch('/api/airtable/touchpoint', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contactName: c.name,
-      company: c.company,
-      date,
-      type,
-      notes,
-      outcome,
-      communicationMethod
-    })
-  }).catch(err => console.warn('Airtable touch point sync failed:', err.message));
+  const manualTpFields = {
+    contactName: c.name,
+    company: c.company,
+    date,
+    type,
+    notes,
+    outcome,
+    communicationMethod
+  };
+  if(airtableWriteGuard('touchpoint', manualTpFields, ['contactName','type'])){
+    fetch('/api/airtable/touchpoint', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(manualTpFields)
+    }).catch(err => console.warn('Airtable touch point sync failed:', err.message));
+  }
 
   if (outcome === 'Meeting Booked') {
     trackConversion(c, date, communicationMethod);
@@ -4485,16 +4535,19 @@ function addTouchPoint(cid) {
 
   // Default next-touch cadence: 7 days on from this touch point
   const nextTouchDate = addDays(date, 7);
-  fetch('/api/airtable/contact/stage', {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contactName: c.name,
-      company: c.company,
-      nextTouchDate,
-      painPoints: selectedPainPoints
-    })
-  }).catch(err => console.warn('Airtable next-touch sync failed:', err.message));
+  const nextTouchFields = {
+    contactName: c.name,
+    company: c.company,
+    nextTouchDate,
+    painPoints: selectedPainPoints
+  };
+  if(airtableWriteGuard('contact/stage', nextTouchFields, ['contactName'])){
+    fetch('/api/airtable/contact/stage', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(nextTouchFields)
+    }).catch(err => console.warn('Airtable next-touch sync failed:', err.message));
+  }
 
   notifyWebhook(c);
   toast('Touch point logged', 'success');
@@ -5165,16 +5218,19 @@ async function confirmBooking(cid){
     const dealData = await dealRes.json();
     if(!dealRes.ok || !dealData.success) throw new Error(dealData.error || 'Deal save failed');
 
+    const bookingTpFields = {
+      contactRecordIds: [cid],
+      date, type: 'Meeting',
+      notes: `${service} booked${cta ? ' via ' + cta : ''}`,
+      outcome: 'Meeting Booked',
+      campaignName: campaign.name
+    };
+    if(!cid) throw new Error('No contact id for this booking');
+    if(!airtableWriteGuard('touchpoint', bookingTpFields, ['type'])) throw new Error('Touch point is missing required data');
     const tpRes = await fetch('/api/airtable/touchpoint', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({
-        contactRecordIds: [cid],
-        date, type: 'Meeting',
-        notes: `${service} booked${cta ? ' via ' + cta : ''}`,
-        outcome: 'Meeting Booked',
-        campaignName: campaign.name
-      })
+      body: JSON.stringify(bookingTpFields)
     });
     const tpData = await tpRes.json();
     if(!tpRes.ok || !tpData.success) throw new Error(tpData.error || 'Touch point save failed');
@@ -7887,7 +7943,22 @@ function formatSequenceForAirtable(sequence){
 }
 
 function syncCampaignToAirtable(campaign, onSynced){
-  const contactNames = state.contacts.filter(c => (campaign.contactIds||[]).includes(c.id)).map(c => c.name);
+  if(!campaign || !airtableWriteGuard('campaign', { name: campaign.name }, ['name'])) return;
+
+  const sourceContactIds = campaign.contactIds || [];
+  const contactNames = state.contacts.filter(c => sourceContactIds.includes(c.id)).map(c => c.name);
+  // state.contacts hydrates async from Airtable on load (see
+  // hydrateContactsFromAirtable) and starts out empty - if this fires
+  // before that resolves, sourceContactIds would resolve to zero names even
+  // though the campaign really does have contacts, and the unconditional
+  // 'Contact IDs' write below (POST /api/airtable/campaign) would blank out
+  // the real value already saved in Airtable. Bail rather than risk that;
+  // the caller's next edit will retry the sync once contacts are loaded.
+  if(sourceContactIds.length && !contactNames.length){
+    console.warn('Airtable campaign sync blocked: contacts not loaded yet, refusing to overwrite Contact IDs with blank for', campaign.name);
+    return;
+  }
+
   fetch('/api/airtable/campaign', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -7940,10 +8011,12 @@ function linkContactsToCampaignAirtable(campaign, contactNames){
 }
 
 function syncCampaignStatusToAirtable(campaign){
+  const statusFields = { name: campaign.name, status: campaign.status };
+  if(!airtableWriteGuard('campaign/status', statusFields, ['name','status'])) return;
   fetch('/api/campaign/status', {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: campaign.name, status: campaign.status })
+    body: JSON.stringify(statusFields)
   }).catch(err => console.warn('Campaign status sync failed:', err.message));
 }
 
@@ -10290,7 +10363,11 @@ async function resetAllDataConfirmed(){
   const btn = document.getElementById('confirmResetAllDataBtn');
   if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Wiping...'; }
   try {
-    const res = await fetch('/api/wipe-data', { method: 'POST' });
+    const res = await fetch('/api/wipe-data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: 'WIPE ALL DATA' })
+    });
     const json = await res.json();
     if(!res.ok || !json.success) throw new Error(json.error || 'Wipe failed');
   } catch(err){
