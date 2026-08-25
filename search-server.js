@@ -2605,7 +2605,15 @@ app.post('/api/apollo/search-contacts', async (req, res) => {
 
       const data = await apolloRes.json();
       people = people.concat(data.people || []);
-      totalPages = (data.pagination && data.pagination.total_pages) || 1;
+      // Falls back to computing pages from total_entries when total_pages
+      // itself is missing/zero on a given response - belt-and-braces in
+      // case a particular account/plan's response omits one but not the
+      // other, so a present total_entries alone still doesn't leave this
+      // stuck reporting 1 page forever.
+      const pagination = data.pagination || {};
+      totalPages = pagination.total_pages
+        || (pagination.total_entries ? Math.ceil(pagination.total_entries / (apolloBody.per_page || 100)) : 1);
+      console.log(`Apollo search page ${page}/${totalPages} - ${(data.people || []).length} people this page, pagination: ${JSON.stringify(pagination)}`);
       page++;
     } while (page <= totalPages && page <= MAX_PAGES);
 
