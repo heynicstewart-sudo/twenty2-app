@@ -2333,7 +2333,18 @@ async function loggerCreateInlineContact(){
     if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
 
     if(!state.contacts.some(c => c.id === data.recordId)){
-      state.contacts.push({ id: data.recordId, name, company, role, url: linkedinUrl });
+      // Same full shape createManualGridContact uses (gridId resolved from
+      // company, same as hydrateContactsFromAirtable does on a real reload)
+      // - every other reader of state.contacts (Today's Actions on Home in
+      // particular) assumes every contact has thread/state/seqId etc. and
+      // throws on one that doesn't, so a partial object here isn't safe
+      // even though the Logger itself never reads those fields.
+      state.contacts.push({
+        id: data.recordId, gridId: resolveGridIdByCompany(company), name, company, role, url: linkedinUrl,
+        seqId: role === 'Digital and Tech' ? 'digitalTech' : 'seniorLeaders', state:'found',
+        foundDate: isoDate(TODAY), connReqDate:null, connDate:null, notes:'',
+        thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[]
+      });
     }
     window.__logger.contactId = data.recordId;
     window.__logger.showAddContact = false;
@@ -2953,7 +2964,14 @@ async function loggerAICreateContact(localId){
     if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
 
     if(!state.contacts.some(c => c.id === data.recordId)){
-      state.contacts.push({ id: data.recordId, name, company, role, url: '' });
+      // Same full shape as loggerCreateInlineContact's fix above - a
+      // partial object here crashed Today's Actions on Home the same way.
+      state.contacts.push({
+        id: data.recordId, gridId: resolveGridIdByCompany(company), name, company, role, url: '',
+        seqId: role === 'Digital and Tech' ? 'digitalTech' : 'seniorLeaders', state:'found',
+        foundDate: isoDate(TODAY), connReqDate:null, connDate:null, notes:'',
+        thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[]
+      });
     }
     item.contactName = name;
     item.company = company;
@@ -3200,16 +3218,63 @@ function computeTodaysActions(){
     .sort((a,b) => (b.daysSinceTouch||0) - (a.daysSinceTouch||0));
 }
 
+// Today's Actions sub-tabs - filter the same computed actions list by
+// what the action actually asks for, rather than recomputing anything.
+// 'connection'/'message' key off the action type computeTodaysActions()
+// already produced (see getFastActionForCampaignContact/
+// getNaturalContactAction above); 'followup' keys off lastTouchPointDate
+// directly since "no touch point in 14 days" isn't tied to any one action
+// type - it can apply regardless of what the card's own action is.
+const TODAYS_ACTIONS_TABS = [
+  ['connection', 'Send Connection'],
+  ['message', 'Send Message'],
+  ['followup', 'Follow Up']
+];
+
+function todaysActionMatchesTab(a, tabId){
+  if(tabId === 'connection') return a.type === 'Send connection';
+  if(tabId === 'message') return (a.type === 'Generate message' && a.messageNumber === 1) || a.type === 'Send first message';
+  if(tabId === 'followup'){
+    const lastTouch = lastTouchPointDate(a.contact);
+    const days = lastTouch ? daysBetween(lastTouch) : null;
+    return days === null || days >= 14;
+  }
+  return true;
+}
+
+function setTodaysActionsTab(tab){
+  window.__todaysActionsTab = tab;
+  renderPage();
+}
+
 function renderTodaysActions(){
   const actions = computeTodaysActions();
+  const counts = {};
+  TODAYS_ACTIONS_TABS.forEach(([key]) => { counts[key] = actions.filter(a => todaysActionMatchesTab(a, key)).length; });
+
+  let activeTab = window.__todaysActionsTab;
+  if(!activeTab || !counts.hasOwnProperty(activeTab)){
+    const firstWithResults = TODAYS_ACTIONS_TABS.find(([key]) => counts[key] > 0);
+    activeTab = firstWithResults ? firstWithResults[0] : TODAYS_ACTIONS_TABS[0][0];
+  }
+  const filtered = actions.filter(a => todaysActionMatchesTab(a, activeTab));
+
+  // Reset before rendering so "Mark all as done" (which reads this map as a
+  // side effect of renderTodaysActionItem) only ever sees the cards actually
+  // showing under the active tab, not ones left over from a previous tab.
+  window.__todaysActions = {};
+
   return `
   <div class="card" style="margin-bottom:22px;">
     <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;">
       <span><i class="ti ti-list-check"></i> Today's actions ${actions.length ? `<span class="count-pill has" style="margin-left:6px;">${actions.length}</span>` : ''}</span>
-      ${actions.length ? `<button class="btn btn-secondary btn-sm" id="markAllDoneBtn" onclick="handleMarkAllActionsDone()"><i class="ti ti-checks"></i> Mark all as done</button>` : ''}
+      ${filtered.length ? `<button class="btn btn-secondary btn-sm" id="markAllDoneBtn" onclick="handleMarkAllActionsDone()"><i class="ti ti-checks"></i> Mark all as done</button>` : ''}
+    </div>
+    <div class="seq-tabs" style="margin-top:12px;">
+      ${TODAYS_ACTIONS_TABS.map(([key,label]) => `<div class="seq-tab ${activeTab===key?'active':''}" onclick="setTodaysActionsTab('${key}')">${label} <span class="count-pill ${counts[key]>0?'has':''}" style="margin-left:4px;">${counts[key]}</span></div>`).join('')}
     </div>
     <div id="todaysActionsList">
-      ${actions.length ? actions.map(a => renderTodaysActionItem(a)).join('') : '<div class="empty-state">Nothing needs attention today — nice work.</div>'}
+      ${filtered.length ? filtered.map(a => renderTodaysActionItem(a)).join('') : '<div class="empty-state">Nothing needs attention today — nice work.</div>'}
     </div>
   </div>`;
 }
