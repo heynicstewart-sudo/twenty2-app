@@ -167,14 +167,27 @@ async function findRecordByFieldName(table, fieldName, value) {
 // fine for routes that just display/search, but not safe for the Trigify
 // sync routes below, which need every Contact regardless of table size.
 async function airtableFetchAllRecords(table) {
+  return airtableFetchAllPaginated(table, '');
+}
+
+// Same offset-following pagination as airtableFetchAllRecords above, but
+// also carries an arbitrary extra query string (filterByFormula, sort,
+// etc.) on every page - for routes that need a raw fetch instead of
+// airtableRequest/airtableFetchAllRecords because they append query params
+// to a table name those helpers would encodeURIComponent() whole (see the
+// GET /api/airtable/company route below for why). Used wherever a raw,
+// single-page `fetch(...&filterByFormula=...)` call was silently capping
+// results at Airtable's 100-per-page default.
+async function airtableFetchAllPaginated(table, extraQueryString) {
   const records = [];
   let offset;
   do {
     const qs = new URLSearchParams({ pageSize: '100' });
     if (offset) qs.set('offset', offset);
-    const res = await fetch(`${AIRTABLE_URL}/${encodeURIComponent(table)}?${qs.toString()}`, {
-      headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` }
-    });
+    const url = extraQueryString
+      ? `${AIRTABLE_URL}/${encodeURIComponent(table)}?${extraQueryString}&${qs.toString()}`
+      : `${AIRTABLE_URL}/${encodeURIComponent(table)}?${qs.toString()}`;
+    const res = await fetch(url, { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } });
     if (!res.ok) { const err = await res.text(); throw new Error(`Airtable error ${res.status}: ${err}`); }
     const data = await res.json();
     records.push(...(data.records || []));
@@ -933,28 +946,19 @@ app.get('/api/airtable/company', async (req, res) => {
   const sortQs = `sort[0][field]=${encodeURIComponent('Company Name')}&sort[0][direction]=asc`;
 
   try {
+    // airtableFetchAllPaginated, not a single raw fetch - Airtable caps a
+    // page at 100 records, and a grid with more companies than that was
+    // silently only ever getting the first page. filterByFormula/sort are
+    // carried as the extra query string since airtableRequest/
+    // airtableFetchAllRecords only take a bare table name.
     if (gridName) {
-      // Raw fetch with filterByFormula, not airtableRequest - that helper
-      // encodeURIComponent()s the whole `table` argument, which would
-      // double-encode a query string appended to it.
-      const filterRes = await fetch(
-        `${AIRTABLE_URL}/Companies?filterByFormula=${encodeURIComponent(`{Grid Name}="${gridName}"`)}&${sortQs}`,
-        { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
-      );
-      const filterData = await filterRes.json();
-      if (!filterRes.ok) throw new Error(filterData.error ? JSON.stringify(filterData.error) : `Airtable error ${filterRes.status}`);
-      return res.json(filterData.records || []);
+      const filterQs = `filterByFormula=${encodeURIComponent(`{Grid Name}="${gridName}"`)}&${sortQs}`;
+      const records = await airtableFetchAllPaginated('Companies', filterQs);
+      return res.json(records);
     }
 
-    // Same raw-fetch reasoning as above - airtableRequest only takes a bare
-    // table name (which it encodeURIComponent()s whole), so it can't carry
-    // an appended sort query string either.
-    const sortedRes = await fetch(`${AIRTABLE_URL}/Companies?${sortQs}`, {
-      headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` }
-    });
-    const sortedData = await sortedRes.json();
-    if (!sortedRes.ok) throw new Error(sortedData.error ? JSON.stringify(sortedData.error) : `Airtable error ${sortedRes.status}`);
-    res.json(sortedData.records || []);
+    const records = await airtableFetchAllPaginated('Companies', sortQs);
+    res.json(records);
   } catch (err) {
     console.error('Airtable company list error:', err.message);
     res.status(500).json({ error: err.message });
