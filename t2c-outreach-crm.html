@@ -1040,6 +1040,28 @@ function resolveGridIdByName(name){
   return grid.id;
 }
 
+// Contacts has no "Grid Name" field of its own on the real Airtable table
+// (see the note on createOrUpdateAirtableContact in search-server.js -
+// deliberately not added there), so hydrateContactsFromAirtable can't
+// resolve a contact's grid the way hydrateCompaniesFromAirtable resolves a
+// company's grid (by name, via resolveGridIdByName above). Derives it from
+// the contact's company instead - every grid's companies list is
+// authoritative (from Companies.Grid Name), so whichever grid actually has
+// this company on it is the right one. Requires state.grids[].companies to
+// already be populated, i.e. hydrateCompaniesFromAirtable must run before
+// hydrateContactsFromAirtable, not in parallel with it.
+//
+// Ambiguous if the same company name was added to more than one grid -
+// picks the first match, same "can't disambiguate, pick one" convention
+// currentGridCampaignName() already uses for a grid/campaign link that
+// isn't 1:1.
+function resolveGridIdByCompany(company){
+  if(!company) return state.grids[0] ? state.grids[0].id : null;
+  const key = company.toLowerCase();
+  const grid = state.grids.find(g => (g.companies||[]).some(c => c.toLowerCase() === key));
+  return grid ? grid.id : (state.grids[0] ? state.grids[0].id : null);
+}
+
 function openGrid(gridId){
   window.__gridReturnTo = null;
   state.currentGridId = gridId;
@@ -3957,13 +3979,14 @@ async function hydrateContactsFromAirtable(){
     state.contacts = records.map(r => {
       const f = r.fields || {};
       const role = f['Job Title'] || '';
+      const company = f['Company'] || '';
       const enrichment = parseContactEnrichment(f['AI Summary']);
       if(enrichment) window.__enrichmentProfiles[r.id] = enrichment;
       return {
         id: r.id || uid('c'),
-        gridId: resolveGridIdByName(f['Grid Name']),
+        gridId: resolveGridIdByCompany(company),
         name: f['Full Name'] || '',
-        company: f['Company'] || '',
+        company: company,
         role: role,
         url: f['LinkedIn URL'] || '',
         seqId: role === 'Digital and Tech' ? 'digitalTech' : 'seniorLeaders',
@@ -10916,23 +10939,28 @@ renderPage();
 // Contacts, campaigns, companies, grids, sequences, settings, bookings,
 // dead contacts and last analysis are never restored from localStorage
 // (see persistState/loadPersistedState) - always fetched fresh here
-// instead. Grids hydrate first: both hydrateContactsFromAirtable and
-// hydrateCompaniesFromAirtable resolve each record's grid by name via
-// resolveGridIdByName, which creates (and syncs back to Airtable) a new
-// local grid if it doesn't find a match - running those before state.grids
-// is populated from Airtable would spuriously create duplicate grids for
-// ones that already exist there but just haven't loaded yet. Campaigns
-// hydrate after both contacts and grids resolve, since it resolves the
-// "Contact IDs"/"Grid IDs" it gets from Airtable against state.contacts/
-// state.grids. Bookings resolve contactId against state.contacts the same
-// way, so it's chained after contacts too. Sequences/Settings/Last
-// Analysis/Dead Contacts are all independent of the rest.
+// instead. Grids hydrate first: hydrateCompaniesFromAirtable resolves each
+// company's grid by name via resolveGridIdByName, which creates (and syncs
+// back to Airtable) a new local grid if it doesn't find a match - running
+// it before state.grids is populated from Airtable would spuriously create
+// duplicate grids for ones that already exist there but just haven't
+// loaded yet. Contacts hydrate after companies (not in parallel) since
+// Contacts has no "Grid Name" field of its own on the real Airtable table -
+// hydrateContactsFromAirtable derives each contact's grid from its company
+// via resolveGridIdByCompany, which needs state.grids[].companies already
+// populated to have anything to match against. Campaigns hydrate after
+// both contacts and grids resolve, since it resolves the "Contact IDs"/
+// "Grid IDs" it gets from Airtable against state.contacts/state.grids.
+// Bookings resolve contactId against state.contacts the same way, so it's
+// chained after contacts too. Sequences/Settings/Last Analysis/Dead
+// Contacts are all independent of the rest.
 hydrateGridsFromAirtable().then(() => {
-  hydrateContactsFromAirtable().then(() => {
-    hydrateCampaignsFromAirtable();
-    hydrateBookingsFromAirtable();
+  hydrateCompaniesFromAirtable().then(() => {
+    hydrateContactsFromAirtable().then(() => {
+      hydrateCampaignsFromAirtable();
+      hydrateBookingsFromAirtable();
+    });
   });
-  hydrateCompaniesFromAirtable();
 });
 hydrateSequencesFromAirtable();
 hydrateSettingsFromAirtable();

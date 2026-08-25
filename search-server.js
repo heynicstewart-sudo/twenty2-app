@@ -269,12 +269,38 @@ app.use(express.json());
 // ===================== AIRTABLE ROUTES =====================
 
 // Fetch all contacts from Airtable
+// Contacts.Company is a linked-record field (createOrUpdateAirtableContact
+// below writes it as fields['Company'] = [companyRecord.id]), so a plain
+// GET returns it as an array of record ids, not the company name text the
+// client has always expected (hydrateContactsFromAirtable does
+// `company: f['Company'] || ''`, with no array handling). Resolved here,
+// server-side, so every caller of this route keeps getting a plain string
+// without needing its own fix - an unresolved array reaching the client
+// silently broke every grid-cell match (string comparison against a real
+// company name never matches an array) and crashed esc() wherever a
+// contact's company was rendered (Array has no .replace).
 app.get('/api/airtable/contact', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
   try {
-    const data = await airtableRequest('GET', 'Contacts');
-    res.json(data.records || []);
+    const [contactRecords, companyRecords] = await Promise.all([
+      airtableFetchAllRecords('Contacts'),
+      airtableFetchAllRecords('Companies')
+    ]);
+
+    const companyNameById = {};
+    companyRecords.forEach(r => { companyNameById[r.id] = r.fields['Company Name'] || ''; });
+
+    const records = contactRecords.map(r => {
+      const companyField = r.fields['Company'];
+      if (!Array.isArray(companyField)) return r;
+      return {
+        ...r,
+        fields: { ...r.fields, 'Company': companyNameById[companyField[0]] || '' }
+      };
+    });
+
+    res.json(records);
   } catch (err) {
     console.error('Airtable contact list error:', err.message);
     res.status(500).json({ error: err.message });
