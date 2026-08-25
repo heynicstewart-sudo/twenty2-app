@@ -2121,12 +2121,34 @@ function initLogger(){
   };
 }
 
+// Manual/AI Assistant toggle - window.__loggerMode, defaulting to 'manual'
+// so nothing about the existing manual flow's behaviour changes for anyone
+// who never touches the toggle. Manual mode's markup below is completely
+// unchanged from before the toggle existed, just moved into its own
+// function so renderLoggerPage can switch between it and renderLoggerAIMode.
 function renderLoggerPage(){
   if(!window.__logger) initLogger();
-  const l = window.__logger;
+  if(!window.__loggerAI) initLoggerAI();
+  const mode = window.__loggerMode || 'manual';
   return `
   <div class="section-title" style="font-size:20px;margin-bottom:2px;">Logger</div>
   <div class="muted" style="margin-bottom:16px;">Quickly capture any touch point - LinkedIn messages, calls, meetings, proposals, research and more - straight into Airtable.</div>
+  <div class="logger-type-grid" style="grid-template-columns:repeat(2,minmax(140px,180px));margin-bottom:16px;">
+    <div class="logger-type-btn ${mode==='manual'?'active':''}" onclick="setLoggerMode('manual')"><i class="ti ti-edit"></i> Manual</div>
+    <div class="logger-type-btn ${mode==='ai'?'active':''}" onclick="setLoggerMode('ai')"><i class="ti ti-sparkles"></i> AI Assistant</div>
+  </div>
+  ${mode === 'ai' ? renderLoggerAIMode() : renderLoggerManualMode()}
+  `;
+}
+
+function setLoggerMode(mode){
+  window.__loggerMode = mode;
+  renderPage();
+}
+
+function renderLoggerManualMode(){
+  const l = window.__logger;
+  return `
   <div class="card">
     ${l.showCampaignStep ? renderLoggerCampaignStep() : `
     ${renderLoggerTypeSelector()}
@@ -2680,6 +2702,333 @@ async function submitLoggerEntry(){
   } catch(err){
     toast('Could not save touch point: ' + err.message, 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-device-floppy"></i> Save touch point'; }
+  }
+}
+
+/* ---- AI Assistant mode: free-text/screenshot dump -> multiple confirmed
+   touch points. Entirely separate state/flow from window.__logger (manual
+   mode) above - nothing here is read by or writes into manual mode's state,
+   so switching the toggle back to Manual leaves it exactly as it was. ---- */
+
+function initLoggerAI(){
+  window.__loggerAI = {
+    dumpText: '',
+    dumpImage: null,
+    extracted: []
+  };
+}
+
+function renderLoggerAIMode(){
+  const ai = window.__loggerAI;
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div class="field"><label>Dump today's interactions</label>
+      <textarea id="loggerAIDumpText" rows="4" placeholder="e.g. Had a call with Stuart at Woodside, sent a LinkedIn message to Craig at BHP, met Elle at a networking event">${esc(ai.dumpText)}</textarea>
+    </div>
+    <div class="learning-panel" ${dropZoneAttrs('loggerAIImageInput')} style="margin-bottom:14px;">
+      <h4><i class="ti ti-message-circle"></i> Or upload a screenshot</h4>
+      <input type="file" id="loggerAIImageInput" accept="image/*" style="display:none;" onchange="handleLoggerAIImageUpload(event)">
+      <button class="btn btn-secondary btn-sm" onclick="document.getElementById('loggerAIImageInput').click()"><i class="ti ti-upload"></i> Upload screenshot</button>
+      <div id="loggerAIImagePreview" style="font-size:11.5px;margin-top:8px;"></div>
+    </div>
+    <button class="btn btn-primary" id="loggerAIParseBtn" onclick="runLoggerAIExtract()"><i class="ti ti-sparkles"></i> Extract touch points</button>
+  </div>
+  <div id="loggerAIResults">${renderLoggerAIResults()}</div>
+  `;
+}
+
+function handleLoggerAIImageUpload(event){
+  const file = event.target.files && event.target.files[0];
+  event.target.value = '';
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const match = String(reader.result).match(/^data:([^;]+);base64,(.*)$/);
+    if(match){
+      window.__loggerAI.dumpImage = { mediaType: match[1], base64: match[2] };
+      const el = document.getElementById('loggerAIImagePreview');
+      if(el) el.innerHTML = `<span class="tag tag-connected">${esc(file.name)} attached</span> <button class="btn btn-ghost btn-sm" onclick="clearLoggerAIImage()"><i class="ti ti-x"></i></button>`;
+    }
+  };
+  reader.onerror = () => toast('Could not read that file', 'warn');
+  reader.readAsDataURL(file);
+}
+function clearLoggerAIImage(){
+  window.__loggerAI.dumpImage = null;
+  const el = document.getElementById('loggerAIImagePreview');
+  if(el) el.innerHTML = '';
+}
+
+// Best-guess existing-contact match for one AI-extracted touch point - an
+// exact name match first (narrowed by company when both share one), then
+// the same Levenshtein fuzzy check the job title suggestion above uses, so
+// an obvious hit doesn't need the rep to search by hand. Anything below the
+// similarity floor is left unmatched rather than risking a wrong contact.
+function loggerFindBestContactMatch(name, company){
+  if(!name) return null;
+  const typedName = name.trim().toLowerCase();
+  const typedCompany = (company || '').trim().toLowerCase();
+  if(!typedName) return null;
+
+  const exact = state.contacts.find(c => c.name.trim().toLowerCase() === typedName && (!typedCompany || (c.company||'').toLowerCase() === typedCompany));
+  if(exact) return exact;
+
+  let best = null, bestScore = 0;
+  state.contacts.forEach(c => {
+    const cName = c.name.trim().toLowerCase();
+    const distance = levenshteinDistance(typedName, cName);
+    const similarity = 1 - distance / Math.max(typedName.length, cName.length);
+    const companyBoost = typedCompany && (c.company||'').toLowerCase() === typedCompany ? 0.1 : 0;
+    const score = similarity + companyBoost;
+    if(score > bestScore){ bestScore = score; best = c; }
+  });
+  return (best && bestScore >= 0.7) ? best : null;
+}
+
+async function runLoggerAIExtract(){
+  const ai = window.__loggerAI;
+  const text = (document.getElementById('loggerAIDumpText')?.value || '').trim();
+  ai.dumpText = text;
+  if(!text && !ai.dumpImage){ toast('Paste a summary or upload a screenshot first', 'warn'); return; }
+
+  const btn = document.getElementById('loggerAIParseBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Reading...'; }
+
+  try {
+    const res = await fetch('/api/logger/extract-touchpoints', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ text: text || undefined, image: ai.dumpImage || undefined })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+
+    const results = data.touchPoints || [];
+    if(!results.length){
+      toast('No touch points found in that - try adding more detail', 'warn');
+      if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-sparkles"></i> Extract touch points'; }
+      return;
+    }
+
+    const validTypes = new Set(LOGGER_TYPES.map(t => t.airtableType));
+    ai.extracted = results.map((r, i) => ({
+      localId: 'ai_' + i + '_' + Date.now(),
+      contactName: r.contactName || '',
+      company: r.company || '',
+      type: validTypes.has(r.type) ? r.type : 'Call',
+      summary: r.summary || '',
+      date: r.date || isoDate(TODAY),
+      matchedContactId: null,
+      showCreateNew: false,
+      campaignId: '',
+      confirmed: false
+    }));
+    ai.extracted.forEach(item => {
+      const match = loggerFindBestContactMatch(item.contactName, item.company);
+      if(match) item.matchedContactId = match.id;
+    });
+
+    ai.dumpText = '';
+    ai.dumpImage = null;
+    renderPage();
+  } catch(err){
+    toast('Could not extract touch points: ' + err.message, 'warn');
+  } finally {
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-sparkles"></i> Extract touch points'; }
+  }
+}
+
+function renderLoggerAIResults(){
+  const ai = window.__loggerAI;
+  if(!ai.extracted.length) return '';
+  return ai.extracted.map(item => renderLoggerAICard(item)).join('');
+}
+
+function renderLoggerAICard(item){
+  if(item.confirmed){
+    const contactName = (state.contacts.find(c => c.id === item.matchedContactId) || {}).name || item.contactName;
+    return `<div class="card" style="margin-bottom:12px;background:#eaf7f0;border-color:#c9e9d7;"><i class="ti ti-circle-check" style="color:var(--success);"></i> Logged for ${esc(contactName)}</div>`;
+  }
+  const matchedContact = item.matchedContactId ? state.contacts.find(c => c.id === item.matchedContactId) : null;
+  return `
+  <div class="card" style="margin-bottom:12px;" data-logger-ai-id="${item.localId}">
+    <div class="field"><label>Contact</label>
+      ${matchedContact
+        ? `<div><span class="pill">${esc(matchedContact.name)}${matchedContact.company ? ` <span class="muted">(${esc(matchedContact.company)})</span>` : ''}</span> <button class="btn btn-ghost btn-sm" onclick="loggerAIClearMatch('${item.localId}')"><i class="ti ti-x"></i></button></div>`
+        : renderLoggerAIContactPicker(item)}
+    </div>
+    <div class="row">
+      <div class="field"><label>Type</label>
+        <select onchange="loggerAIUpdateField('${item.localId}','type',this.value)">
+          ${LOGGER_TYPES.map(t => `<option value="${esc(t.airtableType)}" ${item.type===t.airtableType?'selected':''}>${esc(t.label)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field"><label>Date</label><input type="date" value="${esc(item.date)}" onchange="loggerAIUpdateField('${item.localId}','date',this.value)"></div>
+    </div>
+    <div class="field"><label>Summary</label><textarea rows="2" onchange="loggerAIUpdateField('${item.localId}','summary',this.value)">${esc(item.summary)}</textarea></div>
+    <div class="field"><label>Campaign</label>
+      <select onchange="loggerAIUpdateField('${item.localId}','campaignId',this.value)">
+        <option value="">General touch point (no campaign)</option>
+        ${state.campaigns.map(c => `<option value="${esc(c.id)}" ${item.campaignId===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}
+      </select>
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="confirmLoggerAICard('${item.localId}')"><i class="ti ti-check"></i> Confirm</button>
+  </div>
+  `;
+}
+
+function renderLoggerAIContactPicker(item){
+  return `
+  <input placeholder="Search contacts by name or company..." value="${esc(item.contactName)}" oninput="renderLoggerAIContactResults('${item.localId}', this.value)">
+  <div id="loggerAIContactResults-${item.localId}">${renderLoggerAIContactResultsHTML(item.contactName)}</div>
+  ${item.showCreateNew
+    ? renderLoggerAINewContactForm(item)
+    : `<button class="btn btn-secondary btn-sm" style="margin-top:6px;" onclick="loggerAIToggleCreateNew('${item.localId}', true)"><i class="ti ti-user-plus"></i> Create new contact</button>`}
+  `;
+}
+
+function renderLoggerAIContactResultsHTML(query){
+  const q = (query || '').trim().toLowerCase();
+  if(!q) return '';
+  const matches = state.contacts.filter(c => c.name.toLowerCase().includes(q) || (c.company||'').toLowerCase().includes(q)).slice(0, 6);
+  if(!matches.length) return '<p class="muted" style="font-size:12px;">No matches.</p>';
+  return matches.map(c => `<div class="logger-result-row" onclick="loggerAISelectContact(this.closest('[data-logger-ai-id]').dataset.loggerAiId,'${c.id}')">${esc(c.name)}${c.company ? ` <span class="muted">— ${esc(c.company)}</span>` : ''}</div>`).join('');
+}
+
+function renderLoggerAIContactResults(localId, query){
+  const el = document.getElementById('loggerAIContactResults-'+localId);
+  if(el) el.innerHTML = renderLoggerAIContactResultsHTML(query);
+}
+
+function loggerAISelectContact(localId, contactId){
+  const item = window.__loggerAI.extracted.find(i => i.localId === localId);
+  if(item){ item.matchedContactId = contactId; item.showCreateNew = false; }
+  renderPage();
+}
+function loggerAIClearMatch(localId){
+  const item = window.__loggerAI.extracted.find(i => i.localId === localId);
+  if(item) item.matchedContactId = null;
+  renderPage();
+}
+
+function renderLoggerAINewContactForm(item){
+  return `
+  <div class="row" style="margin-top:8px;">
+    <div class="field"><input placeholder="Full name" value="${esc(item.contactName)}" onchange="loggerAIUpdateField('${item.localId}','contactName',this.value)"></div>
+    <div class="field"><input placeholder="Company" value="${esc(item.company)}" onchange="loggerAIUpdateField('${item.localId}','company',this.value)"></div>
+  </div>
+  <div class="field"><input placeholder="Job title" id="loggerAINewRole-${item.localId}"></div>
+  <div style="display:flex;gap:8px;">
+    <button class="btn btn-secondary btn-sm" onclick="loggerAIToggleCreateNew('${item.localId}', false)">Cancel</button>
+    <button class="btn btn-primary btn-sm" onclick="loggerAICreateContact('${item.localId}')"><i class="ti ti-user-plus"></i> Create contact</button>
+  </div>
+  `;
+}
+
+function loggerAIToggleCreateNew(localId, show){
+  const item = window.__loggerAI.extracted.find(i => i.localId === localId);
+  if(item) item.showCreateNew = show;
+  renderPage();
+}
+
+// Same required-job-title rule as the manual mode's inline "Add contact"
+// above (see loggerCreateInlineContact) - kept consistent rather than
+// letting this second entry point reintroduce the messy-data problem that
+// rule exists to prevent.
+async function loggerAICreateContact(localId){
+  const item = window.__loggerAI.extracted.find(i => i.localId === localId);
+  if(!item) return;
+  const name = item.contactName.trim();
+  const company = item.company.trim();
+  const role = (document.getElementById('loggerAINewRole-'+localId)?.value || '').trim();
+  if(!name || !company || !role){ toast('Name, company and job title are required', 'warn'); return; }
+
+  try {
+    const res = await fetch('/api/airtable/contact', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ name, company, role })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+
+    if(!state.contacts.some(c => c.id === data.recordId)){
+      state.contacts.push({ id: data.recordId, name, company, role, url: '' });
+    }
+    item.contactName = name;
+    item.company = company;
+    item.matchedContactId = data.recordId;
+    item.showCreateNew = false;
+    toast(name + ' added', 'success');
+    renderPage();
+  } catch(err){
+    toast('Could not add contact: ' + err.message, 'warn');
+  }
+}
+
+function loggerAIUpdateField(localId, field, value){
+  const item = window.__loggerAI.extracted.find(i => i.localId === localId);
+  if(item) item[field] = value;
+}
+
+// Writes straight through the existing POST /api/airtable/touchpoint route
+// (same one manual mode uses) the moment each card is confirmed, rather
+// than batching every card until all are reviewed - so progress already
+// made survives the rep getting interrupted partway through a long dump.
+async function confirmLoggerAICard(localId){
+  const item = window.__loggerAI.extracted.find(i => i.localId === localId);
+  if(!item) return;
+  if(!item.matchedContactId){ toast('Match or create a contact first', 'warn'); return; }
+  if(!item.summary.trim()){ toast('Add a summary before confirming', 'warn'); return; }
+
+  const cardEl = document.querySelector(`[data-logger-ai-id="${localId}"]`);
+  const btn = cardEl ? cardEl.querySelector('.btn-primary') : null;
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Saving...'; }
+
+  const contactName = (state.contacts.find(c => c.id === item.matchedContactId) || {}).name || item.contactName;
+  const campaign = item.campaignId ? state.campaigns.find(c => c.id === item.campaignId) : null;
+  const payload = {
+    contactRecordIds: [item.matchedContactId],
+    type: item.type,
+    date: item.date || isoDate(TODAY),
+    notes: item.summary,
+    campaignId: campaign ? campaign.id : undefined,
+    campaignName: campaign ? campaign.name : undefined
+  };
+  if(!airtableWriteGuard('logger-ai-touchpoint', payload, ['type'])){
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-check"></i> Confirm'; }
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/airtable/touchpoint', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+
+    fetch('/api/context/update-summaries', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ contactIds: [item.matchedContactId], campaignName: campaign ? campaign.name : undefined })
+    }).catch(err => console.warn('AI Summary refresh failed (non-fatal):', err.message));
+
+    if(campaign){
+      fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/contacts/link`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ contactNames: [contactName] })
+      }).catch(err => console.warn('Campaign Contact link failed (non-fatal):', err.message));
+    }
+
+    item.confirmed = true;
+    toast('Touch point logged for ' + contactName, 'success');
+    renderPage();
+  } catch(err){
+    toast('Could not save: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-check"></i> Confirm'; }
   }
 }
 

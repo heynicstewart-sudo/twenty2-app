@@ -1654,6 +1654,67 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
   }
 });
 
+// Logger tab's "AI Assistant" mode - a rep dumps a free-text summary of
+// several unrelated interactions in one go (or a screenshot covering more
+// than one), and this splits it into individual touch point candidates for
+// review. Deliberately a separate route from POST /api/logger/parse-
+// conversation above, which is scoped to one already-selected contact's
+// single conversation and returns a different shape (summary/sentiment/
+// objections/nextSteps) - reusing that name here would have broken the
+// existing manual "LinkedIn Message"/"LinkedIn Conversation" touch point
+// types, which already call it. This route has no Airtable side effects of
+// its own either; matching/creating the contact and saving each confirmed
+// touch point happens client-side against the existing POST /api/airtable/
+// contact and POST /api/airtable/touchpoint routes, same as manual mode.
+const LOGGER_EXTRACT_TYPES = ['LinkedIn Message', 'LinkedIn Conversation', 'Call', 'Meeting', 'Sales Proposal', 'Research', 'Email', 'Inbound Lead', 'Event'];
+
+app.post('/api/logger/extract-touchpoints', async (req, res) => {
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  const { image, text } = req.body || {};
+  if (!image && !text) return res.status(400).json({ error: 'image or text is required' });
+
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const prompt = `You are reading a free-text dump from a sales rep at T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM, summarising several interactions from their day in one go - e.g. "Had a call with Stuart at Woodside, sent a LinkedIn message to Craig at BHP, met Elle at a networking event".
+
+${text ? `Here is the dump:\n${text}` : 'Read the attached screenshot, which may cover more than one interaction.'}
+
+Extract every distinct touch point mentioned. For each one:
+- contactName: the person's name as given (a first name alone is fine if that's all that's mentioned).
+- company: their company, if mentioned. Empty string if not.
+- type: exactly one of ${LOGGER_EXTRACT_TYPES.map(t => `"${t}"`).join(', ')} - whichever best matches what's described.
+- summary: a concise one-sentence summary of what happened.
+- date: in YYYY-MM-DD format. Today's date is ${today}. Resolve any relative date mentioned (e.g. "yesterday", "Tuesday") against today; if no date is mentioned at all, use today's date.
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "touchPoints": [ { "contactName": string, "company": string, "type": string, "summary": string, "date": string } ] }`;
+
+    const content = image
+      ? [
+          { type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.base64 } },
+          { type: 'text', text: prompt }
+        ]
+      : prompt;
+
+    const parsed = await callClaudeJson(content, 1200);
+    const touchPoints = (Array.isArray(parsed.touchPoints) ? parsed.touchPoints : [])
+      .filter(t => t && t.contactName)
+      .map(t => ({
+        contactName: String(t.contactName).trim(),
+        company: t.company ? String(t.company).trim() : '',
+        type: LOGGER_EXTRACT_TYPES.includes(t.type) ? t.type : 'Call',
+        summary: t.summary ? String(t.summary).trim() : '',
+        date: /^\d{4}-\d{2}-\d{2}$/.test(t.date || '') ? t.date : today
+      }));
+
+    res.json({ success: true, touchPoints });
+  } catch (err) {
+    console.error('Logger extract-touchpoints error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Logger tab's post-create "Add to campaign" step - offered right after a
 // brand new contact is added inline, so a rep who's just met someone can
 // enrol them in a campaign immediately instead of doing it later from the
