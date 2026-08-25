@@ -2522,7 +2522,7 @@ app.post('/api/apollo/search-contacts', async (req, res) => {
     if (locations.length) apolloBody.person_locations = locations;
     if (keywords && keywords.trim()) apolloBody.q_keywords = keywords.trim();
 
-    const apolloRes = await fetch('https://api.apollo.io/api/v1/mixed_people/search', {
+    const apolloRes = await fetch('https://api.apollo.io/api/v1/mixed_people/api_search', {
       method: 'POST',
       headers: {
         'x-api-key': process.env.APOLLO_API_KEY,
