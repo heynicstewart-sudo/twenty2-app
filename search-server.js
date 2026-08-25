@@ -537,6 +537,79 @@ async function gridStillExistsInAirtable(gridId) {
   }
 }
 
+// Shared find-or-create-a-Company lookup - used by POST /api/airtable/company
+// (client-driven, one company at a time, e.g. "Add company") and the
+// fillMissing branch of runGridSearchJob below (server-driven, once a
+// contact's missing company has been found by search). Same behaviour
+// either way: returns the existing record if the name already matches one,
+// backfilling Grid Name onto it if it was missing, otherwise creates a
+// fresh record.
+async function findOrCreateCompanyRecord(name, gridName) {
+  const searchRes = await airtableFetchWithRetry(
+    `${AIRTABLE_URL}/Companies?filterByFormula=${encodeURIComponent(`{Company Name}="${name}"`)}`,
+    { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
+  );
+  const searchData = await searchRes.json();
+  const existing = searchData.records && searchData.records[0];
+  if (existing) {
+    if (gridName && !existing.fields['Grid Name']) {
+      await airtableRequest('PATCH', 'Companies', { records: [{ id: existing.id, fields: { 'Grid Name': gridName } }] });
+    }
+    return { id: existing.id, skipped: true };
+  }
+
+  const fields = { 'Company Name': name };
+  if (gridName) fields['Grid Name'] = gridName;
+  const data = await airtableRequest('POST', 'Companies', { records: [{ fields }] });
+  return { id: data.records[0].id, skipped: false };
+}
+
+// Reverse lookup for the fillMissing half of runDailySearch: given a
+// contact's name (and whichever of company/role is already known), finds
+// the other one. Distinct from searchContactViaSerper above, which finds a
+// brand new person for a known (company, role) pair - this instead
+// confirms one missing fact about an already-known person, so it's a
+// single targeted Serper query plus a Claude extraction pass rather than
+// searchContactViaSerper's confident-match heuristics (there's no LinkedIn
+// URL match to score here, just "what does the text say").
+async function searchMissingContactField({ name, linkedinUrl, knownCompany, knownRole, missingField }) {
+  if (!process.env.SERPER_API_KEY) {
+    const err = new Error('SERPER_API_KEY is not configured');
+    err.status = 500;
+    throw err;
+  }
+  if (!process.env.ANTHROPIC_API_KEY) {
+    const err = new Error('ANTHROPIC_API_KEY is not configured');
+    err.status = 500;
+    throw err;
+  }
+
+  const slug = extractLinkedInSlug(linkedinUrl || '');
+  const query = slug ? `site:linkedin.com/in/${slug}` : `${name} ${knownCompany || knownRole || ''} linkedin Australia`.trim();
+  const serperRes = await fetch(SERPER_URL, {
+    method: 'POST',
+    headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ q: query, gl: 'au', location: 'Australia' })
+  });
+  if (!serperRes.ok) throw new Error(`Serper API error: ${serperRes.status}`);
+  const data = await serperRes.json();
+  const snippets = (data.organic || []).slice(0, 5).map(r => `${r.title || ''}\n${r.snippet || ''}`).join('\n\n');
+  if (!snippets) return { found: false };
+
+  const fieldLabel = missingField === 'company' ? "this person's current employer (company name only)" : "this person's current job title";
+  const prompt = `Search results for "${name}"${knownCompany ? ` at ${knownCompany}` : ''}${knownRole ? ` (${knownRole})` : ''}:
+${snippets}
+
+Based only on the above search results, what is ${fieldLabel}? Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "found": boolean, "value": string }
+
+Set "found" to false and "value" to "" if the search results don't give a confident, specific answer - don't guess.`;
+
+  const parsed = await callClaudeJson(prompt, 300);
+  if (!parsed || !parsed.found || !parsed.value) return { found: false };
+  return { found: true, value: String(parsed.value).trim() };
+}
+
 async function runGridSearchJob(job, cells, campaignName) {
   // findCampaignRecordByName, not findRecordByFieldName - a campaign name
   // containing a double quote would break the latter's filterByFormula
@@ -566,30 +639,55 @@ async function runGridSearchJob(job, cells, campaignName) {
       return finish('cancelled', 'Grid no longer exists');
     }
 
-    const { company, role } = cells[i];
+    const cell = cells[i];
     let result;
-    try {
-      const searchResult = await searchContactViaSerper(company, role);
-      if (searchResult.found) {
-        const contactResult = await createOrUpdateAirtableContact({
-          name: searchResult.name,
-          company,
-          role,
-          linkedinUrl: searchResult.url,
-          state: 'found',
-          icpRoleCategory: role
-        });
-        if (campaignRecord) {
-          await linkGridContactToCampaign(contactResult.recordId, searchResult.name, campaignRecord, campaignContactRows);
+    if (cell.kind === 'fillMissing') {
+      const { contactId, name, linkedinUrl, knownCompany, knownRole, missingField, gridName } = cell;
+      try {
+        const searchResult = await searchMissingContactField({ name, linkedinUrl, knownCompany, knownRole, missingField });
+        if (searchResult.found) {
+          const patchFields = {};
+          if (missingField === 'role') {
+            patchFields['Job Title'] = searchResult.value;
+          } else {
+            const companyRecord = await findOrCreateCompanyRecord(searchResult.value, gridName);
+            patchFields['Company'] = [companyRecord.id];
+          }
+          await airtableRequest('PATCH', 'Contacts', { records: [{ id: contactId, fields: patchFields }], typecast: true });
+          job.filledCount++;
+          result = { kind: 'fillMissing', contactId, missingField, found: true, value: searchResult.value };
+        } else {
+          result = { kind: 'fillMissing', contactId, missingField, found: false };
         }
-        job.foundCount++;
-        result = { company, role, found: true, name: searchResult.name, url: searchResult.url, recordId: contactResult.recordId };
-      } else {
-        result = { company, role, found: false };
+      } catch (err) {
+        console.warn('Fill-missing-field search failed for', name, '-', err.message);
+        result = { kind: 'fillMissing', contactId, missingField, found: false, error: err.message };
       }
-    } catch (err) {
-      console.warn('Grid search failed for', company, role, '-', err.message);
-      result = { company, role, found: false, error: err.message };
+    } else {
+      const { company, role } = cell;
+      try {
+        const searchResult = await searchContactViaSerper(company, role);
+        if (searchResult.found) {
+          const contactResult = await createOrUpdateAirtableContact({
+            name: searchResult.name,
+            company,
+            role,
+            linkedinUrl: searchResult.url,
+            state: 'found',
+            icpRoleCategory: role
+          });
+          if (campaignRecord) {
+            await linkGridContactToCampaign(contactResult.recordId, searchResult.name, campaignRecord, campaignContactRows);
+          }
+          job.foundCount++;
+          result = { kind: 'newContact', company, role, found: true, name: searchResult.name, url: searchResult.url, recordId: contactResult.recordId };
+        } else {
+          result = { kind: 'newContact', company, role, found: false };
+        }
+      } catch (err) {
+        console.warn('Grid search failed for', company, role, '-', err.message);
+        result = { kind: 'newContact', company, role, found: false, error: err.message };
+      }
     }
     job.results.push(result);
     job.completed++;
@@ -608,6 +706,13 @@ app.post('/api/grid/run-search', (req, res) => {
   const { gridId, cells, campaignName } = req.body;
   if (!gridId) return res.status(400).json({ error: 'gridId is required' });
   if (!Array.isArray(cells) || !cells.length) return res.status(400).json({ error: 'cells (array of {company, role}) is required' });
+  // fillMissing cells (see runDailySearch/searchMissingContactField) need
+  // Claude to extract the missing field from search results, on top of the
+  // Serper key every cell kind needs - only required when this job actually
+  // has one, so a plain empty-cells-only search still works without it.
+  if (cells.some(c => c.kind === 'fillMissing') && !process.env.ANTHROPIC_API_KEY) {
+    return res.status(500).json({ error: 'ANTHROPIC_API_KEY is not configured' });
+  }
   if (runningGridSearchJobs.has(gridId)) {
     return res.status(409).json({ error: 'A daily search is already running for this grid' });
   }
@@ -620,6 +725,7 @@ app.post('/api/grid/run-search', (req, res) => {
     total: cells.length,
     completed: 0,
     foundCount: 0,
+    filledCount: 0,
     results: [],
     error: null,
     cancelled: false,
@@ -651,6 +757,7 @@ app.get('/api/grid/run-search/:jobId', (req, res) => {
     total: job.total,
     completed: job.completed,
     foundCount: job.foundCount,
+    filledCount: job.filledCount,
     results: job.results,
     error: job.error
   });
@@ -951,28 +1058,8 @@ app.post('/api/airtable/company', async (req, res) => {
   if (!name) return res.status(400).json({ error: 'name is required' });
 
   try {
-    const searchRes = await airtableFetchWithRetry(
-      `${AIRTABLE_URL}/Companies?filterByFormula=${encodeURIComponent(`{Company Name}="${name}"`)}`,
-      { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
-    );
-    const searchData = await searchRes.json();
-    const existing = searchData.records && searchData.records[0];
-    if (existing) {
-      if (gridName && !existing.fields['Grid Name']) {
-        await airtableRequest('PATCH', 'Companies', {
-          records: [{ id: existing.id, fields: { 'Grid Name': gridName } }]
-        });
-      }
-      return res.json({ success: true, skipped: true, recordId: existing.id });
-    }
-
-    const fields = { 'Company Name': name };
-    if (gridName) fields['Grid Name'] = gridName;
-
-    const data = await airtableRequest('POST', 'Companies', {
-      records: [{ fields }]
-    });
-    res.json({ success: true, skipped: false, recordId: data.records[0].id });
+    const record = await findOrCreateCompanyRecord(name, gridName);
+    res.json({ success: true, skipped: record.skipped, recordId: record.id });
   } catch (err) {
     console.error('Airtable company create error:', err.message);
     res.status(500).json({ error: err.message });

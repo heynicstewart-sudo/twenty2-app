@@ -3631,6 +3631,39 @@ function renderGridViewToolbar(gridId){
   `;
 }
 
+// Contacts on this grid with no company set yet - e.g. an Apollo import
+// that only came in with a job title. They can't occupy a (company, role)
+// matrix cell (there's no company row for them to sit in), so they'd
+// otherwise be invisible in Grid view even though they're really on this
+// grid - see renderUnassignedGridRow, which surfaces them in their own row
+// bucketed by role/column instead.
+function unassignedGridContacts(gridId){
+  return gridContacts(gridId).filter(c => !isContactExcludedFromGrid(c) && !(c.company||'').trim());
+}
+
+// One extra row, above the normal company rows, holding every company-less
+// contact on this grid - each bucketed into whichever column matches their
+// role, same column set as the rest of the matrix. Multiple contacts for
+// the same role just stack in that cell (renderGridCell only ever expects
+// one contact per company+role pair, so this can't reuse it directly).
+// Once "Run daily search" fills in a contact's company (see
+// applyFillMissingFieldResult), they disappear from here and appear in
+// their proper row on the next render.
+function renderUnassignedGridRow(grid, cols){
+  const unassigned = unassignedGridContacts(grid.id);
+  if(!unassigned.length) return '';
+  return `
+    <tr class="unassigned-row" style="background:var(--surface-2);">
+      <td class="company-cell"><span class="muted" style="font-style:italic;">No company yet</span></td>
+      ${cols.map(role => {
+        const matches = unassigned.filter(c => c.role === role);
+        if(!matches.length) return '<td><div class="cell-empty">—</div></td>';
+        return `<td>${matches.map(c=>renderGridCellHTML(c)).join('')}</td>`;
+      }).join('')}
+    </tr>
+  `;
+}
+
 function renderGridViewArea(grid, cols){
   ensureGridCampaignDataLoaded(grid.id);
   if(gridViewMode(grid.id) === 'table') return renderContactSpreadsheet(grid);
@@ -3639,6 +3672,7 @@ function renderGridViewArea(grid, cols){
     <table class="grid-table">
       <thead><tr><th>Company</th>${cols.map(c=>'<th>'+esc(c)+'</th>').join('')}</tr></thead>
       <tbody id="gridBody">
+        ${renderUnassignedGridRow(grid, cols)}
         ${grid.companies.map(company => `
           <tr>
             <td class="company-cell"><span style="cursor:pointer;" onclick="openCompanyDrawer('${esc(company)}')">${esc(company)}</span>${renderCompanyLinkedInIcon(company)}</td>
@@ -4436,18 +4470,54 @@ function markGridSearchFinished(gridId){
   if(window.__runningGridSearchGridIds) window.__runningGridSearchGridIds.delete(gridId);
 }
 
+// Contacts on this grid missing exactly one of company/role - candidates
+// for the "fill missing field" half of runDailySearch below. Only contacts
+// already synced to Airtable (a real record id) are included, since the
+// server patches the missing field straight onto their Contacts record -
+// a locally-added contact with no Airtable id yet has nothing to patch.
+function incompleteGridContacts(gridId){
+  return gridContacts(gridId).filter(c => {
+    if(isContactExcludedFromGrid(c)) return false;
+    if(!/^rec[A-Za-z0-9]{14}$/.test(c.id)) return false;
+    const hasCompany = !!(c.company||'').trim();
+    const hasRole = !!(c.role||'').trim();
+    return hasCompany !== hasRole;
+  });
+}
+
 // Daily search now runs server-side (POST /api/grid/run-search) instead of
 // this function driving the per-cell search+Airtable-write loop itself -
 // the server writes each match to Airtable as it finds it, and this just
 // starts the job then polls its status until done, patching grid cells in
 // as their results land. See runGridSearchJob in search-server.js.
+//
+// Two kinds of work go into one job: "newContact" cells search for a brand
+// new person to fill an empty (company, role) slot in the matrix (as
+// before); "fillMissing" cells search for the missing company or job title
+// of a contact that's already on this grid but only has one of the two -
+// e.g. an Apollo import that came in with a job title but no company. Both
+// share the same job/poll/cancel machinery so there's one progress bar and
+// one Cancel button for the whole run.
 async function runDailySearch(){
   const grid = currentGrid();
   if(isGridSearchRunning(grid.id)) return;
   const cols = grid.columns;
   const emptyCells = [];
-  grid.companies.forEach(company => cols.forEach(role => { if(!findContact(company, role)) emptyCells.push({company, role}); }));
-  if(!emptyCells.length){ toast('No open roles left to search — every cell has a contact','warn'); return; }
+  grid.companies.forEach(company => cols.forEach(role => { if(!findContact(company, role)) emptyCells.push({ kind:'newContact', company, role }); }));
+
+  const fillCells = incompleteGridContacts(grid.id).map(c => ({
+    kind: 'fillMissing',
+    contactId: c.id,
+    name: c.name,
+    linkedinUrl: c.url,
+    knownCompany: c.company,
+    knownRole: c.role,
+    missingField: c.company ? 'role' : 'company',
+    gridName: grid.name
+  }));
+
+  const cells = [...emptyCells, ...fillCells];
+  if(!cells.length){ toast('No open roles left to search — every cell has a contact','warn'); return; }
 
   const btn = document.getElementById('runSearchBtn');
   if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Searching...'; }
@@ -4456,7 +4526,7 @@ async function runDailySearch(){
     const td = document.querySelector(`.cell-empty[data-company="${cssEscape(company)}"][data-role="${cssEscape(role)}"]`);
     if(td) td.outerHTML = `<div class="cell-searching" data-company="${esc(company)}" data-role="${esc(role)}"><i class="ti ti-loader-2"></i>&nbsp;Searching...</div>`;
   });
-  renderGridSearchStatus(0, emptyCells.length, 0, grid.id);
+  renderGridSearchStatus(0, cells.length, 0, 0, grid.id);
 
   try {
     const startRes = await fetch('/api/grid/run-search', {
@@ -4466,7 +4536,7 @@ async function runDailySearch(){
       // exactly one campaign (same convention as gridCellDays/
       // gridSequenceStageMap above) - lets the server link newly-found
       // contacts into that campaign's Campaign Contacts table too.
-      body: JSON.stringify({ gridId: grid.id, cells: emptyCells, campaignName: currentGridCampaignName() })
+      body: JSON.stringify({ gridId: grid.id, cells, campaignName: currentGridCampaignName() })
     });
     const startData = await startRes.json();
     // A 409 here means the server's own per-grid lock rejected it (already
@@ -4474,11 +4544,11 @@ async function runDailySearch(){
     // surfaces through the same error path as any other start failure.
     if(!startRes.ok || !startData.jobId) throw new Error(startData.error || 'Could not start search');
     markGridSearchRunning(grid.id);
-    await pollGridSearchJob(startData.jobId, grid, emptyCells);
+    await pollGridSearchJob(startData.jobId, grid, cells);
   } catch(err){
     console.warn('Grid search failed to start:', err.message);
     resetStuckSearchingCells(emptyCells);
-    finishGridSearchUI(grid.id, { status:'error', error: err.message, foundCount:0, total: emptyCells.length });
+    finishGridSearchUI(grid.id, { status:'error', error: err.message, foundCount:0, filledCount:0, total: cells.length });
   }
 }
 
@@ -4499,8 +4569,11 @@ function resetStuckSearchingCells(cells){
 // (see body markup) that survives renderPage() swapping pages out, so the
 // indicator stays visible if the user navigates away mid-search. Refreshed
 // on every poll tick with the latest completed/total/foundCount.
-function renderGridSearchStatus(completed, total, foundCount, gridId){
-  const message = `Searching ${completed} of ${total} open roles — ${foundCount} found so far...`;
+function renderGridSearchStatus(completed, total, foundCount, filledCount, gridId){
+  const parts = [];
+  if(foundCount) parts.push(`${foundCount} found`);
+  if(filledCount) parts.push(`${filledCount} filled`);
+  const message = `Searching ${completed} of ${total} — ${parts.length ? parts.join(', ') : '0 found'} so far...`;
   const cancelBtn = `<button class="btn btn-ghost btn-sm" style="margin-left:10px;" onclick="cancelGridSearch('${gridId}')"><i class="ti ti-player-stop"></i> Cancel</button>`;
   const el = document.getElementById('gridNotification');
   if(el) el.innerHTML = `<div class="card" style="margin-bottom:14px;display:flex;align-items:center;"><i class="ti ti-loader-2"></i>&nbsp;${message}${cancelBtn}</div>`;
@@ -4522,6 +4595,18 @@ function renderGridSearchStatus(completed, total, foundCount, gridId){
 // state.contacts instead. A job finishing for a grid that isn't the one
 // currently open (or while on a different page entirely) never touches the
 // DOM at all here.
+//
+// job.foundCount is brand-new contacts placed into empty matrix cells;
+// job.filledCount is existing contacts that had their missing company or
+// job title filled in (see runDailySearch's fillMissing cells) - reported
+// separately since neither term alone describes what the other did.
+function gridSearchResultSummary(job){
+  const parts = [];
+  if(job.foundCount) parts.push(`${job.foundCount} new contact${job.foundCount===1?'':'s'} found`);
+  if(job.filledCount) parts.push(`${job.filledCount} missing field${job.filledCount===1?'':'s'} filled`);
+  return parts.length ? parts.join(', ') : 'nothing new found';
+}
+
 function finishGridSearchUI(gridId, job){
   markGridSearchFinished(gridId);
 
@@ -4533,7 +4618,7 @@ function finishGridSearchUI(gridId, job){
   } else if(job.status === 'cancelled'){
     toast(job.error === 'Grid no longer exists' ? 'Search stopped - grid no longer exists' : 'Search cancelled', 'warn');
   } else {
-    toast(job.foundCount+' new contacts found', 'success');
+    toast(gridSearchResultSummary(job), 'success');
   }
 
   if(state.currentPage !== 'grid') return;
@@ -4546,9 +4631,9 @@ function finishGridSearchUI(gridId, job){
   if(job.status === 'error'){
     el.innerHTML = `<div class="card" style="background:#fbe3dc;border-color:#f0c6b8;margin-bottom:14px;"><i class="ti ti-alert-circle" style="color:var(--danger);"></i> Daily search failed — ${esc(job.error||'unknown error')}</div>`;
   } else if(job.status === 'cancelled'){
-    el.innerHTML = `<div class="card" style="background:#f5f1e8;border-color:#e5dcc8;margin-bottom:14px;"><i class="ti ti-player-stop"></i> Search stopped — ${esc(job.error === 'Grid no longer exists' ? 'this grid no longer exists' : 'cancelled')}. ${job.foundCount} new contact${job.foundCount===1?'':'s'} found before stopping.</div>`;
+    el.innerHTML = `<div class="card" style="background:#f5f1e8;border-color:#e5dcc8;margin-bottom:14px;"><i class="ti ti-player-stop"></i> Search stopped — ${esc(job.error === 'Grid no longer exists' ? 'this grid no longer exists' : 'cancelled')}. ${esc(gridSearchResultSummary(job))} before stopping.</div>`;
   } else {
-    el.innerHTML = `<div class="card" style="background:#eaf7f0;border-color:#c9e9d7;margin-bottom:14px;"><i class="ti ti-circle-check" style="color:var(--success);"></i> Daily search complete — ${job.foundCount} new contact${job.foundCount===1?'':'s'} found across ${job.total} open roles.</div>`;
+    el.innerHTML = `<div class="card" style="background:#eaf7f0;border-color:#c9e9d7;margin-bottom:14px;"><i class="ti ti-circle-check" style="color:var(--success);"></i> Daily search complete — ${esc(gridSearchResultSummary(job))} across ${job.total} open items.</div>`;
   }
 }
 
@@ -4569,8 +4654,11 @@ function cancelGridSearch(gridId){
 
 // Applies one cell's result from a run-search job's `results` array onto
 // the grid - same three outcomes (contact found / no confident match /
-// search error) runDailySearch used to render inline.
+// search error) runDailySearch used to render inline. A "fillMissing"
+// result (see runDailySearch) patches an existing contact's missing field
+// instead, so it's handled separately below.
 function applyGridSearchResult(grid, result){
+  if(result.kind === 'fillMissing'){ applyFillMissingFieldResult(grid, result); return; }
   const { company, role, found, name, url, recordId, error } = result;
   const cellEl = document.querySelector(`.cell-searching[data-company="${cssEscape(company)}"][data-role="${cssEscape(role)}"]`);
   if(found && name && url){
@@ -4596,11 +4684,37 @@ function applyGridSearchResult(grid, result){
   }
 }
 
+// Patches an existing contact's missing company or role in local state once
+// the server's found+written a value for it (Airtable itself is already
+// patched server-side, same "server writes, client reconciles" split as the
+// newContact path above). A found company also gets added to the grid's
+// companies list via ensureGridCompany, same as a manual "Add company" or
+// an Apollo import - so the contact moves out of the "No company yet" row
+// and into its proper matrix cell on the next render. No per-cell DOM patch
+// here (unlike newContact) since these contacts don't have a dedicated
+// .cell-searching placeholder to replace - the renderPage() at the end of
+// finishGridSearchUI picks up the change instead.
+function applyFillMissingFieldResult(grid, result){
+  const { contactId, missingField, found, value } = result;
+  if(!found || !value) return;
+  const contact = state.contacts.find(c => c.id === contactId);
+  if(!contact) return;
+  if(missingField === 'role'){
+    contact.role = value;
+    if(value === 'Digital and Tech') contact.seqId = 'digitalTech';
+  } else {
+    contact.company = value;
+    ensureGridCompany(grid, value);
+  }
+  touchGrid(grid.id);
+}
+
 // Polls a run-search job until it finishes, applying newly-landed cell
 // results and refreshing the status banner on each tick.
 async function pollGridSearchJob(jobId, grid, cells){
+  const cellKey = c => c.kind === 'fillMissing' ? ('fill:'+c.contactId) : (c.company+'|||'+c.role);
   const seenKeys = new Set();
-  const stillSearching = () => cells.filter(({company,role}) => !seenKeys.has(company+'|||'+role));
+  const stillSearching = () => cells.filter(c => !seenKeys.has(cellKey(c)));
   for(;;){
     let res, job;
     try {
@@ -4613,21 +4727,21 @@ async function pollGridSearchJob(jobId, grid, cells){
     }
 
     if(!res.ok){
-      resetStuckSearchingCells(stillSearching());
-      finishGridSearchUI(grid.id, { status:'error', error: job.error || ('status '+res.status), foundCount:0, total: cells.length });
+      resetStuckSearchingCells(stillSearching().filter(c => c.kind !== 'fillMissing'));
+      finishGridSearchUI(grid.id, { status:'error', error: job.error || ('status '+res.status), foundCount:0, filledCount:0, total: cells.length });
       return;
     }
 
     (job.results || []).forEach(r => {
-      const key = r.company+'|||'+r.role;
+      const key = cellKey(r);
       if(seenKeys.has(key)) return;
       seenKeys.add(key);
       applyGridSearchResult(grid, r);
     });
-    renderGridSearchStatus(job.completed, job.total, job.foundCount, grid.id);
+    renderGridSearchStatus(job.completed, job.total, job.foundCount, job.filledCount || 0, grid.id);
 
     if(job.status === 'done' || job.status === 'error' || job.status === 'cancelled'){
-      if(job.status === 'error' || job.status === 'cancelled') resetStuckSearchingCells(stillSearching());
+      if(job.status === 'error' || job.status === 'cancelled') resetStuckSearchingCells(stillSearching().filter(c => c.kind !== 'fillMissing'));
       finishGridSearchUI(grid.id, job);
       return;
     }
