@@ -762,31 +762,26 @@ let rawState = {
 
 /* ===================== PERSISTENCE (localStorage) ===================== */
 /* `state` is a deep reactive proxy over `rawState` — setting or deleting any
-   property anywhere in the tree (state.contacts[0].thread.cta = 'x', array
-   push/splice, etc.) saves the whole app to localStorage immediately, so
-   nothing needs to remember to call a save function by hand.
+   property anywhere in the tree triggers persistState(), but only a small
+   set of pure client-side navigation/UI fields (currentPage, currentGridId,
+   seqActiveTab, calMonth, calYear, archiveOpen) actually get written to
+   localStorage - see the explicit list in persistState() below.
 
-   Contacts, campaigns, companies (grids[].companies/companyLinkedIn) and
-   touch points (nested under each contact) are Airtable's data, not this
-   app's - they're deliberately excluded from what gets written here and
-   are always re-fetched fresh from Airtable on load instead (see
-   hydrateContactsFromAirtable/hydrateCampaignsFromAirtable/
-   hydrateCompaniesFromAirtable at the bottom of this file), so a stale
-   local cache can never drift from what's actually in Airtable. Only this
-   app's own structural/UI state (grid definitions and role columns,
-   sequences, settings, bookings, activity feed, etc.) is cached here. */
+   Everything else - contacts, campaigns, companies, grids, sequences,
+   settings, bookings, dead contacts, activity, last analysis - is
+   Airtable's data now, shared across every browser/user instead of cached
+   per-browser, and is always fetched fresh from Airtable at boot instead
+   (see the hydrate*FromAirtable calls at the bottom of this file). None of
+   it round-trips through localStorage at all any more. */
 
 const STORAGE_KEY = 't2c_state';
 
+const LOCAL_ONLY_STATE_KEYS = ['currentPage', 'currentGridId', 'seqActiveTab', 'calMonth', 'calYear', 'archiveOpen'];
+
 function persistState(){
   try {
-    const { contacts, campaigns, grids, ...rest } = rawState;
-    const toSave = Object.assign({}, rest, {
-      grids: (grids || []).map(g => {
-        const { companies, companyLinkedIn, ...gridRest } = g;
-        return gridRest;
-      })
-    });
+    const toSave = {};
+    LOCAL_ONLY_STATE_KEYS.forEach(key => { toSave[key] = rawState[key]; });
     localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
   } catch(err){
     console.warn('Could not save state to localStorage:', err.message);
@@ -797,47 +792,12 @@ function loadPersistedState(){
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if(!raw) return false;
-    const defaultSettings = rawState.settings;
     const saved = JSON.parse(raw);
 
-    // Migrate pre-multi-grid saves (flat gridColumns, no grids array yet)
-    // into a single default grid so the grid's own structure isn't lost.
-    // Any company data on the legacy save is dropped rather than migrated -
-    // companies are no longer read from localStorage at all, see below.
-    if(!saved.grids || !saved.grids.length){
-      const migratedGridId = 'grid_wa_market_map';
-      const migratedGrid = {
-        id: migratedGridId,
-        name: 'WA Market Map',
-        companies: [],
-        columns: saved.gridColumns || rawState.grids[0].columns,
-        companyLinkedIn: {},
-        createdAt: rawState.grids[0].createdAt,
-        updatedAt: isoDate(TODAY)
-      };
-      saved.grids = [migratedGrid];
-      saved.currentGridId = migratedGridId;
-      delete saved.companies;
-      delete saved.gridColumns;
-      delete saved.companyLinkedIn;
-    }
+    LOCAL_ONLY_STATE_KEYS.forEach(key => {
+      if(saved[key] !== undefined) rawState[key] = saved[key];
+    });
 
-    Object.assign(rawState, saved);
-    if(saved.settings){
-      rawState.settings = Object.assign({}, defaultSettings, saved.settings, {
-        integrations: Object.assign({}, defaultSettings.integrations, saved.settings.integrations),
-        products: saved.settings.products || defaultSettings.products
-      });
-    }
-
-    // Contacts, campaigns and companies are never restored from localStorage
-    // even if an older cached save still has them (see the comment above) -
-    // hydrateContactsFromAirtable/hydrateCampaignsFromAirtable/
-    // hydrateCompaniesFromAirtable populate all three fresh from Airtable
-    // right after init instead.
-    rawState.contacts = [];
-    rawState.campaigns = [];
-    (rawState.grids || []).forEach(g => { g.companies = []; g.companyLinkedIn = {}; });
     return true;
   } catch(err){
     console.warn('Could not restore saved state from localStorage:', err.message);
