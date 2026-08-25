@@ -2820,6 +2820,7 @@ function renderGrid(){
     </div>
     <button class="btn btn-secondary" onclick="addGridColumn()"><i class="ti ti-plus"></i> Add column</button>
     <button class="btn btn-primary" id="runSearchBtn" onclick="runDailySearch()" ${isGridSearchRunning(grid.id) ? 'disabled' : ''}><i class="ti ti-search"></i> ${isGridSearchRunning(grid.id) ? 'Searching...' : 'Run daily search'}</button>
+    <button class="btn btn-secondary" onclick="openAddContactModal()"><i class="ti ti-user-plus"></i> Add contact</button>
     <button class="btn btn-ghost" onclick="resetGrid()"><i class="ti ti-refresh"></i> Reset</button>
     <button class="btn btn-secondary" onclick="exportContactsCsv()"><i class="ti ti-file-download"></i> Export contacts</button>
     <button class="btn btn-secondary" id="syncAirtableBtn" onclick="syncAllContactsToAirtable()"><i class="ti ti-cloud-upload"></i> Sync to Airtable</button>
@@ -3332,7 +3333,7 @@ function openCsvColumnModal(rows){
       </select>
     </div>
     <div class="field">
-      <label>Which column contains the job title / contact name?</label>
+      <label>Which column contains the job title?</label>
       <select id="csvContactColumn">
         <option value="">— None —</option>
         ${optionsHtml}
@@ -3350,45 +3351,41 @@ function openCsvColumnModal(rows){
 async function confirmCsvImport(){
   const grid = currentGrid();
   const colIdx = parseInt(document.getElementById('csvCompanyColumn').value);
-  const contactColValue = document.getElementById('csvContactColumn').value;
-  const contactColIdx = contactColValue !== '' ? parseInt(contactColValue) : null;
+  const jobTitleColValue = document.getElementById('csvContactColumn').value;
+  const jobTitleColIdx = jobTitleColValue !== '' ? parseInt(jobTitleColValue) : null;
   const rows = window.__csvImportRows || [];
   const seen = new Set(grid.companies.map(c => c.toLowerCase()));
-  const seenContacts = new Set(
-    state.contacts.filter(c => c.gridId === grid.id).map(c => c.name.trim().toLowerCase()+'|'+c.company.trim().toLowerCase())
-  );
+  const seenColumns = new Set(grid.columns.map(c => c.toLowerCase()));
   const newCompanies = [];
-  let contactsAddedCount = 0;
+  const newColumns = [];
   rows.forEach(r => {
     const val = (r[colIdx] || '').trim();
-    if(!val) return;
-    const key = val.toLowerCase();
-    if(!seen.has(key)){
-      seen.add(key);
-      grid.companies.push(val);
-      newCompanies.push(val);
+    if(val){
+      const key = val.toLowerCase();
+      if(!seen.has(key)){
+        seen.add(key);
+        grid.companies.push(val);
+        newCompanies.push(val);
+      }
     }
 
-    if(contactColIdx === null) return;
-    const contactName = (r[contactColIdx] || '').trim();
-    if(!contactName) return;
-    const contactKey = contactName.toLowerCase()+'|'+key;
-    if(seenContacts.has(contactKey)) return;
-    seenContacts.add(contactKey);
-    state.contacts.push({
-      id: uid('c'), gridId: grid.id, name: contactName, company: val, role: '', url: '',
-      seqId: 'seniorLeaders', state:'found', foundDate: isoDate(TODAY), connReqDate:null, connDate:null, notes:'',
-      thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[]
-    });
-    contactsAddedCount++;
+    if(jobTitleColIdx === null) return;
+    const jobTitle = (r[jobTitleColIdx] || '').trim();
+    if(!jobTitle) return;
+    const titleKey = jobTitle.toLowerCase();
+    if(seenColumns.has(titleKey)) return;
+    seenColumns.add(titleKey);
+    grid.columns.push(jobTitle);
+    newColumns.push(jobTitle);
   });
   const addedCount = newCompanies.length;
-  if(addedCount || contactsAddedCount) touchGrid(grid.id);
+  const addedColumnsCount = newColumns.length;
+  if(addedCount || addedColumnsCount) touchGrid(grid.id);
   closeModal();
-  if(addedCount || contactsAddedCount) renderPage();
+  if(addedCount || addedColumnsCount) renderPage();
   const parts = [];
   if(addedCount) parts.push(addedCount + ' compan' + (addedCount===1?'y':'ies'));
-  if(contactsAddedCount) parts.push(contactsAddedCount + ' contact' + (contactsAddedCount===1?'':'s'));
+  if(addedColumnsCount) parts.push(addedColumnsCount + ' job title column' + (addedColumnsCount===1?'':'s'));
   toast(parts.length ? parts.join(' and ') + ' added from CSV' : 'Nothing new to add from CSV', parts.length ? 'success' : 'warn');
 
   // Same Airtable write addGridCompany() does for a single manually-added
@@ -3410,6 +3407,105 @@ async function confirmCsvImport(){
     }
     if(i < newCompanies.length - 1) await sleep(250);
   }
+}
+
+// "Add contact" modal (Grid toolbar) - lets someone add a contact to the
+// current grid by hand instead of waiting on Run daily search to find one.
+// Two save paths share createManualGridContact below; the difference is
+// only whether enrichContact's underlying research call also runs.
+function openAddContactModal(){
+  const grid = currentGrid();
+  const body = `
+    <div class="field"><label>Name</label><input id="addContactName" placeholder="e.g. Jane Smith"></div>
+    <div class="field"><label>Job title</label><input id="addContactRole" placeholder="e.g. Transformation Lead" list="addContactRoleOptions"></div>
+    <datalist id="addContactRoleOptions">${grid.columns.map(c => `<option value="${esc(c)}">`).join('')}</datalist>
+    <div class="field"><label>Company</label><input id="addContactCompany" placeholder="e.g. BHP" list="addContactCompanyOptions"></div>
+    <datalist id="addContactCompanyOptions">${grid.companies.map(c => `<option value="${esc(c)}">`).join('')}</datalist>
+    <div class="field"><label>LinkedIn URL</label><input id="addContactUrl" placeholder="https://linkedin.com/in/..."></div>
+    <p class="muted" style="font-size:12px;">"Search for details" saves the contact, then runs the same research enrichment used elsewhere in the app (needs a LinkedIn URL). "Save manually" just saves what you've typed, no research.</p>
+  `;
+  const footer = `
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-secondary" id="addContactSaveBtn" onclick="saveManualContactConfirmed()"><i class="ti ti-device-floppy"></i> Save manually</button>
+    <button class="btn btn-primary" id="addContactSearchBtn" onclick="searchContactDetailsConfirmed()"><i class="ti ti-search"></i> Search for details</button>
+  `;
+  openModal('Add contact', body, footer);
+}
+
+// Shared by both modal actions below - builds the local contact object
+// (same shape applyGridSearchResult uses for a grid-search match) and syncs
+// it to Airtable via the existing per-contact upsert (syncContactToAirtable),
+// same as every other place a contact enters this app.
+function createManualGridContact(name, role, company, linkedinUrl){
+  const grid = currentGrid();
+  const seqId = role === 'Digital and Tech' ? 'digitalTech' : 'seniorLeaders';
+  const contact = {
+    id: uid('c'), gridId: grid.id, name, company, role, url: linkedinUrl,
+    seqId, state:'found', foundDate: isoDate(TODAY), connReqDate:null, connDate:null, notes:'',
+    thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[]
+  };
+  state.contacts.push(contact);
+  touchGrid(grid.id);
+  syncContactToAirtable(contact);
+  return contact;
+}
+
+function readAddContactFields(){
+  return {
+    name: document.getElementById('addContactName').value.trim(),
+    role: document.getElementById('addContactRole').value.trim(),
+    company: document.getElementById('addContactCompany').value.trim(),
+    url: document.getElementById('addContactUrl').value.trim()
+  };
+}
+
+function saveManualContactConfirmed(){
+  const { name, role, company, url } = readAddContactFields();
+  if(!name || !company){ toast('Name and company are required', 'warn'); return; }
+
+  createManualGridContact(name, role, company, url);
+  closeModal();
+  renderPage();
+  toast(name+' added', 'success');
+}
+
+// Same research call enrichContact() makes for an already-saved contact
+// (see that function below) - just fired right after this one is created
+// instead of from its own drawer button. The contact is synced to Airtable
+// first so POST /api/enrich/contact's own best-effort persist-back-to-
+// Airtable step (it looks the contact up by name) finds a record to attach
+// the profile to.
+async function searchContactDetailsConfirmed(){
+  const { name, role, company, url } = readAddContactFields();
+  if(!name || !company){ toast('Name and company are required', 'warn'); return; }
+  if(!url){ toast('A LinkedIn URL is required to search for details', 'warn'); return; }
+
+  const btn = document.getElementById('addContactSearchBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Searching...'; }
+
+  const contact = createManualGridContact(name, role, company, url);
+
+  try {
+    const res = await fetch('/api/enrich/contact', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ linkedinUrl: url, name, company })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+
+    window.__enrichmentProfiles = window.__enrichmentProfiles || {};
+    window.__enrichmentProfiles[contact.id] = data.profile;
+    contact.enrichment = data.profile;
+    toast(name+' added and enriched', 'success');
+  } catch(err){
+    console.warn('Enrichment failed:', err.message);
+    toast(name+' added, but enrichment failed: ' + err.message, 'warn');
+  }
+
+  closeModal();
+  renderPage();
+  openContactDrawer(name, currentGridCampaignName());
 }
 
 function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
