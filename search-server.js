@@ -1436,18 +1436,27 @@ app.post('/api/airtable/touchpoint', async (req, res) => {
 
   try {
     let contactIds = [];
+    // Names resolved alongside ids either way - needed below to build the
+    // "[Type] - [Contact Name] - [Date]" Name field, not just for the
+    // Contact link itself.
+    let resolvedNames = [];
     if (Array.isArray(contactRecordIds) && contactRecordIds.length) {
       contactIds = contactRecordIds;
+      const contactRecords = await Promise.all(contactIds.map(id => airtableGetRecord('Contacts', id)));
+      resolvedNames = contactRecords.filter(Boolean).map(r => r.fields['Full Name'] || '').filter(Boolean);
     } else {
       const names = (Array.isArray(contactNames) && contactNames.length) ? contactNames : (contactName ? [contactName] : []);
       if (!names.length) return res.status(400).json({ error: 'contactName(s) or contactRecordIds are required' });
       const records = await Promise.all(names.map(n => findRecordByFieldName('Contacts', 'Full Name', n)));
       contactIds = records.filter(Boolean).map(r => r.id);
+      resolvedNames = names;
     }
 
+    const dateValue = date || new Date().toISOString().slice(0, 10);
     const summary = campaignName ? `[Campaign: ${campaignName}] ${notes || ''}`.trim() : (notes || '');
     const fields = {
-      'Date': date || new Date().toISOString().slice(0, 10),
+      'Name': `${type} - ${resolvedNames.length ? resolvedNames.join(', ') : 'Unknown contact'} - ${dateValue}`,
+      'Date': dateValue,
       'Type': type,
       'Summary': summary,
       'Outcome': outcome || 'No reply',
