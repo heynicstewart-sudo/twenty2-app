@@ -6100,10 +6100,20 @@ const CAMPAIGN_CONTACTS_TABLE = 'Campaign Contacts';
 // this file - filterByFormula doesn't reliably support matching linked-
 // record cells by record id. Table may not exist in every base yet, so
 // failures are swallowed like the Learning Data/Sales Log tables.
+//
+// airtableFetchAllRecords, not airtableRequest - that only returns the
+// first page (100 records). This function's own comment already promised
+// "the whole table", but a campaign with more than 100 Campaign Contacts
+// rows was silently only getting the first page everywhere this is called
+// (20+ call sites - Roadmap, Today's Actions, Sales/Analytics, connection
+// timeouts, the daily grid search's campaign-linking step, etc.), which is
+// also why a grid search on a large, established campaign looked like it
+// was only processing/linking the first 100 despite the cell list itself
+// (already fixed to paginate) being complete.
 async function fetchCampaignContactsRows() {
   try {
-    const data = await airtableRequest('GET', CAMPAIGN_CONTACTS_TABLE);
-    return data.records || [];
+    const records = await airtableFetchAllRecords(CAMPAIGN_CONTACTS_TABLE);
+    return records || [];
   } catch (err) {
     console.warn('Could not fetch Campaign Contacts (table may not exist yet):', err.message);
     return [];
