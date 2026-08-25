@@ -71,14 +71,20 @@ async function searchContactViaSerper(company, jobTitle){
     throw err;
   }
 
-  const query = `${company} ${jobTitle} linkedin`;
+  // Twenty2 Collective is a Perth, WA outreach agency - "Australia" in the
+  // query text nudges Google toward AU-based profiles when a role/company
+  // combination is ambiguous (a common job title at a company with offices
+  // in multiple countries), and gl:'au' biases Serper/Google's own ranking
+  // toward Australian search results the same way browsing from Australia
+  // would.
+  const query = `${company} ${jobTitle} linkedin Australia`;
   const serperRes = await fetch(SERPER_URL, {
     method: 'POST',
     headers: {
       'X-API-KEY': process.env.SERPER_API_KEY,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({ q: query })
+    body: JSON.stringify({ q: query, gl: 'au' })
   });
 
   if(!serperRes.ok){
@@ -2301,10 +2307,15 @@ function extractLinkedInSlug(url) {
 async function researchContactEnrichment(name, company, linkedinUrl) {
   const slug = extractLinkedInSlug(linkedinUrl || '');
   const [profileSearch, newsSearch] = await Promise.all([
+    // "Australia" only added to the name-fallback query (no slug yet) -
+    // pointless noise on a site:linkedin.com/in/<slug> exact-URL lookup,
+    // which is already unambiguous. gl:'au' is applied either way, same AU
+    // bias as searchContactViaSerper above, since it's harmless even on an
+    // exact-slug lookup.
     fetch(SERPER_URL, {
       method: 'POST',
       headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ q: slug ? `site:linkedin.com/in/${slug}` : `${name} LinkedIn` })
+      body: JSON.stringify({ q: slug ? `site:linkedin.com/in/${slug}` : `${name} LinkedIn Australia`, gl: 'au' })
     }).then(r => r.json()),
     fetch(SERPER_URL, {
       method: 'POST',
@@ -5120,10 +5131,14 @@ async function checkContactJobChanges() {
     if (!companyName) continue;
 
     try {
+      // Same AU bias as searchContactViaSerper/researchContactEnrichment
+      // above - the exact-quoted name+company already narrows this a lot,
+      // but a common name at a company with offices outside Australia can
+      // still surface the wrong person's profile.
       const serperRes = await fetch(SERPER_URL, {
         method: 'POST',
         headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ q: `"${name}" "${companyName}" site:linkedin.com` })
+        body: JSON.stringify({ q: `"${name}" "${companyName}" site:linkedin.com Australia`, gl: 'au' })
       });
       if (!serperRes.ok) continue;
       const data = await serperRes.json();
