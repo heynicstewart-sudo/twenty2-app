@@ -10342,12 +10342,63 @@ function renderSettings(){
     <span class="save-flash" id="saveFlash"><i class="ti ti-circle-check"></i> Settings saved</span>
   </div>
 
+  <div class="settings-section card" id="migrationSection" style="${localStorage.getItem('t2c_migration_done') ? 'display:none;' : ''}">
+    <div class="section-title"><i class="ti ti-cloud-upload"></i> One-time data migration</div>
+    <p class="muted" style="font-size:12px;margin-bottom:14px;">Pushes this browser's grids, sequences, settings, bookings, dead contacts and activity history to Airtable, so every user sees the same data from here on. Only needs to run once, from whichever browser holds the real working data - running it again from a different browser would overwrite what's already there with that browser's (likely emptier) local copy.</p>
+    <button class="btn btn-secondary" onclick="confirmPushLocalData()"><i class="ti ti-cloud-upload"></i> Push local data to Airtable</button>
+  </div>
+
   <div class="settings-section card" style="border-color:#f0c2b0;">
     <div class="section-title"><i class="ti ti-alert-triangle" style="color:var(--danger);"></i> Danger zone</div>
     <p class="muted" style="font-size:12px;margin-bottom:14px;">Permanently clears all contacts, bookings, dead contacts and activity from this browser, and deletes the matching records from Airtable (Contacts, Companies, Touch Points, Campaign Contacts, Deals, Content Signals, Learning Data). Campaigns, Reps, Content Settings and Content are kept. This cannot be undone.</p>
     <button class="btn btn-danger" onclick="confirmResetAllData()"><i class="ti ti-trash"></i> Reset all data</button>
   </div>
   `;
+}
+
+// One-time migration of this browser's localStorage-only state (grids,
+// sequences, settings, bookings, dead contacts, activity) into the shared
+// Airtable tables - see POST /api/airtable/migrate-local-data in
+// search-server.js. Meant to run exactly once, from whichever browser holds
+// the real working data; the server refuses a second run once the Grids
+// table has any rows, and t2c_migration_done just hides the button locally
+// afterward as a courtesy so it isn't sitting there inviting a re-click.
+function confirmPushLocalData(){
+  const body = `<p style="font-size:13px;">This will push this browser's grids, sequences, settings, bookings, dead contacts and activity to Airtable, so every user starts seeing the same data. Only run this once, from the browser that has your real working data. Continue?</p>`;
+  const footer = `
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" id="confirmPushLocalDataBtn" onclick="pushLocalDataToAirtableConfirmed()"><i class="ti ti-cloud-upload"></i> Push data</button>
+  `;
+  openModal('Push local data to Airtable', body, footer);
+}
+
+async function pushLocalDataToAirtableConfirmed(){
+  const btn = document.getElementById('confirmPushLocalDataBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Pushing...'; }
+  try {
+    const res = await fetch('/api/airtable/migrate-local-data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grids: state.grids,
+        bookings: state.bookings,
+        deadContacts: state.deadContacts,
+        activity: state.activity,
+        sequences: state.sequences,
+        settings: state.settings,
+        lastAnalysis: state.lastAnalysis
+      })
+    });
+    const json = await res.json();
+    if(!res.ok || !json.success) throw new Error(json.error || json.message || 'Migration failed');
+    localStorage.setItem('t2c_migration_done', '1');
+    closeModal();
+    toast('Local data pushed to Airtable', 'success');
+    renderPage();
+  } catch(err){
+    toast('Could not push local data: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-cloud-upload"></i> Push data'; }
+  }
 }
 
 function confirmResetAllData(){
