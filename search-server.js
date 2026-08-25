@@ -347,11 +347,10 @@ async function createOrUpdateAirtableContact({ name, company, role, linkedinUrl,
     typecast: true
   });
 
-  if (linkedinUrl) {
-    trigifyCreateContactSearch(data.records[0].id, name, linkedinUrl)
-      .catch(err => console.warn('Could not create Trigify search for new contact (non-fatal):', err.message));
-  }
-
+  // Trigify monitor creation happens later, in PATCH /api/context/
+  // contact-fields once this contact actually reaches Sequence Stage
+  // "Connected" - not here at creation, so a contact that's found but never
+  // connects with never gets an unnecessary Trigify search opened for them.
   return { success: true, skipped: false, recordId: data.records[0].id };
 }
 
@@ -3778,6 +3777,12 @@ app.post('/api/campaign/:id/deals', async (req, res) => {
     if (sentiment) fields['Sentiment'] = sentiment;
     if (campaignRecord) fields['Campaign'] = [campaignRecord.id];
     const data = await airtableRequest('POST', 'Deals', { records: [{ fields }], typecast: true });
+
+    if (outcome === 'Lost') {
+      trigifyDeleteContactSearch(contactId)
+        .catch(err => console.warn('Could not delete Trigify search for lost contact (non-fatal):', err.message));
+    }
+
     res.json({ success: true, deal: data.records[0] });
   } catch (err) {
     console.error('Create deal error:', err.message);
@@ -4705,9 +4710,11 @@ async function trigifyCreateProfileMonitor(name, profileUrl, { maxResults, frequ
 }
 
 // Fire-and-forget creation of one new contact's own Trigify profile
-// monitor, called from POST /api/airtable/contact right after a new
-// contact is created. No-ops quietly if Trigify isn't configured - the
-// contact save itself must never fail because of this.
+// monitor, called from PATCH /api/context/contact-fields once the contact
+// actually reaches Sequence Stage "Connected" - not at contact creation, so
+// a contact that's found but never connects never gets an unnecessary
+// search opened for them. No-ops quietly if Trigify isn't configured - the
+// caller must never fail because of this.
 //
 // Checks for an existing search on this profile URL first (via
 // trigifyFindExistingSearch's GET /v1/searches lookup, the same one
@@ -4724,6 +4731,50 @@ async function trigifyCreateContactSearch(contactId, contactName, linkedinUrl) {
   const existingId = await trigifyFindExistingSearch(normalizedUrl, searchName);
   const searchId = existingId || await trigifyCreateProfileMonitor(searchName, normalizedUrl, { maxResults: 10, frequency: 'DAILY' });
   await airtableRequest('PATCH', 'Contacts', { records: [{ id: contactId, fields: { 'Trigify Search ID': searchId } }] });
+}
+
+// Fire-and-forget teardown of a contact's Trigify profile monitor, called
+// when a contact is marked Lost (POST /api/campaign/:id/deals with
+// outcome "Lost") or Excluded (POST /api/campaign/:id/contacts/:contactId/
+// exclude) - no point continuing to pay for/poll a monitor for someone
+// no longer being pursued. No-ops quietly if Trigify isn't configured, the
+// contact has no Trigify Search ID yet, or the contact record can't be
+// found - same "never fail the caller over this" convention as the create
+// side above.
+//
+// Always protects the primary account's own monitor: refuses to delete
+// when the contact's LinkedIn URL matches Settings' "My LinkedIn URL", or
+// when the search id matches Settings' "Trigify Marcus Search ID"
+// (belt-and-suspenders - the URL check is the one actually asked for, the
+// search-id check catches the same case even if the URL comparison ever
+// drifted) - see trigifyEnsureMarcusSearch above for where that search
+// comes from. Losing Marcus's own content-performance monitor would be a
+// much worse outcome than leaving one contact's stale search running.
+async function trigifyDeleteContactSearch(contactId) {
+  if (!TRIGIFY_API_KEY || !AIRTABLE_API_KEY) return;
+  const contactRecord = await airtableGetRecord('Contacts', contactId);
+  if (!contactRecord) return;
+  const searchId = contactRecord.fields['Trigify Search ID'];
+  if (!searchId) return;
+
+  const settingsRecord = await getSettingsRecord();
+  const myLinkedInUrl = settingsRecord && settingsRecord.fields['My LinkedIn URL'];
+  const myMarcusSearchId = settingsRecord && settingsRecord.fields['Trigify Marcus Search ID'];
+  const contactLinkedInUrl = contactRecord.fields['LinkedIn URL'];
+  const isPrimaryAccountUrl = !!(myLinkedInUrl && contactLinkedInUrl && normalizeLinkedInUrl(contactLinkedInUrl) === normalizeLinkedInUrl(myLinkedInUrl));
+  const isPrimaryAccountSearchId = !!(myMarcusSearchId && searchId === myMarcusSearchId);
+  if (isPrimaryAccountUrl || isPrimaryAccountSearchId) {
+    console.warn(`Refusing to delete Trigify search ${searchId} for contact ${contactId} - it matches the protected primary account (Settings' "My LinkedIn URL").`);
+    return;
+  }
+
+  // Trigify's documented API surface (see the TRIGIFY INTEGRATION comment
+  // above) only lists POST .../linkedin/profile and GET .../{id}/results -
+  // no delete endpoint is documented there. This follows the same REST
+  // convention the rest of the API already uses; worth confirming against
+  // Trigify's actual docs/support if this 404s in practice.
+  await trigifyRequest('DELETE', `/v1/searches/${searchId}`);
+  await airtableRequest('PATCH', 'Contacts', { records: [{ id: contactId, fields: { 'Trigify Search ID': '' } }] });
 }
 
 function normalizeTrigifyPost(p) {
@@ -6635,6 +6686,9 @@ app.post('/api/campaign/:id/contacts/:contactId/exclude', async (req, res) => {
       });
     }
 
+    trigifyDeleteContactSearch(contactId)
+      .catch(err => console.warn('Could not delete Trigify search for excluded contact (non-fatal):', err.message));
+
     res.json({ success: true });
   } catch (err) {
     console.error('Exclude contact error:', err.message);
@@ -6844,6 +6898,19 @@ app.patch('/api/context/contact-fields', async (req, res) => {
           fields: { 'Sequence Stage': 'Connected', 'Stage History': appendStageHistory(r.fields['Stage History'], 'Connected', today) }
         })));
         campaignContactRowsSynced = acceptedRows.length;
+
+        // Trigify monitor creation moved here from contact creation - only
+        // open a search once this contact actually reaches "Connected" (the
+        // "Connections Made" funnel stage, see the comment above this
+        // route), not for every found-but-never-connected contact.
+        // Fire-and-forget, same as the old call site: must never fail this
+        // request over a Trigify hiccup.
+        const contactRecord = await airtableGetRecord('Contacts', contactId);
+        const linkedinUrl = contactRecord && contactRecord.fields['LinkedIn URL'];
+        if (contactRecord && linkedinUrl) {
+          trigifyCreateContactSearch(contactId, contactRecord.fields['Full Name'] || contactId, linkedinUrl)
+            .catch(err => console.warn('Could not create Trigify search on connect (non-fatal):', err.message));
+        }
       }
     }
 
