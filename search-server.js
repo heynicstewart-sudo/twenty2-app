@@ -8508,34 +8508,57 @@ async function ensureAirtableField(tableName, fieldName, fieldDef) {
   airtableSchemaCache = null;
 }
 
+// Provisioning the Keywords/Sitemap tables and the SEO Voice Profile field
+// is best-effort, not a hard requirement: it needs the connected Airtable
+// token to carry schema.bases:write (most tokens don't, by default), and
+// the tables/field can just as well be created once by hand in the
+// Airtable UI instead - using the exact names/types below - with no
+// schema scope needed at all afterwards. So every ensure* call here
+// swallows its own error and logs a warning rather than throwing: if the
+// table/field already exists (created either way), the calling route's
+// actual record read/write proceeds normally; if it doesn't exist and
+// can't be auto-created, that read/write fails on its own with a normal
+// "table not found" Airtable error instead of this step blocking it pre-emptively.
 async function ensureKeywordsTable() {
-  return ensureAirtableTable(KEYWORDS_TABLE, [
-    { name: 'Keyword', type: 'singleLineText' },
-    { name: 'Volume', type: 'number', options: { precision: 0 } },
-    { name: 'KD', type: 'number', options: { precision: 0 } },
-    { name: 'Intent', type: 'singleLineText' },
-    { name: 'Status', type: 'singleSelect', options: { choices: [{ name: 'Queued' }, { name: 'Generating' }, { name: 'Generated' }, { name: 'Published' }] } },
-    { name: 'Post Title', type: 'singleLineText' },
-    { name: 'Post HTML', type: 'multilineText' },
-    { name: 'Meta Title', type: 'singleLineText' },
-    { name: 'Meta Description', type: 'multilineText' },
-    { name: 'Published URL', type: 'url' },
-    { name: 'Suggested Reason', type: 'multilineText' },
-    { name: 'Created Date', type: 'date', options: { dateFormat: { name: 'iso' } } }
-  ]);
+  try {
+    return await ensureAirtableTable(KEYWORDS_TABLE, [
+      { name: 'Keyword', type: 'singleLineText' },
+      { name: 'Volume', type: 'number', options: { precision: 0 } },
+      { name: 'KD', type: 'number', options: { precision: 0 } },
+      { name: 'Intent', type: 'singleLineText' },
+      { name: 'Status', type: 'singleSelect', options: { choices: [{ name: 'Queued' }, { name: 'Generating' }, { name: 'Generated' }, { name: 'Published' }] } },
+      { name: 'Post Title', type: 'singleLineText' },
+      { name: 'Post HTML', type: 'multilineText' },
+      { name: 'Meta Title', type: 'singleLineText' },
+      { name: 'Meta Description', type: 'multilineText' },
+      { name: 'Published URL', type: 'url' },
+      { name: 'Suggested Reason', type: 'multilineText' },
+      { name: 'Created Date', type: 'date', options: { dateFormat: { name: 'iso' } } }
+    ]);
+  } catch (err) {
+    console.warn('Could not auto-provision the Keywords table (create it by hand if it does not exist yet):', err.message);
+  }
 }
 
 async function ensureSitemapTable() {
-  return ensureAirtableTable(SITEMAP_TABLE, [
-    { name: 'URL', type: 'url' },
-    { name: 'Title', type: 'singleLineText' },
-    { name: 'Published Date', type: 'date', options: { dateFormat: { name: 'iso' } } },
-    { name: 'Keyword', type: 'singleLineText' }
-  ]);
+  try {
+    return await ensureAirtableTable(SITEMAP_TABLE, [
+      { name: 'URL', type: 'url' },
+      { name: 'Title', type: 'singleLineText' },
+      { name: 'Published Date', type: 'date', options: { dateFormat: { name: 'iso' } } },
+      { name: 'Keyword', type: 'singleLineText' }
+    ]);
+  } catch (err) {
+    console.warn('Could not auto-provision the Sitemap table (create it by hand if it does not exist yet):', err.message);
+  }
 }
 
 async function ensureSeoVoiceProfileField() {
-  return ensureAirtableField(SETTINGS_TABLE, 'SEO Voice Profile', { type: 'multilineText' });
+  try {
+    return await ensureAirtableField(SETTINGS_TABLE, 'SEO Voice Profile', { type: 'multilineText' });
+  } catch (err) {
+    console.warn('Could not auto-provision the SEO Voice Profile field (add it by hand if it does not exist yet):', err.message);
+  }
 }
 
 function getSeoVoiceProfileText(settingsFields) {
