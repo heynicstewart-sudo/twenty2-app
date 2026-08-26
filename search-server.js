@@ -8851,7 +8851,9 @@ async function generateSeoPostForKeyword(keywordRecord) {
   }
 
   const settingsRecord = await getSettingsRecord();
-  const voiceProfile = getSeoVoiceProfileText(settingsRecord ? settingsRecord.fields : {});
+  const savedVoiceProfile = settingsRecord && settingsRecord.fields['SEO Voice Profile'];
+  const usedCustomVoiceProfile = !!(savedVoiceProfile && savedVoiceProfile.trim());
+  const voiceProfile = usedCustomVoiceProfile ? savedVoiceProfile : DEFAULT_SEO_VOICE_PROFILE;
 
   const avgWordCount = scrapedSummaries.length
     ? Math.round(scrapedSummaries.reduce((sum, s) => sum + (s.wordCount || 0), 0) / scrapedSummaries.length)
@@ -8885,7 +8887,8 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
     title: drafted.title || keyword,
     html,
     metaTitle: (drafted.metaTitle || '').slice(0, 60),
-    metaDescription: (drafted.metaDescription || '').slice(0, 160)
+    metaDescription: (drafted.metaDescription || '').slice(0, 160),
+    usedCustomVoiceProfile
   };
 }
 
@@ -8982,7 +8985,7 @@ app.post('/api/seo/generate-post', async (req, res) => {
       typecast: true
     });
 
-    res.json({ success: true, keywordId, title: post.title, html: post.html, metaTitle: post.metaTitle, metaDescription: post.metaDescription, status: 'Generated' });
+    res.json({ success: true, keywordId, title: post.title, html: post.html, metaTitle: post.metaTitle, metaDescription: post.metaDescription, status: 'Generated', usedCustomVoiceProfile: post.usedCustomVoiceProfile });
   } catch (err) {
     console.error('Generate SEO post error:', err.message);
     airtableRequest('PATCH', KEYWORDS_TABLE, { records: [{ id: keywordId, fields: { 'Status': 'Queued' } }], typecast: true })

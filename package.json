@@ -5,7 +5,7 @@
   "description": "Serper-backed LinkedIn contact search endpoint for T2C Outreach",
   "main": "search-server.js",
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "scripts": {
     "start": "node search-server.js"
