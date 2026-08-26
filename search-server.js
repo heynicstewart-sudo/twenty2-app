@@ -9211,7 +9211,7 @@ app.get('/api/seo/framer-status', async (req, res) => {
       allCollectionNames: collections.map(c => c.name),
       resolvedCollection: collection.name,
       resolvedByExactNameMatch: !!(nameHint && collection.name.toLowerCase() === nameHint.toLowerCase()),
-      fields: fields.map(f => ({ name: f.name, type: f.type })),
+      fields: fields.map(f => ({ id: f.id, name: f.name, type: f.type, required: f.required === undefined ? null : f.required })),
       matchedFields: {
         title: findFramerField(fields, 'title') ? findFramerField(fields, 'title').name : null,
         content: findFramerField(fields, 'content') ? findFramerField(fields, 'content').name : null,
