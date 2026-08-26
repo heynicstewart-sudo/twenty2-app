@@ -5320,9 +5320,53 @@ function addDays(dateStr, days){
   return isoDate(d);
 }
 
+// Grid toolbar's "Reset" button - warns that this permanently deletes the
+// grid's contacts and companies from Airtable, then on confirm wipes them
+// (keeping the Grids record itself, unlike confirmDeleteGrid above) so the
+// grid comes back empty. Resolves contact/company names the same way
+// deleteGridConfirmed does, since Airtable has no per-grid field to filter
+// by directly - grid membership only exists in this app's own state.
 function resetGrid(){
-  toast('Grid view reset','success');
-  renderPage();
+  const grid = currentGrid();
+  const body = `<p style="font-size:13px;">This will permanently delete all contacts and companies in "${esc(grid.name)}" from Airtable. This cannot be undone.</p>`;
+  const footer = `
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" id="confirmResetGridBtn" style="background:var(--danger);border-color:var(--danger);" onclick="resetGridConfirmed('${grid.id}')"><i class="ti ti-trash"></i> Delete everything</button>
+  `;
+  openModal('Reset grid', body, footer);
+}
+
+async function resetGridConfirmed(gridId){
+  const grid = state.grids.find(g => g.id === gridId);
+  if(!grid) return;
+  const btn = document.getElementById('confirmResetGridBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Deleting...'; }
+  try {
+    const contactNames = gridContacts(gridId).map(c => c.name);
+    // Only delete Companies not shared with another grid, same dedup as
+    // deleteGridConfirmed - Airtable has no per-grid concept, so this is the
+    // only place that knows the answer.
+    const otherGridCompanies = new Set();
+    state.grids.forEach(g => { if(g.id !== gridId) g.companies.forEach(c => otherGridCompanies.add(c)); });
+    const companyNames = grid.companies.filter(c => !otherGridCompanies.has(c));
+
+    const res = await fetch(`/api/grids/${encodeURIComponent(gridId)}/contacts`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contactNames, companyNames })
+    });
+    const json = await res.json();
+    if(!res.ok || !json.success) throw new Error(json.error || 'Reset failed');
+
+    state.contacts = state.contacts.filter(c => c.gridId !== gridId);
+    grid.companies = [];
+    closeModal();
+    toast(`Grid "${grid.name}" reset`, 'success');
+    renderPage();
+  } catch(err){
+    toast('Could not reset grid: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-trash"></i> Delete everything'; }
+  }
 }
 
 const COMPANY_DOMAINS = {

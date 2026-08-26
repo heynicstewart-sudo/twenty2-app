@@ -7972,6 +7972,61 @@ app.delete('/api/grid', async (req, res) => {
   }
 });
 
+// ===================== RESET GRID CONTACTS (Grid toolbar) =====================
+// Grid toolbar's "Reset" button - wipes a grid's contacts (and their
+// Campaign Contacts rows) and companies from Airtable, but unlike DELETE
+// /api/grid above, leaves the Grids record itself alone so the grid's name
+// and columns survive and the board just comes back empty. Same
+// client-resolves-the-names approach as DELETE /api/grid, since Airtable has
+// no per-grid field on Contacts (see the "gridName" note on
+// createOrUpdateAirtableContact) - the client already excludes any
+// companyNames shared with another grid before calling this.
+app.delete('/api/grids/:gridId/contacts', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const { contactNames = [], companyNames = [] } = req.body || {};
+
+  try {
+    const contactIds = (await Promise.all(
+      contactNames.map(name => findRecordByFieldName('Contacts', 'Full Name', name))
+    )).filter(Boolean).map(r => r.id);
+
+    const companyIds = (await Promise.all(
+      companyNames.map(name => findRecordByFieldName('Companies', 'Company Name', name))
+    )).filter(Boolean).map(r => r.id);
+
+    // Campaign Contacts rows have no per-grid field either - found the same
+    // way as every other place in this file that needs "every Campaign
+    // Contacts row for a given Contact", by filtering the whole table's
+    // Contact link field against the contact ids resolved above.
+    let deletedCampaignContacts = 0;
+    if (contactIds.length) {
+      const contactIdSet = new Set(contactIds);
+      const ccRows = await airtableFetchAllRecords(CAMPAIGN_CONTACTS_TABLE);
+      const ccIdsToDelete = ccRows
+        .filter(r => (r.fields['Contact'] || []).some(cid => contactIdSet.has(cid)))
+        .map(r => r.id);
+      if (ccIdsToDelete.length) {
+        await airtableBatchDelete(CAMPAIGN_CONTACTS_TABLE, ccIdsToDelete);
+        deletedCampaignContacts = ccIdsToDelete.length;
+      }
+    }
+
+    if (contactIds.length) await airtableBatchDelete('Contacts', contactIds);
+    if (companyIds.length) await airtableBatchDelete('Companies', companyIds);
+
+    res.json({
+      success: true,
+      deletedContacts: contactIds.length,
+      deletedCompanies: companyIds.length,
+      deletedCampaignContacts
+    });
+  } catch (err) {
+    console.error('Grid contacts reset error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ===================== SCHEDULED SYNC JOBS =====================
 // Both run silently in the background and never block the UI - failures
 // are logged, not thrown, same as every other cron-eligible job in this
