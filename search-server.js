@@ -367,23 +367,34 @@ app.get('/api/airtable/contact', async (req, res) => {
 // tracked locally in the app's own state; it just isn't mirrored to
 // Airtable right now.
 async function createOrUpdateAirtableContact({ name, company, role, linkedinUrl, state: contactState, icpRoleCategory, notes, companyLinkedinUrl, apolloTitle }) {
-  if (!name || !company) {
-    const err = new Error('name and company are required');
+  if (!name) {
+    const err = new Error('name is required');
     err.status = 400;
     throw err;
   }
 
+  // company is optional - e.g. an Apollo result with no organisation on the
+  // person's record. Left uncreated here rather than defaulted to a
+  // placeholder company: incompleteGridContacts (t2c-outreach-crm.html)
+  // picks up any synced contact missing exactly one of company/role, so a
+  // blank Company link is what makes this contact a candidate for "Run
+  // daily search"'s fill-missing-field pass (searchMissingContactField)
+  // finding the real company later.
+  //
   // Looked up before the existing-contact check (not just in the create
   // branch below) so a re-encountered contact whose Company link never got
   // set - e.g. found via grid search before its company had finished
   // syncing to Airtable - gets it backfilled too, not just contacts created
   // fresh from this call.
-  const companySearchRes = await airtableFetchWithRetry(
-    `${AIRTABLE_URL}/Companies?filterByFormula=${encodeURIComponent(`{Company Name}="${company}"`)}`,
-    { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
-  );
-  const companySearchData = await companySearchRes.json();
-  const companyRecord = companySearchData.records && companySearchData.records[0];
+  let companyRecord = null;
+  if (company) {
+    const companySearchRes = await airtableFetchWithRetry(
+      `${AIRTABLE_URL}/Companies?filterByFormula=${encodeURIComponent(`{Company Name}="${company}"`)}`,
+      { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
+    );
+    const companySearchData = await companySearchRes.json();
+    companyRecord = companySearchData.records && companySearchData.records[0];
+  }
 
   const searchRes = await airtableFetchWithRetry(
     `${AIRTABLE_URL}/Contacts?filterByFormula=${encodeURIComponent(`{Full Name}="${name}"`)}`,
@@ -6238,23 +6249,27 @@ ${isMessage
 });
 
 // Roadmap "Read connections screenshot" (readConnectionsScreenshot in
-// t2c-outreach-crm.html) - cross-references names visible in one or more
-// LinkedIn "My Network" screenshots against the given list of contacts
-// still awaiting connection acceptance, returning which of them appear to
-// have accepted.
+// t2c-outreach-crm.html) and the Logger's "Log Connections" mode
+// (runLoggerConnectionsMatch) - cross-references names visible in one or
+// more LinkedIn "My Network" screenshots, or pasted text copied from that
+// same page, against the given list of contacts still awaiting connection
+// acceptance, returning which of them appear to have accepted.
 app.post('/api/contacts/match-connections-screenshot', async (req, res) => {
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
 
-  const { candidates, images } = req.body || {};
+  const { candidates, images, text } = req.body || {};
   if (!Array.isArray(candidates) || !candidates.length) return res.status(400).json({ error: 'candidates is required' });
-  if (!Array.isArray(images) || !images.length) return res.status(400).json({ error: 'images is required' });
+  const hasImages = Array.isArray(images) && images.length;
+  if (!hasImages && !text) return res.status(400).json({ error: 'images or text is required' });
 
   try {
     const list = candidates.map(c => `${c.id}: ${c.name} (${c.company})`).join('\n');
-    const promptText = `Here is a screenshot of a LinkedIn connections list. Cross-reference the names visible in the screenshot against this list of contacts awaiting connection acceptance:\n${list}\n\nReturn ONLY a JSON array of the contact ids (e.g. ["c4","c9"]) whose names appear in the screenshot as accepted connections. If none appear, return [].`;
+    const source = hasImages ? 'the attached screenshot(s) of a LinkedIn connections list' : 'this text pasted from a LinkedIn connections list';
+    const promptText = `Cross-reference the names visible in ${source} against this list of contacts awaiting connection acceptance:\n${list}\n\n${hasImages ? '' : `Pasted text:\n${text}\n\n`}Return ONLY a JSON array of the contact ids (e.g. ["c4","c9"]) whose names appear as accepted connections. If none appear, return [].`;
 
-    const content = images.map(img => ({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.base64 } }));
-    content.push({ type: 'text', text: promptText });
+    const content = hasImages
+      ? [...images.map(img => ({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.base64 } })), { type: 'text', text: promptText }]
+      : promptText;
 
     const rawText = await callClaudeText(content, 200);
     let matchedIds = [];

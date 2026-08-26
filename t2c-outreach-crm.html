@@ -2122,23 +2122,26 @@ function initLogger(){
   };
 }
 
-// Manual/AI Assistant toggle - window.__loggerMode, defaulting to 'manual'
-// so nothing about the existing manual flow's behaviour changes for anyone
-// who never touches the toggle. Manual mode's markup below is completely
-// unchanged from before the toggle existed, just moved into its own
-// function so renderLoggerPage can switch between it and renderLoggerAIMode.
+// Manual/AI Assistant/Log Connections toggle - window.__loggerMode,
+// defaulting to 'manual' so nothing about the existing manual flow's
+// behaviour changes for anyone who never touches the toggle. Manual mode's
+// markup below is completely unchanged from before the toggle existed, just
+// moved into its own function so renderLoggerPage can switch between the
+// three modes.
 function renderLoggerPage(){
   if(!window.__logger) initLogger();
   if(!window.__loggerAI) initLoggerAI();
+  if(!window.__loggerConnections) initLoggerConnections();
   const mode = window.__loggerMode || 'manual';
   return `
   <div class="section-title" style="font-size:20px;margin-bottom:2px;">Logger</div>
   <div class="muted" style="margin-bottom:16px;">Quickly capture any touch point - LinkedIn messages, calls, meetings, proposals, research and more - straight into Airtable.</div>
-  <div class="logger-type-grid" style="grid-template-columns:repeat(2,minmax(140px,180px));margin-bottom:16px;">
+  <div class="logger-type-grid" style="grid-template-columns:repeat(3,minmax(140px,180px));margin-bottom:16px;">
     <div class="logger-type-btn ${mode==='manual'?'active':''}" onclick="setLoggerMode('manual')"><i class="ti ti-edit"></i> Manual</div>
     <div class="logger-type-btn ${mode==='ai'?'active':''}" onclick="setLoggerMode('ai')"><i class="ti ti-sparkles"></i> AI Assistant</div>
+    <div class="logger-type-btn ${mode==='connections'?'active':''}" onclick="setLoggerMode('connections')"><i class="ti ti-user-check"></i> Log Connections</div>
   </div>
-  ${mode === 'ai' ? renderLoggerAIMode() : renderLoggerManualMode()}
+  ${mode === 'ai' ? renderLoggerAIMode() : mode === 'connections' ? renderLoggerConnectionsMode() : renderLoggerManualMode()}
   `;
 }
 
@@ -2782,6 +2785,137 @@ function clearLoggerAIImage(){
   window.__loggerAI.dumpImage = null;
   const el = document.getElementById('loggerAIImagePreview');
   if(el) el.innerHTML = '';
+}
+
+/* ---- Logger "Log Connections" mode ----
+   Paste the names from a LinkedIn "My Network"/connections list, or upload
+   one or more screenshots of it, and match against contacts still awaiting
+   connection acceptance - reuses the same POST /api/contacts/match-
+   connections-screenshot route and markContactsConnected(...) the Roadmap's
+   "Read connections screenshot" feature already relies on (see
+   readConnectionsScreenshot above), just scoped to the Logger tab and
+   extended server-side to also accept pasted text, not only images. */
+
+function initLoggerConnections(){
+  window.__loggerConnections = {
+    text: '',
+    shots: [],
+    result: null
+  };
+}
+
+// Same restriction readConnectionsScreenshot uses - only a contact who's
+// been found/opened and had a connection request sent but not yet accepted
+// (no connDate) has anything to update here; anyone already connected,
+// messaging or booked is left alone.
+function loggerConnectionCandidates(){
+  return state.contacts.filter(c => (c.state==='found' || c.state==='opened') && !c.connDate);
+}
+
+function renderLoggerConnectionsMode(){
+  const lc = window.__loggerConnections;
+  const candidateCount = loggerConnectionCandidates().length;
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <p class="muted" style="font-size:12.5px;margin-bottom:12px;">Paste the names from your LinkedIn "My Network" list, or upload a screenshot of it - matches against your ${candidateCount} contact${candidateCount===1?'':'s'} still awaiting connection acceptance and marks any that appear as Connected.</p>
+    <div class="field"><label>Paste recent connections</label>
+      <textarea id="loggerConnText" rows="5" placeholder="Paste names (with or without job titles/dates) copied from LinkedIn...">${esc(lc.text)}</textarea>
+    </div>
+    <div class="learning-panel" ${dropZoneAttrs('loggerConnImageInput')} style="margin:12px 0;">
+      <h4><i class="ti ti-brand-linkedin"></i> Or upload screenshot(s)</h4>
+      <input type="file" id="loggerConnImageInput" accept="image/*" multiple style="display:none;" onchange="handleLoggerConnImageUpload(event)">
+      <button class="btn btn-secondary btn-sm" onclick="document.getElementById('loggerConnImageInput').click()"><i class="ti ti-upload"></i> Upload screenshot(s)</button>
+      <div id="loggerConnShotFiles" style="margin-top:8px;">${renderLoggerConnShotFiles()}</div>
+    </div>
+    <button class="btn btn-primary" id="loggerConnMatchBtn" onclick="runLoggerConnectionsMatch()"><i class="ti ti-sparkles"></i> Log connections</button>
+    <div id="loggerConnResult" style="margin-top:12px;">${renderLoggerConnResult()}</div>
+  </div>
+  `;
+}
+
+function renderLoggerConnShotFiles(){
+  return (window.__loggerConnections.shots || []).map((f,i) => `<span class="shot-file-chip">${esc(f.name)}<button onclick="removeLoggerConnShot(${i})">&times;</button></span>`).join('');
+}
+
+function handleLoggerConnImageUpload(event){
+  const files = Array.from(event.target.files || []);
+  event.target.value = '';
+  if(!files.length) return;
+  const lc = window.__loggerConnections;
+  let pending = files.length;
+  files.forEach(file => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const match = String(reader.result).match(/^data:([^;]+);base64,(.*)$/);
+      if(match) lc.shots.push({ name: file.name, mediaType: match[1], base64: match[2] });
+      pending--;
+      if(pending === 0){
+        const el = document.getElementById('loggerConnShotFiles');
+        if(el) el.innerHTML = renderLoggerConnShotFiles();
+      }
+    };
+    reader.onerror = () => toast('Could not read that file', 'warn');
+    reader.readAsDataURL(file);
+  });
+}
+function removeLoggerConnShot(idx){
+  window.__loggerConnections.shots.splice(idx,1);
+  const el = document.getElementById('loggerConnShotFiles');
+  if(el) el.innerHTML = renderLoggerConnShotFiles();
+}
+
+function renderLoggerConnResult(){
+  const result = window.__loggerConnections.result;
+  if(!result) return '';
+  if(result.error) return `<div class="card" style="background:#fbe3dc;border-color:#f0c6b8;"><i class="ti ti-alert-circle" style="color:var(--danger);"></i> ${esc(result.error)}</div>`;
+  return `
+  <div class="card" style="background:#eaf7f0;border-color:#c9e9d7;">
+    <i class="ti ti-circle-check" style="color:var(--success);"></i>
+    ${result.matched.length ? ` ${result.matched.length} contact${result.matched.length===1?'':'s'} marked as connected: ${result.matched.map(n=>esc(n)).join(', ')}` : " Couldn't match anyone from that - try adding more detail or a clearer screenshot"}
+  </div>
+  `;
+}
+
+async function runLoggerConnectionsMatch(){
+  const lc = window.__loggerConnections;
+  const text = (document.getElementById('loggerConnText')?.value || '').trim();
+  lc.text = text;
+  if(!text && !lc.shots.length){ toast('Paste some names or upload a screenshot first', 'warn'); return; }
+
+  const candidates = loggerConnectionCandidates();
+  if(!candidates.length){ toast('No pending contacts to match against', 'warn'); return; }
+
+  const btn = document.getElementById('loggerConnMatchBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Matching...'; }
+  lc.result = null;
+
+  try {
+    const res = await fetch('/api/contacts/match-connections-screenshot', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        candidates: candidates.map(c => ({ id: c.id, name: c.name, company: c.company })),
+        images: lc.shots.length ? lc.shots.map(f => ({ mediaType: f.mediaType, base64: f.base64 })) : undefined,
+        text: text || undefined
+      })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error((typeof data.error === 'string' && data.error) || ('Request failed with status '+res.status));
+
+    const matched = candidates.filter(c => (data.matchedIds || []).includes(c.id));
+    if(matched.length) markContactsConnected(matched);
+    lc.result = { matched: matched.map(c => c.name) };
+    lc.text = '';
+    lc.shots = [];
+    if(matched.length) toast(`${matched.length} contact${matched.length===1?'':'s'} matched and marked as connected`, 'success');
+    renderPage();
+  } catch(err){
+    lc.result = { error: "We couldn't read that — try rewording or a clearer screenshot" };
+    console.warn('Log connections match failed:', err.message);
+    renderPage();
+  } finally {
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-sparkles"></i> Log connections'; }
+  }
 }
 
 // Best-guess existing-contact match for one AI-extracted touch point - an
@@ -3439,7 +3573,7 @@ function renderTodaysActionItem(a){
   <div class="todo-item" id="todaysAction-${c.id}">
     <div class="todo-item-main">
       <div>
-        <div class="todo-item-name">${esc(c.name)}</div>
+        <div class="todo-item-name" style="cursor:pointer;" onclick="openContactDrawer('${esc(c.name)}', ${a.campaignName ? `'${esc(a.campaignName)}'` : 'null'})">${esc(c.name)}</div>
         <div class="muted" style="font-size:12px;">${esc(c.role)} · ${esc(c.company)}</div>
         ${a.campaignName ? `<div style="margin-top:4px;"><span class="pill" style="background:#e2f2fa;color:#0d6a96;"><i class="ti ti-rocket" style="font-size:11px;"></i> ${esc(a.campaignName)}</span></div>` : ''}
       </div>
@@ -3483,7 +3617,7 @@ function renderFastActionCard(a){
   <div class="todo-item" id="todaysAction-${c.id}">
     <div class="todo-item-main">
       <div>
-        <div class="todo-item-name">${esc(c.name)}</div>
+        <div class="todo-item-name" style="cursor:pointer;" onclick="openContactDrawer('${esc(c.name)}', '${esc(a.campaignName)}')">${esc(c.name)}</div>
         <div class="muted" style="font-size:12px;">${esc(c.role)} · ${esc(c.company)}</div>
         <div style="margin-top:4px;"><span class="pill" style="background:#e2f2fa;color:#0d6a96;"><i class="ti ti-rocket" style="font-size:11px;"></i> ${esc(a.campaignName)}</span></div>
       </div>
@@ -4192,27 +4326,37 @@ function unassignedGridContacts(gridId){
   return gridContacts(gridId).filter(c => !isContactExcludedFromGrid(c) && !(c.company||'').trim());
 }
 
-// One extra row, above the normal company rows, holding every company-less
-// contact on this grid - each bucketed into whichever column matches their
-// role, same column set as the rest of the matrix. Multiple contacts for
-// the same role just stack in that cell (renderGridCell only ever expects
-// one contact per company+role pair, so this can't reuse it directly).
-// Once "Run daily search" fills in a contact's company (see
-// applyFillMissingFieldResult), they disappear from here and appear in
+// Extra rows, above the normal company rows, holding every company-less
+// contact on this grid - one row per contact (e.g. an Apollo import that
+// only came in with a job title, no organisation), each placed in whichever
+// column matches their role, same column set as the rest of the matrix, so
+// two company-less contacts never collapse into the same row just because
+// they share a role. Once "Run daily search" fills in a contact's company
+// (see applyFillMissingFieldResult), they disappear from here and appear in
 // their proper row on the next render.
 function renderUnassignedGridRow(grid, cols){
   const unassigned = unassignedGridContacts(grid.id);
   if(!unassigned.length) return '';
-  return `
+  return unassigned.map(c => `
     <tr class="unassigned-row" style="background:var(--surface-2);">
       <td class="company-cell"><span class="muted" style="font-style:italic;">No company yet</span></td>
-      ${cols.map(role => {
-        const matches = unassigned.filter(c => c.role === role);
-        if(!matches.length) return '<td><div class="cell-empty">—</div></td>';
-        return `<td>${matches.map(c=>renderGridCellHTML(c)).join('')}</td>`;
-      }).join('')}
+      ${cols.map(role => role === c.role ? `<td>${renderGridCellHTML(c)}</td>` : '<td><div class="cell-empty">—</div></td>').join('')}
     </tr>
-  `;
+  `).join('');
+}
+
+// A company can have more than one contact for the same role (see
+// contactsForCell) - this gives it as many rows as its fullest column needs,
+// each carrying the same company label, instead of the matrix only ever
+// showing one contact per (company, role) pair.
+function renderCompanyRows(company, cols){
+  const rowCount = Math.max(1, ...cols.map(role => contactsForCell(company, role).length));
+  const companyCell = `<td class="company-cell"><span style="cursor:pointer;" onclick="openCompanyDrawer('${esc(company)}')">${esc(company)}</span>${renderCompanyLinkedInIcon(company)}</td>`;
+  let rowsHtml = '';
+  for(let i = 0; i < rowCount; i++){
+    rowsHtml += `<tr>${companyCell}${cols.map(role => renderGridCell(company, role, i)).join('')}</tr>`;
+  }
+  return rowsHtml;
 }
 
 function renderGridViewArea(grid, cols){
@@ -4224,12 +4368,7 @@ function renderGridViewArea(grid, cols){
       <thead><tr><th>Company</th>${cols.map(c=>'<th>'+esc(c)+'</th>').join('')}</tr></thead>
       <tbody id="gridBody">
         ${renderUnassignedGridRow(grid, cols)}
-        ${grid.companies.map(company => `
-          <tr>
-            <td class="company-cell"><span style="cursor:pointer;" onclick="openCompanyDrawer('${esc(company)}')">${esc(company)}</span>${renderCompanyLinkedInIcon(company)}</td>
-            ${cols.map(role => renderGridCell(company, role)).join('')}
-          </tr>
-        `).join('')}
+        ${grid.companies.map(company => renderCompanyRows(company, cols)).join('')}
       </tbody>
     </table>
   </div>
@@ -4415,10 +4554,18 @@ function renderContactSpreadsheet(grid){
 // row as still occupying the pair. The Excluded person themselves stays
 // hidden too (same contract renderGridCell/renderContactSpreadsheet rely on)
 // since callers here never see them at all.
-function findContact(company, role){
+// Every non-excluded contact sharing this exact (company, role) slot - a
+// company can have more than one contact for the same role (e.g. two Change
+// Managers at BHP from an Apollo import), so this is an array, not a single
+// match. renderCompanyRows below gives each one its own grid row instead of
+// silently hiding all but one.
+function contactsForCell(company, role){
   const gridId = currentGrid().id;
-  const c = state.contacts.find(c => c.gridId === gridId && c.company === company && c.role === role);
-  return (c && isContactExcludedFromGrid(c)) ? undefined : c;
+  return state.contacts.filter(c => c.gridId === gridId && c.company === company && c.role === role && !isContactExcludedFromGrid(c));
+}
+
+function findContact(company, role){
+  return contactsForCell(company, role)[0];
 }
 
 // Mirrors gridSequenceStageMap's single-linked-campaign resolution, but for
@@ -4487,8 +4634,8 @@ function gridCellState(c){
   return sequenceStageToGridState(seqStage) || c.state;
 }
 
-function renderGridCell(company, role){
-  const c = findContact(company, role);
+function renderGridCell(company, role, index){
+  const c = contactsForCell(company, role)[index || 0];
   if(!c){
     return `<td><div class="cell-empty" data-company="${esc(company)}" data-role="${esc(role)}">No match yet</div></td>`;
   }
@@ -4988,18 +5135,24 @@ function confirmApolloImport(){
   const grid = currentGrid();
   const searchedJobTitle = window.__apolloSearchedJobTitle || '';
 
-  let imported = 0, skipped = 0;
+  // A company-less result (Apollo returned no organisation for that person)
+  // still gets imported - it lands in the grid's "No company yet" row
+  // (unassignedGridContacts/renderUnassignedGridRow) instead of a real
+  // company row, and becomes a candidate for "Run daily search" to backfill
+  // the company later (see the matching note on syncContactToAirtable).
+  let imported = 0, importedNoCompany = 0, skipped = 0;
   checked.forEach(r => {
-    if(!r.name || !r.company){ skipped++; return; }
-    ensureGridCompany(grid, r.company);
-    createManualGridContact(r.name, searchedJobTitle, r.company, r.linkedinUrl || '', r.jobTitle || '');
+    if(!r.name){ skipped++; return; }
+    if(r.company) ensureGridCompany(grid, r.company);
+    else importedNoCompany++;
+    createManualGridContact(r.name, searchedJobTitle, r.company || '', r.linkedinUrl || '', r.jobTitle || '');
     imported++;
   });
 
   closeModal();
   renderPage();
-  if(imported) toast(`${imported} contact${imported===1?'':'s'} imported from Apollo`, 'success');
-  if(skipped) toast(`${skipped} skipped - missing name or company`, 'warn');
+  if(imported) toast(`${imported} contact${imported===1?'':'s'} imported from Apollo${importedNoCompany ? ` (${importedNoCompany} without a company yet)` : ''}`, 'success');
+  if(skipped) toast(`${skipped} skipped - missing name`, 'warn');
 }
 
 function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
@@ -5446,7 +5599,12 @@ function syncContactToAirtable(contact) {
     gridName: gridNameForContact(contact),
     apolloTitle: contact.apolloTitle || ''
   };
-  if(!airtableWriteGuard('contact', contactFields, ['name','company'])) return;
+  // company alone (not name) is allowed blank here - an Apollo result with
+  // no organisation on the person's record still needs its own Airtable row
+  // so incompleteGridContacts/"Run daily search" can backfill the company
+  // later (see the matching note on createOrUpdateAirtableContact,
+  // search-server.js).
+  if(!airtableWriteGuard('contact', contactFields, ['name'])) return;
   fetch('/api/airtable/contact', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
