@@ -6288,12 +6288,20 @@ Message
       ? [...images.map(img => ({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.base64 } })), { type: 'text', text: promptText }]
       : promptText;
 
-    const rawText = await callClaudeText(content, 200);
+    // 200 tokens was enough for the original screenshot use case (a photo
+    // only ever shows a handful of connections at once), but a large real
+    // candidate pool matched against a full text paste of someone's network
+    // can genuinely need to return dozens of Airtable record ids - each
+    // ~18 characters, quoted and comma-separated - which was silently
+    // truncating mid-array into invalid JSON and surfacing as a generic
+    // "could not read that" error instead of the real matches.
+    const rawText = await callClaudeText(content, 1500);
     let matchedIds = [];
     try {
-      const jsonMatch = rawText.match(/\[[\s\S]*\]/);
-      matchedIds = JSON.parse(jsonMatch ? jsonMatch[0] : rawText);
+      const jsonMatch = stripCodeFences(rawText).match(/\[[\s\S]*\]/);
+      matchedIds = JSON.parse(jsonMatch ? jsonMatch[0] : stripCodeFences(rawText));
     } catch (parseErr) {
+      console.error('Match connections screenshot: malformed JSON from Claude:', rawText);
       throw new Error('Could not parse Claude response as a JSON array');
     }
 
