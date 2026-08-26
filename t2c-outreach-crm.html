@@ -570,7 +570,7 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .empty-state{padding:30px;text-align:center;color:var(--muted);font-size:13px;}
 
 /* Grid/Table view toggle + spreadsheet table */
-.grid-view-toolbar{display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-bottom:12px;position:relative;}
+.grid-view-toolbar{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:12px;position:relative;}
 .view-toggle{display:inline-flex;border:1px solid var(--border);border-radius:var(--radius-badge);overflow:hidden;}
 .view-toggle-btn{display:flex;align-items:center;gap:6px;padding:7px 13px;font-size:12px;font-weight:700;border:none;background:var(--surface);color:var(--muted);cursor:pointer;}
 .view-toggle-btn+.view-toggle-btn{border-left:1px solid var(--border);}
@@ -4301,7 +4301,7 @@ function renderGrid(){
     <button class="btn btn-accent" id="readConnectionsBtn" style="margin-top:14px;" onclick="readConnectionsScreenshot()"><i class="ti ti-wand"></i> Read screenshot(s)</button>
   </div>
 
-  <div class="status-bar"><span class="live-dot"></span> Live · ${gridContacts(grid.id).filter(c => !isContactExcludedFromGrid(c)).length} contacts tracked across ${grid.companies.length} companies</div>
+  <div class="status-bar"><span class="live-dot"></span> Live · ${gridContactTally(grid.id)} contacts tracked across ${grid.companies.length} companies</div>
   `;
 }
 
@@ -4357,24 +4357,38 @@ function toggleGridColumnsDropdown(){
   renderPage();
 }
 
+// Contact tally shown in the toolbar shared by both Grid and Table view
+// (renderGridViewToolbar runs once above renderGridViewArea regardless of
+// which mode is active, so this covers both without duplicating it per
+// view) - same count/exclusion rule as the "Live · N contacts tracked
+// across M companies" status-bar line further down the page, just visible
+// without scrolling past the whole grid first.
+function gridContactTally(gridId){
+  return gridContacts(gridId).filter(c => !isContactExcludedFromGrid(c)).length;
+}
+
 function renderGridViewToolbar(gridId){
   const mode = gridViewMode(gridId);
   const visible = new Set(gridVisibleColumns(gridId));
+  const count = gridContactTally(gridId);
   return `
   <div class="grid-view-toolbar">
-    ${mode === 'table' ? `
-    <div class="columns-btn-wrap">
-      <button class="btn btn-secondary btn-sm" onclick="toggleGridColumnsDropdown()"><i class="ti ti-columns"></i> Columns</button>
-      ${window.__gridColumnsDropdownOpen ? `
-      <div class="columns-dropdown">
-        ${SPREADSHEET_COLUMNS.map(c => `
-          <label><input type="checkbox" ${visible.has(c.key)?'checked':''} onchange="toggleGridColumn('${gridId}','${c.key}')"> ${esc(c.label)}</label>
-        `).join('')}
+    <div class="muted" style="font-size:12.5px;font-weight:700;">${count} contact${count===1?'':'s'}</div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      ${mode === 'table' ? `
+      <div class="columns-btn-wrap">
+        <button class="btn btn-secondary btn-sm" onclick="toggleGridColumnsDropdown()"><i class="ti ti-columns"></i> Columns</button>
+        ${window.__gridColumnsDropdownOpen ? `
+        <div class="columns-dropdown">
+          ${SPREADSHEET_COLUMNS.map(c => `
+            <label><input type="checkbox" ${visible.has(c.key)?'checked':''} onchange="toggleGridColumn('${gridId}','${c.key}')"> ${esc(c.label)}</label>
+          `).join('')}
+        </div>` : ''}
       </div>` : ''}
-    </div>` : ''}
-    <div class="view-toggle">
-      <button type="button" class="view-toggle-btn ${mode==='grid'?'active':''}" onclick="setGridViewMode('${gridId}','grid')"><i class="ti ti-grid-dots"></i> Grid</button>
-      <button type="button" class="view-toggle-btn ${mode==='table'?'active':''}" onclick="setGridViewMode('${gridId}','table')"><i class="ti ti-table"></i> Table</button>
+      <div class="view-toggle">
+        <button type="button" class="view-toggle-btn ${mode==='grid'?'active':''}" onclick="setGridViewMode('${gridId}','grid')"><i class="ti ti-grid-dots"></i> Grid</button>
+        <button type="button" class="view-toggle-btn ${mode==='table'?'active':''}" onclick="setGridViewMode('${gridId}','table')"><i class="ti ti-table"></i> Table</button>
+      </div>
     </div>
   </div>
   `;
