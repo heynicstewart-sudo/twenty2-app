@@ -559,13 +559,24 @@ async function gridStillExistsInAirtable(gridId) {
   }
 }
 
+// "Grid Name" holds a comma-separated list of every grid this company is
+// on, not just one - a company (RAC WA, BHP, etc.) is routinely shared
+// across multiple grids (deleteGridConfirmed/confirmApolloImport already
+// account for that on the delete side), so a single value here would let
+// whichever grid touched the company first silently lock every other grid
+// out of ever seeing it again once GET /api/airtable/company?gridName=
+// filters by it. Same join style as Grids.Columns elsewhere in this file.
+function parseGridNameList(raw) {
+  return (raw || '').split(',').map(s => s.trim()).filter(Boolean);
+}
+
 // Shared find-or-create-a-Company lookup - used by POST /api/airtable/company
 // (client-driven, one company at a time, e.g. "Add company") and the
 // fillMissing branch of runGridSearchJob below (server-driven, once a
 // contact's missing company has been found by search). Same behaviour
 // either way: returns the existing record if the name already matches one,
-// backfilling Grid Name onto it if it was missing, otherwise creates a
-// fresh record.
+// appending gridName onto its Grid Name list if it isn't already there,
+// otherwise creates a fresh record.
 async function findOrCreateCompanyRecord(name, gridName) {
   const searchRes = await airtableFetchWithRetry(
     `${AIRTABLE_URL}/Companies?filterByFormula=${encodeURIComponent(`{Company Name}="${name}"`)}`,
@@ -574,8 +585,12 @@ async function findOrCreateCompanyRecord(name, gridName) {
   const searchData = await searchRes.json();
   const existing = searchData.records && searchData.records[0];
   if (existing) {
-    if (gridName && !existing.fields['Grid Name']) {
-      await airtableRequest('PATCH', 'Companies', { records: [{ id: existing.id, fields: { 'Grid Name': gridName } }] });
+    if (gridName) {
+      const gridNames = parseGridNameList(existing.fields['Grid Name']);
+      if (!gridNames.includes(gridName)) {
+        gridNames.push(gridName);
+        await airtableRequest('PATCH', 'Companies', { records: [{ id: existing.id, fields: { 'Grid Name': gridNames.join(', ') } }] });
+      }
     }
     return { id: existing.id, skipped: true };
   }
@@ -1108,7 +1123,14 @@ app.get('/api/airtable/company', async (req, res) => {
     // carried as the extra query string since airtableRequest/
     // airtableFetchAllRecords only take a bare table name.
     if (gridName) {
-      const filterQs = `filterByFormula=${encodeURIComponent(`{Grid Name}="${gridName}"`)}&${sortQs}`;
+      // Grid Name is a comma-separated list (see findOrCreateCompanyRecord),
+      // so an exact-equals match would miss a company shared with any other
+      // grid - wrap both sides in commas and FIND the padded name instead,
+      // same "boundary-safe contains" trick as everywhere else in Airtable
+      // formulas that need "is one of these list items", not "the whole
+      // field equals this one value".
+      const formula = `FIND(",${gridName},", "," & SUBSTITUTE({Grid Name}, ", ", ",") & ",") > 0`;
+      const filterQs = `filterByFormula=${encodeURIComponent(formula)}&${sortQs}`;
       const records = await airtableFetchAllPaginated('Companies', filterQs);
       return res.json(records);
     }

@@ -5879,10 +5879,14 @@ async function hydrateContactsFromAirtable(){
 
 // Replaces grids[].companies/companyLinkedIn wholesale from Airtable's
 // Companies table, keyed off each record's "Grid Name" field to place it in
-// the matching local grid (creating that grid if it doesn't exist yet - see
-// resolveGridIdByName). Companion to hydrateContactsFromAirtable above;
-// companies are never read from localStorage, see persistState/
-// loadPersistedState.
+// every matching local grid (creating one if it doesn't exist yet - see
+// resolveGridIdByName). "Grid Name" is a comma-separated list, not a single
+// value (see findOrCreateCompanyRecord, search-server.js) - a company
+// shared across grids (RAC WA, BHP, etc.) needs to land on all of them here,
+// or whichever grid isn't first in the list would silently lose it on every
+// reload even though the company still very much belongs to it. Companion
+// to hydrateContactsFromAirtable above; companies are never read from
+// localStorage, see persistState/loadPersistedState.
 async function hydrateCompaniesFromAirtable(){
   try {
     const res = await fetch('/api/airtable/company');
@@ -5895,13 +5899,16 @@ async function hydrateCompaniesFromAirtable(){
       const f = r.fields || {};
       const name = f['Company Name'];
       if(!name) return;
-      const gridId = resolveGridIdByName(f['Grid Name']);
-      const grid = state.grids.find(g => g.id === gridId);
-      if(!grid) return;
-      if(!grid.companies.includes(name)) grid.companies.push(name);
-      if(f['Company LinkedIn URL'] || f['LinkedIn Company ID']){
-        grid.companyLinkedIn[name] = { linkedinUrl: f['Company LinkedIn URL'] || '', linkedinSlug: f['LinkedIn Company ID'] || '' };
-      }
+      const gridNames = (f['Grid Name'] || '').split(',').map(s => s.trim()).filter(Boolean);
+      const gridIds = new Set((gridNames.length ? gridNames : ['']).map(resolveGridIdByName));
+      gridIds.forEach(gridId => {
+        const grid = state.grids.find(g => g.id === gridId);
+        if(!grid) return;
+        if(!grid.companies.includes(name)) grid.companies.push(name);
+        if(f['Company LinkedIn URL'] || f['LinkedIn Company ID']){
+          grid.companyLinkedIn[name] = { linkedinUrl: f['Company LinkedIn URL'] || '', linkedinSlug: f['LinkedIn Company ID'] || '' };
+        }
+      });
     });
 
     renderPage();
