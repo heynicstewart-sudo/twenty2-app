@@ -8519,6 +8519,16 @@ async function ensureAirtableField(tableName, fieldName, fieldDef) {
 // actual record read/write proceeds normally; if it doesn't exist and
 // can't be auto-created, that read/write fails on its own with a normal
 // "table not found" Airtable error instead of this step blocking it pre-emptively.
+// Reuses the Keywords table that already existed in this base before this
+// feature (Keyword/Volume/KD/Intent/Status/Content/Related Companies/
+// Notes/AI Keyword Opportunity Score - built for the same kind of keyword/
+// content work, just not by this app's code). Content holds the generated
+// post's HTML and Notes holds the suggested-keyword reason, rather than
+// adding separate Post HTML / Suggested Reason fields that would duplicate
+// them. Related Companies and AI Keyword Opportunity Score aren't read or
+// written by this feature. This field list only matters if the table needs
+// to be created from scratch (it doesn't exist here, but keeps
+// ensureKeywordsTable correct for a from-fresh base).
 async function ensureKeywordsTable() {
   try {
     return await ensureAirtableTable(KEYWORDS_TABLE, [
@@ -8528,11 +8538,11 @@ async function ensureKeywordsTable() {
       { name: 'Intent', type: 'singleLineText' },
       { name: 'Status', type: 'singleSelect', options: { choices: [{ name: 'Queued' }, { name: 'Generating' }, { name: 'Generated' }, { name: 'Published' }] } },
       { name: 'Post Title', type: 'singleLineText' },
-      { name: 'Post HTML', type: 'multilineText' },
+      { name: 'Content', type: 'multilineText' },
       { name: 'Meta Title', type: 'singleLineText' },
       { name: 'Meta Description', type: 'multilineText' },
       { name: 'Published URL', type: 'url' },
-      { name: 'Suggested Reason', type: 'multilineText' },
+      { name: 'Notes', type: 'multilineText' },
       { name: 'Created Date', type: 'date', options: { dateFormat: { name: 'iso' } } }
     ]);
   } catch (err) {
@@ -8649,11 +8659,11 @@ app.get('/api/seo/keywords', async (req, res) => {
         intent: r.fields['Intent'] || '',
         status: r.fields['Status'] || 'Queued',
         postTitle: r.fields['Post Title'] || '',
-        postHtml: r.fields['Post HTML'] || '',
+        postHtml: r.fields['Content'] || '',
         metaTitle: r.fields['Meta Title'] || '',
         metaDescription: r.fields['Meta Description'] || '',
         publishedUrl: r.fields['Published URL'] || '',
-        suggestedReason: r.fields['Suggested Reason'] || '',
+        suggestedReason: r.fields['Notes'] || '',
         createdDate: r.fields['Created Date'] || ''
       }))
       .sort((a, b) => (b.volume || 0) - (a.volume || 0));
@@ -8670,7 +8680,7 @@ app.post('/api/seo/keywords/:id/save', async (req, res) => {
   try {
     const fields = {};
     if (title !== undefined) fields['Post Title'] = title;
-    if (html !== undefined) fields['Post HTML'] = html;
+    if (html !== undefined) fields['Content'] = html;
     if (metaTitle !== undefined) fields['Meta Title'] = metaTitle;
     if (metaDescription !== undefined) fields['Meta Description'] = metaDescription;
     if (!Object.keys(fields).length) return res.status(400).json({ error: 'Nothing to save' });
@@ -8694,7 +8704,7 @@ app.post('/api/seo/keywords/add-to-queue', async (req, res) => {
     }
     const today = new Date().toISOString().slice(0, 10);
     const data = await airtableRequest('POST', KEYWORDS_TABLE, {
-      records: [{ fields: { 'Keyword': keyword.trim(), 'Status': 'Queued', 'Suggested Reason': reason || '', 'Created Date': today } }],
+      records: [{ fields: { 'Keyword': keyword.trim(), 'Status': 'Queued', 'Notes': reason || '', 'Created Date': today } }],
       typecast: true
     });
     res.json({ success: true, id: data.records[0].id });
@@ -8900,7 +8910,7 @@ app.post('/api/seo/generate-post', async (req, res) => {
         id: keywordId,
         fields: {
           'Post Title': post.title,
-          'Post HTML': post.html,
+          'Content': post.html,
           'Meta Title': post.metaTitle,
           'Meta Description': post.metaDescription,
           'Status': 'Generated'
@@ -9076,11 +9086,11 @@ app.post('/api/seo/publish', async (req, res) => {
     const keywordRecord = await airtableGetRecord(KEYWORDS_TABLE, keywordId);
     if (!keywordRecord) return res.status(404).json({ error: 'Keyword not found' });
     const kf = keywordRecord.fields;
-    if (!kf['Post HTML']) return res.status(400).json({ error: 'This keyword has no generated post to publish yet' });
+    if (!kf['Content']) return res.status(400).json({ error: 'This keyword has no generated post to publish yet' });
 
     const post = {
       title: kf['Post Title'] || kf['Keyword'],
-      html: kf['Post HTML'],
+      html: kf['Content'],
       metaTitle: kf['Meta Title'] || '',
       metaDescription: kf['Meta Description'] || ''
     };
