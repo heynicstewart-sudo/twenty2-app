@@ -7091,7 +7091,31 @@ app.post('/api/messages/generate', async (req, res) => {
 
     const enrichmentNote = enrichment ? `\n\nEnrichment data from research on this contact (weave in naturally, don't just list it back): current title ${enrichment.currentTitle || 'unknown'}; company ${enrichment.company || 'unknown'}; work history ${enrichment.workHistory || 'unknown'}; education ${enrichment.education || 'unknown'}; location ${enrichment.location || 'unknown'}.` : '';
 
-    const promptText = `Template for this stage:\n${stage.template || ''}\n\nContact: ${contact.name}, ${contact.role || ''} at ${contact.company || ''}. Sequence stage: ${stage.label || stage.key} (message ${stage.messageNumber || 'n/a'} in the sequence). Profile notes: ${contact.notes || 'none'}.\n\n${ctaStrategyNoteText(stage.key, stage.messageNumber, voice && voice.messagesBeforeCta)}\n\n${voiceRulesPromptText(voice)}${imageNote}${campaignNote}${enrichmentNote}\n\nWrite the actual message for this specific contact, replacing placeholders naturally. Return only the message text.`;
+    // This modal has no built-in memory of what's already been said - unlike
+    // POST /api/campaign/:id/contacts/:contactId/generate-message below,
+    // which is scoped to one campaign and always reads Conversation Context
+    // fresh from Airtable, this route is only ever handed whatever the
+    // client passes in. Without this lookup, a message 2+ draft here had no
+    // way to know a reply had already come in, and read like a first touch
+    // every time - regardless of how many messages had actually gone back
+    // and forth. contact.id is the Airtable Contacts record id (state.contacts
+    // items are hydrated with id: r.id) - resolve it the same way the fast
+    // action's generate-message does, falling back to a name lookup so an
+    // older client that hasn't sent an id yet still gets best-effort context.
+    let conversationNote = '';
+    try {
+      const contactRecord = contact.id
+        ? await airtableGetRecord('Contacts', contact.id)
+        : await findRecordByFieldName('Contacts', 'Full Name', contact.name);
+      if (contactRecord) {
+        const cf = contactRecord.fields || {};
+        conversationNote = `\n\nAI summary of this contact so far: ${cf['AI Summary'] || 'none yet'}. Conversation so far: ${cf['Conversation Context'] || 'none yet - this is the first message'}.`;
+      }
+    } catch (lookupErr) {
+      console.warn('Could not load contact conversation history for message generation (non-fatal):', lookupErr.message);
+    }
+
+    const promptText = `Template for this stage:\n${stage.template || ''}\n\nContact: ${contact.name}, ${contact.role || ''} at ${contact.company || ''}. Sequence stage: ${stage.label || stage.key} (message ${stage.messageNumber || 'n/a'} in the sequence). Profile notes: ${contact.notes || 'none'}.${conversationNote}\n\n${ctaStrategyNoteText(stage.key, stage.messageNumber, voice && voice.messagesBeforeCta)}\n\n${voiceRulesPromptText(voice)}${imageNote}${campaignNote}${enrichmentNote}\n\nWrite the actual message for this specific contact, replacing placeholders naturally - if the conversation so far shows they've already replied, respond to what they actually said rather than reintroducing yourself. Return only the message text.`;
 
     const content = imgs.map(img => ({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.base64 } }));
     content.push({ type: 'text', text: promptText });
@@ -7162,17 +7186,19 @@ app.post('/api/campaign/:id/contacts/:contactId/generate-message', async (req, r
     // as a cold sales blast rather than a peer-to-peer opener.
     const offer = messageNumber >= 2 ? await getActiveOfferForCampaign(campaignRecord.id) : null;
 
-    // Marcus's own edits are the best signal for what "good" looks like -
-    // pull his 5 most recently sent messages that he rewrote before sending
-    // (Draft Outcome "Sent edited", as opposed to "Sent verbatim") across all
-    // contacts/campaigns, most recent row first, as style examples.
+    // Marcus's own edits are the best signal for what "good" looks like for
+    // *this* campaign - pull his 5 most recently sent messages in this same
+    // campaign that he rewrote before sending (Draft Outcome "Sent edited"),
+    // most recent row first, and show the original AI draft next to what he
+    // actually sent so Claude can learn the direction of the edit, not just
+    // the end result.
     const recentEditedExamples = rows
-      .filter(r => r.fields['Draft Outcome'] === 'Sent edited' && r.fields['Final Message Sent'])
+      .filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id) && r.fields['Draft Outcome'] === 'Sent edited' && r.fields['Final Message Sent'] && r.fields['Original Message Draft'])
       .sort((a, b) => new Date(b.createdTime) - new Date(a.createdTime))
       .slice(0, 5)
-      .map(r => r.fields['Final Message Sent']);
+      .map(r => ({ original: r.fields['Original Message Draft'], edited: r.fields['Final Message Sent'] }));
     const examplesNote = recentEditedExamples.length
-      ? `\n\nHere are up to 5 examples of messages Marcus personally edited before sending (most recent first) - match their tone and style:\n${recentEditedExamples.map((m, i) => `${i + 1}. ${m}`).join('\n\n')}`
+      ? `\n\nHere are up to 5 examples of messages Marcus personally edited before sending in this campaign (most recent first) - each pairs the AI draft with what he actually sent, so you can learn the tone and style he prefers for this campaign:\n${recentEditedExamples.map((ex, i) => `${i + 1}. AI draft: ${ex.original}\n   Marcus sent: ${ex.edited}`).join('\n\n')}`
       : '';
 
     const prompt = `You are drafting LinkedIn outreach message ${messageNumber} of 3 for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM.
@@ -7224,6 +7250,12 @@ app.post('/api/campaign/:id/contacts/:contactId/mark-sent', async (req, res) => 
       return res.status(400).json({ error: `Contact is already at the final stage ("${stage}") - nothing further to advance to.` });
     }
 
+    // The pre-edit AI draft this row held before this send - captured now
+    // because it's about to be cleared below. Kept alongside Final Message
+    // Sent so generate-message can show Claude the original-vs-edited pair,
+    // not just the end result.
+    const originalDraft = row.fields['Next Message Draft'] || '';
+
     const today = new Date().toISOString().slice(0, 10);
     const stageFields = {
       'Sequence Stage': nextStage,
@@ -7233,11 +7265,13 @@ app.post('/api/campaign/:id/contacts/:contactId/mark-sent', async (req, res) => 
     // draftOutcome ('Sent verbatim'/'Sent edited') tells us whether Marcus sent
     // the AI draft as-is or rewrote it - feedback signal for how good the
     // draft actually was, diffed client-side against the draft this row held
-    // before this send. Final Message Sent records what actually went out
-    // (as opposed to Next Message Draft, which is the pre-edit AI draft and
-    // gets cleared above) - generate-message reads recent "Sent edited" rows
-    // back out of this field as style examples.
+    // before this send. Final Message Sent records what actually went out;
+    // Original Message Draft preserves the pre-edit AI draft it's paired
+    // with (as opposed to Next Message Draft, which gets cleared above) -
+    // generate-message reads recent "Sent edited" rows back out of both
+    // fields as style examples.
     stageFields['Final Message Sent'] = message;
+    stageFields['Original Message Draft'] = originalDraft;
     if (draftOutcome) stageFields['Draft Outcome'] = draftOutcome;
     await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, {
       records: [{
@@ -7247,9 +7281,18 @@ app.post('/api/campaign/:id/contacts/:contactId/mark-sent', async (req, res) => 
       typecast: true
     });
 
+    // 'Name' isn't auto-generated by Airtable on this table (it's a plain
+    // text primary field) - this write skipped it entirely, which is why
+    // these rows were showing up as "Unnamed record" in the Airtable UI.
+    // "[Campaign]_Message [N]" so it's immediately clear which campaign and
+    // which message in the sequence this was, at a glance in the Airtable
+    // grid - messageNumber here is the one just sent (MESSAGE_NUMBER_FOR_STAGE
+    // keyed off `stage`, the row's stage *before* the advance above).
+    const messageNumber = MESSAGE_NUMBER_FOR_STAGE[stage];
     await airtableRequest('POST', 'Touch Points', {
       records: [{
         fields: {
+          'Name': `${campaignName}_Message ${messageNumber}`,
           'Date': today,
           'Type': 'LinkedIn Message',
           'Direction': 'Outbound',
@@ -7264,6 +7307,77 @@ app.post('/api/campaign/:id/contacts/:contactId/mark-sent', async (req, res) => 
     res.json({ success: true, newStage: nextStage });
   } catch (err) {
     console.error('Mark sent error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// "Reply?" Yes/No toggle on a Roadmap card's message step
+// (t2c-outreach-crm.html, setReply) - this used to be local-only (just
+// flipped c.thread[key].replied in memory, never synced), so it was lost on
+// every reload and Airtable's Sequence Stage never left "Message N Sent"
+// no matter what was clicked here. Reuses SEQUENCE_STAGE_ADVANCE - the same
+// table the DM-screenshot flow (POST /api/context/parse-screenshot above)
+// advances from - keyed off the row's actual current Sequence Stage rather
+// than whatever stage the client's local state believes it's in, so this
+// self-corrects even if that row had drifted out of sync.
+app.post('/api/campaign/:id/contacts/:contactId/reply', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const campaignName = decodeURIComponent(req.params.id);
+  const contactId = req.params.contactId;
+  const { replied } = req.body || {};
+  if (typeof replied !== 'boolean') return res.status(400).json({ error: 'replied (boolean) is required' });
+
+  try {
+    const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
+    if (!campaignRecord) return res.status(404).json({ error: `Campaign "${campaignName}" not found` });
+
+    const contactRecord = await airtableGetRecord('Contacts', contactId);
+    if (!contactRecord) return res.status(404).json({ error: 'Contact not found' });
+
+    const rows = await fetchCampaignContactsRows();
+    const row = await getOrCreateCampaignContactRow(contactId, (contactRecord.fields || {})['Full Name'] || contactId, campaignRecord.id, campaignName, rows);
+    const currentStage = normalizeSequenceStage(row.fields['Sequence Stage']);
+    const advance = SEQUENCE_STAGE_ADVANCE[currentStage];
+    if (!advance) {
+      return res.status(400).json({ error: `Contact is at Sequence Stage "${currentStage}" - not a stage a reply can advance from.` });
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const newStage = replied ? advance.replied : advance.noReply;
+    const stageFields = { 'Sequence Stage': newStage };
+    if (newStage !== currentStage) {
+      stageFields['Stage History'] = appendStageHistory(row.fields['Stage History'], newStage, today);
+    }
+    await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, { records: [{ id: row.id, fields: stageFields }], typecast: true });
+
+    // Only log a Touch Point on an actual "yes" - toggling "no reply yet"
+    // is a state check, not an event worth a row in the history.
+    if (replied) {
+      // currentStage here is always "Message N Sent" or "Pending Reply MN"
+      // (the only keys SEQUENCE_STAGE_ADVANCE has), so it always has a
+      // digit to pull the message number from for the Name below.
+      const messageNumberMatch = currentStage.match(/(\d)/);
+      const messageLabel = messageNumberMatch ? `Message ${messageNumberMatch[1]}` : currentStage;
+      await airtableRequest('POST', 'Touch Points', {
+        records: [{
+          fields: {
+            'Name': `${campaignName}_Reply to ${messageLabel}`,
+            'Date': today,
+            'Type': 'Inbound Reply',
+            'Direction': 'Inbound',
+            'Summary': 'Marked as replied from the Roadmap card - no message content captured here (log it via Conversation History or a DM screenshot for the actual text).',
+            'Contact': [contactId],
+            'Campaign': [campaignRecord.id]
+          }
+        }],
+        typecast: true
+      });
+    }
+
+    res.json({ success: true, previousStage: currentStage, newStage });
+  } catch (err) {
+    console.error('Reply toggle error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -7930,9 +8044,23 @@ Write the next message in the conversation, following on naturally from what the
     // the primary Conversation Context / stage-advance saves above have
     // already succeeded regardless of whether this secondary write lands.
     try {
+      const tpType = parsed.replied ? 'Inbound Reply' : 'LinkedIn Message';
+      // "[Campaign]_Message [N]" when this screenshot was parsed inside a
+      // campaign (currentStage is always "Message N Sent"/"Pending Reply MN"
+      // in that case, same digit-extraction as the reply-toggle endpoint
+      // above) - same convention as mark-sent's Touch Points, so campaign-
+      // scoped history reads consistently everywhere. Falls back to the
+      // generic "[Type] - [Contact Name] - [Date]" label used elsewhere in
+      // the app for an untagged screenshot (parsed outside any campaign, so
+      // there's no Sequence Stage/message number to name it after).
+      const messageNumberMatch = currentStage.match(/(\d)/);
+      const nameLabel = (campaignName && messageNumberMatch)
+        ? `${campaignName}_Message ${messageNumberMatch[1]}`
+        : `${tpType} - ${contactName} - ${dateLabel}`;
       const tpFields = {
+        'Name': nameLabel,
         'Date': dateLabel,
-        'Type': parsed.replied ? 'Inbound Reply' : 'LinkedIn Message',
+        'Type': tpType,
         'Direction': parsed.replied ? 'Inbound' : 'Outbound',
         'Summary': parsed.messageSummary,
         'Contact': [contactRecord.id]

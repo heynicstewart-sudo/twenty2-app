@@ -6995,10 +6995,32 @@ async function markSent(cid, key){
     toast('Marked as sent locally, but could not sync to Airtable: ' + err.message, 'warn');
   }
 }
-function setReply(cid, key, val){
+// This used to only flip c.thread[key].replied in local memory and stop
+// there - it never told Airtable anything, so Sequence Stage stayed on
+// "Message N Sent" forever and the toggle reset on every reload. Now syncs
+// to POST /api/campaign/:name/contacts/:id/reply, which advances Sequence
+// Stage using the same SEQUENCE_STAGE_ADVANCE table the DM-screenshot flow
+// uses, and logs a Touch Point when the answer is "Yes".
+async function setReply(cid, key, val){
   const c = state.contacts.find(x=>x.id===cid);
   c.thread[key].replied = val;
   renderPage();
+
+  const campaign = state.campaigns.find(x => x.id === window.__roadmapCampaignId) || activeCampaignForContact(c);
+  if(!campaign) return;
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/contacts/${cid}/reply`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ replied: val })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    if(window.__roadmapCampaignId === campaign.id) await loadCampaignSequenceStages(campaign);
+  } catch(err){
+    console.warn('Could not sync reply status to Airtable:', err.message);
+    toast('Marked locally, but could not sync reply to Airtable: ' + err.message, 'warn');
+  }
 }
 function setCta(cid, val){
   const c = state.contacts.find(x=>x.id===cid);
@@ -8278,7 +8300,7 @@ async function generateMessageForModal(cid, stageKey){
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contact: { name: c.name, role: c.role, company: c.company, notes: notes || '' },
+        contact: { id: c.id, name: c.name, role: c.role, company: c.company, notes: notes || '' },
         enrichment,
         campaign: campaign ? { name: campaign.name, goal: campaign.goal, strategyBrief: campaign.strategyBrief || '' } : null,
         stage: { key: stageKey, label: st.label, messageNumber: messageNumberForStage(stageKey), template },
@@ -8295,6 +8317,10 @@ async function generateMessageForModal(cid, stageKey){
   }
   const out = document.getElementById('genOutput');
   if(out) out.value = result;
+  // Baseline for diffing Marcus's edits against at Save & advance time (see
+  // saveGeneratedMessage) - reset on every (re)generation so a Regenerate
+  // click re-baselines against the new draft, not the one before it.
+  if(window.__genCtx) window.__genCtx.originalDraft = result;
 }
 function fillTemplate(template, c, stageKey){
   const filled = (template || '')
@@ -8329,20 +8355,45 @@ async function saveGeneratedMessage(cid, stageKey){
   if(stageKey==='m1'){ c.connDate = c.connDate || isoDate(TODAY); c.thread.connSent = c.thread.connSent || isoDate(TODAY); c.thread.m1 = { sent: isoDate(TODAY), replied:false }; c.state='messaging'; const activityEntry = { type:'message', text:`Message 1 sent to ${c.name} (${c.company})`, date: isoDate(TODAY) }; state.activity.unshift(activityEntry); syncActivityToAirtable(activityEntry); }
   if(stageKey==='m2'){ c.thread.m2 = { sent: isoDate(TODAY), replied:false }; const activityEntry = { type:'message', text:`Message 2 sent to ${c.name} (${c.company})`, date: isoDate(TODAY) }; state.activity.unshift(activityEntry); syncActivityToAirtable(activityEntry); }
   if(stageKey==='cta'){ c.thread.cta = c.thread.cta || CTA_OPTIONS[0]; }
+  const originalDraft = (window.__genCtx && window.__genCtx.originalDraft) || '';
   notifyWebhook(c);
   closeModal();
   toast('Message saved for '+c.name, 'success');
   if(window.__genCtx && window.__genCtx.onDone) window.__genCtx.onDone();
   else renderPage();
 
-  // Save the drafted text onto this contact's Campaign Contacts row
-  // (PATCH /api/campaign/:name/contacts/:id/draft) - this modal's own
-  // generation endpoint (POST /api/messages/generate) has no server-side
-  // write of its own, unlike the Today's Actions fast-action's
-  // generate-message endpoint which already writes to Next Message Draft
-  // on its own.
   const campaign = state.campaigns.find(x => x.id === window.__roadmapCampaignId) || activeCampaignForContact(c);
   if(!campaign) return;
+
+  // m1/m2 are the two stages this campaign's Sequence Stage actually tracks
+  // (see SEQUENCE_STAGE_NEXT in search-server.js) - for those, "Save &
+  // advance" needs to do the same Airtable writes as the Today's Actions
+  // "Copy & mark sent" fast-action (POST .../mark-sent): log a Touch Point,
+  // advance Sequence Stage, and record Final/Original Message + Draft
+  // Outcome. It used to only PATCH Next Message Draft, so a message sent
+  // this way never advanced Sequence Stage or showed up in the Touch Points
+  // history at all - Airtable had no record the send ever happened.
+  // connect/cta aren't part of that Sequence Stage vocabulary (connection
+  // requests and CTAs are tracked elsewhere), so they keep the old
+  // draft-only PATCH.
+  if(stageKey === 'm1' || stageKey === 'm2'){
+    const draftOutcome = output === originalDraft ? 'Sent verbatim' : 'Sent edited';
+    try {
+      const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/contacts/${cid}/mark-sent`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ message: output, draftOutcome })
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || 'Request failed');
+      if(window.__roadmapCampaignId === campaign.id) await loadCampaignSequenceStages(campaign);
+    } catch(err){
+      console.warn('Could not log sent message to Airtable:', err.message);
+      toast('Saved locally, but could not log the send to Airtable: ' + err.message, 'warn');
+    }
+    return;
+  }
+
   try {
     const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/contacts/${cid}/draft`, {
       method: 'PATCH',
