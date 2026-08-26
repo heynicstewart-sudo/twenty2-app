@@ -6470,6 +6470,22 @@ function markContactsConnected(contacts){
     state.activity.unshift(activityEntry);
     syncActivityToAirtable(activityEntry);
     notifyWebhook(c);
+
+    // Same PATCH the Context tab's LinkedIn Connections CSV upload makes
+    // once it matches a contact (runContextConnectionsImport) - without
+    // this, a contact matched from this Grid-page screenshot flow only
+    // ever looked "Connected" locally: Contacts.Journey Stage and every
+    // live Campaign Contacts.Sequence Stage stayed wherever they were,
+    // silently diverging from what the app was showing.
+    if(isAirtableRecordId(c.id)){
+      fetch('/api/context/contact-fields', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contactId: c.id, journeyStage: 'Connected', sequenceStage: 'Connected' })
+      }).catch(err => console.warn('Could not sync Connected stage to Airtable for', c.name, err.message));
+    } else {
+      console.warn('Skipping Airtable Connected sync - contact has no Airtable record id yet:', c.name);
+    }
   });
 }
 
