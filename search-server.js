@@ -8828,7 +8828,7 @@ const SEO_CHECKLIST = `Apply this on-page SEO checklist:
 8. Exactly one H1, multiple H2s, and H3s nested under relevant H2s where useful
 9. 2-3 internal links to other T2C blog posts, as placeholder URLs like /blog/related-post-slug
 10. 2-3 external links to real, relevant, authoritative outside sources
-11. An FAQ section with 4-6 questions targeting related search queries, each with a real answer
+11. An FAQ section with 4-6 questions targeting related search queries, each with a real answer, formatted as an open accordion: each question is a <details open><summary>Question</summary><p>Answer</p></details> block
 12. A clear call to action at the end, pointing to a specific T2C service
 13. Meta title under 60 characters
 14. Meta description under 160 characters`;
@@ -8873,13 +8873,13 @@ Average competitor length: approximately ${avgWordCount} words - write to a simi
 
 ${SEO_CHECKLIST}
 
-Write a full SEO blog post as clean HTML - a single string of HTML using h1/h2/h3/p/ul/li/a tags, no <html>/<head>/<body> wrapper and no <img> tags (images are added manually after generation). Internal links: <a href="/blog/relevant-slug">. External links: <a href="..." target="_blank" rel="noopener"> to real, well-known, relevant domains. UK/AU English, no em dashes, in T2C's voice as described above.
+Write a full SEO blog post as clean HTML - a single string of HTML using h1/h2/h3/p/ul/li/a tags, no <html>/<head>/<body> wrapper and no <img> tags (images are added manually after generation). Internal links: <a href="/blog/relevant-slug">. External links: <a href="..." target="_blank" rel="noopener"> to real, well-known, relevant domains. The FAQ section must use <details open><summary>Question text</summary><p>Answer text</p></details> for every question - this renders as a native, no-JavaScript-needed accordion that's expanded by default, not a plain list of bolded questions. UK/AU English, no em dashes, in T2C's voice as described above.
 
 Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 { "title": string, "html": string, "metaTitle": string (under 60 characters), "metaDescription": string (under 160 characters) }`;
 
   const drafted = await callClaudeJson(prompt, 8000);
-  const html = await ensureValidSeoHeadings(drafted.html || '', keyword);
+  const html = await ensureValidSeoStructure(drafted.html || '', keyword);
 
   return {
     title: drafted.title || keyword,
@@ -8889,37 +8889,44 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
   };
 }
 
-// Checklist item 8/9 ("exactly one H1, multiple H2s") is a prompt
-// instruction above, not a guarantee - models occasionally skip it (no H1,
-// two H1s, or only one H2). This actually checks the returned HTML by
-// counting tags and, if it's wrong, sends it back to Claude for a single
-// targeted heading-structure fix pass (content/wording/links untouched)
-// rather than a full regeneration. If the fix pass still doesn't come back
-// valid, the best attempt is used anyway and a warning is logged - the
-// preview panel's editable HTML textarea is the final backstop before
-// anything reaches Framer.
+// The heading-structure and FAQ-accordion rules above are prompt
+// instructions, not a guarantee - models occasionally skip them (no H1,
+// two H1s, too few subheadings, a missing FAQ, or a plain bolded-question
+// list instead of real <details> accordion items). This actually checks
+// the returned HTML by counting tags and, if anything's wrong, sends it
+// back to Claude for a single targeted structure fix pass (wording/links/
+// content untouched) rather than a full regeneration. If the fix pass
+// still doesn't come back valid, the best attempt is used anyway and a
+// warning is logged - the preview panel's editable HTML textarea is the
+// final backstop before anything reaches Framer.
 function countHtmlTag(html, tag) {
   const matches = html.match(new RegExp(`<${tag}[ >]`, 'gi'));
   return matches ? matches.length : 0;
 }
 
-function validateSeoHeadings(html) {
+function validateSeoStructure(html) {
   const h1Count = countHtmlTag(html, 'h1');
   const h2Count = countHtmlTag(html, 'h2');
+  const h3Count = countHtmlTag(html, 'h3');
+  const faqCount = countHtmlTag(html, 'details');
   const problems = [];
   if (h1Count !== 1) problems.push(`${h1Count} <h1> tags found - must be exactly 1`);
-  if (h2Count < 2) problems.push(`only ${h2Count} <h2> tag(s) found - must be at least 2`);
+  if (h2Count + h3Count < 3) problems.push(`only ${h2Count + h3Count} combined <h2>/<h3> subheadings found - must be at least 3`);
+  if (faqCount < 4) problems.push(`only ${faqCount} FAQ <details> accordion items found - must have 4-6 FAQ questions, each as an open <details><summary>question</summary><p>answer</p></details> block`);
   return { valid: problems.length === 0, problems };
 }
 
-async function ensureValidSeoHeadings(html, keyword) {
-  const validation = validateSeoHeadings(html);
+async function ensureValidSeoStructure(html, keyword) {
+  const validation = validateSeoStructure(html);
   if (validation.valid) return html;
 
-  console.warn(`SEO post for "${keyword}" failed heading validation (${validation.problems.join('; ')}) - retrying with a heading fix pass`);
-  const fixPrompt = `This HTML blog post's heading structure is wrong: ${validation.problems.join('; ')}.
+  console.warn(`SEO post for "${keyword}" failed structure validation (${validation.problems.join('; ')}) - retrying with a structure fix pass`);
+  const fixPrompt = `This HTML blog post's structure is wrong: ${validation.problems.join('; ')}.
 
-Fix ONLY the heading structure - keep all the actual wording, links, images, and FAQ content the same. Requirements: exactly one <h1> containing the primary keyword "${keyword}", followed by multiple <h2> subheadings (with <h3> nested under them where useful), no other top-level heading tags.
+Fix ONLY these structural issues - keep all the actual wording, links, and images the same, and keep any FAQ questions/answers that already exist (just reformat them if needed). Requirements:
+- Exactly one <h1> containing the primary keyword "${keyword}"
+- At least 3 subheadings total across <h2> and <h3> combined, with <h3>s nested under relevant <h2>s where useful, no other top-level heading tags
+- An FAQ section with 4-6 questions, each as its own open accordion item: <details open><summary>Question</summary><p>Answer</p></details> - write real, relevant questions/answers for any still missing
 
 HTML to fix:
 ---
@@ -8932,13 +8939,13 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
   try {
     const fixed = await callClaudeJson(fixPrompt, 8000);
     if (!fixed.html) return html;
-    const revalidation = validateSeoHeadings(fixed.html);
+    const revalidation = validateSeoStructure(fixed.html);
     if (!revalidation.valid) {
-      console.warn(`SEO post for "${keyword}" still failed heading validation after the fix pass (${revalidation.problems.join('; ')}) - using it anyway, review before sending to Framer`);
+      console.warn(`SEO post for "${keyword}" still failed structure validation after the fix pass (${revalidation.problems.join('; ')}) - using it anyway, review before sending to Framer`);
     }
     return fixed.html;
   } catch (err) {
-    console.warn('SEO heading fix pass failed, keeping original html:', err.message);
+    console.warn('SEO structure fix pass failed, keeping original html:', err.message);
     return html;
   }
 }
