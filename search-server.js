@@ -9102,9 +9102,28 @@ const FRAMER_FIELD_ALIASES = {
   status: ['status']
 };
 
+// Tries each alias in priority order, exact name match first across all
+// aliases before falling back to substring matching - confirmed against
+// the real T2C Blog collection that this matters: it has both "Excerpt"
+// and "Meta Description" fields, and "excerpt" is itself a complete
+// fallback alias (for collections without a dedicated meta description
+// field), not just a substring seed. A single-pass "exact-over-fuzzy"
+// check still matched both fields exactly (each field's name equals one
+// full alias string) and picked whichever came first in field order,
+// which happened to be "Excerpt" - checking aliases in order and
+// returning on the first hit makes "meta description" beat "excerpt"
+// because it's listed first, regardless of field order.
 function findFramerField(fields, aliasKey) {
   const aliases = FRAMER_FIELD_ALIASES[aliasKey] || [];
-  return fields.find(f => aliases.some(alias => f.name.toLowerCase().includes(alias)));
+  for (const alias of aliases) {
+    const exact = fields.find(f => f.name.toLowerCase() === alias);
+    if (exact) return exact;
+  }
+  for (const alias of aliases) {
+    const fuzzy = fields.find(f => f.name.toLowerCase().includes(alias));
+    if (fuzzy) return fuzzy;
+  }
+  return null;
 }
 
 function slugifyForFramer(title) {
@@ -9124,8 +9143,13 @@ function slugifyForFramer(title) {
 // fail typia's check.
 function buildFramerTextFieldEntry(field, value) {
   if (!field) return null;
-  if (field.type === 'string') return { type: 'string', value: value || '' };
-  if (field.type === 'formattedText') return { type: 'formattedText', value: value || '', contentType: 'html' };
+  // Coerces defensively to a real primitive string rather than relying on
+  // `value || ''` - safe regardless of what post.title/html/etc actually
+  // hold, and rules out "the value wasn't really a primitive string" as a
+  // cause of the SDK's typia "expect to be string" validation error.
+  const stringValue = value == null ? '' : String(value);
+  if (field.type === 'string') return { type: 'string', value: stringValue };
+  if (field.type === 'formattedText') return { type: 'formattedText', value: stringValue, contentType: 'html' };
   console.warn(`Framer field "${field.name}" matched but is type "${field.type}", not string/formattedText - skipping it on publish`);
   return null;
 }
@@ -9158,11 +9182,34 @@ async function publishToFramer(post) {
       const entry = buildFramerTextFieldEntry(field, value);
       if (entry) fieldData[field.id] = entry;
     });
-    if (statusField && statusField.type === 'enum') {
-      const draftCase = statusField.cases.find(c => /draft/i.test(c.name));
-      if (draftCase) fieldData[statusField.id] = { type: 'enum', value: draftCase.id };
-      else console.warn('Framer Status field has no "Draft" case - post created without a status');
+    // Status isn't always a select/enum field - confirmed against the
+    // real T2C Blog collection, where it's plain text - so this writes
+    // the literal string "Draft" for a string-type Status field, and only
+    // looks for a matching enum case when it actually is one.
+    if (statusField) {
+      if (statusField.type === 'enum') {
+        const draftCase = statusField.cases.find(c => /draft/i.test(c.name));
+        if (draftCase) fieldData[statusField.id] = { type: 'enum', value: draftCase.id };
+        else console.warn('Framer Status field has no "Draft" case - post created without a status');
+      } else if (statusField.type === 'string') {
+        fieldData[statusField.id] = { type: 'string', value: 'Draft' };
+      } else {
+        console.warn(`Framer Status field is type "${statusField.type}", not enum/string - post created without a status`);
+      }
     }
+
+    // Temporary diagnostic - logs exactly what's about to be sent for each
+    // field (type + JS typeof/length of value, not the full content) so a
+    // typia validation failure can be matched to the real payload instead
+    // of guessed at from the field id alone. Safe to remove once the
+    // publish path is confirmed working end-to-end.
+    console.log('Framer addItems fieldData:', Object.entries(fieldData).map(([id, entry]) => ({
+      id,
+      fieldName: fields.find(f => f.id === id) ? fields.find(f => f.id === id).name : '?',
+      type: entry.type,
+      valueTypeofJs: typeof entry.value,
+      valueLength: typeof entry.value === 'string' ? entry.value.length : null
+    })));
 
     const slug = slugifyForFramer(post.title);
     await collection.addItems([{ slug, fieldData }]);
