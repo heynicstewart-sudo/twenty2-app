@@ -6778,6 +6778,65 @@ function renderContactEnrichmentSection(c){
   `;
 }
 
+// Manual-override stages offered on the contact drawer's stage dropdown -
+// the finer automatic Sequence Stage vocabulary (Message 1 Sent, Pending
+// Reply M1, etc - see SEQUENCE_STAGE_ADVANCE) is advanced by the sequence
+// engine itself, not picked by a rep here. "Connection Made" is the drawer
+// label for Airtable's "Connected" value, same mapping direction as
+// LOGGER_JOURNEY_STAGE_TO_SEQUENCE_STAGE in search-server.js, so a stage set
+// from here still reads correctly everywhere else that's Sequence-Stage
+// aware (funnel counts, Today's Actions, etc).
+const CONTACT_DRAWER_STAGE_OPTIONS = ['Found', 'Connection Pending', 'Connection Made', 'Meeting Booked', 'Lost', 'Excluded'];
+const SEQUENCE_STAGE_TO_DRAWER_LABEL = { 'Connected': 'Connection Made' };
+
+// Replaces the old static Journey Stage/Sequence Stage badges with an
+// editable dropdown, scoped to this campaign's Campaign Contacts row (there
+// is no campaign-wide "journey stage" concept in Airtable - see the
+// gridName/"Grid Name" notes elsewhere in this file for the same
+// no-per-grid-field situation). Disabled when the drawer was opened without
+// a campaign context, since there's no Campaign Contacts row to write to.
+// If the real current stage is one of the finer automatic values not in
+// CONTACT_DRAWER_STAGE_OPTIONS, it's shown as an extra disabled option so
+// the dropdown never lies about the contact's actual stage.
+function renderContactDrawerStageSelect(data, campaignName){
+  if(!campaignName){
+    return `<select disabled title="Open this contact from within a campaign to edit stage"><option>No campaign</option></select>`;
+  }
+  const rawStage = data.sequenceStage || '';
+  const currentLabel = rawStage ? (SEQUENCE_STAGE_TO_DRAWER_LABEL[rawStage] || rawStage) : '';
+  const isKnown = CONTACT_DRAWER_STAGE_OPTIONS.includes(currentLabel);
+  return `<select id="contactStageSelect" onchange="updateContactDrawerStage(this.value)">
+    ${!isKnown && currentLabel ? `<option value="${esc(currentLabel)}" selected disabled>${esc(currentLabel)}</option>` : ''}
+    ${CONTACT_DRAWER_STAGE_OPTIONS.map(s => `<option value="${esc(s)}" ${s === currentLabel ? 'selected' : ''}>${esc(s)}</option>`).join('')}
+  </select>`;
+}
+
+async function updateContactDrawerStage(newStage){
+  const profile = window.__drawerContactProfile;
+  const campaignName = window.__drawerCampaignName;
+  if(!profile || !campaignName) return;
+  const select = document.getElementById('contactStageSelect');
+  if(select) select.disabled = true;
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaignName)}/contacts/${encodeURIComponent(profile.contact.id)}/stage`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stage: newStage })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Stage update failed');
+    profile.sequenceStage = data.sequenceStage;
+    toast('Stage updated', 'success');
+  } catch(err){
+    toast('Could not update stage: ' + err.message, 'warn');
+    // Re-render from the unchanged profile so the select reverts to the
+    // actual stored stage instead of sitting on the failed selection.
+    if(document.getElementById('profileDrawer')) drawerBody(renderContactDrawerContent(profile, campaignName));
+    return;
+  }
+  if(select) select.disabled = false;
+}
+
 function renderContactDrawerContent(data, campaignName){
   const c = data.contact;
   let cvc = null;
@@ -6811,8 +6870,7 @@ function renderContactDrawerContent(data, campaignName){
         <button class="btn btn-secondary btn-sm" id="enrichContactBtn" onclick="enrichContactDrawer()"><i class="ti ti-sparkles"></i> Enrich</button>
       </div>
       <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
-        ${c.journeyStage ? `<span class="tag tag-connected">${esc(c.journeyStage)}</span>` : ''}
-        ${data.sequenceStage ? `<span class="tag tag-messaging">${esc(data.sequenceStage)}</span>` : ''}
+        ${renderContactDrawerStageSelect(data, campaignName)}
         ${cvc ? `<span class="tag tag-booked"><i class="ti ti-report"></i> Change Value Check</span> <a href="#" onclick="event.preventDefault();openCvcModalFromDrawer();" style="font-size:11.5px;font-weight:700;">View results</a>` : ''}
       </div>
     </div>
@@ -6848,7 +6906,51 @@ function renderContactDrawerContent(data, campaignName){
     <textarea id="contactNoteInput" rows="2" placeholder="Peter mentioned to follow up next Wednesday..." style="margin-top:8px;"></textarea>
     <button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="saveContactDrawerNote()" id="saveContactNoteBtn"><i class="ti ti-device-floppy"></i> Save note</button>
   </div>
+
+  <div class="drawer-section">
+    <div class="section-title" style="font-size:13px;"><i class="ti ti-messages"></i> Conversation History</div>
+    <textarea id="contactConvoHistoryInput" rows="4" placeholder="Paste an existing LinkedIn or email thread..."></textarea>
+    <button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="saveContactConversationHistory()" id="saveContactConvoBtn"><i class="ti ti-device-floppy"></i> Save history</button>
+  </div>
   `;
+}
+
+// "Save history" (Conversation History section, contact drawer) - writes the
+// pasted thread as its own Touch Point (reusing POST /api/airtable/touchpoint,
+// same as every other touch point write in this app) with Type "LinkedIn
+// Conversation", linked to this contact and (when opened from within one)
+// the current campaign. Claude's summarise-and-fold-into-AI-Summary step
+// then reuses POST /api/contacts/update-summary in the background - the
+// same call saveContactDrawerNote makes for a plain note - since that's the
+// route that actually does the "Claude summarises this and updates AI
+// Summary" work; it happens after the touch point write above, not blocking
+// the "saved" feedback.
+async function saveContactConversationHistory(){
+  const input = document.getElementById('contactConvoHistoryInput');
+  const threadText = input.value.trim();
+  if(!threadText) return;
+  const name = window.__drawerContactName;
+  const campaignName = window.__drawerCampaignName;
+  const btn = document.getElementById('saveContactConvoBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Saving...'; }
+  try {
+    const res = await fetch('/api/airtable/touchpoint', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contactName: name, type: 'LinkedIn Conversation', notes: threadText, campaignName: campaignName || undefined })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Save failed');
+    input.value = '';
+    toast('Conversation history saved', 'success');
+
+    fetch('/api/contacts/update-summary', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name, noteText: threadText }) })
+      .catch(err => console.warn('Background summary update failed:', err.message));
+  } catch(err){
+    toast('Could not save conversation history: ' + err.message, 'warn');
+  } finally {
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-device-floppy"></i> Save history'; }
+  }
 }
 
 async function enrichContactDrawer(){

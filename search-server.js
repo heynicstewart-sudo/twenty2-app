@@ -7126,6 +7126,67 @@ app.post('/api/campaign/:id/contacts/:contactId/exclude', async (req, res) => {
   }
 });
 
+// Contact profile drawer's stage dropdown (t2c-outreach-crm.html,
+// updateContactDrawerStage) - patches this contact's Campaign Contacts row
+// for the given campaign to the chosen stage, same existing-row-or-create
+// pattern as the exclude route above. "Connection Made" maps to the
+// Sequence Stage vocabulary's "Connected" for the same reason
+// LOGGER_JOURNEY_STAGE_TO_SEQUENCE_STAGE does, above - so a stage set from
+// here still reads correctly to every other Sequence-Stage-aware feature.
+// "Lost" isn't otherwise part of that vocabulary (Deals has its own separate
+// Outcome field for that) - typecast:true lets it through as a new select
+// option rather than failing the write, same as the exclude route's own
+// typecast:true PATCH just above.
+const DRAWER_STAGE_TO_SEQUENCE_STAGE = {
+  'Found': 'Found',
+  'Connection Pending': 'Connection Pending',
+  'Connection Made': 'Connected',
+  'Meeting Booked': 'Meeting Booked',
+  'Lost': 'Lost',
+  'Excluded': 'Excluded'
+};
+
+app.patch('/api/campaign/:id/contacts/:contactId/stage', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const campaignName = decodeURIComponent(req.params.id);
+  const contactId = req.params.contactId;
+  const { stage } = req.body || {};
+  const sequenceStage = DRAWER_STAGE_TO_SEQUENCE_STAGE[stage];
+  if (!sequenceStage) return res.status(400).json({ error: 'stage must be one of ' + Object.keys(DRAWER_STAGE_TO_SEQUENCE_STAGE).join(', ') });
+
+  try {
+    const campaignRecord = await findCampaignRecordByName(campaignName);
+    if (!campaignRecord) return res.status(404).json({ error: `Campaign "${campaignName}" not found` });
+
+    const contactRecord = await airtableGetRecord('Contacts', contactId);
+    if (!contactRecord) return res.status(404).json({ error: 'Contact not found' });
+
+    const rows = await fetchCampaignContactsRows();
+    const existing = findCampaignContactRow(rows, contactId, campaignRecord.id);
+    const today = new Date().toISOString().slice(0, 10);
+
+    const stageFields = {
+      'Sequence Stage': sequenceStage,
+      'Stage History': appendStageHistory(existing ? existing.fields['Stage History'] : '', sequenceStage, today)
+    };
+
+    if (existing) {
+      await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, {
+        records: [{ id: existing.id, fields: stageFields }],
+        typecast: true
+      });
+    } else {
+      await getOrCreateCampaignContactRow(contactId, (contactRecord.fields || {})['Full Name'] || contactId, campaignRecord.id, campaignName, rows, stageFields);
+    }
+
+    res.json({ success: true, sequenceStage });
+  } catch (err) {
+    console.error('Update contact stage error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Necessary supporting infrastructure, not itself one of the requested
 // changes: the only existing way to write Next Message Draft onto a
 // Campaign Contacts row was buried inside the server-side generate-message
