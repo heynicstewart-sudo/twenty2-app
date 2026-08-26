@@ -1048,26 +1048,27 @@ function resolveGridIdByName(name){
   return grid.id;
 }
 
-// Contacts has no "Grid Name" field of its own on the real Airtable table
-// (see the note on createOrUpdateAirtableContact in search-server.js -
-// deliberately not added there), so hydrateContactsFromAirtable can't
-// resolve a contact's grid the way hydrateCompaniesFromAirtable resolves a
-// company's grid (by name, via resolveGridIdByName above). Derives it from
-// the contact's company instead - every grid's companies list is
-// authoritative (from Companies.Grid Name), so whichever grid actually has
-// this company on it is the right one. Requires state.grids[].companies to
-// already be populated, i.e. hydrateCompaniesFromAirtable must run before
-// hydrateContactsFromAirtable, not in parallel with it.
+// Fallback for a contact with no Grid Name of its own yet (see
+// hydrateContactsFromAirtable below - contacts created before Contacts got
+// its own Grid Name field, or synced before that field existed in Airtable,
+// have nothing else to go on). Derives it from the contact's company
+// instead - every grid's companies list is authoritative (from Companies.
+// Grid Name), so whichever grid actually has this company on it is the
+// right one. Requires state.grids[].companies to already be populated, i.e.
+// hydrateCompaniesFromAirtable must run before hydrateContactsFromAirtable,
+// not in parallel with it.
 //
 // Ambiguous if the same company name was added to more than one grid -
 // picks the first match, same "can't disambiguate, pick one" convention
 // currentGridCampaignName() already uses for a grid/campaign link that
-// isn't 1:1.
+// isn't 1:1. Returns null (not state.grids[0]) when nothing matches - a
+// contact whose company genuinely isn't on any grid belongs on none of
+// them, not on whichever grid happens to be first in the array.
 function resolveGridIdByCompany(company){
-  if(!company) return state.grids[0] ? state.grids[0].id : null;
+  if(!company) return null;
   const key = company.toLowerCase();
   const grid = state.grids.find(g => (g.companies||[]).some(c => c.toLowerCase() === key));
-  return grid ? grid.id : (state.grids[0] ? state.grids[0].id : null);
+  return grid ? grid.id : null;
 }
 
 function openGrid(gridId){
@@ -1165,6 +1166,49 @@ async function deleteGridConfirmed(gridId){
   } catch(err){
     toast('Could not delete grid: ' + err.message, 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-trash"></i> Delete'; }
+  }
+}
+
+// One-time maintenance action: tags every existing contact (across every
+// grid, not just one) with its own currently-resolved grid directly on its
+// Airtable Contacts record, via POST /api/contacts/backfill-grid-tags - see
+// that route and the Grid Name notes on hydrateContactsFromAirtable/
+// createOrUpdateAirtableContact for why a contact's own tag matters (a
+// company shared across grids no longer needs to drag every one of its
+// contacts along). Meant to be run once, after any grid cleanup, so it
+// reflects correct final grid membership rather than baking in whatever
+// state things happened to be in before that cleanup.
+function confirmBackfillContactGridTags(){
+  const taggable = state.contacts.filter(c => c.gridId && gridNameForContact(c));
+  const body = `<p style="font-size:13px;">Tag ${taggable.length} contact${taggable.length===1?'':'s'} with their current grid, directly on their Airtable record? Only affects contacts that don't already have a matching tag - safe to run more than once.</p>`;
+  const footer = `
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" id="confirmBackfillGridTagsBtn" onclick="backfillContactGridTagsConfirmed()"><i class="ti ti-tag"></i> Tag ${taggable.length} contact${taggable.length===1?'':'s'}</button>
+  `;
+  openModal('Backfill grid tags', body, footer);
+}
+
+async function backfillContactGridTagsConfirmed(){
+  const btn = document.getElementById('confirmBackfillGridTagsBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Tagging...'; }
+  try {
+    const tags = state.contacts
+      .filter(c => c.gridId && gridNameForContact(c))
+      .map(c => ({ id: c.id, gridName: gridNameForContact(c) }));
+
+    const res = await fetch('/api/contacts/backfill-grid-tags', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tags })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Backfill failed');
+
+    closeModal();
+    toast(`${data.tagged} contact${data.tagged===1?'':'s'} tagged${data.skipped ? ` (${data.skipped} already tagged)` : ''}`, 'success');
+  } catch(err){
+    toast('Could not backfill grid tags: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-tag"></i> Tag contacts'; }
   }
 }
 
@@ -1324,7 +1368,10 @@ function renderHome(){
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-layout-grid"></i> Your Grids</div>
-      <button class="btn btn-primary btn-sm" onclick="createNewGridFlow()"><i class="ti ti-plus"></i> New Grid</button>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-secondary btn-sm" onclick="confirmBackfillContactGridTags()" title="One-time: tag every existing contact with its current grid, so it stops depending on its company's Grid Name"><i class="ti ti-tag"></i> Backfill grid tags</button>
+        <button class="btn btn-primary btn-sm" onclick="createNewGridFlow()"><i class="ti ti-plus"></i> New Grid</button>
+      </div>
     </div>
     <div class="perf-table-wrap">
       <table class="perf-table">
@@ -6020,9 +6067,18 @@ async function hydrateContactsFromAirtable(){
       const company = f['Company'] || '';
       const enrichment = parseContactEnrichment(f['AI Summary']);
       if(enrichment) window.__enrichmentProfiles[r.id] = enrichment;
+      // A contact's own Grid Name (set at creation - see gridName in
+      // syncContactToAirtable/createOrUpdateAirtableContact, search-
+      // server.js) is the real source of truth once present: it keeps a
+      // contact scoped to the grid it was actually imported for, even if
+      // its company also happens to be shared with another grid. Only
+      // falls back to the old company-inherited resolution for a contact
+      // synced before that field existed - never overwritten retroactively.
+      const ownGridNames = (f['Grid Name'] || '').split(',').map(s => s.trim()).filter(Boolean);
+      const gridId = ownGridNames.length ? resolveGridIdByName(ownGridNames[0]) : resolveGridIdByCompany(company);
       return {
         id: r.id || uid('c'),
-        gridId: resolveGridIdByCompany(company),
+        gridId,
         name: f['Full Name'] || '',
         company: company,
         role: role,

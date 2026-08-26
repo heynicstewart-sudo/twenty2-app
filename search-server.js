@@ -366,7 +366,7 @@ app.get('/api/airtable/contact', async (req, res) => {
 // per instruction not to create missing fields. Grid membership is still
 // tracked locally in the app's own state; it just isn't mirrored to
 // Airtable right now.
-async function createOrUpdateAirtableContact({ name, company, role, linkedinUrl, state: contactState, icpRoleCategory, notes, companyLinkedinUrl, apolloTitle }) {
+async function createOrUpdateAirtableContact({ name, company, role, linkedinUrl, state: contactState, icpRoleCategory, notes, companyLinkedinUrl, apolloTitle, gridName }) {
   if (!name) {
     const err = new Error('name is required');
     err.status = 400;
@@ -423,6 +423,26 @@ async function createOrUpdateAirtableContact({ name, company, role, linkedinUrl,
         console.warn('Best-effort Apollo Title field write failed:', apolloTitleErr.message);
       }
     }
+    // Same best-effort convention as Apollo Title above - Contacts.Grid Name
+    // isn't a confirmed real field yet (add a single-line text field named
+    // exactly "Grid Name" to the Contacts table to enable this), so a
+    // missing field only drops this tag, not the whole contact sync. Tags
+    // a contact directly rather than relying on its Company's Grid Name -
+    // a company shared across grids no longer drags every one of its
+    // contacts along into a grid they were never actually imported for.
+    // Appended, not overwritten, same multi-grid list convention
+    // Companies.Grid Name already uses (see findOrCreateCompanyRecord).
+    if (gridName) {
+      try {
+        const gridNames = parseGridNameList(existing.fields['Grid Name']);
+        if (!gridNames.includes(gridName)) {
+          gridNames.push(gridName);
+          await airtableRequest('PATCH', 'Contacts', { records: [{ id: existing.id, fields: { 'Grid Name': gridNames.join(', ') } }], typecast: true });
+        }
+      } catch (gridNameErr) {
+        console.warn('Best-effort Grid Name field write failed (add a "Grid Name" text field to Contacts to enable this):', gridNameErr.message);
+      }
+    }
     return { success: true, skipped: true, recordId: existing.id };
   }
 
@@ -452,6 +472,14 @@ async function createOrUpdateAirtableContact({ name, company, role, linkedinUrl,
       await airtableRequest('PATCH', 'Contacts', { records: [{ id: recordId, fields: { 'Apollo Title': apolloTitle } }], typecast: true });
     } catch (apolloTitleErr) {
       console.warn('Best-effort Apollo Title field write failed:', apolloTitleErr.message);
+    }
+  }
+
+  if (gridName) {
+    try {
+      await airtableRequest('PATCH', 'Contacts', { records: [{ id: recordId, fields: { 'Grid Name': gridName } }], typecast: true });
+    } catch (gridNameErr) {
+      console.warn('Best-effort Grid Name field write failed (add a "Grid Name" text field to Contacts to enable this):', gridNameErr.message);
     }
   }
 
@@ -6352,6 +6380,49 @@ extracted: every person visible/mentioned, one entry each, regardless of whether
     res.json({ success: true, matchedIds, extracted });
   } catch (err) {
     console.error('Match connections screenshot error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// One-time backfill for contacts synced before Contacts had its own Grid
+// Name field (see createOrUpdateAirtableContact) - those inherited their
+// grid tag implicitly from their company, which is exactly the crossover
+// mechanism the field was added to avoid. The client already has each
+// contact's correctly-resolved gridId in state (accounting for shared
+// companies, blank companies, etc. - see hydrateContactsFromAirtable), so
+// it sends {id, gridName} pairs straight from that rather than this route
+// trying to re-derive grid membership from scratch server-side. Same
+// append-not-overwrite convention as the per-contact write in
+// createOrUpdateAirtableContact, so a contact that's already picked up a
+// tag since that shipped isn't clobbered, just topped up - and a single
+// fetch-all + batched patch here instead of one sync call per contact.
+app.post('/api/contacts/backfill-grid-tags', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const { tags } = req.body || {};
+  if (!Array.isArray(tags) || !tags.length) return res.status(400).json({ error: 'tags is required' });
+
+  try {
+    const records = await airtableFetchAllRecords('Contacts');
+    const byId = {};
+    records.forEach(r => { byId[r.id] = r; });
+
+    const patches = [];
+    tags.forEach(({ id, gridName }) => {
+      if (!id || !gridName) return;
+      const record = byId[id];
+      if (!record) return;
+      const gridNames = parseGridNameList(record.fields['Grid Name']);
+      if (!gridNames.includes(gridName)) {
+        gridNames.push(gridName);
+        patches.push({ id, fields: { 'Grid Name': gridNames.join(', ') } });
+      }
+    });
+
+    if (patches.length) await airtableBatchPatch('Contacts', patches);
+    res.json({ success: true, tagged: patches.length, skipped: tags.length - patches.length });
+  } catch (err) {
+    console.error('Backfill grid tags error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
