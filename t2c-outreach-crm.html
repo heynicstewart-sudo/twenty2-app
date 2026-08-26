@@ -3150,24 +3150,28 @@ function activeCampaignForContact(c){
 
 function getContactAction(c){
   const campaign = activeCampaignForContact(c);
-  // A live campaign fully owns this contact's Today's Actions card while
-  // their Sequence Stage is still in the fast-action range - the
-  // account-level "natural" actions below (Reply back, Follow up,
-  // Re-engage...) only apply once that campaign sequence is exhausted
-  // (Meeting Booked/Nurture/Timed Out) or there's no active campaign at
-  // all. A contact genuinely waiting on the other side (connection not yet
+  // Today's Actions only ever surfaces contacts with an active Campaign
+  // Contact record (a live campaign that this contact belongs to, via
+  // activeCampaignForContact) - a contact sitting only in a grid with no
+  // campaign association gets no card at all, fast or natural. A live
+  // campaign fully owns this contact's card while their Sequence Stage is
+  // still in the fast-action range; the account-level "natural" actions
+  // below (Reply back, Follow up, Re-engage...) only apply once that
+  // campaign sequence is exhausted (Meeting Booked/Nurture/Timed Out). A
+  // contact genuinely waiting on the other side (connection not yet
   // accepted, or a message sent with no reply yet) shows nothing at all -
   // never a fast action, and never a fallback natural action either, since
   // that reads entirely different local-state fields unrelated to this
   // campaign's real Sequence Stage and would show a stale/wrong action.
-  if(campaign){
-    const fastAction = getFastActionForCampaignContact(c, campaign);
-    if(fastAction && fastAction.waiting) return null;
-    if(fastAction) return fastAction;
-  }
+  if(!campaign) return null;
+
+  const fastAction = getFastActionForCampaignContact(c, campaign);
+  if(fastAction && fastAction.waiting) return null;
+  if(fastAction) return fastAction;
+
   const natural = getNaturalContactAction(c);
   if(natural){
-    if(campaign) natural.campaignName = campaign.name;
+    natural.campaignName = campaign.name;
     return natural;
   }
   return null;
@@ -3285,8 +3289,9 @@ function computeTodaysActions(){
 // what the action actually asks for, rather than recomputing anything.
 // 'connection'/'message' key off the action type computeTodaysActions()
 // already produced (see getFastActionForCampaignContact/
-// getNaturalContactAction above); 'followup' keys off lastTouchPointDate
-// directly since "no touch point in 14 days" isn't tied to any one action
+// getNaturalContactAction above); 'followup' keys off the contact's Sequence
+// Stage and touch point history directly (see contactQualifiesForFollowUp
+// below) since "no touch point in 14 days" isn't tied to any one action
 // type - it can apply regardless of what the card's own action is.
 const TODAYS_ACTIONS_TABS = [
   ['connection', 'Send Connection'],
@@ -3297,12 +3302,33 @@ const TODAYS_ACTIONS_TABS = [
 function todaysActionMatchesTab(a, tabId){
   if(tabId === 'connection') return a.type === 'Send connection';
   if(tabId === 'message') return (a.type === 'Generate message' && a.messageNumber === 1) || a.type === 'Send first message';
-  if(tabId === 'followup'){
-    const lastTouch = lastTouchPointDate(a.contact);
-    const days = lastTouch ? daysBetween(lastTouch) : null;
-    return days === null || days >= 14;
-  }
+  if(tabId === 'followup') return contactQualifiesForFollowUp(a.contact);
   return true;
+}
+
+// Follow Up tab: a contact only qualifies once they're past Found/
+// Connection Pending (nothing to "follow up" on before a connection is even
+// made), and then only if either their most recent real Airtable Touch
+// Point is more than 14 days old, or - if none has ever been logged - they
+// reached Connection Made (Sequence Stage "Connected") more than 14 days
+// ago. c.connDate is the same "since when connected" date
+// getNaturalContactAction already reads elsewhere in this file; there's no
+// separate per-campaign "connected on" date to prefer over it.
+function contactQualifiesForFollowUp(c){
+  const campaign = activeCampaignForContact(c);
+  if(!campaign) return false;
+  const stages = window.__campaignSequenceStages && window.__campaignSequenceStages[campaign.id];
+  const stage = stages ? (stages[c.name.trim().toLowerCase()] || 'Found') : 'Found';
+  if(stage === 'Found' || stage === 'Connection Pending') return false;
+
+  const lastTouch = lastTouchPointDate(c);
+  if(lastTouch) return daysBetween(lastTouch) > 14;
+
+  if(stage === 'Connected'){
+    const days = daysBetween(c.connDate);
+    return days !== null && days > 14;
+  }
+  return false;
 }
 
 function setTodaysActionsTab(tab){
