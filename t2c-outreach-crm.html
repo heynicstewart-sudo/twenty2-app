@@ -5140,18 +5140,30 @@ function confirmApolloImport(){
   // (unassignedGridContacts/renderUnassignedGridRow) instead of a real
   // company row, and becomes a candidate for "Run daily search" to backfill
   // the company later (see the matching note on syncContactToAirtable).
-  let imported = 0, importedNoCompany = 0, skipped = 0;
+  //
+  // Re-running the same Apollo search re-fetches candidates already on this
+  // grid too (results aren't deduped against the grid server-side), so
+  // skip any result whose name is already here rather than pushing a second
+  // local contact object for the same person - createManualGridContact has
+  // no create-if-missing check of its own, and Airtable's own dedup (Full
+  // Name lookup in createOrUpdateAirtableContact) only stops a second
+  // Airtable record, not a second row showing up in this grid.
+  let imported = 0, importedNoCompany = 0, alreadyOnGrid = 0, skipped = 0;
+  const existingNames = new Set(gridContacts(grid.id).map(c => c.name.trim().toLowerCase()));
   checked.forEach(r => {
     if(!r.name){ skipped++; return; }
+    if(existingNames.has(r.name.trim().toLowerCase())){ alreadyOnGrid++; return; }
     if(r.company) ensureGridCompany(grid, r.company);
     else importedNoCompany++;
     createManualGridContact(r.name, searchedJobTitle, r.company || '', r.linkedinUrl || '', r.jobTitle || '');
+    existingNames.add(r.name.trim().toLowerCase());
     imported++;
   });
 
   closeModal();
   renderPage();
   if(imported) toast(`${imported} contact${imported===1?'':'s'} imported from Apollo${importedNoCompany ? ` (${importedNoCompany} without a company yet)` : ''}`, 'success');
+  if(alreadyOnGrid) toast(`${alreadyOnGrid} already on this grid - skipped`, 'success');
   if(skipped) toast(`${skipped} skipped - missing name`, 'warn');
 }
 
