@@ -3148,21 +3148,44 @@ function activeCampaignForContact(c){
   return state.campaigns.find(camp => camp.status === 'Live' && campaignContacts(camp).some(cc => cc.id === c.id)) || null;
 }
 
+// Today's Actions specifically must not use activeCampaignForContact above -
+// that treats "sitting on a grid linked to a Live campaign" as belonging to
+// it, with no real per-contact record required (by design, so other
+// features - Roadmap, generate-message, mark-sent - can act on a contact
+// before their first Campaign Contacts row exists). That looseness is
+// exactly what let grid contacts with no genuine campaign link leak into
+// Today's Actions. This checks the actual Campaign Contacts Airtable table
+// instead: window.__campaignSequenceStages[campaign.id] is fetched straight
+// from GET /api/campaign/:id/campaign-contacts, which already filters to
+// rows whose Campaign field links this specific campaign (see that route in
+// search-server.js) - so a hit here means a real record with a valid
+// campaign ID exists, not just grid/contactIds membership.
+function campaignContactRecordFor(c){
+  const key = c.name.trim().toLowerCase();
+  for(const camp of state.campaigns){
+    if(camp.status !== 'Live') continue;
+    const stages = window.__campaignSequenceStages && window.__campaignSequenceStages[camp.id];
+    if(stages && Object.prototype.hasOwnProperty.call(stages, key)) return camp;
+  }
+  return null;
+}
+
 function getContactAction(c){
-  const campaign = activeCampaignForContact(c);
-  // Today's Actions only ever surfaces contacts with an active Campaign
-  // Contact record (a live campaign that this contact belongs to, via
-  // activeCampaignForContact) - a contact sitting only in a grid with no
-  // campaign association gets no card at all, fast or natural. A live
-  // campaign fully owns this contact's card while their Sequence Stage is
-  // still in the fast-action range; the account-level "natural" actions
-  // below (Reply back, Follow up, Re-engage...) only apply once that
-  // campaign sequence is exhausted (Meeting Booked/Nurture/Timed Out). A
-  // contact genuinely waiting on the other side (connection not yet
-  // accepted, or a message sent with no reply yet) shows nothing at all -
-  // never a fast action, and never a fallback natural action either, since
-  // that reads entirely different local-state fields unrelated to this
-  // campaign's real Sequence Stage and would show a stale/wrong action.
+  const campaign = campaignContactRecordFor(c);
+  // Today's Actions only ever surfaces contacts with a real Campaign
+  // Contacts record linking them to a Live campaign (see
+  // campaignContactRecordFor above) - a contact sitting only in a grid, or
+  // merely grid/contactIds-linked to a campaign with no Campaign Contacts
+  // row yet, gets no card at all, fast or natural. A live campaign fully
+  // owns this contact's card while their Sequence Stage is still in the
+  // fast-action range; the account-level "natural" actions below (Reply
+  // back, Follow up, Re-engage...) only apply once that campaign sequence
+  // is exhausted (Meeting Booked/Nurture/Timed Out). A contact genuinely
+  // waiting on the other side (connection not yet accepted, or a message
+  // sent with no reply yet) shows nothing at all - never a fast action, and
+  // never a fallback natural action either, since that reads entirely
+  // different local-state fields unrelated to this campaign's real
+  // Sequence Stage and would show a stale/wrong action.
   if(!campaign) return null;
 
   const fastAction = getFastActionForCampaignContact(c, campaign);
@@ -3279,10 +3302,35 @@ function getNaturalContactAction(c){
 }
 
 function computeTodaysActions(){
-  return state.contacts
+  const actions = state.contacts
     .map(c => { const action = getContactAction(c); return action ? { contact:c, ...action } : null; })
     .filter(Boolean)
     .sort((a,b) => (b.daysSinceTouch||0) - (a.daysSinceTouch||0));
+
+  // Diagnostic: every contact above is sourced via campaignContactRecordFor,
+  // i.e. a real Campaign Contacts Airtable row with a valid Campaign link -
+  // never grid/contactIds membership alone. Logs the gap between the two so
+  // a regression back to the old grid-sourced behaviour is visible
+  // immediately instead of silently reappearing.
+  const liveCampaigns = state.campaigns.filter(camp => camp.status === 'Live');
+  const gridOrIdMemberIds = new Set();
+  liveCampaigns.forEach(camp => campaignContacts(camp).forEach(c => gridOrIdMemberIds.add(c.id)));
+  const realRecordMemberIds = new Set();
+  liveCampaigns.forEach(camp => {
+    const stages = window.__campaignSequenceStages && window.__campaignSequenceStages[camp.id];
+    if(!stages) return;
+    state.contacts.forEach(c => { if(Object.prototype.hasOwnProperty.call(stages, c.name.trim().toLowerCase())) realRecordMemberIds.add(c.id); });
+  });
+  const gridOnlyLeakCount = [...gridOrIdMemberIds].filter(id => !realRecordMemberIds.has(id)).length;
+  console.log(
+    `[Today's Actions] ${actions.length} contact(s) shown - all sourced from real Campaign Contacts records ` +
+    `(${realRecordMemberIds.size} contact(s) have one on a Live campaign). ` +
+    `${gridOrIdMemberIds.size} contact(s) are grid/contactIds-linked to a Live campaign; ` +
+    `${gridOnlyLeakCount} of those have no Campaign Contacts record and are correctly excluded.`,
+    actions.map(a => ({ contact: a.contact.name, campaign: a.campaignName || null, type: a.type }))
+  );
+
+  return actions;
 }
 
 // Today's Actions sub-tabs - filter the same computed actions list by
@@ -3315,7 +3363,7 @@ function todaysActionMatchesTab(a, tabId){
 // getNaturalContactAction already reads elsewhere in this file; there's no
 // separate per-campaign "connected on" date to prefer over it.
 function contactQualifiesForFollowUp(c){
-  const campaign = activeCampaignForContact(c);
+  const campaign = campaignContactRecordFor(c);
   if(!campaign) return false;
   const stages = window.__campaignSequenceStages && window.__campaignSequenceStages[campaign.id];
   const stage = stages ? (stages[c.name.trim().toLowerCase()] || 'Found') : 'Found';
