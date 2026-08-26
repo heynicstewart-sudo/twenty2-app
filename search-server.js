@@ -8879,12 +8879,68 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 { "title": string, "html": string, "metaTitle": string (under 60 characters), "metaDescription": string (under 160 characters) }`;
 
   const drafted = await callClaudeJson(prompt, 8000);
+  const html = await ensureValidSeoHeadings(drafted.html || '', keyword);
+
   return {
     title: drafted.title || keyword,
-    html: drafted.html || '',
+    html,
     metaTitle: (drafted.metaTitle || '').slice(0, 60),
     metaDescription: (drafted.metaDescription || '').slice(0, 160)
   };
+}
+
+// Checklist item 8/9 ("exactly one H1, multiple H2s") is a prompt
+// instruction above, not a guarantee - models occasionally skip it (no H1,
+// two H1s, or only one H2). This actually checks the returned HTML by
+// counting tags and, if it's wrong, sends it back to Claude for a single
+// targeted heading-structure fix pass (content/wording/links untouched)
+// rather than a full regeneration. If the fix pass still doesn't come back
+// valid, the best attempt is used anyway and a warning is logged - the
+// preview panel's editable HTML textarea is the final backstop before
+// anything reaches Framer.
+function countHtmlTag(html, tag) {
+  const matches = html.match(new RegExp(`<${tag}[ >]`, 'gi'));
+  return matches ? matches.length : 0;
+}
+
+function validateSeoHeadings(html) {
+  const h1Count = countHtmlTag(html, 'h1');
+  const h2Count = countHtmlTag(html, 'h2');
+  const problems = [];
+  if (h1Count !== 1) problems.push(`${h1Count} <h1> tags found - must be exactly 1`);
+  if (h2Count < 2) problems.push(`only ${h2Count} <h2> tag(s) found - must be at least 2`);
+  return { valid: problems.length === 0, problems };
+}
+
+async function ensureValidSeoHeadings(html, keyword) {
+  const validation = validateSeoHeadings(html);
+  if (validation.valid) return html;
+
+  console.warn(`SEO post for "${keyword}" failed heading validation (${validation.problems.join('; ')}) - retrying with a heading fix pass`);
+  const fixPrompt = `This HTML blog post's heading structure is wrong: ${validation.problems.join('; ')}.
+
+Fix ONLY the heading structure - keep all the actual wording, links, images, and FAQ content the same. Requirements: exactly one <h1> containing the primary keyword "${keyword}", followed by multiple <h2> subheadings (with <h3> nested under them where useful), no other top-level heading tags.
+
+HTML to fix:
+---
+${html}
+---
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "html": string }`;
+
+  try {
+    const fixed = await callClaudeJson(fixPrompt, 8000);
+    if (!fixed.html) return html;
+    const revalidation = validateSeoHeadings(fixed.html);
+    if (!revalidation.valid) {
+      console.warn(`SEO post for "${keyword}" still failed heading validation after the fix pass (${revalidation.problems.join('; ')}) - using it anyway, review before sending to Framer`);
+    }
+    return fixed.html;
+  } catch (err) {
+    console.warn('SEO heading fix pass failed, keeping original html:', err.message);
+    return html;
+  }
 }
 
 app.post('/api/seo/generate-post', async (req, res) => {
