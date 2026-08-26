@@ -12583,17 +12583,33 @@ function renderSeoKeywordTable(list){
         <td>${k.kd || '—'}</td>
         <td>${esc(k.intent || '—')}</td>
         <td>${seoStatusTag(k.status)}</td>
-        <td>
+        <td style="white-space:nowrap;">
           ${k.status === 'Generated' || k.status === 'Published'
             ? `<button class="btn btn-ghost btn-sm" onclick="openSeoPreview('${k.id}')"><i class="ti ti-eye"></i> View</button>`
             : `<button class="btn btn-primary btn-sm" ${k.status==='Generating'?'disabled':''} onclick="generateSeoPost('${k.id}')"><i class="ti ${k.status==='Generating'?'ti-loader-2':'ti-sparkles'}"></i> ${k.status==='Generating'?'Generating...':'Generate post'}</button>`
           }
+          <button class="btn btn-ghost btn-sm" title="Delete keyword" onclick="deleteSeoKeyword('${k.id}','${esc(k.keyword).replace(/'/g,"\\'")}')"><i class="ti ti-trash"></i></button>
         </td>
       </tr>
     `).join('')}
     </tbody>
   </table>
   </div>`;
+}
+
+async function deleteSeoKeyword(id, keyword){
+  if(!confirm(`Permanently delete "${keyword}" from the keyword library? This removes the whole row from Airtable, including its Volume/KD/Intent and any generated post content. This cannot be undone here. If a draft was already sent to Framer, it is NOT affected.`)) return;
+  try {
+    const res = await fetch(`/api/seo/keywords/${id}`, { method:'DELETE' });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Delete failed');
+    if(Array.isArray(window.__seoKeywords)) window.__seoKeywords = window.__seoKeywords.filter(k=>k.id!==id);
+    if(window.__seoPreview && window.__seoPreview.keywordId === id) window.__seoPreview = null;
+    toast(`Deleted "${keyword}"`, 'success');
+    renderPage();
+  } catch(err){
+    toast('Could not delete keyword: ' + err.message, 'warn');
+  }
 }
 
 async function handleSeoKeywordCsv(event){
@@ -12774,8 +12790,9 @@ function renderSeoPreviewPanel(){
         <button class="btn btn-secondary btn-sm" onclick="saveSeoPreviewEdits()"><i class="ti ti-device-floppy"></i> Save edits</button>
         <button class="btn btn-secondary btn-sm" id="seoRegenBtn" onclick="regenerateSeoPreview()"><i class="ti ti-refresh"></i> Regenerate</button>
         <button class="btn btn-primary btn-sm" id="seoPublishBtn" ${p.status==='Published'?'disabled':''} onclick="publishSeoPreview()"><i class="ti ti-rocket"></i> ${p.status==='Published' ? 'Sent to Framer' : 'Send to Framer'}</button>
+        <button class="btn btn-danger btn-sm" id="seoDeleteBtn" onclick="deleteSeoPreviewPost()"><i class="ti ti-trash"></i> Delete post</button>
       </div>
-      ${p.publishedUrl ? `<div class="muted" style="font-size:12px;margin-top:8px;">Added to Framer as a draft - review and hit Publish there to go live at <a href="${esc(p.publishedUrl)}" target="_blank" rel="noopener">${esc(p.publishedUrl)}</a></div>` : ''}
+      ${p.publishedUrl ? `<div class="muted" style="font-size:12px;margin-top:8px;">Added to Framer as a draft - review and hit Publish there to go live at <a href="${esc(p.publishedUrl)}" target="_blank" rel="noopener">${esc(p.publishedUrl)}</a>. Deleting here will not remove or change that Framer draft.</div>` : ''}
     </div>
     <div class="card">
       <div class="section-title" style="font-size:13px;margin-bottom:10px;"><i class="ti ti-eye"></i> Preview</div>
@@ -12853,6 +12870,28 @@ async function publishSeoPreview(){
   } catch(err){
     toast('Could not send to Framer: ' + err.message, 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-rocket"></i> Send to Framer'; }
+  }
+}
+
+async function deleteSeoPreviewPost(){
+  const p = window.__seoPreview;
+  const warning = p.publishedUrl
+    ? `Delete this draft and reset "${p.keyword}" back to Queued? This clears the generated title, content, and meta fields here so you can start fresh. The draft already sent to Framer is NOT touched - it stays exactly as it is there.`
+    : `Delete this draft and reset "${p.keyword}" back to Queued? This clears the generated title, content, and meta fields so you can start fresh.`;
+  if(!confirm(warning)) return;
+  const btn = document.getElementById('seoDeleteBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Deleting...'; }
+  try {
+    const res = await fetch(`/api/seo/keywords/${p.keywordId}/post`, { method:'DELETE' });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Delete failed');
+    const k = (window.__seoKeywords||[]).find(x=>x.id===p.keywordId);
+    if(k) Object.assign(k, { status:'Queued', postTitle:'', postHtml:'', metaTitle:'', metaDescription:'', publishedUrl:'' });
+    toast('Post deleted - keyword is back to Queued', 'success');
+    closeSeoPreview();
+  } catch(err){
+    toast('Could not delete post: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-trash"></i> Delete post'; }
   }
 }
 

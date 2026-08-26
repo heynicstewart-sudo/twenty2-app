@@ -8692,6 +8692,54 @@ app.post('/api/seo/keywords/:id/save', async (req, res) => {
   }
 });
 
+// "Start fresh" reset - clears the generated post fields and puts the
+// keyword back to Queued, but keeps the Keywords row itself (Keyword/
+// Volume/KD/Intent untouched) rather than deleting the record outright, so
+// nothing needs re-importing. Deliberately never touches Framer: if a
+// draft was already sent there, it's left exactly as it is - this only
+// resets the app's own Airtable tracking, not anything already created in
+// the CMS.
+app.delete('/api/seo/keywords/:id/post', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    await airtableRequest('PATCH', KEYWORDS_TABLE, {
+      records: [{
+        id: req.params.id,
+        fields: {
+          'Post Title': '',
+          'Content': '',
+          'Meta Title': '',
+          'Meta Description': '',
+          'Published URL': '',
+          'Status': 'Queued'
+        }
+      }],
+      typecast: true
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Delete SEO post error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Library cleanup - removes the Keywords row entirely (unlike the reset
+// route above, which only clears the generated fields). Never touches
+// Framer, same reasoning as the reset route: if a draft was already sent
+// there, it's left exactly as it is.
+app.delete('/api/seo/keywords/:id', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const url = `${AIRTABLE_URL}/${encodeURIComponent(KEYWORDS_TABLE)}?records[]=${encodeURIComponent(req.params.id)}`;
+    const resp = await airtableFetchWithRetry(url, { method: 'DELETE', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } });
+    if (!resp.ok) { const err = await resp.text(); throw new Error(`Airtable error ${resp.status}: ${err}`); }
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Delete SEO keyword error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/seo/keywords/add-to-queue', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   const { keyword, reason } = req.body;
