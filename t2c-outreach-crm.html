@@ -12771,9 +12771,9 @@ function renderSeoPreviewPanel(){
       <div style="display:flex;gap:10px;flex-wrap:wrap;">
         <button class="btn btn-secondary btn-sm" onclick="saveSeoPreviewEdits()"><i class="ti ti-device-floppy"></i> Save edits</button>
         <button class="btn btn-secondary btn-sm" id="seoRegenBtn" onclick="regenerateSeoPreview()"><i class="ti ti-refresh"></i> Regenerate</button>
-        <button class="btn btn-primary btn-sm" id="seoPublishBtn" ${p.status==='Published'?'disabled':''} onclick="publishSeoPreview()"><i class="ti ti-rocket"></i> ${p.status==='Published' ? 'Published' : 'Publish'}</button>
+        <button class="btn btn-primary btn-sm" id="seoPublishBtn" ${p.status==='Published'?'disabled':''} onclick="publishSeoPreview()"><i class="ti ti-rocket"></i> ${p.status==='Published' ? 'Sent to Framer' : 'Send to Framer'}</button>
       </div>
-      ${p.publishedUrl ? `<div class="muted" style="font-size:12px;margin-top:8px;">Live at <a href="${esc(p.publishedUrl)}" target="_blank" rel="noopener">${esc(p.publishedUrl)}</a></div>` : ''}
+      ${p.publishedUrl ? `<div class="muted" style="font-size:12px;margin-top:8px;">Added to Framer as a draft - review and hit Publish there to go live at <a href="${esc(p.publishedUrl)}" target="_blank" rel="noopener">${esc(p.publishedUrl)}</a></div>` : ''}
     </div>
     <div class="card">
       <div class="section-title" style="font-size:13px;margin-bottom:10px;"><i class="ti ti-eye"></i> Preview</div>
@@ -12833,7 +12833,7 @@ async function regenerateSeoPreview(){
 async function publishSeoPreview(){
   const p = window.__seoPreview;
   const btn = document.getElementById('seoPublishBtn');
-  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Publishing...'; }
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Sending...'; }
   try {
     await saveSeoPreviewEdits();
     const res = await fetch('/api/seo/publish', {
@@ -12841,16 +12841,16 @@ async function publishSeoPreview(){
       body: JSON.stringify({ keywordId: p.keywordId })
     });
     const data = await res.json();
-    if(!res.ok || !data.success) throw new Error(data.error || 'Publish failed');
+    if(!res.ok || !data.success) throw new Error(data.error || 'Send to Framer failed');
     p.status = 'Published';
     p.publishedUrl = data.url;
     const k = (window.__seoKeywords||[]).find(x=>x.id===p.keywordId);
     if(k) Object.assign(k, { status:'Published', publishedUrl:data.url });
-    toast('Published to Framer', 'success');
+    toast('Added to Framer as a draft - review and publish it there', 'success');
     renderPage();
   } catch(err){
-    toast('Could not publish: ' + err.message, 'warn');
-    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-rocket"></i> Publish'; }
+    toast('Could not send to Framer: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-rocket"></i> Send to Framer'; }
   }
 }
 

@@ -8443,12 +8443,13 @@ app.delete('/api/grids/:gridId/contacts', async (req, res) => {
 // ===================== SEO CONTENT ENGINE =====================
 // Marketing tab > SEO sub-tab: a Ubersuggest keyword library, an SEO voice
 // profile (a dedicated field on the Settings singleton, separate from the
-// LinkedIn/blog voice profile on Content Settings above), Serper+Pexels+
-// Claude blog post generation against an 80-point on-page checklist, and
-// publishing straight to Framer's CMS via the real "framer-api" Server API
-// SDK (see publishToFramer below - it's a stateful connect/addItems/publish
-// session, not a plain REST POST, so this file's usual airtableRequest-style
-// fetch() wrapper doesn't apply to it).
+// LinkedIn/blog voice profile on Content Settings above), Serper+Claude
+// blog post generation against an on-page SEO checklist, and sending the
+// result to Framer's CMS as a draft item via the real "framer-api" Server
+// API SDK (see publishToFramer below - it's a stateful connect/addItems
+// session, not a plain REST POST, so this file's usual airtableRequest-
+// style fetch() wrapper doesn't apply to it. It deliberately never calls
+// the SDK's site-wide publish() - see that function's comment for why).
 
 const KEYWORDS_TABLE = 'Keywords';
 const SITEMAP_TABLE = 'Sitemap';
@@ -8894,24 +8895,39 @@ app.post('/api/seo/generate-post', async (req, res) => {
   }
 });
 
-// ---- Publish to Framer ----
+// ---- Send to Framer (as a draft) ----
 // Framer's CMS write path is a stateful Server API connection, not a plain
 // REST POST: the "framer-api" npm package (ESM-only, hence the dynamic
 // import from this CommonJS file) opens a session with connect(), and
-// collection.addItems()/framer.publish() run over it before disconnect().
-// The target collection's field names aren't known ahead of time, so
-// fields are matched by name (case-insensitive substring) via
+// collection.addItems() runs over it before disconnect(). Deliberately
+// never calls framer.publish() - that deploys the whole site, and the
+// brief is explicit that generated posts must land as a draft for someone
+// to review, not go live automatically. Instead, the new CMS item's own
+// Status field (an enum field on the Blog collection - confirmed against
+// the real T2C base, values include "Live") is set to whichever case name
+// matches /draft/i, so it shows up in Framer's CMS table the same way a
+// manually-created draft post would. If that field or a matching case
+// isn't found, the item is still created without a status - never blocks
+// the whole write over it.
+//
+// Every other field is matched by name (case-insensitive substring) via
 // FRAMER_FIELD_ALIASES below - the same defensive, schema-not-fully-
 // confirmed approach this file already uses for the LinkedIn org id scrape
-// route. Requires FRAMER_API_KEY and FRAMER_PROJECT_URL (e.g.
-// "https://framer.com/projects/Website--aabbccdd1122") in the environment;
-// FRAMER_BLOG_COLLECTION_NAME and FRAMER_SITE_URL are optional overrides.
+// route. Requires FRAMER_API_KEY and FRAMER_PROJECT_URL (the project URL
+// from Framer's own address bar, without any ?node=/&view= query string -
+// e.g. "https://framer.com/projects/Website--aabbccdd1122") in the
+// environment. FRAMER_SITE_URL (the live domain) and
+// FRAMER_BLOG_PATH_PREFIX (the collection's page path, e.g. "/research" -
+// confirmed against an existing T2C post's URL, may differ per project) are
+// used only to build the preview URL shown in the UI; FRAMER_BLOG_COLLECTION_NAME
+// picks the collection by exact name when a project has more than one.
 
 const FRAMER_FIELD_ALIASES = {
   title: ['title', 'name', 'headline'],
   content: ['content', 'body', 'post', 'article'],
   metaTitle: ['meta title', 'seo title'],
-  metaDescription: ['meta description', 'seo description', 'excerpt', 'summary']
+  metaDescription: ['meta description', 'seo description', 'excerpt', 'summary'],
+  status: ['status']
 };
 
 function findFramerField(fields, aliasKey) {
@@ -8940,25 +8956,38 @@ async function publishToFramer(post) {
     const contentField = findFramerField(fields, 'content');
     const metaTitleField = findFramerField(fields, 'metaTitle');
     const metaDescField = findFramerField(fields, 'metaDescription');
+    const statusField = findFramerField(fields, 'status');
 
     const fieldData = {};
     if (titleField) fieldData[titleField.id] = { type: 'string', value: post.title };
     if (contentField) fieldData[contentField.id] = { type: 'formattedText', value: post.html, contentType: 'html' };
     if (metaTitleField) fieldData[metaTitleField.id] = { type: 'string', value: post.metaTitle };
     if (metaDescField) fieldData[metaDescField.id] = { type: 'string', value: post.metaDescription };
+    if (statusField && statusField.type === 'enum') {
+      const draftCase = statusField.cases.find(c => /draft/i.test(c.name));
+      if (draftCase) fieldData[statusField.id] = { type: 'enum', value: draftCase.id };
+      else console.warn('Framer Status field has no "Draft" case - post created without a status');
+    }
 
     const slug = slugifyForFramer(post.title);
     await collection.addItems([{ slug, fieldData }]);
-    await framer.publish();
+    // No framer.publish() call - the item exists in the CMS as a draft
+    // (Status set above, if the field/case were found) until a human
+    // reviews it and presses Publish in the Framer UI themselves.
 
     const siteUrl = (process.env.FRAMER_SITE_URL || '').replace(/\/$/, '');
-    const url = siteUrl ? `${siteUrl}/${slug}` : slug;
+    const pathPrefix = (process.env.FRAMER_BLOG_PATH_PREFIX || '/research').replace(/\/$/, '');
+    const url = siteUrl ? `${siteUrl}${pathPrefix}/${slug}` : slug;
     return { url, slug, collectionName: collection.name };
   } finally {
     await framer.disconnect();
   }
 }
 
+// "Published" here (route name, Keywords.Status, Sitemap.Published Date)
+// tracks that the post was sent to Framer's CMS as a draft item - not that
+// it's live. Going live is a separate, manual step the reviewer takes in
+// Framer itself (see publishToFramer's comment above).
 app.post('/api/seo/publish', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   if (!process.env.FRAMER_API_KEY) return res.status(500).json({ error: 'FRAMER_API_KEY not configured' });
