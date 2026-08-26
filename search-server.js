@@ -8086,17 +8086,41 @@ app.post('/api/wipe-data', async (req, res) => {
   res.json({ success: true, results });
 });
 
+// Strips gridName out of a Company's (possibly multi-grid) "Grid Name" list
+// without touching the record otherwise - for a company kept alive by
+// another still-existing grid, hard-deleting isn't right, but leaving the
+// deleted grid's name sitting in that list isn't either: the next
+// hydrateCompaniesFromAirtable load would hand it to resolveGridIdByName,
+// which - finding no local grid by that name any more - silently recreates
+// the "deleted" grid from scratch and repopulates it with every company
+// still carrying the stale tag. Only records that actually have the tag get
+// patched.
+async function untagCompaniesFromGrid(gridName, companyNames) {
+  if (!gridName || !Array.isArray(companyNames) || !companyNames.length) return;
+  const records = (await Promise.all(
+    companyNames.map(name => findRecordByFieldName('Companies', 'Company Name', name))
+  )).filter(Boolean);
+
+  const patches = records
+    .map(r => ({ id: r.id, gridNames: parseGridNameList(r.fields['Grid Name']) }))
+    .filter(r => r.gridNames.some(g => g.toLowerCase() === gridName.toLowerCase()))
+    .map(r => ({ id: r.id, fields: { 'Grid Name': r.gridNames.filter(g => g.toLowerCase() !== gridName.toLowerCase()).join(', ') } }));
+
+  if (patches.length) await airtableBatchPatch('Companies', patches);
+}
+
 // ===================== DELETE GRID (Home page) =====================
 // Grids only exist client-side (see the "gridName"/"Grid Name" notes above),
 // so the client tells us which Contact/Company names belonged to the grid
 // being deleted - each name is looked up in Airtable and, if found, its
 // record is removed. Companies shared with another grid are the client's
 // responsibility to exclude from companyNames before calling this (it has
-// no way to know about other grids).
+// no way to know about other grids) - sharedCompanyNames covers those
+// instead, via untagCompaniesFromGrid above.
 app.delete('/api/grid', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
-  const { contactNames = [], companyNames = [] } = req.body || {};
+  const { contactNames = [], companyNames = [], sharedCompanyNames = [], gridName } = req.body || {};
 
   try {
     const contactIds = (await Promise.all(
@@ -8109,6 +8133,7 @@ app.delete('/api/grid', async (req, res) => {
 
     if (contactIds.length) await airtableBatchDelete('Contacts', contactIds);
     if (companyIds.length) await airtableBatchDelete('Companies', companyIds);
+    await untagCompaniesFromGrid(gridName, sharedCompanyNames);
 
     res.json({ success: true, deletedContacts: contactIds.length, deletedCompanies: companyIds.length });
   } catch (err) {
@@ -8125,11 +8150,14 @@ app.delete('/api/grid', async (req, res) => {
 // client-resolves-the-names approach as DELETE /api/grid, since Airtable has
 // no per-grid field on Contacts (see the "gridName" note on
 // createOrUpdateAirtableContact) - the client already excludes any
-// companyNames shared with another grid before calling this.
+// companyNames shared with another grid before calling this, passing them
+// as sharedCompanyNames instead so untagCompaniesFromGrid can drop just
+// this grid's name off them (see DELETE /api/grid above for why leaving it
+// there is a real bug, not a cosmetic one).
 app.delete('/api/grids/:gridId/contacts', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
-  const { contactNames = [], companyNames = [] } = req.body || {};
+  const { contactNames = [], companyNames = [], sharedCompanyNames = [], gridName } = req.body || {};
 
   try {
     const contactIds = (await Promise.all(
@@ -8159,6 +8187,7 @@ app.delete('/api/grids/:gridId/contacts', async (req, res) => {
 
     if (contactIds.length) await airtableBatchDelete('Contacts', contactIds);
     if (companyIds.length) await airtableBatchDelete('Companies', companyIds);
+    await untagCompaniesFromGrid(gridName, sharedCompanyNames);
 
     res.json({
       success: true,

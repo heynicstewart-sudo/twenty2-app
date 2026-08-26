@@ -1136,14 +1136,20 @@ async function deleteGridConfirmed(gridId){
     const contactNames = gridContacts(gridId).map(c => c.name);
     // Only delete Companies not shared with another grid - Airtable has no
     // per-grid concept, so this is the only place that knows the answer.
+    // Shared ones are sent separately as sharedCompanyNames so the server
+    // can strip just this grid's name off their (possibly multi-grid) Grid
+    // Name list instead of leaving it there - a stale tag on an otherwise-
+    // untouched record is exactly what silently resurrects a "deleted" grid
+    // on next load (see untagCompaniesFromGrid, search-server.js).
     const otherGridCompanies = new Set();
     state.grids.forEach(g => { if(g.id !== gridId) g.companies.forEach(c => otherGridCompanies.add(c)); });
     const companyNames = grid.companies.filter(c => !otherGridCompanies.has(c));
+    const sharedCompanyNames = grid.companies.filter(c => otherGridCompanies.has(c));
 
     const res = await fetch('/api/grid', {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contactNames, companyNames })
+      body: JSON.stringify({ contactNames, companyNames, sharedCompanyNames, gridName: grid.name })
     });
     const json = await res.json();
     if(!res.ok || !json.success) throw new Error(json.error || 'Delete failed');
@@ -5723,15 +5729,17 @@ async function resetGridConfirmed(gridId){
     const contactNames = gridContacts(gridId).map(c => c.name);
     // Only delete Companies not shared with another grid, same dedup as
     // deleteGridConfirmed - Airtable has no per-grid concept, so this is the
-    // only place that knows the answer.
+    // only place that knows the answer. Shared ones go in as
+    // sharedCompanyNames instead, same reasoning as deleteGridConfirmed.
     const otherGridCompanies = new Set();
     state.grids.forEach(g => { if(g.id !== gridId) g.companies.forEach(c => otherGridCompanies.add(c)); });
     const companyNames = grid.companies.filter(c => !otherGridCompanies.has(c));
+    const sharedCompanyNames = grid.companies.filter(c => otherGridCompanies.has(c));
 
     const res = await fetch(`/api/grids/${encodeURIComponent(gridId)}/contacts`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contactNames, companyNames })
+      body: JSON.stringify({ contactNames, companyNames, sharedCompanyNames, gridName: grid.name })
     });
     const json = await res.json();
     if(!res.ok || !json.success) throw new Error(json.error || 'Reset failed');
@@ -6048,8 +6056,13 @@ async function hydrateCompaniesFromAirtable(){
       const f = r.fields || {};
       const name = f['Company Name'];
       if(!name) return;
+      // A genuinely blank Grid Name means this company isn't on any grid
+      // yet - it must NOT fall through to resolveGridIdByName('') here,
+      // which defaults a falsy name to state.grids[0] and would otherwise
+      // silently dump every unassigned company into whichever grid happens
+      // to be first in the array.
       const gridNames = (f['Grid Name'] || '').split(',').map(s => s.trim()).filter(Boolean);
-      const gridIds = new Set((gridNames.length ? gridNames : ['']).map(resolveGridIdByName));
+      const gridIds = new Set(gridNames.map(resolveGridIdByName));
       gridIds.forEach(gridId => {
         const grid = state.grids.find(g => g.id === gridId);
         if(!grid) return;
