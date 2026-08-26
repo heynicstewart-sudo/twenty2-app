@@ -8984,6 +8984,57 @@ async function publishToFramer(post) {
   }
 }
 
+// Read-only connection check - connects, resolves the target collection
+// and its fields, then disconnects without writing anything. Exists so the
+// Framer env vars (API key, project URL, collection name) can be verified
+// after a Railway deploy without creating a real draft post as a side
+// effect of testing.
+app.get('/api/seo/framer-status', async (req, res) => {
+  if (!process.env.FRAMER_API_KEY) return res.status(500).json({ error: 'FRAMER_API_KEY not configured' });
+  if (!process.env.FRAMER_PROJECT_URL) return res.status(500).json({ error: 'FRAMER_PROJECT_URL not configured' });
+
+  let framer;
+  try {
+    const { connect } = await import('framer-api');
+    framer = await connect(process.env.FRAMER_PROJECT_URL, process.env.FRAMER_API_KEY);
+
+    const info = await framer.getProjectInfo();
+    const collections = await framer.getCollections();
+    if (!collections.length) return res.json({ connected: true, projectName: info.name, error: 'No CMS collections found in this project' });
+
+    const nameHint = process.env.FRAMER_BLOG_COLLECTION_NAME;
+    const collection = (nameHint && collections.find(c => c.name.toLowerCase() === nameHint.toLowerCase()))
+      || collections.find(c => /blog|post|article/i.test(c.name))
+      || collections[0];
+
+    const fields = await collection.getFields();
+    const statusField = findFramerField(fields, 'status');
+
+    res.json({
+      connected: true,
+      projectName: info.name,
+      allCollectionNames: collections.map(c => c.name),
+      resolvedCollection: collection.name,
+      resolvedByExactNameMatch: !!(nameHint && collection.name.toLowerCase() === nameHint.toLowerCase()),
+      fields: fields.map(f => ({ name: f.name, type: f.type })),
+      matchedFields: {
+        title: findFramerField(fields, 'title') ? findFramerField(fields, 'title').name : null,
+        content: findFramerField(fields, 'content') ? findFramerField(fields, 'content').name : null,
+        metaTitle: findFramerField(fields, 'metaTitle') ? findFramerField(fields, 'metaTitle').name : null,
+        metaDescription: findFramerField(fields, 'metaDescription') ? findFramerField(fields, 'metaDescription').name : null,
+        status: statusField ? statusField.name : null
+      },
+      statusFieldCases: (statusField && statusField.type === 'enum') ? statusField.cases.map(c => c.name) : null,
+      draftCaseFound: (statusField && statusField.type === 'enum') ? !!statusField.cases.find(c => /draft/i.test(c.name)) : null
+    });
+  } catch (err) {
+    console.error('Framer status check error:', err.message);
+    res.status(500).json({ connected: false, error: err.message });
+  } finally {
+    if (framer) await framer.disconnect().catch(() => {});
+  }
+});
+
 // "Published" here (route name, Keywords.Status, Sitemap.Published Date)
 // tracks that the post was sent to Framer's CMS as a draft item - not that
 // it's live. Going live is a separate, manual step the reviewer takes in
