@@ -5684,11 +5684,24 @@ async function pollGridSearchJob(jobId, grid, cells){
   }
 }
 
+// Apollo's plain people-search redacts a person's last name for accounts
+// without a paid "reveal" unlock (e.g. "Ta***r" - see /api/apollo/search-
+// contacts' last_name_obfuscated handling), and that masked string gets
+// stored as this contact's real name, not just shown in a preview. A
+// Serper/Google search built from it (searchMissingContactField) can only
+// ever guess, since "Ta***r" isn't a real name to match against - flagged
+// wherever the name is shown (grid cell, contact drawer, CSV export) so a
+// rep knows to verify the identity manually rather than trust it outright.
+function hasUncertainName(name){
+  return /\*/.test(name || '');
+}
+
 function renderGridCellHTML(c){
   const days = gridCellDays(c);
   const effectiveState = gridCellState(c);
+  const uncertainName = hasUncertainName(c.name);
   return `<td><div class="grid-cell cell-${effectiveState}">
-      <div class="cell-name" style="cursor:pointer;" onclick="openContactDrawer('${esc(c.name)}', ${currentGridCampaignName() ? `'${esc(currentGridCampaignName())}'` : 'null'})">${esc(c.name)}${c.url ? ` <a href="${esc(c.url)}" target="_blank" rel="noopener" onclick="handleContactLinkedInOpened('${c.id}', event)" title="Open on LinkedIn" style="margin-left:2px;color:var(--blue);"><i class="ti ti-brand-linkedin"></i></a>` : ''}</div>
+      <div class="cell-name" style="cursor:pointer;" onclick="openContactDrawer('${esc(c.name)}', ${currentGridCampaignName() ? `'${esc(currentGridCampaignName())}'` : 'null'})">${esc(c.name)}${uncertainName ? ` <i class="ti ti-alert-triangle" style="color:#a1701c;font-size:12px;" title="Name may not be accurate - last name was masked by Apollo, verify manually"></i>` : ''}${c.url ? ` <a href="${esc(c.url)}" target="_blank" rel="noopener" onclick="handleContactLinkedInOpened('${c.id}', event)" title="Open on LinkedIn" style="margin-left:2px;color:var(--blue);"><i class="ti ti-brand-linkedin"></i></a>` : ''}</div>
       <div class="cell-meta">
         <span class="day-badge ${dayBadgeClass(days)}">${days}d</span>
         <span class="tag tag-${effectiveState}">${effectiveState}</span>
@@ -6221,10 +6234,11 @@ function exportContactsCsv(){
   const rows = gridContacts(gridId).filter(c => EXPORTABLE_STATES.includes(c.state) && c.url && c.url.trim());
   if(!rows.length){ toast('No found contacts to export yet', 'warn'); return; }
 
-  const header = ['Name','Company','Domain','LinkedIn URL'];
+  const header = ['Name','Company','Domain','LinkedIn URL','Name Confidence'];
   const lines = [header.map(csvField).join(',')];
   rows.forEach(c => {
-    lines.push([c.name, c.company, companyDomain(c.company), c.url].map(csvField).join(','));
+    const nameConfidence = hasUncertainName(c.name) ? 'Might not be accurate - masked name from Apollo' : '';
+    lines.push([c.name, c.company, companyDomain(c.company), c.url, nameConfidence].map(csvField).join(','));
   });
   const csvContent = lines.join('\r\n');
 
@@ -7298,6 +7312,14 @@ function renderContactDrawerContent(data, campaignName){
 
   return `
   <button class="drawer-close" onclick="closeDrawer()">&times;</button>
+  ${hasUncertainName(c.fullName) ? `
+  <div class="job-change-badge">
+    <i class="ti ti-alert-triangle" style="color:#a1701c;flex-shrink:0;margin-top:1px;"></i>
+    <div>
+      <div style="font-weight:700;font-size:12.5px;color:#a1701c;">Name may not be accurate</div>
+      <div style="font-size:12.5px;margin-top:2px;">Apollo masked this contact's last name - verify their identity manually before relying on this record.</div>
+    </div>
+  </div>` : ''}
   ${c.jobChangeSignal ? `
   <div class="job-change-badge">
     <i class="ti ti-alert-triangle" style="color:#a1701c;flex-shrink:0;margin-top:1px;"></i>
