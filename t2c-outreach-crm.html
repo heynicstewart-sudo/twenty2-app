@@ -1191,21 +1191,31 @@ async function deleteGridConfirmed(gridId){
   }
 }
 
-// One-time maintenance action: tags every existing contact (across every
-// grid, not just one) with its own currently-resolved grid directly on its
-// Airtable Contacts record, via POST /api/contacts/backfill-grid-tags - see
-// that route and the Grid Name notes on hydrateContactsFromAirtable/
+// One-time maintenance action: tags every existing contact AND company
+// (across every grid, not just one) with its own currently-resolved
+// grid(s), directly on its Airtable record - via POST /api/contacts/
+// backfill-grid-tags and /api/companies/backfill-grid-tags. See those
+// routes and the Grid Name notes on hydrateContactsFromAirtable/
 // createOrUpdateAirtableContact for why a contact's own tag matters (a
 // company shared across grids no longer needs to drag every one of its
-// contacts along). Meant to be run once, after any grid cleanup, so it
-// reflects correct final grid membership rather than baking in whatever
-// state things happened to be in before that cleanup.
+// contacts along) - companies were already taggable, this just catches any
+// that predate that or never got it written for some other reason. Meant
+// to be run once, after any grid cleanup, so it reflects correct final
+// grid membership rather than baking in whatever state things happened to
+// be in before that cleanup.
+function buildCompanyGridTags(){
+  const tags = [];
+  state.grids.forEach(g => (g.companies || []).forEach(name => tags.push({ name, gridName: g.name })));
+  return tags;
+}
+
 function confirmBackfillContactGridTags(){
-  const taggable = state.contacts.filter(c => c.gridId && gridNameForContact(c));
-  const body = `<p style="font-size:13px;">Tag ${taggable.length} contact${taggable.length===1?'':'s'} with their current grid, directly on their Airtable record? Only affects contacts that don't already have a matching tag - safe to run more than once.</p>`;
+  const contactCount = state.contacts.filter(c => c.gridId && gridNameForContact(c)).length;
+  const companyCount = buildCompanyGridTags().length;
+  const body = `<p style="font-size:13px;">Tag ${contactCount} contact${contactCount===1?'':'s'} and ${companyCount} compan${companyCount===1?'y':'ies'} with their current grid(s), directly on their Airtable records? Only affects records that don't already have a matching tag - safe to run more than once.</p>`;
   const footer = `
     <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-    <button class="btn btn-primary" id="confirmBackfillGridTagsBtn" onclick="backfillContactGridTagsConfirmed()"><i class="ti ti-tag"></i> Tag ${taggable.length} contact${taggable.length===1?'':'s'}</button>
+    <button class="btn btn-primary" id="confirmBackfillGridTagsBtn" onclick="backfillContactGridTagsConfirmed()"><i class="ti ti-tag"></i> Tag ${contactCount} contact${contactCount===1?'':'s'} &amp; ${companyCount} compan${companyCount===1?'y':'ies'}</button>
   `;
   openModal('Backfill grid tags', body, footer);
 }
@@ -1214,23 +1224,29 @@ async function backfillContactGridTagsConfirmed(){
   const btn = document.getElementById('confirmBackfillGridTagsBtn');
   if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Tagging...'; }
   try {
-    const tags = state.contacts
+    const contactTags = state.contacts
       .filter(c => c.gridId && gridNameForContact(c))
       .map(c => ({ id: c.id, gridName: gridNameForContact(c) }));
+    const companyTags = buildCompanyGridTags();
 
-    const res = await fetch('/api/contacts/backfill-grid-tags', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tags })
-    });
-    const data = await res.json();
-    if(!res.ok || !data.success) throw new Error(data.error || 'Backfill failed');
+    const [contactsRes, companiesRes] = await Promise.all([
+      contactTags.length ? fetch('/api/contacts/backfill-grid-tags', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tags: contactTags })
+      }) : Promise.resolve(null),
+      companyTags.length ? fetch('/api/companies/backfill-grid-tags', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tags: companyTags })
+      }) : Promise.resolve(null)
+    ]);
+    const contactsData = contactsRes ? await contactsRes.json() : { tagged: 0, skipped: 0 };
+    const companiesData = companiesRes ? await companiesRes.json() : { tagged: 0, skipped: 0 };
+    if(contactsRes && (!contactsRes.ok || !contactsData.success)) throw new Error(contactsData.error || 'Contact backfill failed');
+    if(companiesRes && (!companiesRes.ok || !companiesData.success)) throw new Error(companiesData.error || 'Company backfill failed');
 
     closeModal();
-    toast(`${data.tagged} contact${data.tagged===1?'':'s'} tagged${data.skipped ? ` (${data.skipped} already tagged)` : ''}`, 'success');
+    toast(`${contactsData.tagged} contact${contactsData.tagged===1?'':'s'}, ${companiesData.tagged} compan${companiesData.tagged===1?'y':'ies'} tagged`, 'success');
   } catch(err){
     toast('Could not backfill grid tags: ' + err.message, 'warn');
-    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-tag"></i> Tag contacts'; }
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-tag"></i> Tag contacts &amp; companies'; }
   }
 }
 

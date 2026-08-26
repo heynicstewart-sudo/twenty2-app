@@ -6427,6 +6427,46 @@ app.post('/api/contacts/backfill-grid-tags', async (req, res) => {
   }
 });
 
+// Same purpose as the Contacts version above, for Companies - matched by
+// name rather than record id, since state.grids[].companies is just a list
+// of company name strings on the client (no Airtable record id tracked for
+// them). A company can need more than one grid name appended (it's
+// deliberately allowed to sit on several grids - see
+// findOrCreateCompanyRecord), so tags for the same company are grouped
+// before writing, and each record gets exactly one PATCH covering every
+// grid it needs rather than one per (company, grid) pair.
+app.post('/api/companies/backfill-grid-tags', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const { tags } = req.body || {};
+  if (!Array.isArray(tags) || !tags.length) return res.status(400).json({ error: 'tags is required' });
+
+  try {
+    const records = await airtableFetchAllRecords('Companies');
+    const byName = {};
+    records.forEach(r => { byName[(r.fields['Company Name'] || '').toLowerCase()] = r; });
+
+    const gridNamesByRecordId = {};
+    let skipped = 0;
+    tags.forEach(({ name, gridName }) => {
+      if (!name || !gridName) { skipped++; return; }
+      const record = byName[name.toLowerCase()];
+      if (!record) { skipped++; return; }
+      if (!gridNamesByRecordId[record.id]) gridNamesByRecordId[record.id] = parseGridNameList(record.fields['Grid Name']);
+      const list = gridNamesByRecordId[record.id];
+      if (!list.includes(gridName)) list.push(gridName);
+      else skipped++;
+    });
+
+    const patches = Object.entries(gridNamesByRecordId).map(([id, gridNames]) => ({ id, fields: { 'Grid Name': gridNames.join(', ') } }));
+    if (patches.length) await airtableBatchPatch('Companies', patches);
+    res.json({ success: true, tagged: patches.length, skipped });
+  } catch (err) {
+    console.error('Backfill company grid tags error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/contacts/notes', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   const { name, noteText } = req.body;
