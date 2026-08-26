@@ -2823,6 +2823,7 @@ function renderLoggerConnectionsMode(){
     </div>
     <div class="learning-panel" ${dropZoneAttrs('loggerConnImageInput')} style="margin:12px 0;">
       <h4><i class="ti ti-brand-linkedin"></i> Or upload screenshot(s)</h4>
+      <p class="muted" style="font-size:11.5px;margin-bottom:10px;">Drag and drop screenshot(s) here, or click below to upload.</p>
       <input type="file" id="loggerConnImageInput" accept="image/*" multiple style="display:none;" onchange="handleLoggerConnImageUpload(event)">
       <button class="btn btn-secondary btn-sm" onclick="document.getElementById('loggerConnImageInput').click()"><i class="ti ti-upload"></i> Upload screenshot(s)</button>
       <div id="loggerConnShotFiles" style="margin-top:8px;">${renderLoggerConnShotFiles()}</div>

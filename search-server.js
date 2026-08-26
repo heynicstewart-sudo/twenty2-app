@@ -6265,7 +6265,24 @@ app.post('/api/contacts/match-connections-screenshot', async (req, res) => {
   try {
     const list = candidates.map(c => `${c.id}: ${c.name} (${c.company})`).join('\n');
     const source = hasImages ? 'the attached screenshot(s) of a LinkedIn connections list' : 'this text pasted from a LinkedIn connections list';
-    const promptText = `Cross-reference the names visible in ${source} against this list of contacts awaiting connection acceptance:\n${list}\n\n${hasImages ? '' : `Pasted text:\n${text}\n\n`}Return ONLY a JSON array of the contact ids (e.g. ["c4","c9"]) whose names appear as accepted connections. If none appear, return [].`;
+    // Selecting text straight off LinkedIn's "My Network" page and pasting
+    // it carries over page furniture Claude would otherwise have to guess
+    // the shape of - spelling it out here (rather than leaving it to infer
+    // from schema alone) is what actually makes the noisy paste reliable,
+    // the same reasoning as the worked examples on the Logger's other
+    // Claude-parsing endpoints (see LOGGER_PARSE_CONVERSATION_SYSTEM above).
+    const textFormatNote = hasImages ? '' : `A raw paste from that page repeats this block per connection - match only on the name, and ignore "'s profile picture" and the "Message" button line, they're page furniture, not part of anyone's name or title:
+<Name>'s profile picture
+<Name>
+
+<job title / headline, sometimes several lines>
+
+Connected on <Month Day, Year>
+
+Message
+
+`;
+    const promptText = `Cross-reference the names visible in ${source} against this list of contacts awaiting connection acceptance:\n${list}\n\n${textFormatNote}${hasImages ? '' : `Pasted text:\n${text}\n\n`}Return ONLY a JSON array of the contact ids (e.g. ["c4","c9"]) whose names appear as accepted connections. If none appear, return [].`;
 
     const content = hasImages
       ? [...images.map(img => ({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.base64 } })), { type: 'text', text: promptText }]
