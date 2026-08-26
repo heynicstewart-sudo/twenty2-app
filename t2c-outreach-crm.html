@@ -12724,11 +12724,11 @@ async function generateSeoPost(id){
     });
     const data = await res.json();
     if(!res.ok || !data.success) throw new Error(data.error || 'Generation failed');
-    if(k) Object.assign(k, { status:'Generated', postTitle:data.title, postHtml:data.html, metaTitle:data.metaTitle, metaDescription:data.metaDescription, imageUrls:data.images });
+    if(k) Object.assign(k, { status:'Generated', postTitle:data.title, postHtml:data.html, metaTitle:data.metaTitle, metaDescription:data.metaDescription });
     window.__seoPreview = {
       keywordId: id, keyword: k ? k.keyword : '',
       title: data.title, html: data.html, metaTitle: data.metaTitle, metaDescription: data.metaDescription,
-      images: data.images || [], status: 'Generated'
+      status: 'Generated'
     };
     toast('Post generated', 'success');
     renderPage();
@@ -12746,7 +12746,7 @@ function openSeoPreview(id){
   window.__seoPreview = {
     keywordId: id, keyword: k.keyword,
     title: k.postTitle, html: k.postHtml, metaTitle: k.metaTitle, metaDescription: k.metaDescription,
-    images: k.imageUrls || [], publishedUrl: k.publishedUrl, status: k.status
+    publishedUrl: k.publishedUrl, status: k.status
   };
   renderPage();
 }
@@ -12780,12 +12780,6 @@ function renderSeoPreviewPanel(){
       <div style="border:1px solid var(--border);border-radius:8px;padding:14px;max-height:600px;overflow-y:auto;font-size:13px;line-height:1.6;">
         ${p.html || '<span class="muted">Nothing generated yet.</span>'}
       </div>
-      ${p.images && p.images.length ? `
-        <div class="muted" style="font-size:11.5px;margin-top:14px;margin-bottom:6px;font-weight:700;">Sourced images</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          ${p.images.map(img => `<img src="${esc(img.url)}" alt="${esc(img.alt||'')}" style="width:90px;height:60px;object-fit:cover;border-radius:6px;">`).join('')}
-        </div>
-      ` : ''}
     </div>
   </div>
   `;
@@ -12825,9 +12819,9 @@ async function regenerateSeoPreview(){
     });
     const data = await res.json();
     if(!res.ok || !data.success) throw new Error(data.error || 'Regenerate failed');
-    Object.assign(p, { title:data.title, html:data.html, metaTitle:data.metaTitle, metaDescription:data.metaDescription, images:data.images||[] });
+    Object.assign(p, { title:data.title, html:data.html, metaTitle:data.metaTitle, metaDescription:data.metaDescription });
     const k = (window.__seoKeywords||[]).find(x=>x.id===p.keywordId);
-    if(k) Object.assign(k, { status:'Generated', postTitle:data.title, postHtml:data.html, metaTitle:data.metaTitle, metaDescription:data.metaDescription, imageUrls:data.images });
+    if(k) Object.assign(k, { status:'Generated', postTitle:data.title, postHtml:data.html, metaTitle:data.metaTitle, metaDescription:data.metaDescription });
     toast('Regenerated', 'success');
     renderPage();
   } catch(err){

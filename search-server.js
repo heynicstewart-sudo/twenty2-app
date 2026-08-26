@@ -8518,7 +8518,6 @@ async function ensureKeywordsTable() {
     { name: 'Post HTML', type: 'multilineText' },
     { name: 'Meta Title', type: 'singleLineText' },
     { name: 'Meta Description', type: 'multilineText' },
-    { name: 'Image URLs', type: 'multilineText' },
     { name: 'Published URL', type: 'url' },
     { name: 'Suggested Reason', type: 'multilineText' },
     { name: 'Created Date', type: 'date', options: { dateFormat: { name: 'iso' } } }
@@ -8541,11 +8540,6 @@ async function ensureSeoVoiceProfileField() {
 function getSeoVoiceProfileText(settingsFields) {
   const v = settingsFields && settingsFields['SEO Voice Profile'];
   return v && v.trim() ? v : DEFAULT_SEO_VOICE_PROFILE;
-}
-
-function safeJsonArray(raw) {
-  if (!raw) return [];
-  try { const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed : []; } catch (e) { return []; }
 }
 
 app.get('/api/seo/voice-profile', async (req, res) => {
@@ -8634,7 +8628,6 @@ app.get('/api/seo/keywords', async (req, res) => {
         postHtml: r.fields['Post HTML'] || '',
         metaTitle: r.fields['Meta Title'] || '',
         metaDescription: r.fields['Meta Description'] || '',
-        imageUrls: safeJsonArray(r.fields['Image URLs']),
         publishedUrl: r.fields['Published URL'] || '',
         suggestedReason: r.fields['Suggested Reason'] || '',
         createdDate: r.fields['Created Date'] || ''
@@ -8790,21 +8783,6 @@ function summarizeScrapedPage(url, scraped) {
   return { url, title: scraped.title || '', wordCount, headings: headings.slice(0, 40) };
 }
 
-async function fetchPexelsImages(query, count) {
-  if (!process.env.PEXELS_API_KEY) return [];
-  const pexelsRes = await fetch(`https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=${count || 3}&orientation=landscape`, {
-    headers: { Authorization: process.env.PEXELS_API_KEY }
-  });
-  if (!pexelsRes.ok) throw new Error(`Pexels API error: ${pexelsRes.status}`);
-  const data = await pexelsRes.json();
-  return (data.photos || []).map(p => ({
-    url: (p.src && (p.src.large2x || p.src.large || p.src.original)) || '',
-    alt: p.alt || query,
-    photographer: p.photographer || '',
-    pageUrl: p.url || ''
-  })).filter(img => img.url);
-}
-
 const SEO_CHECKLIST = `Apply this on-page SEO checklist:
 1. Primary keyword in the H1
 2. Primary keyword in the meta title
@@ -8813,14 +8791,13 @@ const SEO_CHECKLIST = `Apply this on-page SEO checklist:
 5. At least 3 subheadings (H2/H3) beyond the H1
 6. A keyword cluster of 5-8 closely related terms woven naturally throughout, not just the primary keyword repeated
 7. Natural keyword density between 1-2% for the primary keyword
-8. Every image has descriptive alt text that includes the keyword or a close variant
-9. Exactly one H1, multiple H2s, and H3s nested under relevant H2s where useful
-10. 2-3 internal links to other T2C blog posts, as placeholder URLs like /blog/related-post-slug
-11. 2-3 external links to real, relevant, authoritative outside sources
-12. An FAQ section with 4-6 questions targeting related search queries, each with a real answer
-13. A clear call to action at the end, pointing to a specific T2C service
-14. Meta title under 60 characters
-15. Meta description under 160 characters`;
+8. Exactly one H1, multiple H2s, and H3s nested under relevant H2s where useful
+9. 2-3 internal links to other T2C blog posts, as placeholder URLs like /blog/related-post-slug
+10. 2-3 external links to real, relevant, authoritative outside sources
+11. An FAQ section with 4-6 questions targeting related search queries, each with a real answer
+12. A clear call to action at the end, pointing to a specific T2C service
+13. Meta title under 60 characters
+14. Meta description under 160 characters`;
 
 async function generateSeoPostForKeyword(keywordRecord) {
   const keyword = keywordRecord.fields['Keyword'];
@@ -8838,9 +8815,6 @@ async function generateSeoPostForKeyword(keywordRecord) {
       scrapedSummaries.push({ url: result.link, title: result.title || '', wordCount: 0, headings: [], scrapeFailed: true });
     }
   }
-
-  let images = [];
-  try { images = await fetchPexelsImages(keyword, 3); } catch (err) { console.warn('Pexels fetch failed:', err.message); }
 
   const settingsRecord = await getSettingsRecord();
   const voiceProfile = getSeoVoiceProfileText(settingsRecord ? settingsRecord.fields : {});
@@ -8863,12 +8837,9 @@ ${scrapedSummaries.map((s, i) => `${i + 1}. ${s.url}${s.title ? ' - "' + s.title
 
 Average competitor length: approximately ${avgWordCount} words - write to a similar length.
 
-AVAILABLE IMAGES (place one <img> per image, using the exact src URL given and alt text that includes the primary keyword):
-${images.map((img, i) => `${i + 1}. src="${img.url}" - subject: ${img.alt}`).join('\n') || 'none available - write without image placements'}
-
 ${SEO_CHECKLIST}
 
-Write a full SEO blog post as clean HTML - a single string of HTML using h1/h2/h3/p/ul/li/a/img tags, no <html>/<head>/<body> wrapper. Internal links: <a href="/blog/relevant-slug">. External links: <a href="..." target="_blank" rel="noopener"> to real, well-known, relevant domains. UK/AU English, no em dashes, in T2C's voice as described above.
+Write a full SEO blog post as clean HTML - a single string of HTML using h1/h2/h3/p/ul/li/a tags, no <html>/<head>/<body> wrapper and no <img> tags (images are added manually after generation). Internal links: <a href="/blog/relevant-slug">. External links: <a href="..." target="_blank" rel="noopener"> to real, well-known, relevant domains. UK/AU English, no em dashes, in T2C's voice as described above.
 
 Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 { "title": string, "html": string, "metaTitle": string (under 60 characters), "metaDescription": string (under 160 characters) }`;
@@ -8878,8 +8849,7 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
     title: drafted.title || keyword,
     html: drafted.html || '',
     metaTitle: (drafted.metaTitle || '').slice(0, 60),
-    metaDescription: (drafted.metaDescription || '').slice(0, 160),
-    images
+    metaDescription: (drafted.metaDescription || '').slice(0, 160)
   };
 }
 
@@ -8909,14 +8879,13 @@ app.post('/api/seo/generate-post', async (req, res) => {
           'Post HTML': post.html,
           'Meta Title': post.metaTitle,
           'Meta Description': post.metaDescription,
-          'Image URLs': JSON.stringify(post.images),
           'Status': 'Generated'
         }
       }],
       typecast: true
     });
 
-    res.json({ success: true, keywordId, title: post.title, html: post.html, metaTitle: post.metaTitle, metaDescription: post.metaDescription, images: post.images, status: 'Generated' });
+    res.json({ success: true, keywordId, title: post.title, html: post.html, metaTitle: post.metaTitle, metaDescription: post.metaDescription, status: 'Generated' });
   } catch (err) {
     console.error('Generate SEO post error:', err.message);
     airtableRequest('PATCH', KEYWORDS_TABLE, { records: [{ id: keywordId, fields: { 'Status': 'Queued' } }], typecast: true })
