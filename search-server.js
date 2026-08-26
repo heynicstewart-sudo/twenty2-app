@@ -77,7 +77,7 @@ async function searchContactViaSerper(company, jobTitle){
   // in multiple countries), and gl:'au' plus location:'Australia' bias
   // Serper/Google's own ranking toward Australian search results the same
   // way browsing from Australia would.
-  const query = `${company} ${jobTitle} linkedin Australia`;
+  const query = `${company} ${jobTitle} linkedin Australia Perth OR "Western Australia"`;
   const serperRes = await fetch(SERPER_URL, {
     method: 'POST',
     headers: {
