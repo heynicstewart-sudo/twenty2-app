@@ -244,6 +244,8 @@ label{font-size:var(--label-size);font-weight:700;color:var(--muted);display:blo
 .tag-sent-neutral{background:#f1f1ee;color:#6b6558;}
 .tag-sent-cold{background:#e2f2fa;color:#0d6a96;}
 .tag-sent-negative{background:#fbe4e0;color:#b3413a;}
+.stage-select{border:none;outline:none;padding:4px 10px;border-radius:var(--radius-badge);font-size:11px;font-weight:700;font-family:inherit;cursor:pointer;}
+.stage-select:disabled{cursor:not-allowed;opacity:.6;background:#f1f1ee;color:var(--muted);}
 .day-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:var(--radius-badge);font-size:11px;font-weight:800;}
 .day-green{background:#e3f5eb;color:#1f7a4f;}
 .day-amber{background:#fdf0d9;color:#a1701c;}
@@ -2800,6 +2802,7 @@ function initLoggerConnections(){
   window.__loggerConnections = {
     text: '',
     shots: [],
+    pendingMatches: null,
     result: null
   };
 }
@@ -2865,16 +2868,73 @@ function removeLoggerConnShot(idx){
   if(el) el.innerHTML = renderLoggerConnShotFiles();
 }
 
+// Shows the pending-confirmation checklist (see runLoggerConnectionsMatch)
+// while one is awaiting a decision, falling back to the final outcome
+// (or error) once it's been confirmed/cancelled - never both at once, since
+// pendingMatches is cleared before result is ever set.
 function renderLoggerConnResult(){
-  const result = window.__loggerConnections.result;
+  const lc = window.__loggerConnections;
+  if(lc.pendingMatches && lc.pendingMatches.length) return renderLoggerConnConfirmCard();
+
+  const result = lc.result;
   if(!result) return '';
   if(result.error) return `<div class="card" style="background:#fbe3dc;border-color:#f0c6b8;"><i class="ti ti-alert-circle" style="color:var(--danger);"></i> ${esc(result.error)}</div>`;
+  const emptyMessage = result.noneFound
+    ? " Couldn't match anyone from that - try adding more detail or a clearer screenshot"
+    : " Nothing was marked as connected";
   return `
   <div class="card" style="background:#eaf7f0;border-color:#c9e9d7;">
     <i class="ti ti-circle-check" style="color:var(--success);"></i>
-    ${result.matched.length ? ` ${result.matched.length} contact${result.matched.length===1?'':'s'} marked as connected: ${result.matched.map(n=>esc(n)).join(', ')}` : " Couldn't match anyone from that - try adding more detail or a clearer screenshot"}
+    ${result.matched.length ? ` ${result.matched.length} contact${result.matched.length===1?'':'s'} marked as connected: ${result.matched.map(n=>esc(n)).join(', ')}` : emptyMessage}
   </div>
   `;
+}
+
+// Nobody gets marked Connected purely off Claude's read of a screenshot/
+// paste - every match is shown here, checked by default, for the rep to
+// deselect anyone that's wrong before Confirm actually writes anything (see
+// confirmLoggerConnMatches). Cancel discards the whole batch untouched.
+function renderLoggerConnConfirmCard(){
+  const pending = window.__loggerConnections.pendingMatches;
+  return `
+  <div class="card" style="background:#eaf7f0;border-color:#c9e9d7;">
+    <div style="font-weight:700;font-size:12.5px;margin-bottom:8px;">${pending.length} contact${pending.length===1?'':'s'} matched - confirm before marking as connected:</div>
+    ${pending.map((p,i) => `
+      <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;padding:4px 0;">
+        <input type="checkbox" ${p.checked?'checked':''} onchange="toggleLoggerConnMatch(${i}, this.checked)">
+        <span>${esc(p.name)}${p.company ? ` <span class="muted">(${esc(p.company)})</span>` : ''}</span>
+      </label>
+    `).join('')}
+    <div style="display:flex;gap:8px;margin-top:10px;">
+      <button class="btn btn-primary btn-sm" onclick="confirmLoggerConnMatches()"><i class="ti ti-check"></i> Confirm</button>
+      <button class="btn btn-secondary btn-sm" onclick="cancelLoggerConnMatches()">Cancel</button>
+    </div>
+  </div>
+  `;
+}
+
+function toggleLoggerConnMatch(idx, checked){
+  const pending = window.__loggerConnections.pendingMatches;
+  if(pending && pending[idx]) pending[idx].checked = checked;
+}
+
+function confirmLoggerConnMatches(){
+  const lc = window.__loggerConnections;
+  const toApply = (lc.pendingMatches || []).filter(p => p.checked);
+  const contacts = toApply.map(p => state.contacts.find(c => c.id === p.contactId)).filter(Boolean);
+  if(contacts.length) markContactsConnected(contacts);
+  lc.pendingMatches = null;
+  lc.result = { matched: contacts.map(c => c.name) };
+  if(contacts.length) toast(`${contacts.length} contact${contacts.length===1?'':'s'} marked as connected`, 'success');
+  renderPage();
+}
+
+function cancelLoggerConnMatches(){
+  const lc = window.__loggerConnections;
+  lc.pendingMatches = null;
+  lc.result = null;
+  toast('Cancelled - nothing changed', 'warn');
+  renderPage();
 }
 
 async function runLoggerConnectionsMatch(){
@@ -2889,6 +2949,7 @@ async function runLoggerConnectionsMatch(){
   const btn = document.getElementById('loggerConnMatchBtn');
   if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Matching...'; }
   lc.result = null;
+  lc.pendingMatches = null;
 
   try {
     const res = await fetch('/api/contacts/match-connections-screenshot', {
@@ -2904,11 +2965,13 @@ async function runLoggerConnectionsMatch(){
     if(!res.ok || !data.success) throw new Error((typeof data.error === 'string' && data.error) || ('Request failed with status '+res.status));
 
     const matched = candidates.filter(c => (data.matchedIds || []).includes(c.id));
-    if(matched.length) markContactsConnected(matched);
-    lc.result = { matched: matched.map(c => c.name) };
+    if(matched.length){
+      lc.pendingMatches = matched.map(c => ({ contactId: c.id, name: c.name, company: c.company, checked: true }));
+    } else {
+      lc.result = { matched: [], noneFound: true };
+    }
     lc.text = '';
     lc.shots = [];
-    if(matched.length) toast(`${matched.length} contact${matched.length===1?'':'s'} matched and marked as connected`, 'success');
     renderPage();
   } catch(err){
     lc.result = { error: "We couldn't read that — try rewording or a clearer screenshot" };
@@ -6960,6 +7023,23 @@ function renderContactEnrichmentSection(c){
 const CONTACT_DRAWER_STAGE_OPTIONS = ['Found', 'Connection Pending', 'Connection Made', 'Meeting Booked', 'Lost', 'Excluded'];
 const SEQUENCE_STAGE_TO_DRAWER_LABEL = { 'Connected': 'Connection Made' };
 
+// Same Journey Stage colour scheme as the .tag-* classes above (Found=blue,
+// Connection pending=amber, Connection made=green, Booked=gold) so the
+// drawer's stage dropdown reads as the same colour-coded pill as everywhere
+// else the stage shows up, instead of a plain unstyled <select>. Lost/
+// Excluded/unknown values fall back to the neutral .tag-sent-neutral grey.
+const CONTACT_DRAWER_STAGE_COLORS = {
+  'Found': { bg:'#e2f2fa', color:'var(--blue)' },
+  'Connection Pending': { bg:'#fdf0d9', color:'var(--warning)' },
+  'Connection Made': { bg:'#e3f5eb', color:'var(--success)' },
+  'Meeting Booked': { bg:'#fdf3d0', color:'#96751a' },
+  'Lost': { bg:'#fbe4e0', color:'#b3413a' },
+  'Excluded': { bg:'#f1f1ee', color:'#6b6558' }
+};
+function contactDrawerStageColor(label){
+  return CONTACT_DRAWER_STAGE_COLORS[label] || { bg:'#f1f1ee', color:'#6b6558' };
+}
+
 // Replaces the old static Journey Stage/Sequence Stage badges with an
 // editable dropdown, scoped to this campaign's Campaign Contacts row (there
 // is no campaign-wide "journey stage" concept in Airtable - see the
@@ -6971,12 +7051,13 @@ const SEQUENCE_STAGE_TO_DRAWER_LABEL = { 'Connected': 'Connection Made' };
 // the dropdown never lies about the contact's actual stage.
 function renderContactDrawerStageSelect(data, campaignName){
   if(!campaignName){
-    return `<select disabled title="Open this contact from within a campaign to edit stage"><option>No campaign</option></select>`;
+    return `<select class="stage-select" disabled title="Open this contact from within a campaign to edit stage"><option>No campaign</option></select>`;
   }
   const rawStage = data.sequenceStage || '';
   const currentLabel = rawStage ? (SEQUENCE_STAGE_TO_DRAWER_LABEL[rawStage] || rawStage) : '';
   const isKnown = CONTACT_DRAWER_STAGE_OPTIONS.includes(currentLabel);
-  return `<select id="contactStageSelect" onchange="updateContactDrawerStage(this.value)">
+  const { bg, color } = contactDrawerStageColor(currentLabel);
+  return `<select id="contactStageSelect" class="stage-select" style="background:${bg};color:${color};" onchange="updateContactDrawerStage(this.value)">
     ${!isKnown && currentLabel ? `<option value="${esc(currentLabel)}" selected disabled>${esc(currentLabel)}</option>` : ''}
     ${CONTACT_DRAWER_STAGE_OPTIONS.map(s => `<option value="${esc(s)}" ${s === currentLabel ? 'selected' : ''}>${esc(s)}</option>`).join('')}
   </select>`;
@@ -6987,7 +7068,12 @@ async function updateContactDrawerStage(newStage){
   const campaignName = window.__drawerCampaignName;
   if(!profile || !campaignName) return;
   const select = document.getElementById('contactStageSelect');
-  if(select) select.disabled = true;
+  if(select){
+    select.disabled = true;
+    const { bg, color } = contactDrawerStageColor(newStage);
+    select.style.background = bg;
+    select.style.color = color;
+  }
   try {
     const res = await fetch(`/api/campaign/${encodeURIComponent(campaignName)}/contacts/${encodeURIComponent(profile.contact.id)}/stage`, {
       method: 'PATCH',
@@ -6997,6 +7083,20 @@ async function updateContactDrawerStage(newStage){
     const data = await res.json();
     if(!res.ok || !data.success) throw new Error(data.error || 'Stage update failed');
     profile.sequenceStage = data.sequenceStage;
+
+    // Grid cells, Roadmap cards and Today's Actions all read Sequence Stage
+    // out of this same cache (see gridSequenceStageMap/campaignSequenceStageFor
+    // above), not off the drawer's own profile - patch it here too so a
+    // stage change made from the drawer shows up everywhere else immediately
+    // instead of only after the next full reload/re-fetch.
+    const campaign = state.campaigns.find(cp => cp.name === campaignName);
+    if(campaign){
+      window.__campaignSequenceStages = window.__campaignSequenceStages || {};
+      window.__campaignSequenceStages[campaign.id] = window.__campaignSequenceStages[campaign.id] || {};
+      window.__campaignSequenceStages[campaign.id][profile.contact.fullName.trim().toLowerCase()] = data.sequenceStage;
+      renderPage();
+    }
+
     toast('Stage updated', 'success');
   } catch(err){
     toast('Could not update stage: ' + err.message, 'warn');
