@@ -12804,24 +12804,34 @@ function renderSeoPreviewPanel(){
   `;
 }
 
-async function saveSeoPreviewEdits(){
+// Shared by the standalone "Save edits" button and by publishSeoPreview
+// (which must persist edits before sending to Framer). Split out from
+// saveSeoPreviewEdits so publishSeoPreview can save silently - firing the
+// "Saved" toast mid-publish looked like a false "it worked" signal when
+// the actual /api/seo/publish call failed a moment later, since the two
+// toasts overlapped and only the first (successful save) one really
+// registered.
+async function saveSeoPreviewFields(silent){
   const p = window.__seoPreview;
   const title = document.getElementById('seoPreviewTitle').value.trim();
   const metaTitle = document.getElementById('seoPreviewMetaTitle').value.trim();
   const metaDescription = document.getElementById('seoPreviewMetaDesc').value.trim();
   const html = document.getElementById('seoPreviewHtml').value;
+  const res = await fetch(`/api/seo/keywords/${p.keywordId}/save`, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ title, metaTitle, metaDescription, html })
+  });
+  const data = await res.json();
+  if(!res.ok || !data.success) throw new Error(data.error || 'Save failed');
+  Object.assign(p, { title, metaTitle, metaDescription, html });
+  const k = (window.__seoKeywords||[]).find ? (window.__seoKeywords||[]).find(x=>x.id===p.keywordId) : null;
+  if(k) Object.assign(k, { postTitle:title, metaTitle, metaDescription, postHtml:html });
+  if(!silent){ toast('Saved', 'success'); renderPage(); }
+}
+
+async function saveSeoPreviewEdits(){
   try {
-    const res = await fetch(`/api/seo/keywords/${p.keywordId}/save`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ title, metaTitle, metaDescription, html })
-    });
-    const data = await res.json();
-    if(!res.ok || !data.success) throw new Error(data.error || 'Save failed');
-    Object.assign(p, { title, metaTitle, metaDescription, html });
-    const k = (window.__seoKeywords||[]).find ? (window.__seoKeywords||[]).find(x=>x.id===p.keywordId) : null;
-    if(k) Object.assign(k, { postTitle:title, metaTitle, metaDescription, postHtml:html });
-    toast('Saved', 'success');
-    renderPage();
+    await saveSeoPreviewFields(false);
   } catch(err){
     toast('Could not save: ' + err.message, 'warn');
   }
@@ -12854,7 +12864,7 @@ async function publishSeoPreview(){
   const btn = document.getElementById('seoPublishBtn');
   if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Sending...'; }
   try {
-    await saveSeoPreviewEdits();
+    await saveSeoPreviewFields(true);
     const res = await fetch('/api/seo/publish', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ keywordId: p.keywordId })

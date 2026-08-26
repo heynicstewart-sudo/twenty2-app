@@ -8881,11 +8881,31 @@ const SEO_CHECKLIST = `Apply this on-page SEO checklist:
 13. Meta title under 60 characters
 14. Meta description under 160 characters`;
 
+// Reddit/Quora/social results rank highly for plenty of keywords, but a
+// thread's replies aren't real editorial H1/H2 structure to imitate -
+// scraping one either fails outright (bot-blocked) or "succeeds" with
+// nothing structurally useful. Preferred out of the structure-matching
+// sample, not out of the search results themselves - if the real top 3
+// happen to be dominated by these domains, they're still used as a
+// fallback rather than shrinking the sample to fewer than 3 pages.
+const SEO_STRUCTURE_EXCLUDE_DOMAINS = ['reddit.com', 'quora.com', 'facebook.com', 'youtube.com', 'pinterest.com', 'twitter.com', 'x.com', 'tiktok.com', 'instagram.com'];
+
+function isUgcOrSocialDomain(url) {
+  try {
+    const host = new URL(url).hostname.replace(/^www\./, '');
+    return SEO_STRUCTURE_EXCLUDE_DOMAINS.some(d => host === d || host.endsWith('.' + d));
+  } catch (err) {
+    return false;
+  }
+}
+
 async function generateSeoPostForKeyword(keywordRecord) {
   const keyword = keywordRecord.fields['Keyword'];
 
   const organic = await serperSearchTop(keyword, 10);
-  const topResults = organic.slice(0, 3);
+  const editorialResults = organic.filter(r => !isUgcOrSocialDomain(r.link));
+  const ugcResults = organic.filter(r => isUgcOrSocialDomain(r.link));
+  const topResults = [...editorialResults, ...ugcResults].slice(0, 3);
 
   const scrapedSummaries = [];
   for (const result of topResults) {
@@ -8903,8 +8923,13 @@ async function generateSeoPostForKeyword(keywordRecord) {
   const usedCustomVoiceProfile = !!(savedVoiceProfile && savedVoiceProfile.trim());
   const voiceProfile = usedCustomVoiceProfile ? savedVoiceProfile : DEFAULT_SEO_VOICE_PROFILE;
 
-  const avgWordCount = scrapedSummaries.length
-    ? Math.round(scrapedSummaries.reduce((sum, s) => sum + (s.wordCount || 0), 0) / scrapedSummaries.length)
+  // Only averages pages that actually scraped successfully - a failed
+  // scrape stubs in wordCount: 0, and folding that into the average would
+  // silently pull the target length down every time a competitor page
+  // fails to scrape (which happens often for bot-blocked sites).
+  const validWordCounts = scrapedSummaries.filter(s => !s.scrapeFailed && s.wordCount > 0).map(s => s.wordCount);
+  const avgWordCount = validWordCounts.length
+    ? Math.round(validWordCounts.reduce((sum, wc) => sum + wc, 0) / validWordCounts.length)
     : 1200;
 
   const prompt = `You are writing an SEO blog post for T2C Outreach, Twenty2 Collective.
@@ -9087,6 +9112,24 @@ function slugifyForFramer(title) {
   return slug || `post-${Date.now()}`;
 }
 
+// The SDK validates fieldData against each field's *actual* type at
+// request time (typia.createAssert internally) - {type:'string', value}
+// on a field that's really e.g. formattedText or a link fails with an
+// opaque "invalid type on $input[...].fieldData.<fieldId>.value" error
+// with no field name in it. findFramerField only matches by name, not
+// type, so this checks field.type before building the entry instead of
+// assuming every matched field is a plain string - and skips (with a
+// named warning) any matched field whose type isn't one of the two this
+// feature can safely write, rather than sending a payload guaranteed to
+// fail typia's check.
+function buildFramerTextFieldEntry(field, value) {
+  if (!field) return null;
+  if (field.type === 'string') return { type: 'string', value: value || '' };
+  if (field.type === 'formattedText') return { type: 'formattedText', value: value || '', contentType: 'html' };
+  console.warn(`Framer field "${field.name}" matched but is type "${field.type}", not string/formattedText - skipping it on publish`);
+  return null;
+}
+
 async function publishToFramer(post) {
   const { connect } = await import('framer-api');
   const framer = await connect(process.env.FRAMER_PROJECT_URL, process.env.FRAMER_API_KEY);
@@ -9106,10 +9149,15 @@ async function publishToFramer(post) {
     const statusField = findFramerField(fields, 'status');
 
     const fieldData = {};
-    if (titleField) fieldData[titleField.id] = { type: 'string', value: post.title };
-    if (contentField) fieldData[contentField.id] = { type: 'formattedText', value: post.html, contentType: 'html' };
-    if (metaTitleField) fieldData[metaTitleField.id] = { type: 'string', value: post.metaTitle };
-    if (metaDescField) fieldData[metaDescField.id] = { type: 'string', value: post.metaDescription };
+    [
+      [titleField, post.title],
+      [contentField, post.html],
+      [metaTitleField, post.metaTitle],
+      [metaDescField, post.metaDescription]
+    ].forEach(([field, value]) => {
+      const entry = buildFramerTextFieldEntry(field, value);
+      if (entry) fieldData[field.id] = entry;
+    });
     if (statusField && statusField.type === 'enum') {
       const draftCase = statusField.cases.find(c => /draft/i.test(c.name));
       if (draftCase) fieldData[statusField.id] = { type: 'enum', value: draftCase.id };
