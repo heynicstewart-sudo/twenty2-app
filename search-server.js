@@ -6280,12 +6280,18 @@ app.post('/api/contacts/match-connections-screenshot', async (req, res) => {
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
 
   const { candidates, images, text } = req.body || {};
-  if (!Array.isArray(candidates) || !candidates.length) return res.status(400).json({ error: 'candidates is required' });
+  // candidates can legitimately be empty - the Logger's Log Connections
+  // mode still wants "extracted" below (every person mentioned, so it can
+  // offer importing anyone new) even when nobody is currently awaiting
+  // connection acceptance to cross-reference against.
+  const candidateList = Array.isArray(candidates) ? candidates : [];
   const hasImages = Array.isArray(images) && images.length;
   if (!hasImages && !text) return res.status(400).json({ error: 'images or text is required' });
 
   try {
-    const list = candidates.map(c => `${c.id}: ${c.name} (${c.company})`).join('\n');
+    const list = candidateList.length
+      ? candidateList.map(c => `${c.id}: ${c.name} (${c.company})`).join('\n')
+      : '(none currently awaiting connection acceptance)';
     const source = hasImages ? 'the attached screenshot(s) of a LinkedIn connections list' : 'this text pasted from a LinkedIn connections list';
     // Selecting text straight off LinkedIn's "My Network" page and pasting
     // it carries over page furniture Claude would otherwise have to guess
@@ -6304,7 +6310,16 @@ Connected on <Month Day, Year>
 Message
 
 `;
-    const promptText = `Cross-reference the names visible in ${source} against this list of contacts awaiting connection acceptance:\n${list}\n\n${textFormatNote}${hasImages ? '' : `Pasted text:\n${text}\n\n`}Return ONLY a JSON array of the contact ids (e.g. ["c4","c9"]) whose names appear as accepted connections. If none appear, return [].`;
+    // "extracted" covers EVERY person visible/mentioned, matched or not -
+    // the Logger's Log Connections mode (unlike the Roadmap caller, which
+    // only ever reads matchedIds) uses this to offer importing anyone who
+    // isn't already a contact anywhere in the CRM, not just anyone missing
+    // from the (deliberately narrow) candidates list above.
+    const promptText = `Cross-reference the names visible in ${source} against this list of contacts awaiting connection acceptance:\n${list}\n\n${textFormatNote}${hasImages ? '' : `Pasted text:\n${text}\n\n`}Return ONLY a JSON object, no markdown, no commentary, in exactly this shape:
+{ "matchedIds": ["c4","c9"], "extracted": [ { "name": "Jane Doe", "company": "Acme", "role": "Product Owner" } ] }
+
+matchedIds: contact ids from the list above whose names appear as accepted connections. Empty array if none.
+extracted: every person visible/mentioned, one entry each, regardless of whether they matched. Infer company and role from their headline where possible (e.g. "Product Owner @ Aurecon" -> company "Aurecon", role "Product Owner"); if no company is evident, use an empty string for company but still give a short best-guess role from the headline.`;
 
     const content = hasImages
       ? [...images.map(img => ({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.base64 } })), { type: 'text', text: promptText }]
@@ -6313,21 +6328,28 @@ Message
     // 200 tokens was enough for the original screenshot use case (a photo
     // only ever shows a handful of connections at once), but a large real
     // candidate pool matched against a full text paste of someone's network
-    // can genuinely need to return dozens of Airtable record ids - each
-    // ~18 characters, quoted and comma-separated - which was silently
-    // truncating mid-array into invalid JSON and surfacing as a generic
-    // "could not read that" error instead of the real matches.
-    const rawText = await callClaudeText(content, 1500);
-    let matchedIds = [];
+    // can genuinely need to return dozens of Airtable record ids plus the
+    // full extracted list below - each id is ~18 characters, quoted and
+    // comma-separated - which was silently truncating mid-array into
+    // invalid JSON and surfacing as a generic "could not read that" error
+    // instead of the real matches.
+    const rawText = await callClaudeText(content, 3000);
+    let parsed;
     try {
-      const jsonMatch = stripCodeFences(rawText).match(/\[[\s\S]*\]/);
-      matchedIds = JSON.parse(jsonMatch ? jsonMatch[0] : stripCodeFences(rawText));
+      const cleaned = stripCodeFences(rawText);
+      const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(jsonMatch ? jsonMatch[0] : cleaned);
     } catch (parseErr) {
       console.error('Match connections screenshot: malformed JSON from Claude:', rawText);
-      throw new Error('Could not parse Claude response as a JSON array');
+      throw new Error('Could not parse Claude response as JSON');
     }
 
-    res.json({ success: true, matchedIds: Array.isArray(matchedIds) ? matchedIds : [] });
+    const matchedIds = Array.isArray(parsed.matchedIds) ? parsed.matchedIds : [];
+    const extracted = (Array.isArray(parsed.extracted) ? parsed.extracted : [])
+      .filter(p => p && p.name)
+      .map(p => ({ name: String(p.name).trim(), company: p.company ? String(p.company).trim() : '', role: p.role ? String(p.role).trim() : '' }));
+
+    res.json({ success: true, matchedIds, extracted });
   } catch (err) {
     console.error('Match connections screenshot error:', err.message);
     res.status(500).json({ error: err.message });

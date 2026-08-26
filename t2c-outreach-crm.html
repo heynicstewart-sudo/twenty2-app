@@ -2803,16 +2803,26 @@ function initLoggerConnections(){
     text: '',
     shots: [],
     pendingMatches: null,
+    pendingImports: null,
+    importGridId: '',
+    creatingNewGrid: false,
+    newGridName: '',
     result: null
   };
 }
 
-// Same restriction readConnectionsScreenshot uses - only a contact who's
-// been found/opened and had a connection request sent but not yet accepted
-// (no connDate) has anything to update here; anyone already connected,
-// messaging or booked is left alone.
+// Same restriction readConnectionsScreenshot uses - only a contact whose
+// connection request has actually gone out and is still awaiting
+// acceptance has anything to update here. On real Airtable-hydrated data
+// that's state 'connectionPending' (JOURNEY_STAGE_TO_STATE's mapping for
+// Journey Stage "Connection Pending") - 'found' is a stage earlier than
+// that (no request sent yet) and was wrongly included before, which meant
+// a contact whose request actually IS pending never showed up as a
+// candidate at all. 'opened' is kept only for the local mock/demo seed
+// data (rawState.contacts), which uses it the same way; real hydration
+// never produces that value, so it's a no-op in production.
 function loggerConnectionCandidates(){
-  return state.contacts.filter(c => (c.state==='found' || c.state==='opened') && !c.connDate);
+  return state.contacts.filter(c => (c.state==='connectionPending' || c.state==='opened') && !c.connDate);
 }
 
 function renderLoggerConnectionsMode(){
@@ -2868,26 +2878,30 @@ function removeLoggerConnShot(idx){
   if(el) el.innerHTML = renderLoggerConnShotFiles();
 }
 
-// Shows the pending-confirmation checklist (see runLoggerConnectionsMatch)
-// while one is awaiting a decision, falling back to the final outcome
-// (or error) once it's been confirmed/cancelled - never both at once, since
-// pendingMatches is cleared before result is ever set.
+// Renders whichever of the two independent review steps still needs a
+// decision (see runLoggerConnectionsMatch) - either or both can be showing
+// at once, since confirming/cancelling one doesn't touch the other. Once
+// neither is pending any more, falls back to the accumulated final outcome
+// (built incrementally by confirmLoggerConnMatches/confirmLoggerImports as
+// each step resolves) or the "found nothing at all" / error case.
 function renderLoggerConnResult(){
   const lc = window.__loggerConnections;
-  if(lc.pendingMatches && lc.pendingMatches.length) return renderLoggerConnConfirmCard();
+  const parts = [];
+  if(lc.pendingMatches && lc.pendingMatches.length) parts.push(renderLoggerConnConfirmCard());
+  if(lc.pendingImports && lc.pendingImports.length) parts.push(renderLoggerConnImportCard());
+  const nothingPending = !(lc.pendingMatches && lc.pendingMatches.length) && !(lc.pendingImports && lc.pendingImports.length);
+  if(nothingPending && lc.result) parts.push(renderLoggerConnFinalCard());
+  return parts.join('');
+}
 
-  const result = lc.result;
-  if(!result) return '';
-  if(result.error) return `<div class="card" style="background:#fbe3dc;border-color:#f0c6b8;"><i class="ti ti-alert-circle" style="color:var(--danger);"></i> ${esc(result.error)}</div>`;
-  const emptyMessage = result.noneFound
-    ? " Couldn't match anyone from that - try adding more detail or a clearer screenshot"
-    : " Nothing was marked as connected";
-  return `
-  <div class="card" style="background:#eaf7f0;border-color:#c9e9d7;">
-    <i class="ti ti-circle-check" style="color:var(--success);"></i>
-    ${result.matched.length ? ` ${result.matched.length} contact${result.matched.length===1?'':'s'} marked as connected: ${result.matched.map(n=>esc(n)).join(', ')}` : emptyMessage}
-  </div>
-  `;
+function renderLoggerConnFinalCard(){
+  const result = window.__loggerConnections.result;
+  if(result.error) return `<div class="card" style="background:#fbe3dc;border-color:#f0c6b8;margin-top:10px;"><i class="ti ti-alert-circle" style="color:var(--danger);"></i> ${esc(result.error)}</div>`;
+  const lines = [];
+  if(result.matched && result.matched.length) lines.push(`${result.matched.length} contact${result.matched.length===1?'':'s'} marked as connected: ${result.matched.map(n=>esc(n)).join(', ')}`);
+  if(result.imported && result.imported.length) lines.push(`${result.imported.length} new contact${result.imported.length===1?'':'s'} imported: ${result.imported.map(n=>esc(n)).join(', ')}`);
+  if(!lines.length) lines.push(result.noneFound ? "Couldn't match anyone from that - try adding more detail or a clearer screenshot" : "Nothing was changed");
+  return `<div class="card" style="background:#eaf7f0;border-color:#c9e9d7;margin-top:10px;"><i class="ti ti-circle-check" style="color:var(--success);"></i> ${lines.join(' &middot; ')}</div>`;
 }
 
 // Nobody gets marked Connected purely off Claude's read of a screenshot/
@@ -2924,7 +2938,8 @@ function confirmLoggerConnMatches(){
   const contacts = toApply.map(p => state.contacts.find(c => c.id === p.contactId)).filter(Boolean);
   if(contacts.length) markContactsConnected(contacts);
   lc.pendingMatches = null;
-  lc.result = { matched: contacts.map(c => c.name) };
+  lc.result = lc.result || {};
+  lc.result.matched = contacts.map(c => c.name);
   if(contacts.length) toast(`${contacts.length} contact${contacts.length===1?'':'s'} marked as connected`, 'success');
   renderPage();
 }
@@ -2932,8 +2947,111 @@ function confirmLoggerConnMatches(){
 function cancelLoggerConnMatches(){
   const lc = window.__loggerConnections;
   lc.pendingMatches = null;
-  lc.result = null;
   toast('Cancelled - nothing changed', 'warn');
+  renderPage();
+}
+
+// Anyone Claude saw who isn't already a contact anywhere in the CRM (any
+// stage - see runLoggerConnectionsMatch's use of loggerFindBestContactMatch)
+// is offered here instead of being silently dropped: editable company/role
+// per row (Claude's best guess from their headline, not always right), and
+// a single grid choice for the whole batch - either an existing grid or a
+// brand new one named right here, so the rep never has to leave this card
+// to add somewhere for these contacts to land.
+function renderLoggerConnImportCard(){
+  const lc = window.__loggerConnections;
+  const pending = lc.pendingImports;
+  const useNewGrid = lc.creatingNewGrid || !state.grids.length;
+  return `
+  <div class="card" style="background:#e2f2fa;border-color:#bfe0f2;">
+    <div style="font-weight:700;font-size:12.5px;margin-bottom:8px;">${pending.length} contact${pending.length===1?'':'s'} found that aren't in your CRM yet - import them?</div>
+    ${pending.map((p,i) => `
+      <div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);">
+        <input type="checkbox" style="margin-top:9px;" ${p.checked?'checked':''} onchange="toggleLoggerImportRow(${i}, this.checked)">
+        <div style="flex:1;">
+          <div style="font-weight:700;font-size:12.5px;">${esc(p.name)}</div>
+          <div class="row" style="margin-top:4px;">
+            <input placeholder="Company" value="${esc(p.company)}" style="font-size:12px;" onchange="updateLoggerImportField(${i},'company',this.value)">
+            <input placeholder="Job title" value="${esc(p.role)}" style="font-size:12px;" onchange="updateLoggerImportField(${i},'role',this.value)">
+          </div>
+        </div>
+      </div>
+    `).join('')}
+    <div class="field" style="margin-top:10px;"><label>Add to grid</label>
+      ${useNewGrid
+        ? `<input id="loggerConnNewGridName" placeholder="New grid name" value="${esc(lc.newGridName)}" onchange="updateLoggerNewGridName(this.value)">
+           ${state.grids.length ? `<button class="btn btn-ghost btn-sm" style="margin-top:6px;" onclick="toggleLoggerImportNewGrid(false)">Use an existing grid instead</button>` : ''}`
+        : `<select onchange="setLoggerImportGrid(this.value)">
+             ${state.grids.map(g => `<option value="${esc(g.id)}" ${lc.importGridId===g.id?'selected':''}>${esc(g.name)}</option>`).join('')}
+           </select>
+           <button class="btn btn-ghost btn-sm" style="margin-top:6px;" onclick="toggleLoggerImportNewGrid(true)">+ Create new grid instead</button>`}
+    </div>
+    <div style="display:flex;gap:8px;margin-top:10px;">
+      <button class="btn btn-primary btn-sm" onclick="confirmLoggerImports()"><i class="ti ti-user-plus"></i> Import selected</button>
+      <button class="btn btn-secondary btn-sm" onclick="cancelLoggerImports()">Skip</button>
+    </div>
+  </div>
+  `;
+}
+
+function toggleLoggerImportRow(idx, checked){
+  const pending = window.__loggerConnections.pendingImports;
+  if(pending && pending[idx]) pending[idx].checked = checked;
+}
+function updateLoggerImportField(idx, field, value){
+  const pending = window.__loggerConnections.pendingImports;
+  if(pending && pending[idx]) pending[idx][field] = value;
+}
+function setLoggerImportGrid(gridId){
+  window.__loggerConnections.importGridId = gridId;
+}
+function updateLoggerNewGridName(value){
+  window.__loggerConnections.newGridName = value;
+}
+function toggleLoggerImportNewGrid(show){
+  window.__loggerConnections.creatingNewGrid = show;
+  renderPage();
+}
+
+// Temporarily points state.currentGridId at the target grid so
+// createManualGridContact (which always reads currentGrid()) lands each
+// import there, then restores it - importing from Logger shouldn't change
+// which grid the rep is actually looking at elsewhere in the app. Adds the
+// role as a grid column too, if it's a new one, before creating the
+// contact - createManualGridContact's own touchGrid sync needs to see it
+// already in place, or the synced Columns field would be one behind.
+function confirmLoggerImports(){
+  const lc = window.__loggerConnections;
+  const toImport = (lc.pendingImports || []).filter(p => p.checked);
+  if(!toImport.length){ lc.pendingImports = null; renderPage(); return; }
+
+  let gridId = lc.importGridId;
+  if(lc.creatingNewGrid || !state.grids.length){
+    const name = (document.getElementById('loggerConnNewGridName')?.value || lc.newGridName || '').trim();
+    if(!name){ toast('Name the new grid first', 'warn'); return; }
+    gridId = createGrid(name).id;
+  }
+  const grid = state.grids.find(g => g.id === gridId);
+  if(!grid){ toast('Pick a grid first', 'warn'); return; }
+
+  const prevGridId = state.currentGridId;
+  state.currentGridId = grid.id;
+  const created = toImport.map(p => {
+    if(p.role && !grid.columns.includes(p.role)) grid.columns.push(p.role);
+    return createManualGridContact(p.name, p.role, p.company, '');
+  });
+  state.currentGridId = prevGridId;
+
+  lc.pendingImports = null;
+  lc.result = lc.result || {};
+  lc.result.imported = created.map(c => c.name);
+  toast(`${created.length} contact${created.length===1?'':'s'} imported to ${grid.name}`, 'success');
+  renderPage();
+}
+
+function cancelLoggerImports(){
+  window.__loggerConnections.pendingImports = null;
+  toast('Skipped - nothing imported', 'warn');
   renderPage();
 }
 
@@ -2944,12 +3062,12 @@ async function runLoggerConnectionsMatch(){
   if(!text && !lc.shots.length){ toast('Paste some names or upload a screenshot first', 'warn'); return; }
 
   const candidates = loggerConnectionCandidates();
-  if(!candidates.length){ toast('No pending contacts to match against', 'warn'); return; }
 
   const btn = document.getElementById('loggerConnMatchBtn');
   if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Matching...'; }
   lc.result = null;
   lc.pendingMatches = null;
+  lc.pendingImports = null;
 
   try {
     const res = await fetch('/api/contacts/match-connections-screenshot', {
@@ -2967,9 +3085,26 @@ async function runLoggerConnectionsMatch(){
     const matched = candidates.filter(c => (data.matchedIds || []).includes(c.id));
     if(matched.length){
       lc.pendingMatches = matched.map(c => ({ contactId: c.id, name: c.name, company: c.company, checked: true }));
-    } else {
-      lc.result = { matched: [], noneFound: true };
     }
+
+    // Anyone Claude saw who isn't already a contact anywhere in the CRM
+    // (any stage, not just the narrow "pending" candidates above - the same
+    // fuzzy matcher the AI Assistant flow uses) is offered as a new-contact
+    // import instead, so a genuinely new connection doesn't just get
+    // silently dropped on the floor.
+    const extracted = data.extracted || [];
+    const newPeople = extracted.filter(p => !loggerFindBestContactMatch(p.name, p.company));
+    if(newPeople.length){
+      lc.pendingImports = newPeople.map(p => ({ name: p.name, company: p.company, role: p.role, checked: true }));
+      lc.importGridId = state.grids.length ? state.grids[0].id : '';
+      lc.creatingNewGrid = !state.grids.length;
+      lc.newGridName = '';
+    }
+
+    if(!lc.pendingMatches && !lc.pendingImports){
+      lc.result = { noneFound: true };
+    }
+
     lc.text = '';
     lc.shots = [];
     renderPage();
@@ -6143,7 +6278,13 @@ function removeConnectionsShot(idx){
 
 async function readConnectionsScreenshot(){
   const shots = window.__connectionsShots || [];
-  const candidates = state.contacts.filter(c => (c.state==='found' || c.state==='opened') && !c.connDate);
+  // 'connectionPending' is the real state a request-sent-awaiting-
+  // acceptance contact has once hydrated from Airtable (see
+  // JOURNEY_STAGE_TO_STATE) - 'found' is an earlier stage (no request sent
+  // yet) and was wrongly included here before, which meant this never
+  // matched anyone against a real screenshot. 'opened' stays for the local
+  // mock/demo seed data only; real hydration never produces it.
+  const candidates = state.contacts.filter(c => (c.state==='connectionPending' || c.state==='opened') && !c.connDate);
   if(!candidates.length){ toast('No pending contacts to match against a screenshot','warn'); return; }
 
   const btn = document.getElementById('readConnectionsBtn');
