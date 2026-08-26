@@ -913,10 +913,32 @@ function dayBadgeClass(days){
   return 'day-red';
 }
 
+// Excluded from every Roadmap column outright, not just left in whichever
+// one they'd otherwise fall into - a card with no recognised Sequence Stage
+// used to default straight to "Connection pending" (see the fallback below),
+// which is exactly where an Excluded/Lost contact wrongly kept showing up.
+const ROADMAP_EXCLUDED_SEQUENCE_STAGES = ['Excluded', 'Lost'];
+
+// The Roadmap is only ever rendered from renderCampaignRoadmapTab, which
+// sets window.__roadmapCampaignId before calling renderRoadmap - so this is
+// always reading the current campaign's live Sequence Stage (fetched into
+// window.__campaignSequenceStages by loadCampaignSequenceStages, a real
+// GET /api/campaign/:id/campaign-contacts call), not local state.
 function getRoadmapColumn(c){
+  const liveStage = window.__roadmapCampaignId ? campaignSequenceStageFor(c.name) : '';
+  if(ROADMAP_EXCLUDED_SEQUENCE_STAGES.includes(liveStage)) return null;
   if(c.thread.booked) return 'booked';
-  if(c.state === 'messaging') return 'messaging';
-  if(c.state === 'connected') return 'made';
+  if(liveStage === 'Connected') return 'made';
+  if(/^Message \d Sent$/.test(liveStage) || /^Pending Reply/.test(liveStage) || /^Ready for Message/.test(liveStage)) return 'messaging';
+  // Found/Connection Requested/Connection Pending/Meeting Booked (not yet
+  // separately columned) all land here, same as before this stage read
+  // sequence stage at all - as does the brief window before this campaign's
+  // Sequence Stage map has finished loading (liveStage === ''), falling
+  // back to local state just so the board isn't empty for that one render.
+  if(!liveStage){
+    if(c.state === 'messaging') return 'messaging';
+    if(c.state === 'connected') return 'made';
+  }
   return 'pending';
 }
 
@@ -6452,7 +6474,10 @@ const ROADMAP_COLS = [
 function renderRoadmap(contactsOverride){
   const contactsList = contactsOverride || state.contacts;
   const grouped = { pending:[], made:[], messaging:[], booked:[] };
-  contactsList.forEach(c => grouped[getRoadmapColumn(c)].push(c));
+  // getRoadmapColumn returns null for an Excluded/Lost contact - skip
+  // pushing rather than crashing on grouped[null], since they shouldn't
+  // appear in any column at all.
+  contactsList.forEach(c => { const col = getRoadmapColumn(c); if(col) grouped[col].push(c); });
 
   return `
   <div class="kanban" id="kanbanBoard">
