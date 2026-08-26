@@ -8440,6 +8440,599 @@ app.delete('/api/grids/:gridId/contacts', async (req, res) => {
   }
 });
 
+// ===================== SEO CONTENT ENGINE =====================
+// Marketing tab > SEO sub-tab: a Ubersuggest keyword library, an SEO voice
+// profile (a dedicated field on the Settings singleton, separate from the
+// LinkedIn/blog voice profile on Content Settings above), Serper+Pexels+
+// Claude blog post generation against an 80-point on-page checklist, and
+// publishing straight to Framer's CMS via the real "framer-api" Server API
+// SDK (see publishToFramer below - it's a stateful connect/addItems/publish
+// session, not a plain REST POST, so this file's usual airtableRequest-style
+// fetch() wrapper doesn't apply to it).
+
+const KEYWORDS_TABLE = 'Keywords';
+const SITEMAP_TABLE = 'Sitemap';
+
+const DEFAULT_SEO_VOICE_PROFILE = `Twenty2 Collective (T2C) is a Perth, WA-based Agile and change consultancy. Write with authority and practical insight for corporate professionals - programme leads, transformation execs, PMO heads - who are tired of theory and want what actually works on the ground. Tone: direct, no jargon for its own sake, occasional dry humour, always backed by a concrete example, stat, or story from real client work. T2C has opinions: Agile theatre without genuine behaviour change wastes a budget; most transformation failures are change management failures, not process failures; frameworks are a starting point, not a religion. UK/AU English, no em dashes.`;
+
+// ---- Airtable schema provisioning ----
+// airtableRequest's typecast:true only converts a value into an *existing*
+// field's type (and, for single selects, adds a new option) - it never
+// creates a table or field that isn't there yet. The Keywords/Sitemap
+// tables and the Settings.SEO Voice Profile field are provisioned on first
+// use via Airtable's separate Metadata API, which needs the connected PAT
+// to carry the schema.bases:write scope in addition to the data scopes
+// this file already relies on elsewhere - if it doesn't, these throw with
+// Airtable's own permission error text surfaced straight to the caller.
+const AIRTABLE_META_URL = `https://api.airtable.com/v0/meta/bases/${AIRTABLE_BASE_ID}`;
+let airtableSchemaCache = null;
+
+async function fetchAirtableSchema(force) {
+  if (airtableSchemaCache && !force) return airtableSchemaCache;
+  const res = await airtableFetchWithRetry(`${AIRTABLE_META_URL}/tables`, {
+    headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` }
+  });
+  if (!res.ok) throw new Error(`Airtable schema fetch error ${res.status}: ${await res.text()}`);
+  const data = await res.json();
+  airtableSchemaCache = data.tables || [];
+  return airtableSchemaCache;
+}
+
+async function ensureAirtableTable(tableName, fields) {
+  const tables = await fetchAirtableSchema();
+  let table = tables.find(t => t.name === tableName);
+  if (table) return table;
+  const res = await airtableFetchWithRetry(`${AIRTABLE_META_URL}/tables`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: tableName, fields })
+  });
+  if (!res.ok) throw new Error(`Could not create Airtable table "${tableName}": ${res.status} ${await res.text()}`);
+  table = await res.json();
+  airtableSchemaCache = null;
+  return table;
+}
+
+async function ensureAirtableField(tableName, fieldName, fieldDef) {
+  const tables = await fetchAirtableSchema();
+  const table = tables.find(t => t.name === tableName);
+  if (!table) throw new Error(`Airtable table "${tableName}" not found`);
+  if (table.fields.some(f => f.name === fieldName)) return;
+  const res = await airtableFetchWithRetry(`${AIRTABLE_META_URL}/tables/${table.id}/fields`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: fieldName, ...fieldDef })
+  });
+  if (!res.ok) throw new Error(`Could not create field "${fieldName}" on "${tableName}": ${res.status} ${await res.text()}`);
+  airtableSchemaCache = null;
+}
+
+async function ensureKeywordsTable() {
+  return ensureAirtableTable(KEYWORDS_TABLE, [
+    { name: 'Keyword', type: 'singleLineText' },
+    { name: 'Volume', type: 'number', options: { precision: 0 } },
+    { name: 'KD', type: 'number', options: { precision: 0 } },
+    { name: 'Intent', type: 'singleLineText' },
+    { name: 'Status', type: 'singleSelect', options: { choices: [{ name: 'Queued' }, { name: 'Generating' }, { name: 'Generated' }, { name: 'Published' }] } },
+    { name: 'Post Title', type: 'singleLineText' },
+    { name: 'Post HTML', type: 'multilineText' },
+    { name: 'Meta Title', type: 'singleLineText' },
+    { name: 'Meta Description', type: 'multilineText' },
+    { name: 'Image URLs', type: 'multilineText' },
+    { name: 'Published URL', type: 'url' },
+    { name: 'Suggested Reason', type: 'multilineText' },
+    { name: 'Created Date', type: 'date', options: { dateFormat: { name: 'iso' } } }
+  ]);
+}
+
+async function ensureSitemapTable() {
+  return ensureAirtableTable(SITEMAP_TABLE, [
+    { name: 'URL', type: 'url' },
+    { name: 'Title', type: 'singleLineText' },
+    { name: 'Published Date', type: 'date', options: { dateFormat: { name: 'iso' } } },
+    { name: 'Keyword', type: 'singleLineText' }
+  ]);
+}
+
+async function ensureSeoVoiceProfileField() {
+  return ensureAirtableField(SETTINGS_TABLE, 'SEO Voice Profile', { type: 'multilineText' });
+}
+
+function getSeoVoiceProfileText(settingsFields) {
+  const v = settingsFields && settingsFields['SEO Voice Profile'];
+  return v && v.trim() ? v : DEFAULT_SEO_VOICE_PROFILE;
+}
+
+function safeJsonArray(raw) {
+  if (!raw) return [];
+  try { const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed : []; } catch (e) { return []; }
+}
+
+app.get('/api/seo/voice-profile', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const record = await getSettingsRecord();
+    const voiceProfile = (record && record.fields['SEO Voice Profile']) || '';
+    res.json({ voiceProfile, defaultVoiceProfile: DEFAULT_SEO_VOICE_PROFILE });
+  } catch (err) {
+    console.error('Get SEO voice profile error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/seo/voice-profile', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { voiceProfile } = req.body;
+  try {
+    await ensureSeoVoiceProfileField();
+    const settingsRecord = await getOrCreateSettingsRecord();
+    await airtableRequest('PATCH', SETTINGS_TABLE, {
+      records: [{ id: settingsRecord.id, fields: { 'SEO Voice Profile': voiceProfile || '' } }],
+      typecast: true
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Save SEO voice profile error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Keyword library ----
+
+app.post('/api/seo/keywords/import', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+  if (!rows.length) return res.status(400).json({ error: 'No rows to import' });
+  try {
+    await ensureKeywordsTable();
+    const existing = await airtableFetchAllRecords(KEYWORDS_TABLE);
+    const existingKeywords = new Set(existing.map(r => (r.fields['Keyword'] || '').toLowerCase().trim()));
+    const today = new Date().toISOString().slice(0, 10);
+    const seenInFile = new Set();
+    const toCreate = [];
+    rows.forEach(r => {
+      const keyword = (r.keyword || '').trim();
+      if (!keyword) return;
+      const key = keyword.toLowerCase();
+      if (existingKeywords.has(key) || seenInFile.has(key)) return;
+      seenInFile.add(key);
+      toCreate.push({
+        fields: {
+          'Keyword': keyword,
+          'Volume': Number(r.volume) || 0,
+          'KD': Number(r.kd) || 0,
+          'Intent': r.intent || '',
+          'Status': 'Queued',
+          'Created Date': today
+        }
+      });
+    });
+    for (let i = 0; i < toCreate.length; i += 10) {
+      await airtableRequest('POST', KEYWORDS_TABLE, { records: toCreate.slice(i, i + 10), typecast: true });
+    }
+    res.json({ success: true, created: toCreate.length, skipped: rows.length - toCreate.length });
+  } catch (err) {
+    console.error('Import SEO keywords error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/seo/keywords', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    await ensureKeywordsTable();
+    const records = await airtableFetchAllRecords(KEYWORDS_TABLE);
+    const keywords = records
+      .map(r => ({
+        id: r.id,
+        keyword: r.fields['Keyword'] || '',
+        volume: r.fields['Volume'] || 0,
+        kd: r.fields['KD'] || 0,
+        intent: r.fields['Intent'] || '',
+        status: r.fields['Status'] || 'Queued',
+        postTitle: r.fields['Post Title'] || '',
+        postHtml: r.fields['Post HTML'] || '',
+        metaTitle: r.fields['Meta Title'] || '',
+        metaDescription: r.fields['Meta Description'] || '',
+        imageUrls: safeJsonArray(r.fields['Image URLs']),
+        publishedUrl: r.fields['Published URL'] || '',
+        suggestedReason: r.fields['Suggested Reason'] || '',
+        createdDate: r.fields['Created Date'] || ''
+      }))
+      .sort((a, b) => (b.volume || 0) - (a.volume || 0));
+    res.json({ keywords });
+  } catch (err) {
+    console.error('List SEO keywords error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/seo/keywords/:id/save', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { title, html, metaTitle, metaDescription } = req.body;
+  try {
+    const fields = {};
+    if (title !== undefined) fields['Post Title'] = title;
+    if (html !== undefined) fields['Post HTML'] = html;
+    if (metaTitle !== undefined) fields['Meta Title'] = metaTitle;
+    if (metaDescription !== undefined) fields['Meta Description'] = metaDescription;
+    if (!Object.keys(fields).length) return res.status(400).json({ error: 'Nothing to save' });
+    await airtableRequest('PATCH', KEYWORDS_TABLE, { records: [{ id: req.params.id, fields }], typecast: true });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Save SEO post edits error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/seo/keywords/add-to-queue', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { keyword, reason } = req.body;
+  if (!keyword) return res.status(400).json({ error: 'keyword is required' });
+  try {
+    await ensureKeywordsTable();
+    const existing = await airtableFetchAllRecords(KEYWORDS_TABLE);
+    if (existing.some(r => (r.fields['Keyword'] || '').toLowerCase().trim() === keyword.toLowerCase().trim())) {
+      return res.status(409).json({ error: 'That keyword is already in the library' });
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    const data = await airtableRequest('POST', KEYWORDS_TABLE, {
+      records: [{ fields: { 'Keyword': keyword.trim(), 'Status': 'Queued', 'Suggested Reason': reason || '', 'Created Date': today } }],
+      typecast: true
+    });
+    res.json({ success: true, id: data.records[0].id });
+  } catch (err) {
+    console.error('Add SEO keyword to queue error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Suggested keywords ----
+// Same "mine recent logged activity with Claude" shape as
+// detectContentSignals() above, but pointed at Touch Points + Research
+// Events (CVC responses) + Contacts.Job Change Signal instead of Touch
+// Points + Deals, and returning keyword ideas rather than content themes.
+
+app.get('/api/seo/suggest-keywords', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  try {
+    const [tpRecords, researchRecords, contactRecords] = await Promise.all([
+      airtableFetchAllRecords('Touch Points'),
+      airtableFetchAllRecords('Research Events'),
+      airtableFetchAllRecords('Contacts')
+    ]);
+
+    const recentTouchPoints = tpRecords
+      .filter(r => r.fields['Summary'])
+      .sort((a, b) => new Date(b.fields['Date'] || 0) - new Date(a.fields['Date'] || 0))
+      .slice(0, 50)
+      .map(r => r.fields['Summary']);
+
+    const cvcInsights = researchRecords
+      .map(r => [r.fields['Extracted Themes'], r.fields['Key Pain Points'], r.fields['Hot Topics']].filter(Boolean).join(' | '))
+      .filter(Boolean);
+
+    const jobChangeSignals = contactRecords
+      .filter(r => r.fields['Job Change Signal'])
+      .map(r => r.fields['Job Change Signal']);
+
+    if (!recentTouchPoints.length && !cvcInsights.length && !jobChangeSignals.length) {
+      return res.json({ suggestions: [] });
+    }
+
+    const prompt = `You are an SEO content strategist for T2C Outreach, Twenty2 Collective, a Perth-based Agile and change consultancy.
+
+Analyse this real activity from the CRM to find blog keyword opportunities:
+
+RECENT TOUCH POINT NOTES (${recentTouchPoints.length}):
+${JSON.stringify(recentTouchPoints)}
+
+CVC / RESEARCH EVENT INSIGHTS (${cvcInsights.length}):
+${JSON.stringify(cvcInsights)}
+
+JOB CHANGE SIGNALS (${jobChangeSignals.length}):
+${JSON.stringify(jobChangeSignals)}
+
+Identify the language, pain points, and topics being discussed, and suggest 5-10 blog post keywords that would resonate with this audience and have plausible search intent. For each, give a one-line explanation of why it's relevant based on what you found above.
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "suggestions": [ { "keyword": string, "reason": string } ] }`;
+
+    const parsed = await callClaudeJson(prompt, 2000);
+    res.json({ suggestions: parsed.suggestions || [] });
+  } catch (err) {
+    console.error('Suggest SEO keywords error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Post generation ----
+
+async function serperSearchTop(query, num) {
+  const serperRes = await fetch(SERPER_URL, {
+    method: 'POST',
+    headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ q: query, num: num || 10 })
+  });
+  if (!serperRes.ok) throw new Error(`Serper API error: ${serperRes.status}`);
+  const data = await serperRes.json();
+  return data.organic || [];
+}
+
+async function serperScrapePage(url) {
+  const scrapeRes = await fetch('https://scrape.serper.dev', {
+    method: 'POST',
+    headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url })
+  });
+  if (!scrapeRes.ok) throw new Error(`Serper scrape error: ${scrapeRes.status}`);
+  return scrapeRes.json();
+}
+
+// Serper's scrape response shape isn't documented to a fixed schema (same
+// uncertainty already flagged on the LinkedIn org id scrape route above) -
+// this reads whichever of text/html/markdown came back and is defensive
+// about all of them, since it's only used for a rough structural summary
+// (heading list + word count), not exact reproduction.
+function summarizeScrapedPage(url, scraped) {
+  const text = scraped.text || scraped.markdown || '';
+  const html = scraped.html || '';
+  const wordCount = text ? text.trim().split(/\s+/).filter(Boolean).length : 0;
+  const headings = [];
+  if (html) {
+    const headingMatches = html.matchAll(/<h([1-3])[^>]*>(.*?)<\/h\1>/gis);
+    for (const m of headingMatches) {
+      const cleaned = m[2].replace(/<[^>]+>/g, '').trim();
+      if (cleaned) headings.push({ level: Number(m[1]), text: cleaned });
+    }
+  }
+  return { url, title: scraped.title || '', wordCount, headings: headings.slice(0, 40) };
+}
+
+async function fetchPexelsImages(query, count) {
+  if (!process.env.PEXELS_API_KEY) return [];
+  const pexelsRes = await fetch(`https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=${count || 3}&orientation=landscape`, {
+    headers: { Authorization: process.env.PEXELS_API_KEY }
+  });
+  if (!pexelsRes.ok) throw new Error(`Pexels API error: ${pexelsRes.status}`);
+  const data = await pexelsRes.json();
+  return (data.photos || []).map(p => ({
+    url: (p.src && (p.src.large2x || p.src.large || p.src.original)) || '',
+    alt: p.alt || query,
+    photographer: p.photographer || '',
+    pageUrl: p.url || ''
+  })).filter(img => img.url);
+}
+
+const SEO_CHECKLIST = `Apply this on-page SEO checklist:
+1. Primary keyword in the H1
+2. Primary keyword in the meta title
+3. Primary keyword in the meta description
+4. Primary keyword in the first paragraph (within the first 100 words)
+5. At least 3 subheadings (H2/H3) beyond the H1
+6. A keyword cluster of 5-8 closely related terms woven naturally throughout, not just the primary keyword repeated
+7. Natural keyword density between 1-2% for the primary keyword
+8. Every image has descriptive alt text that includes the keyword or a close variant
+9. Exactly one H1, multiple H2s, and H3s nested under relevant H2s where useful
+10. 2-3 internal links to other T2C blog posts, as placeholder URLs like /blog/related-post-slug
+11. 2-3 external links to real, relevant, authoritative outside sources
+12. An FAQ section with 4-6 questions targeting related search queries, each with a real answer
+13. A clear call to action at the end, pointing to a specific T2C service
+14. Meta title under 60 characters
+15. Meta description under 160 characters`;
+
+async function generateSeoPostForKeyword(keywordRecord) {
+  const keyword = keywordRecord.fields['Keyword'];
+
+  const organic = await serperSearchTop(keyword, 10);
+  const topResults = organic.slice(0, 3);
+
+  const scrapedSummaries = [];
+  for (const result of topResults) {
+    try {
+      const scraped = await serperScrapePage(result.link);
+      scrapedSummaries.push(summarizeScrapedPage(result.link, scraped));
+    } catch (err) {
+      console.warn('SEO scrape failed for', result.link, '-', err.message);
+      scrapedSummaries.push({ url: result.link, title: result.title || '', wordCount: 0, headings: [], scrapeFailed: true });
+    }
+  }
+
+  let images = [];
+  try { images = await fetchPexelsImages(keyword, 3); } catch (err) { console.warn('Pexels fetch failed:', err.message); }
+
+  const settingsRecord = await getSettingsRecord();
+  const voiceProfile = getSeoVoiceProfileText(settingsRecord ? settingsRecord.fields : {});
+
+  const avgWordCount = scrapedSummaries.length
+    ? Math.round(scrapedSummaries.reduce((sum, s) => sum + (s.wordCount || 0), 0) / scrapedSummaries.length)
+    : 1200;
+
+  const prompt = `You are writing an SEO blog post for T2C Outreach, Twenty2 Collective.
+
+VOICE PROFILE:
+${voiceProfile}
+
+PRIMARY KEYWORD: "${keyword}"
+
+TOP-RANKING PAGES FOR THIS KEYWORD (match the average structure and topic coverage of these):
+${scrapedSummaries.map((s, i) => `${i + 1}. ${s.url}${s.title ? ' - "' + s.title + '"' : ''}
+   Approx word count: ${s.wordCount || 'unknown'}
+   Headings: ${s.headings.length ? s.headings.map(h => `H${h.level}: ${h.text}`).join(' | ') : 'not extracted'}`).join('\n\n')}
+
+Average competitor length: approximately ${avgWordCount} words - write to a similar length.
+
+AVAILABLE IMAGES (place one <img> per image, using the exact src URL given and alt text that includes the primary keyword):
+${images.map((img, i) => `${i + 1}. src="${img.url}" - subject: ${img.alt}`).join('\n') || 'none available - write without image placements'}
+
+${SEO_CHECKLIST}
+
+Write a full SEO blog post as clean HTML - a single string of HTML using h1/h2/h3/p/ul/li/a/img tags, no <html>/<head>/<body> wrapper. Internal links: <a href="/blog/relevant-slug">. External links: <a href="..." target="_blank" rel="noopener"> to real, well-known, relevant domains. UK/AU English, no em dashes, in T2C's voice as described above.
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "title": string, "html": string, "metaTitle": string (under 60 characters), "metaDescription": string (under 160 characters) }`;
+
+  const drafted = await callClaudeJson(prompt, 8000);
+  return {
+    title: drafted.title || keyword,
+    html: drafted.html || '',
+    metaTitle: (drafted.metaTitle || '').slice(0, 60),
+    metaDescription: (drafted.metaDescription || '').slice(0, 160),
+    images
+  };
+}
+
+app.post('/api/seo/generate-post', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  if (!process.env.SERPER_API_KEY) return res.status(500).json({ error: 'SERPER_API_KEY not configured' });
+
+  const { keywordId } = req.body;
+  if (!keywordId) return res.status(400).json({ error: 'keywordId is required' });
+
+  try {
+    await ensureKeywordsTable();
+    const keywordRecord = await airtableGetRecord(KEYWORDS_TABLE, keywordId);
+    if (!keywordRecord) return res.status(404).json({ error: 'Keyword not found' });
+
+    airtableRequest('PATCH', KEYWORDS_TABLE, { records: [{ id: keywordId, fields: { 'Status': 'Generating' } }], typecast: true })
+      .catch(err => console.warn('Could not mark keyword Generating:', err.message));
+
+    const post = await generateSeoPostForKeyword(keywordRecord);
+
+    await airtableRequest('PATCH', KEYWORDS_TABLE, {
+      records: [{
+        id: keywordId,
+        fields: {
+          'Post Title': post.title,
+          'Post HTML': post.html,
+          'Meta Title': post.metaTitle,
+          'Meta Description': post.metaDescription,
+          'Image URLs': JSON.stringify(post.images),
+          'Status': 'Generated'
+        }
+      }],
+      typecast: true
+    });
+
+    res.json({ success: true, keywordId, title: post.title, html: post.html, metaTitle: post.metaTitle, metaDescription: post.metaDescription, images: post.images, status: 'Generated' });
+  } catch (err) {
+    console.error('Generate SEO post error:', err.message);
+    airtableRequest('PATCH', KEYWORDS_TABLE, { records: [{ id: keywordId, fields: { 'Status': 'Queued' } }], typecast: true })
+      .catch(() => {});
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Publish to Framer ----
+// Framer's CMS write path is a stateful Server API connection, not a plain
+// REST POST: the "framer-api" npm package (ESM-only, hence the dynamic
+// import from this CommonJS file) opens a session with connect(), and
+// collection.addItems()/framer.publish() run over it before disconnect().
+// The target collection's field names aren't known ahead of time, so
+// fields are matched by name (case-insensitive substring) via
+// FRAMER_FIELD_ALIASES below - the same defensive, schema-not-fully-
+// confirmed approach this file already uses for the LinkedIn org id scrape
+// route. Requires FRAMER_API_KEY and FRAMER_PROJECT_URL (e.g.
+// "https://framer.com/projects/Website--aabbccdd1122") in the environment;
+// FRAMER_BLOG_COLLECTION_NAME and FRAMER_SITE_URL are optional overrides.
+
+const FRAMER_FIELD_ALIASES = {
+  title: ['title', 'name', 'headline'],
+  content: ['content', 'body', 'post', 'article'],
+  metaTitle: ['meta title', 'seo title'],
+  metaDescription: ['meta description', 'seo description', 'excerpt', 'summary']
+};
+
+function findFramerField(fields, aliasKey) {
+  const aliases = FRAMER_FIELD_ALIASES[aliasKey] || [];
+  return fields.find(f => aliases.some(alias => f.name.toLowerCase().includes(alias)));
+}
+
+function slugifyForFramer(title) {
+  const slug = (title || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '').slice(0, 80);
+  return slug || `post-${Date.now()}`;
+}
+
+async function publishToFramer(post) {
+  const { connect } = await import('framer-api');
+  const framer = await connect(process.env.FRAMER_PROJECT_URL, process.env.FRAMER_API_KEY);
+  try {
+    const collections = await framer.getCollections();
+    if (!collections.length) throw new Error('No CMS collections found in the connected Framer project');
+    const nameHint = process.env.FRAMER_BLOG_COLLECTION_NAME;
+    const collection = (nameHint && collections.find(c => c.name.toLowerCase() === nameHint.toLowerCase()))
+      || collections.find(c => /blog|post|article/i.test(c.name))
+      || collections[0];
+
+    const fields = await collection.getFields();
+    const titleField = findFramerField(fields, 'title');
+    const contentField = findFramerField(fields, 'content');
+    const metaTitleField = findFramerField(fields, 'metaTitle');
+    const metaDescField = findFramerField(fields, 'metaDescription');
+
+    const fieldData = {};
+    if (titleField) fieldData[titleField.id] = { type: 'string', value: post.title };
+    if (contentField) fieldData[contentField.id] = { type: 'formattedText', value: post.html, contentType: 'html' };
+    if (metaTitleField) fieldData[metaTitleField.id] = { type: 'string', value: post.metaTitle };
+    if (metaDescField) fieldData[metaDescField.id] = { type: 'string', value: post.metaDescription };
+
+    const slug = slugifyForFramer(post.title);
+    await collection.addItems([{ slug, fieldData }]);
+    await framer.publish();
+
+    const siteUrl = (process.env.FRAMER_SITE_URL || '').replace(/\/$/, '');
+    const url = siteUrl ? `${siteUrl}/${slug}` : slug;
+    return { url, slug, collectionName: collection.name };
+  } finally {
+    await framer.disconnect();
+  }
+}
+
+app.post('/api/seo/publish', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.FRAMER_API_KEY) return res.status(500).json({ error: 'FRAMER_API_KEY not configured' });
+  if (!process.env.FRAMER_PROJECT_URL) return res.status(500).json({ error: 'FRAMER_PROJECT_URL not configured' });
+
+  const { keywordId } = req.body;
+  if (!keywordId) return res.status(400).json({ error: 'keywordId is required' });
+
+  try {
+    await ensureKeywordsTable();
+    await ensureSitemapTable();
+    const keywordRecord = await airtableGetRecord(KEYWORDS_TABLE, keywordId);
+    if (!keywordRecord) return res.status(404).json({ error: 'Keyword not found' });
+    const kf = keywordRecord.fields;
+    if (!kf['Post HTML']) return res.status(400).json({ error: 'This keyword has no generated post to publish yet' });
+
+    const post = {
+      title: kf['Post Title'] || kf['Keyword'],
+      html: kf['Post HTML'],
+      metaTitle: kf['Meta Title'] || '',
+      metaDescription: kf['Meta Description'] || ''
+    };
+
+    const published = await publishToFramer(post);
+    const today = new Date().toISOString().slice(0, 10);
+
+    await airtableRequest('POST', SITEMAP_TABLE, {
+      records: [{ fields: { 'URL': published.url, 'Title': post.title, 'Published Date': today, 'Keyword': kf['Keyword'] || '' } }],
+      typecast: true
+    });
+
+    await airtableRequest('PATCH', KEYWORDS_TABLE, {
+      records: [{ id: keywordId, fields: { 'Status': 'Published', 'Published URL': published.url } }],
+      typecast: true
+    });
+
+    res.json({ success: true, url: published.url });
+  } catch (err) {
+    console.error('Publish SEO post error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ===================== SCHEDULED SYNC JOBS =====================
 // Both run silently in the background and never block the UI - failures
 // are logged, not thrown, same as every other cron-eligible job in this

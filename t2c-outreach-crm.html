@@ -1357,6 +1357,9 @@ function afterRender(page){
     if((tab === 'drafts' || tab === 'calendar') && window.__contentDrafts === undefined) loadContentDrafts();
     if(tab === 'performance' && window.__contentPerformance === undefined) loadContentPerformance();
     if(tab === 'performance' && window.__marcusJobStatus === undefined) checkMarcusJobStatus();
+    if(tab === 'seo' && window.__seoKeywords === undefined) loadSeoKeywords();
+    if(tab === 'seo' && window.__seoSuggestions === undefined) loadSeoSuggestions();
+    if(tab === 'seo' && window.__seoVoiceProfile === undefined) loadSeoVoiceProfile();
     if(tab === 'settings' && window.__contentSettings === undefined) loadContentSettings();
   }
   if(page === 'home' && window.__homeContactSignals === undefined) loadHomeContactSignals();
@@ -11656,7 +11659,7 @@ function renderLearningResult(kind, data, recordCount){
 // campaign-name-not-id scoping convention (the backend resolves a campaign
 // name to its Airtable record id itself, same as sales-overview/deals).
 
-const CONTENT_SUBTABS = [['signals','Signals'],['drafts','Draft Centre'],['calendar','Calendar'],['performance','My Performance'],['settings','Settings']];
+const CONTENT_SUBTABS = [['signals','Signals'],['drafts','Draft Centre'],['calendar','Calendar'],['performance','My Performance'],['seo','SEO'],['settings','Settings']];
 const CONTENT_FORMATS = ['LinkedIn Post','Blog','Newsletter'];
 const CONTENT_FORMAT_META = {
   'LinkedIn Post': { dotClass:'format-linkedin', label:'LinkedIn' },
@@ -11681,6 +11684,7 @@ function renderContent(){
   ${tab==='drafts' ? renderContentDraftsTab() : ''}
   ${tab==='calendar' ? renderContentCalendarTab() : ''}
   ${tab==='performance' ? renderContentPerformanceTab() : ''}
+  ${tab==='seo' ? renderContentSeoTab() : ''}
   ${tab==='settings' ? renderContentSettingsTab() : ''}
   `;
 }
@@ -12445,6 +12449,415 @@ function startMarcusJobPoll(){
   };
   tick();
   window.__marcusJobPollTimer = setInterval(tick, 5000);
+}
+
+/* ---- SEO sub-tab ---- */
+// Keyword Library (Ubersuggest CSV import), Content Queue (Queued keywords
+// by volume), Suggested Keywords (mined from touch points/CVC/job change
+// signals), and the SEO Voice Profile setting - all backed by the Keywords
+// table via /api/seo/*. window.__seoPreview holds the currently open
+// generate/edit/publish panel for one keyword; null/undefined means show
+// the library view instead.
+
+const SEO_KEYWORD_STATUSES = ['Queued','Generating','Generated','Published'];
+const SEO_STATUS_TAG_CLASS = { Queued:'tag-pending', Generating:'tag-messaging', Generated:'tag-started', Published:'tag-won' };
+
+function seoStatusTag(status){
+  return `<span class="tag ${SEO_STATUS_TAG_CLASS[status]||'tag-pending'}">${esc(status||'Queued')}</span>`;
+}
+
+async function loadSeoKeywords(){
+  try {
+    const res = await fetch('/api/seo/keywords');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__seoKeywords = data.keywords || [];
+  } catch(err){
+    window.__seoKeywords = { error: err.message };
+  }
+  if(state.currentPage === 'content' && window.__contentSubTab === 'seo') renderPage();
+}
+
+async function loadSeoSuggestions(force){
+  if(window.__seoSuggestions !== undefined && !force) return;
+  window.__seoSuggestionsLoading = true;
+  if(force) renderPage();
+  try {
+    const res = await fetch('/api/seo/suggest-keywords');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__seoSuggestions = data.suggestions || [];
+  } catch(err){
+    window.__seoSuggestions = { error: err.message };
+  }
+  window.__seoSuggestionsLoading = false;
+  if(state.currentPage === 'content' && window.__contentSubTab === 'seo') renderPage();
+}
+
+async function loadSeoVoiceProfile(){
+  try {
+    const res = await fetch('/api/seo/voice-profile');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__seoVoiceProfile = data;
+  } catch(err){
+    window.__seoVoiceProfile = { error: err.message };
+  }
+  if(state.currentPage === 'content' && window.__contentSubTab === 'seo') renderPage();
+}
+
+function renderContentSeoTab(){
+  if(window.__seoPreview) return renderSeoPreviewPanel();
+  return `
+  <div class="card" style="margin-bottom:18px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:10px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-key"></i> Keyword Library</div>
+      <div>
+        <input type="file" id="seoKeywordCsvInput" accept=".csv" style="display:none;" onchange="handleSeoKeywordCsv(event)">
+        <button class="btn btn-primary btn-sm" onclick="document.getElementById('seoKeywordCsvInput').click()"><i class="ti ti-upload"></i> Upload Ubersuggest CSV</button>
+      </div>
+    </div>
+    ${renderSeoKeywordFilterBar()}
+    ${renderSeoKeywordTable(seoFilteredKeywords())}
+  </div>
+
+  <div class="card" style="margin-bottom:18px;">
+    <div class="section-title"><i class="ti ti-list-check"></i> Content Queue</div>
+    <p class="muted" style="font-size:12px;margin-bottom:10px;">Queued keywords, highest search volume first.</p>
+    ${renderSeoKeywordTable(seoQueuedKeywords())}
+  </div>
+
+  <div class="card" style="margin-bottom:18px;">
+    <div class="section-title"><i class="ti ti-bulb"></i> Suggested Keywords</div>
+    <p class="muted" style="font-size:12px;margin-bottom:10px;">Mined from recent touch points, CVC responses, and job change signals.</p>
+    <button class="btn btn-secondary btn-sm" style="margin-bottom:10px;" onclick="loadSeoSuggestions(true)"><i class="ti ti-refresh"></i> Refresh suggestions</button>
+    ${renderSeoSuggestions()}
+  </div>
+
+  <div class="card">
+    <div class="section-title"><i class="ti ti-microphone-2"></i> SEO Voice Profile</div>
+    <p class="muted" style="font-size:12px;margin-bottom:10px;">Read by the Engine before every generated post. Leave blank to use T2C's default profile.</p>
+    ${renderSeoVoiceProfileEditor()}
+  </div>
+  `;
+}
+
+function seoFilteredKeywords(){
+  const list = window.__seoKeywords;
+  if(!Array.isArray(list)) return list;
+  const filter = window.__seoKeywordFilter || '';
+  return filter ? list.filter(k => k.status === filter) : list;
+}
+
+function seoQueuedKeywords(){
+  const list = window.__seoKeywords;
+  if(!Array.isArray(list)) return list;
+  return list.filter(k => k.status === 'Queued').slice().sort((a,b) => (b.volume||0) - (a.volume||0));
+}
+
+function setSeoKeywordFilter(val){ window.__seoKeywordFilter = val; renderPage(); }
+
+function renderSeoKeywordFilterBar(){
+  return `
+  <div style="margin-bottom:10px;">
+    <select id="seoKeywordFilterSelect" onchange="setSeoKeywordFilter(this.value)" style="width:auto;">
+      <option value="">All statuses</option>
+      ${SEO_KEYWORD_STATUSES.map(s => `<option value="${s}" ${(window.__seoKeywordFilter||'')===s?'selected':''}>${s}</option>`).join('')}
+    </select>
+  </div>`;
+}
+
+function renderSeoKeywordTable(list){
+  if(!list) return '<div class="muted"><i class="ti ti-loader-2"></i> Loading keywords...</div>';
+  if(list.error) return `<div class="muted">Could not load keywords: ${esc(list.error)}</div>`;
+  if(!list.length) return '<div class="empty-state">No keywords yet. Upload a Ubersuggest CSV export to get started.</div>';
+  return `
+  <div class="perf-table-wrap">
+  <table class="perf-table">
+    <thead><tr><th>Keyword</th><th>Volume</th><th>KD</th><th>Intent</th><th>Status</th><th></th></tr></thead>
+    <tbody>
+    ${list.map(k => `
+      <tr>
+        <td>${esc(k.keyword)}</td>
+        <td>${k.volume ? k.volume.toLocaleString() : '—'}</td>
+        <td>${k.kd || '—'}</td>
+        <td>${esc(k.intent || '—')}</td>
+        <td>${seoStatusTag(k.status)}</td>
+        <td>
+          ${k.status === 'Generated' || k.status === 'Published'
+            ? `<button class="btn btn-ghost btn-sm" onclick="openSeoPreview('${k.id}')"><i class="ti ti-eye"></i> View</button>`
+            : `<button class="btn btn-primary btn-sm" ${k.status==='Generating'?'disabled':''} onclick="generateSeoPost('${k.id}')"><i class="ti ${k.status==='Generating'?'ti-loader-2':'ti-sparkles'}"></i> ${k.status==='Generating'?'Generating...':'Generate post'}</button>`
+          }
+        </td>
+      </tr>
+    `).join('')}
+    </tbody>
+  </table>
+  </div>`;
+}
+
+async function handleSeoKeywordCsv(event){
+  const file = event.target.files && event.target.files[0];
+  event.target.value = '';
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const rows = parseCsv(String(reader.result));
+    if(rows.length < 2){ toast('That CSV looks empty', 'warn'); return; }
+    const headers = rows[0].map(h => h.trim().toLowerCase());
+    const idx = {
+      keyword: headers.findIndex(h => h.includes('keyword')),
+      volume: headers.findIndex(h => h.includes('volume')),
+      kd: headers.findIndex(h => (h.includes('difficulty') || h === 'kd') && !h.includes('paid')),
+      intent: headers.findIndex(h => h.includes('intent'))
+    };
+    if(idx.keyword === -1){ toast('Could not find a Keyword column in that CSV', 'warn'); return; }
+    const parsedRows = rows.slice(1).map(r => ({
+      keyword: (r[idx.keyword] || '').trim(),
+      volume: idx.volume !== -1 ? (r[idx.volume] || '').replace(/[^0-9.]/g,'') : '',
+      kd: idx.kd !== -1 ? (r[idx.kd] || '').replace(/[^0-9.]/g,'') : '',
+      intent: idx.intent !== -1 ? (r[idx.intent] || '').trim() : ''
+    })).filter(r => r.keyword);
+    if(!parsedRows.length){ toast('No keyword rows found in that CSV', 'warn'); return; }
+    importSeoKeywords(parsedRows);
+  };
+  reader.onerror = () => toast('Could not read that file', 'warn');
+  reader.readAsText(file);
+}
+
+async function importSeoKeywords(rows){
+  toast(`Importing ${rows.length} keyword${rows.length===1?'':'s'}...`, 'info');
+  try {
+    const res = await fetch('/api/seo/keywords/import', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ rows })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Import failed');
+    toast(`Added ${data.created} keyword${data.created===1?'':'s'}${data.skipped ? ` (${data.skipped} already in the library)` : ''}`, 'success');
+    window.__seoKeywords = undefined;
+    loadSeoKeywords();
+  } catch(err){
+    toast('Could not import CSV: ' + err.message, 'warn');
+  }
+}
+
+function renderSeoSuggestions(){
+  const list = window.__seoSuggestions;
+  if(window.__seoSuggestionsLoading) return '<div class="muted"><i class="ti ti-loader-2"></i> Analysing recent activity...</div>';
+  if(!list) return '<div class="muted"><i class="ti ti-loader-2"></i> Loading suggestions...</div>';
+  if(list.error) return `<div class="muted">Could not load suggestions: ${esc(list.error)}</div>`;
+  if(!list.length) return '<div class="empty-state">No suggestions yet - keep logging touch points and research events.</div>';
+  return list.map((s,i) => `
+    <div class="signal-card">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">
+        <div style="flex:1;min-width:220px;">
+          <div style="font-weight:700;font-size:13.5px;margin-bottom:4px;">${esc(s.keyword)}</div>
+          <div class="muted" style="font-size:12px;">${esc(s.reason||'')}</div>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="addSeoSuggestionToQueue(${i})"><i class="ti ti-plus"></i> Add to queue</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function addSeoSuggestionToQueue(i){
+  const list = window.__seoSuggestions || [];
+  const s = list[i];
+  if(!s) return;
+  try {
+    const res = await fetch('/api/seo/keywords/add-to-queue', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ keyword: s.keyword, reason: s.reason })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Could not add keyword');
+    toast(`Added "${s.keyword}" to the queue`, 'success');
+    list.splice(i,1);
+    window.__seoKeywords = undefined;
+    loadSeoKeywords();
+    renderPage();
+  } catch(err){
+    toast('Could not add to queue: ' + err.message, 'warn');
+  }
+}
+
+function renderSeoVoiceProfileEditor(){
+  const v = window.__seoVoiceProfile;
+  if(!v) return '<div class="muted"><i class="ti ti-loader-2"></i> Loading voice profile...</div>';
+  if(v.error) return `<div class="muted">Could not load voice profile: ${esc(v.error)}</div>`;
+  return `
+    <div class="field">
+      <textarea id="seoVoiceProfileInput" rows="6" placeholder="Describe T2C's tone, writing style, opinions, stats, and stories...">${esc(v.voiceProfile)}</textarea>
+    </div>
+    ${!v.voiceProfile ? `<p class="muted" style="font-size:11.5px;margin-bottom:10px;">Currently blank - generated posts use T2C's default profile until you save one here.</p>` : ''}
+    <button class="btn btn-primary btn-sm" onclick="saveSeoVoiceProfile()"><i class="ti ti-device-floppy"></i> Save voice profile</button>
+  `;
+}
+
+async function saveSeoVoiceProfile(){
+  const voiceProfile = document.getElementById('seoVoiceProfileInput').value.trim();
+  try {
+    const res = await fetch('/api/seo/voice-profile', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ voiceProfile })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Save failed');
+    window.__seoVoiceProfile = { voiceProfile };
+    toast('Voice profile saved', 'success');
+    renderPage();
+  } catch(err){
+    toast('Could not save voice profile: ' + err.message, 'warn');
+  }
+}
+
+async function generateSeoPost(id){
+  const list = window.__seoKeywords;
+  const k = Array.isArray(list) ? list.find(x=>x.id===id) : null;
+  if(k) k.status = 'Generating';
+  renderPage();
+  try {
+    const res = await fetch('/api/seo/generate-post', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ keywordId: id })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Generation failed');
+    if(k) Object.assign(k, { status:'Generated', postTitle:data.title, postHtml:data.html, metaTitle:data.metaTitle, metaDescription:data.metaDescription, imageUrls:data.images });
+    window.__seoPreview = {
+      keywordId: id, keyword: k ? k.keyword : '',
+      title: data.title, html: data.html, metaTitle: data.metaTitle, metaDescription: data.metaDescription,
+      images: data.images || [], status: 'Generated'
+    };
+    toast('Post generated', 'success');
+    renderPage();
+  } catch(err){
+    if(k) k.status = 'Queued';
+    toast('Could not generate post: ' + err.message, 'warn');
+    renderPage();
+  }
+}
+
+function openSeoPreview(id){
+  const list = window.__seoKeywords;
+  const k = Array.isArray(list) ? list.find(x=>x.id===id) : null;
+  if(!k) return;
+  window.__seoPreview = {
+    keywordId: id, keyword: k.keyword,
+    title: k.postTitle, html: k.postHtml, metaTitle: k.metaTitle, metaDescription: k.metaDescription,
+    images: k.imageUrls || [], publishedUrl: k.publishedUrl, status: k.status
+  };
+  renderPage();
+}
+
+function closeSeoPreview(){
+  window.__seoPreview = null;
+  renderPage();
+}
+
+function renderSeoPreviewPanel(){
+  const p = window.__seoPreview;
+  return `
+  <div style="margin-bottom:14px;">
+    <button class="btn btn-ghost btn-sm" onclick="closeSeoPreview()"><i class="ti ti-arrow-left"></i> Back to library</button>
+  </div>
+  <div class="two-col">
+    <div class="card">
+      <div class="field"><label>Title</label><input id="seoPreviewTitle" value="${esc(p.title)}"></div>
+      <div class="field"><label>Meta title <span class="muted">(${(p.metaTitle||'').length}/60)</span></label><input id="seoPreviewMetaTitle" value="${esc(p.metaTitle)}"></div>
+      <div class="field"><label>Meta description <span class="muted">(${(p.metaDescription||'').length}/160)</span></label><textarea id="seoPreviewMetaDesc" rows="2">${esc(p.metaDescription)}</textarea></div>
+      <div class="field"><label>Body (HTML)</label><textarea id="seoPreviewHtml" rows="20" style="font-family:monospace;font-size:12px;">${esc(p.html)}</textarea></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <button class="btn btn-secondary btn-sm" onclick="saveSeoPreviewEdits()"><i class="ti ti-device-floppy"></i> Save edits</button>
+        <button class="btn btn-secondary btn-sm" id="seoRegenBtn" onclick="regenerateSeoPreview()"><i class="ti ti-refresh"></i> Regenerate</button>
+        <button class="btn btn-primary btn-sm" id="seoPublishBtn" ${p.status==='Published'?'disabled':''} onclick="publishSeoPreview()"><i class="ti ti-rocket"></i> ${p.status==='Published' ? 'Published' : 'Publish'}</button>
+      </div>
+      ${p.publishedUrl ? `<div class="muted" style="font-size:12px;margin-top:8px;">Live at <a href="${esc(p.publishedUrl)}" target="_blank" rel="noopener">${esc(p.publishedUrl)}</a></div>` : ''}
+    </div>
+    <div class="card">
+      <div class="section-title" style="font-size:13px;margin-bottom:10px;"><i class="ti ti-eye"></i> Preview</div>
+      <div style="border:1px solid var(--border);border-radius:8px;padding:14px;max-height:600px;overflow-y:auto;font-size:13px;line-height:1.6;">
+        ${p.html || '<span class="muted">Nothing generated yet.</span>'}
+      </div>
+      ${p.images && p.images.length ? `
+        <div class="muted" style="font-size:11.5px;margin-top:14px;margin-bottom:6px;font-weight:700;">Sourced images</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          ${p.images.map(img => `<img src="${esc(img.url)}" alt="${esc(img.alt||'')}" style="width:90px;height:60px;object-fit:cover;border-radius:6px;">`).join('')}
+        </div>
+      ` : ''}
+    </div>
+  </div>
+  `;
+}
+
+async function saveSeoPreviewEdits(){
+  const p = window.__seoPreview;
+  const title = document.getElementById('seoPreviewTitle').value.trim();
+  const metaTitle = document.getElementById('seoPreviewMetaTitle').value.trim();
+  const metaDescription = document.getElementById('seoPreviewMetaDesc').value.trim();
+  const html = document.getElementById('seoPreviewHtml').value;
+  try {
+    const res = await fetch(`/api/seo/keywords/${p.keywordId}/save`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ title, metaTitle, metaDescription, html })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Save failed');
+    Object.assign(p, { title, metaTitle, metaDescription, html });
+    const k = (window.__seoKeywords||[]).find ? (window.__seoKeywords||[]).find(x=>x.id===p.keywordId) : null;
+    if(k) Object.assign(k, { postTitle:title, metaTitle, metaDescription, postHtml:html });
+    toast('Saved', 'success');
+    renderPage();
+  } catch(err){
+    toast('Could not save: ' + err.message, 'warn');
+  }
+}
+
+async function regenerateSeoPreview(){
+  const p = window.__seoPreview;
+  const btn = document.getElementById('seoRegenBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Regenerating...'; }
+  try {
+    const res = await fetch('/api/seo/generate-post', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ keywordId: p.keywordId })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Regenerate failed');
+    Object.assign(p, { title:data.title, html:data.html, metaTitle:data.metaTitle, metaDescription:data.metaDescription, images:data.images||[] });
+    const k = (window.__seoKeywords||[]).find(x=>x.id===p.keywordId);
+    if(k) Object.assign(k, { status:'Generated', postTitle:data.title, postHtml:data.html, metaTitle:data.metaTitle, metaDescription:data.metaDescription, imageUrls:data.images });
+    toast('Regenerated', 'success');
+    renderPage();
+  } catch(err){
+    toast('Could not regenerate: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-refresh"></i> Regenerate'; }
+  }
+}
+
+async function publishSeoPreview(){
+  const p = window.__seoPreview;
+  const btn = document.getElementById('seoPublishBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Publishing...'; }
+  try {
+    await saveSeoPreviewEdits();
+    const res = await fetch('/api/seo/publish', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ keywordId: p.keywordId })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Publish failed');
+    p.status = 'Published';
+    p.publishedUrl = data.url;
+    const k = (window.__seoKeywords||[]).find(x=>x.id===p.keywordId);
+    if(k) Object.assign(k, { status:'Published', publishedUrl:data.url });
+    toast('Published to Framer', 'success');
+    renderPage();
+  } catch(err){
+    toast('Could not publish: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-rocket"></i> Publish'; }
+  }
 }
 
 function renderContentSettingsTab(){
