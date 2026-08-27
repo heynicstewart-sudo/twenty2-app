@@ -6289,6 +6289,58 @@ app.patch('/api/contacts/:id/job-title', async (req, res) => {
   }
 });
 
+// Contact drawer's "Clean up notes" button (t2c-outreach-crm.html,
+// cleanUpContactNotes) - Notes (POST /api/contacts/notes) is a plain
+// append-log, so a big copy-pasted LinkedIn bio/job-history dump just sits
+// there verbatim and keeps growing every time someone adds to it. This
+// never touches Notes itself - the raw history stays on file - it rewrites
+// AI Summary from everything on file (Notes + Touch Points), the same
+// field POST /api/campaign/:id/contacts/:contactId/generate-message already
+// reads as its "AI summary" context. refreshContactAndCompanySummaries
+// above already does an incremental version of this on every new note/
+// conversation save, but only folding in the one new line each time; this
+// is a full re-digest on demand, for a contact whose Notes accumulated a
+// mess before that pipeline existed, or was bulk-imported and never went
+// through POST /api/contacts/notes to trigger it at all.
+app.post('/api/contacts/:id/cleanup-notes', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  try {
+    const [contactRecord, touchPointRecords] = await Promise.all([
+      airtableGetRecord('Contacts', req.params.id),
+      airtableFetchAllRecords('Touch Points')
+    ]);
+    if (!contactRecord) return res.status(404).json({ error: 'Contact not found' });
+    const f = contactRecord.fields || {};
+    if (!f['Notes']) return res.status(400).json({ error: 'This contact has no notes to clean up' });
+
+    const touchPoints = touchPointRecords
+      .filter(r => (r.fields['Contact'] || []).includes(req.params.id))
+      .map(r => ({ date: r.fields['Date'] || '', type: r.fields['Type'] || '', notes: r.fields['Summary'] || '' }))
+      .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    const prompt = `You are cleaning up the Notes field for a contact in T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM.
+
+Contact: ${f['Full Name'] || ''}, ${f['Job Title'] || ''}.
+
+RAW NOTES ON FILE (often a messy copy-paste dump - a LinkedIn bio, job history, or similar pasted verbatim, sometimes logged more than once):
+${f['Notes']}
+
+TOUCH POINTS ON FILE (${touchPoints.length}, most recent first, for context only - do not repeat these verbatim):
+${JSON.stringify(touchPoints, null, 2)}
+
+Write a clean, concise intelligence brief: who they are, their role and background, and anything substantive worth remembering for outreach (pain points, interests, things they've said). Drop duplicate or redundant copy-paste, LinkedIn UI chrome ("· 1 yr 9 mos", "View profile", "...more", etc.) and anything not actually informative. UK English, no em dashes. Return only the summary text, nothing else.`;
+
+    const summary = await callClaudeText(prompt, 700);
+    await airtableRequest('PATCH', 'Contacts', { records: [{ id: req.params.id, fields: { 'AI Summary': summary } }] });
+
+    res.json({ success: true, summary });
+  } catch (err) {
+    console.error('Clean up notes error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Contact drawer's campaign dropdown (t2c-outreach-crm.html,
 // updateContactCampaignMembership) - the dropdown presents a contact as
 // belonging to at most one campaign at a time (a single <select>, not a

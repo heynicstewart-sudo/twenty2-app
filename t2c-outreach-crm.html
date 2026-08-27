@@ -7714,7 +7714,13 @@ function renderContactDrawerContent(data, campaignName){
   </div>
 
   <div class="drawer-section">
-    <div class="section-title" style="font-size:13px;"><i class="ti ti-notes"></i> Notes</div>
+    <div class="section-title" style="font-size:13px;display:flex;justify-content:space-between;align-items:center;">
+      <span><i class="ti ti-notes"></i> Notes</span>
+      <button class="btn btn-secondary btn-sm" onclick="cleanUpContactNotes()" id="cleanupNotesBtn" ${c.notes ? '' : 'disabled title="No notes to clean up yet"'}><i class="ti ti-wand"></i> Clean up notes</button>
+    </div>
+    <div class="muted" style="font-size:11px;font-weight:700;margin-top:10px;margin-bottom:4px;">AI SUMMARY - what message generation reads</div>
+    <div id="contactAiSummaryText" style="font-size:12.5px;white-space:pre-wrap;${c.aiSummary ? '' : 'color:var(--muted);'}">${c.aiSummary ? esc(c.aiSummary) : 'No summary yet - press "Clean up notes" to generate one from what\'s on file below.'}</div>
+    <div class="muted" style="font-size:11px;font-weight:700;margin-top:12px;margin-bottom:4px;">RAW NOTES - unchanged, kept as the source record</div>
     <div id="contactNotesThread">${renderNotesThread(c.notes)}</div>
     <textarea id="contactNoteInput" rows="2" placeholder="Peter mentioned to follow up next Wednesday..." style="margin-top:8px;"></textarea>
     <button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="saveContactDrawerNote()" id="saveContactNoteBtn"><i class="ti ti-device-floppy"></i> Save note</button>
@@ -7875,6 +7881,34 @@ async function saveContactDrawerNote(){
     toast('Could not save note: ' + err.message, 'warn');
   } finally {
     if(btn) btn.disabled = false;
+  }
+}
+
+// "Clean up notes" (Notes section, contact drawer) - forces a fresh AI
+// Summary rewrite from whatever's on file (raw Notes + Touch Points), for
+// a contact whose Notes accumulated a big copy-paste dump (a LinkedIn bio/
+// job history block pasted verbatim). Never touches the raw Notes thread
+// below it - that stays the source record - only AI Summary changes, which
+// is the field generate-message actually reads, so this is what a rep
+// would use before generating a message for a contact whose card looks
+// like the screenshot that prompted this feature.
+async function cleanUpContactNotes(){
+  const profile = window.__drawerContactProfile;
+  if(!profile) return;
+  const btn = document.getElementById('cleanupNotesBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Cleaning...'; }
+  try {
+    const res = await fetch(`/api/contacts/${encodeURIComponent(profile.contact.id)}/cleanup-notes`, { method: 'POST' });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
+    profile.contact.aiSummary = data.summary;
+    const el = document.getElementById('contactAiSummaryText');
+    if(el){ el.textContent = data.summary; el.style.color = ''; }
+    toast('Notes cleaned up', 'success');
+  } catch(err){
+    toast('Could not clean up notes: ' + err.message, 'warn');
+  } finally {
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-wand"></i> Clean up notes'; }
   }
 }
 
