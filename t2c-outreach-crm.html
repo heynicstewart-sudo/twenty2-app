@@ -13041,6 +13041,59 @@ const SEO_SERVICE_OPTIONS = ['Change Management Consulting','Agile Coaching','Ag
 // via GET /api/seo/gsc-dashboard. Charts render in initSeoGscCharts(),
 // called from afterRender once the canvases exist.
 
+function seoGscRange(){ return window.__seoGscRange || { preset:'28' }; }
+
+// Resolves a range object to {startDate,endDate}, or null (custom range
+// with a date still missing) which makes the endpoint fall back to 28 days.
+function seoGscComputeDates(r){
+  if(r.preset === 'custom'){
+    return (r.startDate && r.endDate) ? { startDate:r.startDate, endDate:r.endDate } : null;
+  }
+  const days = Number(r.preset) || 28;
+  return {
+    startDate: new Date(Date.now() - days*86400000).toISOString().slice(0,10),
+    endDate: new Date().toISOString().slice(0,10)
+  };
+}
+
+function setSeoGscRangePreset(preset){
+  const cur = seoGscRange();
+  window.__seoGscRange = { preset, startDate: cur.startDate, endDate: cur.endDate };
+  if(preset === 'custom'){ renderPage(); return; }
+  loadSeoGscDashboard(true);
+}
+
+function setSeoGscCustomDate(which, val){
+  const cur = seoGscRange();
+  window.__seoGscRange = {
+    preset:'custom',
+    startDate: which === 'start' ? val : cur.startDate,
+    endDate: which === 'end' ? val : cur.endDate
+  };
+  const r = window.__seoGscRange;
+  if(r.startDate && r.endDate){
+    if(r.startDate > r.endDate){ toast('Start date must be on or before the end date', 'warn'); renderPage(); return; }
+    loadSeoGscDashboard(true);
+  } else {
+    renderPage();
+  }
+}
+
+function renderSeoGscRangeToggle(){
+  const r = seoGscRange();
+  const opt = (key, label) => `<button class="btn btn-sm ${r.preset===key?'btn-primary':'btn-secondary'}" onclick="setSeoGscRangePreset('${key}')">${label}</button>`;
+  return `
+  <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:14px;">
+    <span class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.03em;margin-right:2px;">Range</span>
+    ${opt('28','28 days')}${opt('60','60 days')}${opt('90','90 days')}${opt('custom','Custom')}
+    ${r.preset==='custom' ? `
+      <input type="date" value="${esc(r.startDate||'')}" onchange="setSeoGscCustomDate('start', this.value)" style="height:30px;width:150px;">
+      <span class="muted" style="font-size:12px;">to</span>
+      <input type="date" value="${esc(r.endDate||'')}" onchange="setSeoGscCustomDate('end', this.value)" style="height:30px;width:150px;">
+    ` : ''}
+  </div>`;
+}
+
 async function loadSeoGscDashboard(force){
   if(window.__seoGscDashboard !== undefined && !force) return;
   if(window.__seoGscDashboardLoading) return;
@@ -13048,7 +13101,9 @@ async function loadSeoGscDashboard(force){
   if(force) window.__seoGscInsights = undefined;
   if(force && state.currentPage === 'content' && window.__contentSubTab === 'seo') renderPage();
   try {
-    const res = await fetch('/api/seo/gsc-dashboard');
+    const dates = seoGscComputeDates(seoGscRange());
+    const qs = dates ? `?startDate=${encodeURIComponent(dates.startDate)}&endDate=${encodeURIComponent(dates.endDate)}` : '';
+    const res = await fetch('/api/seo/gsc-dashboard' + qs);
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
     window.__seoGscDashboard = data;
@@ -13078,6 +13133,7 @@ function renderSeoGscDashboard(){
     const totals = d.totals || {};
     const queries = (d.queries || []).slice().sort((a,b) => (a.position || 9999) - (b.position || 9999));
     const hasDaily = Array.isArray(d.daily) && d.daily.length > 0;
+    const rangeLabel = (d.range && d.range.startDate && d.range.endDate) ? `${d.range.startDate} to ${d.range.endDate}` : 'selected range';
     bodyHtml = `
       <div class="mini-cards">
         <div class="mini-card"><div class="num">${seoGscFmtInt(totals.clicks)}</div><div class="label">Total clicks</div></div>
@@ -13087,11 +13143,11 @@ function renderSeoGscDashboard(){
       ${hasDaily ? `
       <div class="row" style="gap:16px;margin-bottom:6px;">
         <div class="field" style="flex:1;min-width:280px;margin-bottom:0;">
-          <label>Clicks &amp; impressions &middot; last 28 days</label>
+          <label>Clicks &amp; impressions &middot; ${esc(rangeLabel)}</label>
           <div style="position:relative;height:230px;"><canvas id="seoGscTrafficChart"></canvas></div>
         </div>
         <div class="field" style="flex:1;min-width:280px;margin-bottom:0;">
-          <label>Average position &middot; last 28 days</label>
+          <label>Average position &middot; ${esc(rangeLabel)}</label>
           <div style="position:relative;height:230px;"><canvas id="seoGscPositionChart"></canvas></div>
         </div>
       </div>` : ''}
@@ -13117,6 +13173,7 @@ function renderSeoGscDashboard(){
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-chart-line"></i> GSC Dashboard</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">${insightsBtn}${refreshBtn}</div>
     </div>
+    ${renderSeoGscRangeToggle()}
     ${bodyHtml}
     ${renderSeoGscInsights()}
   </div>`;

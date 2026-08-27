@@ -10395,13 +10395,24 @@ app.get('/api/seo/gsc-dashboard', async (req, res) => {
   try {
     const token = await getGscAccessToken();
 
-    const endDate = new Date().toISOString().slice(0, 10);
-    const startDate = new Date(Date.now() - 28 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    // Range from the query string when both dates are valid YYYY-MM-DD and
+    // in order; otherwise fall back to the last 28 days.
+    const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+    const qStart = ((req.query.startDate || '')).trim();
+    const qEnd = ((req.query.endDate || '')).trim();
+    let startDate, endDate;
+    if (DATE_RE.test(qStart) && DATE_RE.test(qEnd) && qStart <= qEnd) {
+      startDate = qStart;
+      endDate = qEnd;
+    } else {
+      endDate = new Date().toISOString().slice(0, 10);
+      startDate = new Date(Date.now() - 28 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    }
 
     const [totalsData, queryData, dailyData] = await Promise.all([
       gscSearchAnalyticsQuery(token, property, { startDate, endDate, dimensions: [] }),
       gscSearchAnalyticsQuery(token, property, { startDate, endDate, dimensions: ['query'], rowLimit: 50 }),
-      gscSearchAnalyticsQuery(token, property, { startDate, endDate, dimensions: ['date'], rowLimit: 400 })
+      gscSearchAnalyticsQuery(token, property, { startDate, endDate, dimensions: ['date'], rowLimit: 1000 })
     ]);
 
     const t = (totalsData.rows && totalsData.rows[0]) || {};
