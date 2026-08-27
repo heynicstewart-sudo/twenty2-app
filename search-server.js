@@ -6583,6 +6583,87 @@ app.delete('/api/reminders/:id', async (req, res) => {
   }
 });
 
+// Contact drawer's "Follow up in N days" quick-set control
+// (t2c-outreach-crm.html, setContactFollowUpReminder) - a deterministic
+// alternative to POST /api/contacts/extract-actions above, for when a rep
+// already knows exactly when they want reminding rather than writing
+// "follow up in a week" into a note and relying on Claude to catch it.
+// Writes straight into the same Reminders table with the same field shape,
+// so it shows up everywhere a note-extracted reminder already does (Sales
+// Calendar, and GET /api/reminders/due below).
+app.post('/api/contacts/set-reminder', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { name, days, description, campaignName } = req.body || {};
+  if (!name || !days) return res.status(400).json({ error: 'name and days are required' });
+  try {
+    const contactRecord = await findRecordByFieldName('Contacts', 'Full Name', name);
+    if (!contactRecord) return res.status(404).json({ error: 'Contact not found' });
+    const campaignRecord = campaignName ? await findCampaignRecordByName(campaignName) : null;
+
+    const todayLabel = new Date().toISOString().slice(0, 10);
+    const due = new Date();
+    due.setDate(due.getDate() + Number(days));
+    const dueDate = due.toISOString().slice(0, 10);
+
+    const fields = {
+      'Description': description || `Reach out to ${name}`,
+      'Due Date': dueDate,
+      'Contact': [contactRecord.id],
+      'Created Date': todayLabel
+    };
+    if (campaignRecord) fields['Campaign'] = [campaignRecord.id];
+
+    const data = await airtableRequest('POST', 'Reminders', { records: [{ fields }] });
+    res.json({ success: true, reminderId: data.records[0].id, dueDate });
+  } catch (err) {
+    console.error('Set reminder error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Today's Actions (Home page, t2c-outreach-crm.html loadDueReminders) -
+// unlike GET /api/calendar/events (every reminder, past and future, for the
+// Sales Calendar's day grid), this only returns ones actually due today or
+// overdue, since that's the only thing that should interrupt a rep's daily
+// list of things to do.
+app.get('/api/reminders/due', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const [reminderRecords, contactRecords, campaignRecords] = await Promise.all([
+      airtableFetchAllRecords('Reminders'),
+      airtableFetchAllRecords('Contacts'),
+      airtableFetchAllRecords('Campaigns')
+    ]);
+    const contactsById = {}; contactRecords.forEach(r => { contactsById[r.id] = r; });
+    const campaignsById = {}; campaignRecords.forEach(r => { campaignsById[r.id] = r; });
+    const todayLabel = new Date().toISOString().slice(0, 10);
+
+    const due = reminderRecords
+      .filter(r => (r.fields['Due Date'] || '') && r.fields['Due Date'] <= todayLabel)
+      .map(r => {
+        const contactId = (r.fields['Contact'] || [])[0] || null;
+        const campaignRecId = (r.fields['Campaign'] || [])[0] || null;
+        const contact = contactId ? contactsById[contactId] : null;
+        const camp = campaignRecId ? campaignsById[campaignRecId] : null;
+        return {
+          reminderId: r.id,
+          description: r.fields['Description'] || '',
+          dueDate: r.fields['Due Date'] || '',
+          contactId,
+          contactName: contact ? (contact.fields['Full Name'] || '') : '',
+          campaignName: camp ? (camp.fields['Name'] || '') : ''
+        };
+      })
+      .filter(r => r.contactId)
+      .sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''));
+
+    res.json({ reminders: due });
+  } catch (err) {
+    console.error('Due reminders error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/companies/profile', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   const name = (req.query.name || '').trim();

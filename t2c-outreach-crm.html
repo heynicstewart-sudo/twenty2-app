@@ -1338,6 +1338,7 @@ function afterRender(page){
   }
   if(page === 'intelligence' && (window.__intelSubTab||'intelligence') === 'context') ensureContextDataLoaded();
   if(page === 'home') ensureTodaysActionsSequenceStagesLoaded();
+  if(page === 'home' && window.__dueReminders === undefined) loadDueReminders();
   if(page === 'logger' && window.__repsCache === undefined) loadRepsCache();
   if(page === 'logger' && window.__loggerCampaigns === undefined) loadLoggerCampaigns();
   if(page === 'calendar'){
@@ -3728,10 +3729,28 @@ function getNaturalContactAction(c){
   return null;
 }
 
+// Manually-set reminders (POST /api/contacts/set-reminder from the drawer,
+// or note-extracted via POST /api/contacts/extract-actions) that are due
+// today or overdue, fetched into window.__dueReminders by loadDueReminders
+// - for a contact being deliberately left warm outside the campaign's
+// normal 3-message/CTA sequence (see setContactFollowUpReminder), where
+// none of getContactAction's automatic heuristics below would otherwise
+// fire again until the 21-day re-engage fallback.
+function reminderTodaysActions(){
+  return (window.__dueReminders || [])
+    .map(r => {
+      const c = state.contacts.find(x => x.id === r.contactId);
+      if(!c) return null;
+      return { contact:c, type:'Reminder', isReminder:true, reminderId:r.reminderId, description:r.description, dueDate:r.dueDate, campaignName:r.campaignName||null, daysSinceTouch:null };
+    })
+    .filter(Boolean);
+}
+
 function computeTodaysActions(){
   const actions = state.contacts
     .map(c => { const action = getContactAction(c); return action ? { contact:c, ...action } : null; })
     .filter(Boolean)
+    .concat(reminderTodaysActions())
     .sort((a,b) => (b.daysSinceTouch||0) - (a.daysSinceTouch||0));
 
   // Diagnostic: every contact above is sourced via campaignContactRecordFor,
@@ -3775,6 +3794,7 @@ const TODAYS_ACTIONS_TABS = [
 ];
 
 function todaysActionMatchesTab(a, tabId){
+  if(a.isReminder) return tabId === 'followup';
   if(tabId === 'connection') return a.type === 'Send connection';
   if(tabId === 'message') return (a.type === 'Generate message' && a.messageNumber === 1) || a.type === 'Send first message';
   if(tabId === 'followup') return contactQualifiesForFollowUp(a.contact);
@@ -3857,6 +3877,7 @@ function recommendedMethodForAction(a){
 function renderTodaysActionItem(a){
   window.__todaysActions = window.__todaysActions || {};
   window.__todaysActions[a.contact.id] = a;
+  if(a.isReminder) return renderReminderActionCard(a);
   if(a.isFastAction) return renderFastActionCard(a);
 
   const c = a.contact;
@@ -3887,6 +3908,33 @@ function renderTodaysActionItem(a){
     </div>
     <div id="brief-${c.id}" style="${cachedBrief ? 'display:block;' : 'display:none;'}margin-top:10px;">
       ${cachedBrief ? renderBriefPanelHtml(c.id, cachedBrief.result, cachedBrief.isMessage) : ''}
+    </div>
+  </div>`;
+}
+
+// Today's Actions card for a due reminderTodaysActions() entry - just the
+// description a rep wrote (or the "Reach out to X" default) and a due date,
+// no draft/brief/touch-point buttons since there's no specific next message
+// this implies (that's the point of a manual reminder over the automatic
+// sequence-stage-driven cards below).
+function renderReminderActionCard(a){
+  const c = a.contact;
+  return `
+  <div class="todo-item" id="todaysAction-${c.id}">
+    <div class="todo-item-main">
+      <div>
+        <div class="todo-item-name" style="cursor:pointer;" onclick="openContactDrawer('${esc(c.name)}', ${a.campaignName ? `'${esc(a.campaignName)}'` : 'null'})">${esc(c.name)}</div>
+        <div class="muted" style="font-size:12px;">${esc(c.role)} · ${esc(c.company)}</div>
+        <div style="margin-top:6px;font-size:12.5px;">${esc(a.description)}</div>
+      </div>
+      <div style="text-align:right;">
+        <span class="pill" style="background:#fdf3d0;color:#96751a;">Reminder</span>
+        <div class="muted" style="font-size:11px;margin-top:4px;">Due ${fmtDate(a.dueDate)}</div>
+      </div>
+    </div>
+    <div class="todo-item-actions">
+      <button class="btn btn-secondary btn-sm" onclick="openContactDrawer('${esc(c.name)}', ${a.campaignName ? `'${esc(a.campaignName)}'` : 'null'})"><i class="ti ti-id"></i> Open profile</button>
+      <button class="btn btn-ghost btn-sm" onclick="handleDismissReminder('${a.reminderId}','${c.id}')"><i class="ti ti-check"></i> Mark as done</button>
     </div>
   </div>`;
 }
@@ -3951,6 +3999,45 @@ async function handleMarkActionDone(cid){
   } catch(err){
     console.warn('Could not mark action done:', err.message);
     toast('Marked done locally, but could not sync to Airtable: ' + err.message, 'warn');
+  }
+}
+
+// Home page afterRender hook (see the page==='home' block above) - fetches
+// reminders due today or overdue once per page load, same "ensure" pattern
+// as ensureTodaysActionsSequenceStagesLoaded, so computeTodaysActions has
+// something to fold in via reminderTodaysActions.
+async function loadDueReminders(){
+  window.__dueReminders = [];
+  try {
+    const res = await fetch('/api/reminders/due');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__dueReminders = data.reminders || [];
+  } catch(err){
+    console.warn('Could not load due reminders:', err.message);
+    window.__dueReminders = [];
+  }
+  if(state.currentPage === 'home') renderPage();
+}
+
+// "Mark as done" on a reminder card - same optimistic-UI convention as
+// handleMarkActionDone, but deletes the Reminders record outright (via the
+// existing DELETE /api/reminders/:id also used by the note-extracted-action
+// undo toasts) rather than just clearing a local Today's Actions entry,
+// since a dismissed reminder has nothing else in Airtable to advance.
+async function handleDismissReminder(reminderId, cid){
+  const cardEl = document.getElementById('todaysAction-' + cid);
+  if(cardEl) cardEl.remove();
+  delete (window.__todaysActions || {})[cid];
+  window.__dueReminders = (window.__dueReminders || []).filter(r => r.reminderId !== reminderId);
+
+  try {
+    const res = await fetch(`/api/reminders/${reminderId}`, { method: 'DELETE' });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+  } catch(err){
+    console.warn('Could not dismiss reminder:', err.message);
+    toast('Marked done locally, but could not delete the reminder in Airtable: ' + err.message, 'warn');
   }
 }
 
@@ -7538,11 +7625,54 @@ function renderContactDrawerContent(data, campaignName){
   </div>
 
   <div class="drawer-section">
+    <div class="section-title" style="font-size:13px;"><i class="ti ti-clock"></i> Follow-up reminder</div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:8px;">Sets a reminder that shows up in Today's Actions once it's due - use this instead of (or as well as) mentioning a date in a note.</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;" id="followUpReminderBtns-${c.id}">
+      ${FOLLOW_UP_REMINDER_PRESETS.map(days => `<button class="btn btn-secondary btn-sm" onclick="setContactFollowUpReminder(${days})">In ${days} days</button>`).join('')}
+    </div>
+  </div>
+
+  <div class="drawer-section">
     <div class="section-title" style="font-size:13px;"><i class="ti ti-messages"></i> Conversation History</div>
     <textarea id="contactConvoHistoryInput" rows="4" placeholder="Paste an existing LinkedIn or email thread..."></textarea>
     <button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="saveContactConversationHistory()" id="saveContactConvoBtn"><i class="ti ti-device-floppy"></i> Save history</button>
   </div>
   `;
+}
+
+// Preset day options for the drawer's "Follow-up reminder" quick-set
+// buttons (setContactFollowUpReminder below) - covers the "leave it warm
+// and come back in a week or two" case that falls outside the campaign's
+// normal 3-message/CTA sequence, without needing a note phrased just right
+// for POST /api/contacts/extract-actions to catch a date in it.
+const FOLLOW_UP_REMINDER_PRESETS = [3, 7, 14, 30];
+
+async function setContactFollowUpReminder(days){
+  const profile = window.__drawerContactProfile;
+  const name = window.__drawerContactName;
+  const campaignName = window.__drawerCampaignName;
+  if(!profile || !name) return;
+  const wrap = document.getElementById(`followUpReminderBtns-${profile.contact.id}`);
+  if(wrap) wrap.querySelectorAll('button').forEach(b => b.disabled = true);
+  try {
+    const res = await fetch('/api/contacts/set-reminder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, days, campaignName: campaignName || undefined })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Could not set reminder');
+    toast(`Reminder set - Reach out to ${name} on ${fmtDate(data.dueDate)}`, 'success');
+    // Today's Actions only re-fetches due reminders on a fresh page load
+    // (see the afterRender hook) - clearing the cache here means the next
+    // Home visit picks up a reminder that's due immediately (days=0 isn't
+    // offered above, but this keeps the two in sync regardless).
+    window.__dueReminders = undefined;
+  } catch(err){
+    toast('Could not set reminder: ' + err.message, 'warn');
+  } finally {
+    if(wrap) wrap.querySelectorAll('button').forEach(b => b.disabled = false);
+  }
 }
 
 // "Save history" (Conversation History section, contact drawer) - writes the
