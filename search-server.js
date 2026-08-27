@@ -64,6 +64,17 @@ function isConfidentMatch(result, companyWords, titleWords){
 // grid's empty cells in one job). Throws with a `.status` of 500 when
 // SERPER_API_KEY is missing, matching the response GET /api/search-contact
 // always returned for that case; a plain Error otherwise.
+//
+// Returns every confident match from the one Serper call, not just the
+// first - a company genuinely can have (and the Grid already fully
+// supports, via contactsForCell/renderCompanyRows expanding a company to
+// as many rows as its fullest column needs) more than one person in the
+// same role, e.g. several Product Owners at one large employer. Stopping
+// at the first candidate silently discarded every other real person the
+// same search had already found, and since "Run daily search" only ever
+// searches cells with zero existing contacts (see the emptyCells filter in
+// runDailySearch), that person would never get a search of their own on a
+// later day either - there was no path back to them at all.
 async function searchContactViaSerper(company, jobTitle){
   if(!process.env.SERPER_API_KEY){
     const err = new Error('SERPER_API_KEY is not configured');
@@ -97,10 +108,22 @@ async function searchContactViaSerper(company, jobTitle){
   const companyWords = company.toLowerCase().split(/\s+/).filter(Boolean);
   const titleWords = jobTitle.toLowerCase().split(/\s+/).filter(Boolean);
 
-  const match = results.find(r => isConfidentMatch(r, companyWords, titleWords));
-  if(!match) return { found: false };
+  const seenUrls = new Set();
+  const matches = results
+    .filter(r => isConfidentMatch(r, companyWords, titleWords))
+    .map(r => ({ name: extractName(r.title), url: r.link }))
+    .filter(m => {
+      const key = m.url.toLowerCase();
+      if (seenUrls.has(key)) return false;
+      seenUrls.add(key);
+      return true;
+    });
 
-  return { found: true, name: extractName(match.title), url: match.link };
+  if(!matches.length) return { found: false, matches: [] };
+
+  // name/url kept at the top level too (the first match) so a caller that
+  // only knows the old single-match shape still gets a sensible result.
+  return { found: true, matches, name: matches[0].name, url: matches[0].url };
 }
 
 app.get('/api/search-contact', async (req, res) => {
@@ -733,19 +756,31 @@ async function runGridSearchJob(job, cells, campaignName) {
       try {
         const searchResult = await searchContactViaSerper(company, role);
         if (searchResult.found) {
-          const contactResult = await createOrUpdateAirtableContact({
-            name: searchResult.name,
-            company,
-            role,
-            linkedinUrl: searchResult.url,
-            state: 'found',
-            icpRoleCategory: role
-          });
-          if (campaignRecord) {
-            await linkGridContactToCampaign(contactResult.recordId, searchResult.name, campaignRecord, campaignContactRows);
+          // One search can confidently match several distinct people in
+          // this role at this company (see searchContactViaSerper) - write
+          // every one of them, not just the first, since the Grid already
+          // renders as many rows per company as its fullest column needs.
+          const createdContacts = [];
+          for (const m of searchResult.matches) {
+            const contactResult = await createOrUpdateAirtableContact({
+              name: m.name,
+              company,
+              role,
+              linkedinUrl: m.url,
+              state: 'found',
+              icpRoleCategory: role
+            });
+            if (campaignRecord) {
+              await linkGridContactToCampaign(contactResult.recordId, m.name, campaignRecord, campaignContactRows);
+            }
+            createdContacts.push({ name: m.name, url: m.url, recordId: contactResult.recordId });
           }
-          job.foundCount++;
-          result = { kind: 'newContact', company, role, found: true, name: searchResult.name, url: searchResult.url, recordId: contactResult.recordId };
+          job.foundCount += createdContacts.length;
+          // name/url/recordId kept at the top level too (the first contact)
+          // for the same backward-compatibility reason as searchResult
+          // above - applyGridSearchResult (t2c-outreach-crm.html) prefers
+          // the `contacts` array when present but falls back to these.
+          result = { kind: 'newContact', company, role, found: true, contacts: createdContacts, name: createdContacts[0].name, url: createdContacts[0].url, recordId: createdContacts[0].recordId };
         } else {
           result = { kind: 'newContact', company, role, found: false };
         }

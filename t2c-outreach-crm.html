@@ -5767,26 +5767,38 @@ function cancelGridSearch(gridId){
 // search error) runDailySearch used to render inline. A "fillMissing"
 // result (see runDailySearch) patches an existing contact's missing field
 // instead, so it's handled separately below.
+//
+// A cell's search can now come back with more than one confident match
+// (see searchContactViaSerper in search-server.js - it used to stop at the
+// first candidate, discarding any other genuine person in the same role at
+// the same company) - result.contacts carries all of them, still with a
+// top-level name/url/recordId for the first one so an older cached result
+// shape doesn't break. One match still gets the instant single-cell DOM
+// patch; more than one needs extra rows for this company (see
+// renderCompanyRows), which a single <td> patch can't express, so that
+// case falls back to a full re-render instead.
 function applyGridSearchResult(grid, result){
   if(result.kind === 'fillMissing'){ applyFillMissingFieldResult(grid, result); return; }
-  const { company, role, found, name, url, recordId, error } = result;
+  const { company, role, found, error } = result;
+  const matches = result.contacts || (result.found && result.name && result.url ? [{ name: result.name, url: result.url, recordId: result.recordId }] : []);
   const cellEl = document.querySelector(`.cell-searching[data-company="${cssEscape(company)}"][data-role="${cssEscape(role)}"]`);
-  if(found && name && url){
+  if(found && matches.length){
     const seqId = role === 'Digital and Tech' ? 'digitalTech' : 'seniorLeaders';
-    const newContact = {
+    const newContacts = matches.map(({ name, url, recordId }) => ({
       // recordId is the Airtable id the server already wrote this contact
       // under - falling back to a local uid only guards against a
       // malformed job result, not the normal path.
       id: recordId || uid('c'), gridId: grid.id, name, company, role, url,
       seqId, state:'found', foundDate: isoDate(TODAY), connReqDate:null, connDate:null, notes:'',
       thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[]
-    };
-    state.contacts.push(newContact);
+    }));
+    newContacts.forEach(nc => state.contacts.push(nc));
     touchGrid(grid.id);
-    if(cellEl) cellEl.outerHTML = renderGridCellHTML(newContact);
     // Already written to Airtable server-side by /api/grid/run-search -
     // only the Make.com webhook notification still needs to happen here.
-    notifyWebhook(newContact, { skipAirtableSync: true });
+    newContacts.forEach(nc => notifyWebhook(nc, { skipAirtableSync: true }));
+    if(newContacts.length > 1) renderPage();
+    else if(cellEl) cellEl.outerHTML = renderGridCellHTML(newContacts[0]);
   } else if(error){
     if(cellEl) cellEl.outerHTML = `<div class="cell-empty" data-company="${esc(company)}" data-role="${esc(role)}" title="The search request itself failed — try again">Search error — try again</div>`;
   } else {
