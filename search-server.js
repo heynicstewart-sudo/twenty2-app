@@ -7470,11 +7470,25 @@ app.post('/api/campaign/:id/contacts/:contactId/exclude', async (req, res) => {
 // "Lost" isn't otherwise part of that vocabulary (Deals has its own separate
 // Outcome field for that) - typecast:true lets it through as a new select
 // option rather than failing the write, same as the exclude route's own
-// typecast:true PATCH just above.
+// typecast:true PATCH just above. The Message N Sent/Pending Reply MN/Ready
+// for Message N entries map to themselves verbatim (they're already real
+// Sequence Stage values, same vocabulary as SEQUENCE_STAGE_ADVANCE) - added
+// so a rep can manually correct a contact's stage when mark-sent and a
+// stray "Reply?" click land close enough together to walk it further than
+// what was actually sent (this route was the only per-Campaign-Contacts
+// write with no manual way back for that vocabulary before).
 const DRAWER_STAGE_TO_SEQUENCE_STAGE = {
   'Found': 'Found',
   'Connection Pending': 'Connection Pending',
   'Connection Made': 'Connected',
+  'Message 1 Sent': 'Message 1 Sent',
+  'Pending Reply M1': 'Pending Reply M1',
+  'Ready for Message 2': 'Ready for Message 2',
+  'Message 2 Sent': 'Message 2 Sent',
+  'Pending Reply M2': 'Pending Reply M2',
+  'Ready for Message 3': 'Ready for Message 3',
+  'Message 3 Sent': 'Message 3 Sent',
+  'Pending Reply M3': 'Pending Reply M3',
   'Meeting Booked': 'Meeting Booked',
   'Lost': 'Lost',
   'Excluded': 'Excluded'

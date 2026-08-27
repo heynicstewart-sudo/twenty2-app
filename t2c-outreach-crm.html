@@ -7339,15 +7339,27 @@ function renderContactEnrichmentSection(c){
   `;
 }
 
-// Manual-override stages offered on the contact drawer's stage dropdown -
-// the finer automatic Sequence Stage vocabulary (Message 1 Sent, Pending
-// Reply M1, etc - see SEQUENCE_STAGE_ADVANCE) is advanced by the sequence
-// engine itself, not picked by a rep here. "Connection Made" is the drawer
-// label for Airtable's "Connected" value, same mapping direction as
-// LOGGER_JOURNEY_STAGE_TO_SEQUENCE_STAGE in search-server.js, so a stage set
-// from here still reads correctly everywhere else that's Sequence-Stage
-// aware (funnel counts, Today's Actions, etc).
-const CONTACT_DRAWER_STAGE_OPTIONS = ['Found', 'Connection Pending', 'Connection Made', 'Meeting Booked', 'Lost', 'Excluded'];
+// Manual-override stages offered on the contact drawer's stage dropdown.
+// The finer automatic Sequence Stage vocabulary (Message 1 Sent, Pending
+// Reply M1, etc - see SEQUENCE_STAGE_ADVANCE) is normally advanced by the
+// sequence engine itself, but it's exposed here too so a rep can correct
+// it by hand when the engine drifts - e.g. mark-sent and a stray "Reply?"
+// click both firing close together can walk a contact's stage further than
+// what was actually sent, and there was previously no way to wind it back
+// short of editing Airtable directly. "Connection Made" is the drawer label
+// for Airtable's "Connected" value, same mapping direction as
+// LOGGER_JOURNEY_STAGE_TO_SEQUENCE_STAGE in search-server.js; every other
+// option here is the real Sequence Stage string verbatim (same vocabulary
+// already shown on Roadmap card badges via campaignSequenceStageFor), so a
+// stage set from here still reads correctly everywhere else that's
+// Sequence-Stage aware (funnel counts, Today's Actions, etc).
+const CONTACT_DRAWER_STAGE_OPTIONS = [
+  'Found', 'Connection Pending', 'Connection Made',
+  'Message 1 Sent', 'Pending Reply M1', 'Ready for Message 2',
+  'Message 2 Sent', 'Pending Reply M2', 'Ready for Message 3',
+  'Message 3 Sent', 'Pending Reply M3',
+  'Meeting Booked', 'Lost', 'Excluded'
+];
 const SEQUENCE_STAGE_TO_DRAWER_LABEL = { 'Connected': 'Connection Made' };
 
 // Same Journey Stage colour scheme as the .tag-* classes above (Found=blue,
@@ -7355,10 +7367,22 @@ const SEQUENCE_STAGE_TO_DRAWER_LABEL = { 'Connected': 'Connection Made' };
 // drawer's stage dropdown reads as the same colour-coded pill as everywhere
 // else the stage shows up, instead of a plain unstyled <select>. Lost/
 // Excluded/unknown values fall back to the neutral .tag-sent-neutral grey.
+// The per-message stages reuse that same three-colour logic: a "Sent"
+// milestone is the success green, a "Pending Reply" wait is the warning
+// amber, and a "Ready for Message N" (drafted, not yet sent) is the blue
+// used for Found - an outstanding next action, same as Found is.
 const CONTACT_DRAWER_STAGE_COLORS = {
   'Found': { bg:'#e2f2fa', color:'var(--blue)' },
   'Connection Pending': { bg:'#fdf0d9', color:'var(--warning)' },
   'Connection Made': { bg:'#e3f5eb', color:'var(--success)' },
+  'Message 1 Sent': { bg:'#e3f5eb', color:'var(--success)' },
+  'Pending Reply M1': { bg:'#fdf0d9', color:'var(--warning)' },
+  'Ready for Message 2': { bg:'#e2f2fa', color:'var(--blue)' },
+  'Message 2 Sent': { bg:'#e3f5eb', color:'var(--success)' },
+  'Pending Reply M2': { bg:'#fdf0d9', color:'var(--warning)' },
+  'Ready for Message 3': { bg:'#e2f2fa', color:'var(--blue)' },
+  'Message 3 Sent': { bg:'#e3f5eb', color:'var(--success)' },
+  'Pending Reply M3': { bg:'#fdf0d9', color:'var(--warning)' },
   'Meeting Booked': { bg:'#fdf3d0', color:'#96751a' },
   'Lost': { bg:'#fbe4e0', color:'#b3413a' },
   'Excluded': { bg:'#f1f1ee', color:'#6b6558' }
