@@ -6168,7 +6168,12 @@ app.get('/api/contacts/profile', async (req, res) => {
     const company = companyId ? companiesById[companyId] : null;
 
     const myCcRows = ccRows.filter(r => (r.fields['Contact'] || []).includes(contactRecord.id));
+    // Excluded rows aren't real membership from the drawer's point of view
+    // (see the campaign-membership route below and the exclude route it
+    // shares the convention with) - a soft-removed campaign shouldn't still
+    // read as "this contact is in this campaign" here.
     const campaigns = myCcRows
+      .filter(r => (r.fields['Sequence Stage'] || '') !== 'Excluded')
       .map(r => {
         const campId = (r.fields['Campaign'] || [])[0];
         return campId && campaignsById[campId] ? { id: campId, name: campaignsById[campId].fields['Name'] || '' } : null;
@@ -6260,6 +6265,94 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
     });
   } catch (err) {
     console.error('Contact profile error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Contact drawer's editable Job Title field (t2c-outreach-crm.html,
+// saveContactJobTitle) - Serper/Apollo-sourced titles are sometimes wrong
+// or stale, and there was previously no way to correct one without editing
+// Airtable directly.
+app.patch('/api/contacts/:id/job-title', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const jobTitle = (req.body || {}).jobTitle;
+  if (typeof jobTitle !== 'string' || !jobTitle.trim()) return res.status(400).json({ error: 'jobTitle is required' });
+  try {
+    const contactRecord = await airtableGetRecord('Contacts', req.params.id);
+    if (!contactRecord) return res.status(404).json({ error: 'Contact not found' });
+    const trimmed = jobTitle.trim();
+    await airtableRequest('PATCH', 'Contacts', { records: [{ id: req.params.id, fields: { 'Job Title': trimmed } }] });
+    res.json({ success: true, jobTitle: trimmed });
+  } catch (err) {
+    console.error('Update job title error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Contact drawer's campaign dropdown (t2c-outreach-crm.html,
+// updateContactCampaignMembership) - the dropdown presents a contact as
+// belonging to at most one campaign at a time (a single <select>, not a
+// multi-select), even though Campaign Contacts can technically hold a row
+// per campaign for the same contact. Picking a campaign here excludes every
+// *other* campaign row this contact has (reactivating a prior "Excluded"
+// row for the picked one instead of creating a duplicate); picking "None"
+// (empty campaignName) excludes all of them and creates nothing.
+// "Excluded" is the same soft-removal POST /api/campaign/:id/contacts/:contactId/exclude
+// already uses - never deletes a row, so history stays on file and a later
+// grid sync won't silently re-include them. Never touches the Contacts
+// record itself or its Grid Name - a grid with no matching campaign (e.g. a
+// "Change Managers" grid nobody's built a campaign for yet) is completely
+// unaffected by this route either way.
+app.patch('/api/contacts/:id/campaign-membership', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const contactId = req.params.id;
+  const campaignName = (req.body || {}).campaignName || null;
+
+  try {
+    const contactRecord = await airtableGetRecord('Contacts', contactId);
+    if (!contactRecord) return res.status(404).json({ error: 'Contact not found' });
+    const contactFullName = (contactRecord.fields || {})['Full Name'] || contactId;
+
+    let targetCampaignRecord = null;
+    if (campaignName) {
+      targetCampaignRecord = await findCampaignRecordByName(campaignName);
+      if (!targetCampaignRecord) return res.status(404).json({ error: `Campaign "${campaignName}" not found` });
+    }
+
+    const rows = await fetchCampaignContactsRows();
+    const myRows = rows.filter(r => (r.fields['Contact'] || []).includes(contactId));
+    const today = new Date().toISOString().slice(0, 10);
+
+    const toExclude = myRows.filter(r => {
+      const alreadyExcluded = (r.fields['Sequence Stage'] || '') === 'Excluded';
+      const isTarget = targetCampaignRecord && (r.fields['Campaign'] || []).includes(targetCampaignRecord.id);
+      return !alreadyExcluded && !isTarget;
+    });
+    if (toExclude.length) {
+      await airtableBatchPatch(CAMPAIGN_CONTACTS_TABLE, toExclude.map(r => ({
+        id: r.id,
+        fields: { 'Sequence Stage': 'Excluded', 'Stage History': appendStageHistory(r.fields['Stage History'], 'Excluded', today) }
+      })));
+    }
+
+    if (targetCampaignRecord) {
+      const existingTargetRow = myRows.find(r => (r.fields['Campaign'] || []).includes(targetCampaignRecord.id));
+      if (existingTargetRow && (existingTargetRow.fields['Sequence Stage'] || '') === 'Excluded') {
+        await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, {
+          records: [{
+            id: existingTargetRow.id,
+            fields: { 'Sequence Stage': 'Found', 'Stage History': appendStageHistory(existingTargetRow.fields['Stage History'], 'Found', today) }
+          }],
+          typecast: true
+        });
+      } else if (!existingTargetRow) {
+        await getOrCreateCampaignContactRow(contactId, contactFullName, targetCampaignRecord.id, campaignName, myRows);
+      }
+    }
+
+    res.json({ success: true, campaignName: campaignName || null });
+  } catch (err) {
+    console.error('Update campaign membership error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

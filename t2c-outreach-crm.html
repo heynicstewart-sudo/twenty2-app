@@ -7546,6 +7546,99 @@ async function updateContactDrawerStage(newStage){
   if(select) select.disabled = false;
 }
 
+// Corrects a Serper/Apollo-sourced Job Title straight from the drawer
+// header - saves on blur (or Enter) rather than needing a separate Save
+// button, since this is a single short field people will fix in passing.
+// No-ops if unchanged so leaving the field without editing it never fires
+// an unnecessary write.
+async function saveContactJobTitle(){
+  const input = document.getElementById('contactJobTitleInput');
+  const profile = window.__drawerContactProfile;
+  if(!input || !profile) return;
+  const newTitle = input.value.trim();
+  if(!newTitle || newTitle === profile.contact.jobTitle) { input.value = profile.contact.jobTitle; return; }
+  try {
+    const res = await fetch(`/api/contacts/${encodeURIComponent(profile.contact.id)}/job-title`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jobTitle: newTitle })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
+    profile.contact.jobTitle = data.jobTitle;
+    input.value = data.jobTitle;
+    toast('Job title updated', 'success');
+  } catch(err){
+    input.value = profile.contact.jobTitle;
+    toast('Could not update job title: ' + err.message, 'warn');
+  }
+}
+
+// Drawer's CAMPAIGN dropdown - treats a contact as belonging to at most one
+// campaign at a time (see PATCH /api/contacts/:id/campaign-membership for
+// why that's a deliberate simplification of the underlying Campaign
+// Contacts data). data.campaigns is already filtered server-side to
+// non-Excluded rows, so its first entry (preferring whichever campaign this
+// drawer was opened from, if it's among them) is "the" current campaign.
+// Every Live/Draft/Past campaign is offered regardless of membership, plus
+// "None" - picking either from here never touches this contact's Grid Name
+// or any grid-only campaign, only their Campaign Contacts rows.
+function renderContactDrawerCampaignSelect(data, campaignName){
+  const activeCampaignNames = (data.campaigns||[]).map(cp => cp.name);
+  const current = (campaignName && activeCampaignNames.includes(campaignName)) ? campaignName : (activeCampaignNames[0] || '');
+  const allCampaignNames = state.campaigns.map(cp => cp.name);
+  const options = (current && !allCampaignNames.includes(current)) ? [current, ...allCampaignNames] : allCampaignNames;
+  const others = activeCampaignNames.filter(n => n !== current);
+  return `
+    <select id="contactCampaignSelect" class="stage-select" onchange="updateContactCampaignMembership(this.value)">
+      <option value="">None</option>
+      ${options.map(name => `<option value="${esc(name)}" ${name===current?'selected':''}>${esc(name)}</option>`).join('')}
+    </select>
+    ${others.length ? `<div class="muted" style="font-size:11px;margin-top:6px;">Also in: ${others.map(esc).join(', ')} - changing this will remove those too.</div>` : ''}
+  `;
+}
+
+async function updateContactCampaignMembership(newCampaignName){
+  const profile = window.__drawerContactProfile;
+  if(!profile) return;
+  const select = document.getElementById('contactCampaignSelect');
+  if(select) select.disabled = true;
+  try {
+    const res = await fetch(`/api/contacts/${encodeURIComponent(profile.contact.id)}/campaign-membership`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ campaignName: newCampaignName || null })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
+    toast(newCampaignName ? `Moved to ${newCampaignName}` : 'Removed from all campaigns - contact and grid membership untouched', 'success');
+
+    // Roadmap/Today's Actions/Grid cells all read Sequence Stage out of
+    // window.__campaignSequenceStages, keyed per campaign (see
+    // loadCampaignSequenceStages) - not off the drawer's own profile fetch
+    // below. Refresh every campaign this change actually touched (the
+    // campaign just picked, plus every one this contact was just excluded
+    // from) so those views stop showing this contact under a campaign
+    // they've left, without waiting on a full page reload.
+    const beforeCampaignNames = (profile.campaigns||[]).map(cp => cp.name);
+    const touchedNames = new Set(beforeCampaignNames);
+    if(newCampaignName) touchedNames.add(newCampaignName);
+    touchedNames.forEach(name => {
+      const camp = state.campaigns.find(cp => cp.name === name);
+      if(camp) loadCampaignSequenceStages(camp);
+    });
+
+    // Full re-open rather than a targeted patch - campaignName changing
+    // also changes what the stage select and touch point list above should
+    // show, same as clicking into this contact from a different campaign
+    // context would.
+    await openContactDrawer(profile.contact.fullName, newCampaignName || null);
+  } catch(err){
+    toast('Could not update campaign: ' + err.message, 'warn');
+    if(select) select.disabled = false;
+  }
+}
+
 function renderContactDrawerContent(data, campaignName){
   const c = data.contact;
   let cvc = null;
@@ -7581,7 +7674,10 @@ function renderContactDrawerContent(data, campaignName){
     <div class="drawer-avatar">${esc(initials(c.fullName))}</div>
     <div style="flex:1;min-width:0;">
       <div style="font-weight:800;font-size:16px;">${esc(c.fullName)}</div>
-      <div class="muted" style="font-size:12.5px;">${esc(c.jobTitle)}${c.companyName ? ' · '+esc(c.companyName) : ''}</div>
+      <div style="display:flex;align-items:center;gap:5px;">
+        <input id="contactJobTitleInput" class="muted" value="${esc(c.jobTitle)}" placeholder="Job title" title="Click to correct - useful if the Serper/Apollo search got it wrong" style="font-size:12.5px;border:1px solid transparent;border-radius:4px;padding:1px 4px;margin-left:-4px;background:transparent;min-width:0;flex:0 1 auto;" size="${Math.max(8, c.jobTitle.length)}" onfocus="this.style.borderColor='var(--border,#ddd)';" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}" onblur="this.style.borderColor='transparent';saveContactJobTitle();" />
+        ${c.companyName ? `<span class="muted" style="font-size:12.5px;">· ${esc(c.companyName)}</span>` : ''}
+      </div>
       <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
         ${c.linkedinUrl ? `<a href="${esc(c.linkedinUrl)}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm"><i class="ti ti-brand-linkedin"></i></a>` : ''}
         <button class="btn btn-secondary btn-sm" id="enrichContactBtn" onclick="enrichContactDrawer()"><i class="ti ti-sparkles"></i> Enrich</button>
@@ -7593,10 +7689,10 @@ function renderContactDrawerContent(data, campaignName){
     </div>
   </div>
 
-  ${(data.campaigns||[]).length ? `<div class="drawer-section">
-    <div class="muted" style="font-size:11px;font-weight:700;margin-bottom:6px;">CAMPAIGNS</div>
-    ${data.campaigns.map(camp=>`<span class="pill" style="margin:0 4px 4px 0;">${esc(camp.name)}</span>`).join('')}
-  </div>` : ''}
+  <div class="drawer-section">
+    <div class="muted" style="font-size:11px;font-weight:700;margin-bottom:6px;">CAMPAIGN</div>
+    ${renderContactDrawerCampaignSelect(data, campaignName)}
+  </div>
 
   <div class="drawer-section" id="enrichmentSection">
     ${renderContactEnrichmentSection(c)}
