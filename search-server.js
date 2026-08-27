@@ -8892,13 +8892,33 @@ const DEFAULT_SEO_VOICE_PROFILE = `Twenty2 Collective (T2C) is a Perth, WA-based
 // Airtable's own permission error text surfaced straight to the caller.
 const AIRTABLE_META_URL = `https://api.airtable.com/v0/meta/bases/${AIRTABLE_BASE_ID}`;
 let airtableSchemaCache = null;
+// Remembers a Metadata API refusal (this base's token usually has no
+// schema.bases scope) so every SEO route's ensure* call doesn't re-fetch
+// and re-log the same 403. Cleared on an explicit force refresh or a
+// process restart.
+let airtableSchemaFetchError = null;
+
+// console.warn that fires at most once per distinct key for the life of
+// the process - used for the best-effort schema-provisioning warnings,
+// which are otherwise emitted on every request that hits an SEO route.
+const warnedOnceKeys = new Set();
+function warnOnce(key, ...args) {
+  if (warnedOnceKeys.has(key)) return;
+  warnedOnceKeys.add(key);
+  console.warn(...args);
+}
 
 async function fetchAirtableSchema(force) {
-  if (airtableSchemaCache && !force) return airtableSchemaCache;
+  if (force) { airtableSchemaCache = null; airtableSchemaFetchError = null; }
+  if (airtableSchemaCache) return airtableSchemaCache;
+  if (airtableSchemaFetchError) throw airtableSchemaFetchError;
   const res = await airtableFetchWithRetry(`${AIRTABLE_META_URL}/tables`, {
     headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` }
   });
-  if (!res.ok) throw new Error(`Airtable schema fetch error ${res.status}: ${await res.text()}`);
+  if (!res.ok) {
+    airtableSchemaFetchError = new Error(`Airtable schema fetch error ${res.status}: ${await res.text()}`);
+    throw airtableSchemaFetchError;
+  }
   const data = await res.json();
   airtableSchemaCache = data.tables || [];
   return airtableSchemaCache;
@@ -8971,7 +8991,7 @@ async function ensureKeywordsTable() {
       { name: 'Created Date', type: 'date', options: { dateFormat: { name: 'iso' } } }
     ]);
   } catch (err) {
-    console.warn('Could not auto-provision the Keywords table (create it by hand if it does not exist yet):', err.message);
+    warnOnce('provision:keywords-table', 'Could not auto-provision the Keywords table (create it by hand if it does not exist yet):', err.message);
   }
 }
 
@@ -8986,7 +9006,7 @@ async function ensureSitemapTable() {
       { name: 'LinkedIn Draft', type: 'multilineText' }
     ]);
   } catch (err) {
-    console.warn('Could not auto-provision the Sitemap table (create it by hand if it does not exist yet):', err.message);
+    warnOnce('provision:sitemap-table', 'Could not auto-provision the Sitemap table (create it by hand if it does not exist yet):', err.message);
   }
 }
 
@@ -9002,7 +9022,7 @@ async function ensureSitemapTypeField() {
       options: { choices: [{ name: 'Blog' }, { name: 'Service' }] }
     });
   } catch (err) {
-    console.warn('Could not auto-provision the Sitemap Type field (add it by hand if it does not exist yet):', err.message);
+    warnOnce('provision:sitemap-type-field', 'Could not auto-provision the Sitemap Type field (add it by hand if it does not exist yet):', err.message);
   }
 }
 
@@ -9012,7 +9032,7 @@ async function ensureSitemapLinkedInDraftField() {
   try {
     return await ensureAirtableField(SITEMAP_TABLE, 'LinkedIn Draft', { type: 'multilineText' });
   } catch (err) {
-    console.warn('Could not auto-provision the Sitemap LinkedIn Draft field (add it by hand if it does not exist yet):', err.message);
+    warnOnce('provision:sitemap-linkedin-draft-field', 'Could not auto-provision the Sitemap LinkedIn Draft field (add it by hand if it does not exist yet):', err.message);
   }
 }
 
@@ -9103,7 +9123,7 @@ async function ensureSeoVoiceProfileField() {
   try {
     return await ensureAirtableField(SETTINGS_TABLE, 'SEO Voice Profile', { type: 'multilineText' });
   } catch (err) {
-    console.warn('Could not auto-provision the SEO Voice Profile field (add it by hand if it does not exist yet):', err.message);
+    warnOnce('provision:seo-voice-profile-field', 'Could not auto-provision the SEO Voice Profile field (add it by hand if it does not exist yet):', err.message);
   }
 }
 
