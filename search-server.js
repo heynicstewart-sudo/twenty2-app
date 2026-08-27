@@ -8981,10 +8981,27 @@ async function ensureSitemapTable() {
       { name: 'URL', type: 'url' },
       { name: 'Title', type: 'singleLineText' },
       { name: 'Published Date', type: 'date', options: { dateFormat: { name: 'iso' } } },
-      { name: 'Keyword', type: 'singleLineText' }
+      { name: 'Keyword', type: 'singleLineText' },
+      { name: 'Type', type: 'singleSelect', options: { choices: [{ name: 'Blog' }, { name: 'Service' }] } }
     ]);
   } catch (err) {
     console.warn('Could not auto-provision the Sitemap table (create it by hand if it does not exist yet):', err.message);
+  }
+}
+
+// The Type column distinguishes blog posts from service pages in the
+// Published Content view. ensureSitemapTable only seeds it when the table
+// is created from scratch, so this adds it to a Sitemap table that already
+// existed - best-effort, same swallow-and-warn contract as every other
+// ensure* helper here.
+async function ensureSitemapTypeField() {
+  try {
+    return await ensureAirtableField(SITEMAP_TABLE, 'Type', {
+      type: 'singleSelect',
+      options: { choices: [{ name: 'Blog' }, { name: 'Service' }] }
+    });
+  } catch (err) {
+    console.warn('Could not auto-provision the Sitemap Type field (add it by hand if it does not exist yet):', err.message);
   }
 }
 
@@ -9717,6 +9734,7 @@ app.post('/api/seo/publish', async (req, res) => {
   try {
     await ensureKeywordsTable();
     await ensureSitemapTable();
+    await ensureSitemapTypeField();
     const keywordRecord = await airtableGetRecord(KEYWORDS_TABLE, keywordId);
     if (!keywordRecord) return res.status(404).json({ error: 'Keyword not found' });
     const kf = keywordRecord.fields;
@@ -9733,7 +9751,7 @@ app.post('/api/seo/publish', async (req, res) => {
     const today = new Date().toISOString().slice(0, 10);
 
     await airtableRequest('POST', SITEMAP_TABLE, {
-      records: [{ fields: { 'URL': published.url, 'Title': post.title, 'Published Date': today, 'Keyword': kf['Keyword'] || '' } }],
+      records: [{ fields: { 'URL': published.url, 'Title': post.title, 'Published Date': today, 'Keyword': kf['Keyword'] || '', 'Type': 'Blog' } }],
       typecast: true
     });
 
@@ -9745,6 +9763,148 @@ app.post('/api/seo/publish', async (req, res) => {
     res.json({ success: true, url: published.url });
   } catch (err) {
     console.error('Publish SEO post error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Service pages (city zipper model) ----
+// One page per {service} x {location} keyword (e.g. "change management
+// consulting Fremantle"). Same Serper-scrape-the-top-3 + Claude-write-to-
+// the-SEO-checklist pipeline as the blog generator above, but with a fixed
+// service-page section structure instead of matching an arbitrary blog
+// outline, and it publishes to Framer and logs to Sitemap in the same
+// request rather than as a separate review step - per the city-zipper
+// brief these are templated per-suburb pages, not one-off editorial. The
+// Framer draft still lands as a draft (publishToFramer never calls
+// framer.publish()), so a human reviews before it goes live.
+const SERVICE_PAGE_SECTIONS = `The page MUST contain, in this order:
+1. An <h1> containing "{service} {location}" (or a very close natural phrasing of it)
+2. An intro paragraph, with the primary keyword inside the first 100 words
+3. A "What we do" section (<h2>) describing the service in T2C terms
+4. A "Who it's for" section (<h2>) naming the roles and situations this suits
+5. An "Our approach" section (<h2>) with T2C's method, broken down with <h3>s or a <ul>
+6. An FAQ section with exactly 5 questions, each as its own open accordion item: <details open><summary>Question</summary><p>Answer</p></details>
+7. A closing call to action pointing to a specific T2C service and inviting {location} organisations to get in touch`;
+
+async function generateServicePage(service, location) {
+  const keyword = `${service} ${location}`.replace(/\s+/g, ' ').trim();
+
+  const organic = await serperSearchTop(keyword, 10);
+  const editorialResults = organic.filter(r => !isUgcOrSocialDomain(r.link));
+  const ugcResults = organic.filter(r => isUgcOrSocialDomain(r.link));
+  const topResults = [...editorialResults, ...ugcResults].slice(0, 3);
+
+  const scrapedSummaries = [];
+  for (const result of topResults) {
+    try {
+      const scraped = await serperScrapePage(result.link);
+      scrapedSummaries.push(summarizeScrapedPage(result.link, scraped));
+    } catch (err) {
+      console.warn('Service page scrape failed for', result.link, '-', err.message);
+      scrapedSummaries.push({ url: result.link, title: result.title || '', wordCount: 0, headings: [], scrapeFailed: true });
+    }
+  }
+
+  const settingsRecord = await getSettingsRecord();
+  const savedVoiceProfile = settingsRecord && settingsRecord.fields['SEO Voice Profile'];
+  const usedCustomVoiceProfile = !!(savedVoiceProfile && savedVoiceProfile.trim());
+  const voiceProfile = usedCustomVoiceProfile ? savedVoiceProfile : DEFAULT_SEO_VOICE_PROFILE;
+
+  const validWordCounts = scrapedSummaries.filter(s => !s.scrapeFailed && s.wordCount > 0).map(s => s.wordCount);
+  const avgWordCount = validWordCounts.length
+    ? Math.round(validWordCounts.reduce((sum, wc) => sum + wc, 0) / validWordCounts.length)
+    : 900;
+
+  const prompt = `You are writing a location service page for T2C Outreach, Twenty2 Collective.
+
+VOICE PROFILE:
+${voiceProfile}
+
+SERVICE: "${service}"
+LOCATION: "${location}"
+PRIMARY KEYWORD: "${keyword}"
+
+TOP-RANKING PAGES FOR THIS KEYWORD (match their depth and topic coverage, not their wording):
+${scrapedSummaries.map((s, i) => `${i + 1}. ${s.url}${s.title ? ' - "' + s.title + '"' : ''}
+   Approx word count: ${s.wordCount || 'unknown'}
+   Headings: ${s.headings.length ? s.headings.map(h => `H${h.level}: ${h.text}`).join(' | ') : 'not extracted'}`).join('\n\n')}
+
+Average competitor length: approximately ${avgWordCount} words - write to a similar length.
+
+${SERVICE_PAGE_SECTIONS.replace(/\{service\}/g, service).replace(/\{location\}/g, location)}
+
+${SEO_CHECKLIST}
+
+Write the page as clean HTML - a single string using h1/h2/h3/p/ul/li/a/details/summary tags, no <html>/<head>/<body> wrapper and no <img> tags (images are added manually after generation). Internal links: <a href="/blog/relevant-slug"> or <a href="/services/relevant-slug">. External links: <a href="..." target="_blank" rel="noopener"> to real, well-known, relevant domains. Every FAQ question must be its own <details open><summary>Question</summary><p>Answer</p></details> block - a native no-JavaScript accordion, expanded by default. Reference ${location} naturally throughout - this page targets people searching for this service in that specific place. UK/AU English, no em dashes, in T2C's voice as described above.
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "title": string, "html": string, "metaTitle": string (under 60 characters), "metaDescription": string (under 160 characters) }`;
+
+  const drafted = await callClaudeJson(prompt, 8000);
+  const html = await ensureValidSeoStructure(drafted.html || '', keyword);
+
+  return {
+    title: drafted.title || keyword,
+    html,
+    metaTitle: (drafted.metaTitle || '').slice(0, 60),
+    metaDescription: (drafted.metaDescription || '').slice(0, 160),
+    keyword,
+    service,
+    location,
+    usedCustomVoiceProfile
+  };
+}
+
+// Generates and publishes in one call (see the section comment above for
+// why service pages don't use the blog flow's separate generate/publish
+// steps). "Published" means sent to Framer's CMS as a draft and logged to
+// Sitemap - going live is still a manual step in Framer.
+app.post('/api/seo/generate-service-page', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  if (!process.env.SERPER_API_KEY) return res.status(500).json({ error: 'SERPER_API_KEY not configured' });
+  if (!process.env.FRAMER_API_KEY) return res.status(500).json({ error: 'FRAMER_API_KEY not configured' });
+  if (!process.env.FRAMER_PROJECT_URL) return res.status(500).json({ error: 'FRAMER_PROJECT_URL not configured' });
+
+  const service = (req.body.service || '').trim();
+  const location = (req.body.location || '').trim();
+  if (!service || !location) return res.status(400).json({ error: 'service and location are both required' });
+
+  try {
+    await ensureSitemapTable();
+    await ensureSitemapTypeField();
+
+    const page = await generateServicePage(service, location);
+    const published = await publishToFramer(page);
+    const today = new Date().toISOString().slice(0, 10);
+
+    await airtableRequest('POST', SITEMAP_TABLE, {
+      records: [{
+        fields: {
+          'URL': published.url,
+          'Title': page.title,
+          'Published Date': today,
+          'Keyword': page.keyword,
+          'Type': 'Service'
+        }
+      }],
+      typecast: true
+    });
+
+    res.json({
+      success: true,
+      url: published.url,
+      title: page.title,
+      html: page.html,
+      metaTitle: page.metaTitle,
+      metaDescription: page.metaDescription,
+      keyword: page.keyword,
+      service: page.service,
+      location: page.location,
+      usedCustomVoiceProfile: page.usedCustomVoiceProfile
+    });
+  } catch (err) {
+    console.error('Generate service page error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
