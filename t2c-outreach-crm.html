@@ -13110,7 +13110,7 @@ function renderSeoSitemapTable(){
         <td>${esc(row.keyword || '—')}</td>
         <td>${esc(row.publishedDate || '—')}</td>
         <td>${row.linkedInDraft
-          ? `<button class="btn btn-secondary btn-sm" onclick="copySeoLinkedInDraft(${i})"><i class="ti ti-copy"></i> Copy</button>`
+          ? `<button class="btn btn-secondary btn-sm" onclick="sendSeoLinkedInToDraftCentre('${row.id}', this)"><i class="ti ti-send"></i> Send to Draft Centre</button>`
           : '<span class="muted">—</span>'}</td>
       </tr>`).join('')}
     </tbody>
@@ -13118,11 +13118,20 @@ function renderSeoSitemapTable(){
   </div>`;
 }
 
-function copySeoLinkedInDraft(index){
-  const list = window.__seoSitemap;
-  const row = Array.isArray(list) ? list[index] : null;
-  if(!row || !row.linkedInDraft){ toast('No LinkedIn draft for that row', 'warn'); return; }
-  fallbackCopyOrClipboard(row.linkedInDraft, () => toast('LinkedIn draft copied', 'success'));
+// Copies this published page's stored LinkedIn draft into the Draft Centre
+// (Content table) as a new LinkedIn draft record for review/scheduling.
+async function sendSeoLinkedInToDraftCentre(sitemapId, btn){
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Sending...'; }
+  try {
+    const res = await fetch(`/api/seo/sitemap/${sitemapId}/send-to-draft-centre`, { method:'POST' });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Send failed');
+    toast('LinkedIn draft sent to the Draft Centre', 'success');
+    if(btn){ btn.innerHTML = '<i class="ti ti-check"></i> Sent to Draft Centre'; }
+  } catch(err){
+    toast('Could not send to Draft Centre: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-send"></i> Send to Draft Centre'; }
+  }
 }
 
 function fallbackCopy(text, done){

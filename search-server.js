@@ -10145,6 +10145,31 @@ app.get('/api/seo/sitemap', async (req, res) => {
   }
 });
 
+// "Send to Draft Centre" on a Published Content row - copies that page's
+// stored LinkedIn draft into the Content table (the Draft Centre's table)
+// as a new LinkedIn draft record, so it shows up alongside Marcus's other
+// drafts for review/scheduling. The field set (Title / Body / Format /
+// Status) matches how POST /api/content/draft creates a "new" draft.
+app.post('/api/seo/sitemap/:id/send-to-draft-centre', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const record = await airtableGetRecord(SITEMAP_TABLE, req.params.id);
+    if (!record) return res.status(404).json({ error: 'Published page not found' });
+    const title = record.fields['Title'] || record.fields['Keyword'] || 'LinkedIn post';
+    const body = (record.fields['LinkedIn Draft'] || '').trim();
+    if (!body) return res.status(400).json({ error: 'This page has no LinkedIn draft to send' });
+
+    const created = await airtableRequest('POST', CONTENT_TABLE, {
+      records: [{ fields: { 'Title': title, 'Body': body, 'Format': 'LinkedIn', 'Status': 'Draft' } }],
+      typecast: true
+    });
+    res.json({ success: true, contentId: created.records[0].id });
+  } catch (err) {
+    console.error('Send LinkedIn draft to Draft Centre error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---- Service pages (city zipper model) ----
 // One page per {service} x {location} keyword (e.g. "change management
 // consulting Fremantle"). Same Serper-scrape-the-top-3 + Claude-write-to-
