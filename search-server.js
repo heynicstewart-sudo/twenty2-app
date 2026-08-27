@@ -9475,6 +9475,99 @@ function isBlockedScrapeDomain(url) {
   }
 }
 
+// Three-pass humanizer that strips AI writing tells from a generated post
+// body. Runs on both the blog post and the service page after the draft
+// is generated (and structure-validated) but before internal linking,
+// saving, or returning:
+//   Pass 1 - draft rewrite against the fixed pattern list
+//   Pass 2 - audit pass 1 for whatever tells remain (bullet list)
+//   Pass 3 - final rewrite fixing the pass 2 findings
+// Best-effort at every step: an unusable or structurally-broken rewrite,
+// or a failed call, falls back to the best output so far (pass 1, then the
+// pre-humanizer HTML) rather than failing generation. All three passes use
+// claude-opus-4-6 via callClaudeMessages.
+const SEO_HUMANIZER_SYSTEM_PROMPT = `You are a writing editor that removes AI writing patterns to make content sound natural and human. Rewrite the HTML content provided, preserving all HTML tags and SEO structure, but fixing every instance of the following patterns:
+
+1. Inflated significance language: remove words like stands as, serves as, testament, pivotal, crucial, underscores, highlights, reflects broader, evolving landscape, indelible mark
+2. Notability inflation: remove claims about media coverage, leading experts, active presence
+3. Promotional language: remove puffery, superlatives, and marketing speak
+4. Superficial -ing openers: rewrite sentences starting with present participles like Looking at, Navigating, Drawing on
+5. Vague attributions: replace phrases like many experts say, studies show, it is widely believed with specific claims or remove them
+6. AI vocabulary: replace utilise with use, leverage with use or apply, delve with look into, tapestry with mix or range, vibrant with specific description, foster with build or grow, demonstrate with show, facilitate with help, comprehensive with specific description, robust with strong or specific
+7. Em dashes and en dashes: replace with commas, full stops, or restructured sentences
+8. Rule of three: break up formulaic three-part lists where they feel mechanical
+9. Passive voice: convert to active where possible
+10. Negative parallelisms: rewrite "not just X but Y" constructions
+11. Fake-candid hooks: remove theatrical openers like Honestly? or The truth is
+12. Filler phrases: remove In conclusion, It is worth noting, It goes without saying, At the end of the day, In today's world
+13. Soulless neutral reporting: add opinions, specific details, mixed feelings, varied sentence rhythm. Short punchy sentences. Then longer ones. Mix it up.
+14. Over-formatted conclusions: rewrite tidy wrap-up paragraphs that restate the whole article
+15. Legacy and trend inflation: remove phrases like setting the stage for, marking a shift, key turning point, shaping the, contributing to the
+16. Inflated symbolism: do not read significance into ordinary things
+17. Superficial -ing phrases: rewrite present-participle phrases anywhere in a sentence, not just as sentence openers
+18. Sentence length uniformity: break up even mid-length cadence with genuinely short sentences and genuinely long ones
+19. AI punctuation habits: fix formulaic comma splices
+
+Preserve all H1, H2, H3, p, ul, li, and other HTML tags exactly. Keep keyword placement intact. Do not add new sections. Match the voice of a confident, opinionated Perth-based consultancy writing for corporate professionals. Return only the rewritten HTML with no commentary.`;
+
+const SEO_HUMANIZER_AUDIT_PROMPT = `Read this HTML content. List only the remaining AI writing tells as short bullet points. Focus on: anything that still sounds like neutral reporting with no opinion, sentences that are all roughly the same length, any remaining AI vocabulary words, any sections that wrap up too neatly, any missing human texture like asides, mixed feelings, or unresolved tension. Return only the bullet list, no commentary.`;
+
+function seoHumanizerFinalPrompt(auditBullets) {
+  return `Rewrite this HTML content to fix the issues listed below. Add genuine asides and self-corrections where natural. Add mixed feelings or unresolved tension where the content allows. Make sure sentence length varies dramatically, including some very short sentences and some long winding ones. Preserve all HTML tags and keyword placement. Return only the final rewritten HTML with no commentary. Issues to fix:\n${auditBullets}`;
+}
+
+function isUsableHumanizedHtml(candidate) {
+  if (!candidate) return false;
+  if (!/<\/?[a-z][\s\S]*>/i.test(candidate)) return false;
+  return validateSeoStructure(candidate).valid;
+}
+
+async function humanizeSeoHtml(html) {
+  if (!html || !html.trim()) return html;
+
+  // Pass 1 - draft rewrite.
+  let pass1;
+  try {
+    const raw = await callClaudeMessages(`HTML content to rewrite:\n\n${html}`, 8000, SEO_HUMANIZER_SYSTEM_PROMPT);
+    pass1 = stripCodeFences(raw).trim();
+  } catch (err) {
+    console.warn('Humanizer pass 1 failed - keeping the pre-humanizer version:', err.message);
+    return html;
+  }
+  if (!isUsableHumanizedHtml(pass1)) {
+    console.warn('Humanizer pass 1 returned unusable HTML - keeping the pre-humanizer version');
+    return html;
+  }
+
+  // Pass 2 - audit pass 1 for remaining tells.
+  let auditBullets = '';
+  try {
+    auditBullets = stripCodeFences(await callClaudeMessages(
+      `${SEO_HUMANIZER_AUDIT_PROMPT}\n\nHTML content:\n\n${pass1}`, 1500
+    )).trim();
+  } catch (err) {
+    console.warn('Humanizer pass 2 (audit) failed - using pass 1 output:', err.message);
+    return pass1;
+  }
+  if (!auditBullets) return pass1;
+
+  // Pass 3 - final rewrite fixing the audit findings.
+  try {
+    const raw = await callClaudeMessages(
+      `${seoHumanizerFinalPrompt(auditBullets)}\n\nHTML content:\n\n${pass1}`, 8000
+    );
+    const pass3 = stripCodeFences(raw).trim();
+    if (!isUsableHumanizedHtml(pass3)) {
+      console.warn('Humanizer pass 3 returned unusable HTML - using pass 1 output');
+      return pass1;
+    }
+    return pass3;
+  } catch (err) {
+    console.warn('Humanizer pass 3 failed - using pass 1 output:', err.message);
+    return pass1;
+  }
+}
+
 async function generateSeoPostForKeyword(keywordRecord) {
   const keyword = keywordRecord.fields['Keyword'];
 
@@ -9530,7 +9623,8 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 { "title": string, "html": string, "metaTitle": string (under 60 characters), "metaDescription": string (under 160 characters) }`;
 
   const drafted = await callClaudeJson(prompt, 8000);
-  const html = await ensureValidSeoStructure(drafted.html || '', keyword);
+  let html = await ensureValidSeoStructure(drafted.html || '', keyword);
+  html = await humanizeSeoHtml(html);
 
   return {
     title: drafted.title || keyword,
@@ -10101,7 +10195,8 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 { "title": string, "html": string, "metaTitle": string (under 60 characters), "metaDescription": string (under 160 characters) }`;
 
   const drafted = await callClaudeJson(prompt, 8000);
-  const html = await ensureValidSeoStructure(drafted.html || '', keyword);
+  let html = await ensureValidSeoStructure(drafted.html || '', keyword);
+  html = await humanizeSeoHtml(html);
 
   return {
     title: drafted.title || keyword,
