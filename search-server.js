@@ -9455,15 +9455,17 @@ function isUgcOrSocialDomain(url) {
   }
 }
 
-// Hard blocklist - job boards, review sites, and social/UGC domains that
-// are never useful as an on-page structure sample. Unlike
-// SEO_STRUCTURE_EXCLUDE_DOMAINS above (which only de-prioritises), a match
-// here is dropped from the candidate pool entirely and the next Serper
-// result is used in its place.
+// Hard blocklist - job boards, review sites, social/UGC domains, and the
+// big consultancy/methodology sites whose pages skew the structure sample
+// and read as templated marketing. Unlike SEO_STRUCTURE_EXCLUDE_DOMAINS
+// above (which only de-prioritises), a match here is dropped from the
+// candidate pool entirely and the next Serper result is used in its place.
 const SEO_SCRAPE_BLOCKLIST = [
   'seek.com.au', 'indeed.com', 'linkedin.com', 'glassdoor.com', 'facebook.com',
   'twitter.com', 'instagram.com', 'youtube.com', 'reddit.com', 'quora.com',
-  'pinterest.com', 'yelp.com', 'yellowpages.com.au', 'truelocal.com.au'
+  'pinterest.com', 'yelp.com', 'yellowpages.com.au', 'truelocal.com.au',
+  'prosci.com', 'prosci.com.au', 'accenture.com', 'mckinsey.com',
+  'deloitte.com', 'pwc.com', 'kpmg.com'
 ];
 
 function isBlockedScrapeDomain(url) {
@@ -9526,6 +9528,7 @@ async function humanizeSeoHtml(html) {
   if (!html || !html.trim()) return html;
 
   // Pass 1 - draft rewrite.
+  console.log('Humanizer pass 1 starting');
   let pass1;
   try {
     const raw = await callClaudeMessages(`HTML content to rewrite:\n\n${html}`, 8000, SEO_HUMANIZER_SYSTEM_PROMPT);
@@ -9538,8 +9541,10 @@ async function humanizeSeoHtml(html) {
     console.warn('Humanizer pass 1 returned unusable HTML - keeping the pre-humanizer version');
     return html;
   }
+  console.log('Humanizer pass 1 complete');
 
   // Pass 2 - audit pass 1 for remaining tells.
+  console.log('Humanizer pass 2 audit starting');
   let auditBullets = '';
   try {
     auditBullets = stripCodeFences(await callClaudeMessages(
@@ -9549,9 +9554,14 @@ async function humanizeSeoHtml(html) {
     console.warn('Humanizer pass 2 (audit) failed - using pass 1 output:', err.message);
     return pass1;
   }
-  if (!auditBullets) return pass1;
+  if (!auditBullets) {
+    console.log('Humanizer pass 2 audit returned no findings - using pass 1 output');
+    return pass1;
+  }
+  console.log('Humanizer pass 2 audit complete');
 
   // Pass 3 - final rewrite fixing the audit findings.
+  console.log('Humanizer pass 3 final rewrite starting');
   try {
     const raw = await callClaudeMessages(
       `${seoHumanizerFinalPrompt(auditBullets)}\n\nHTML content:\n\n${pass1}`, 8000
@@ -9561,6 +9571,7 @@ async function humanizeSeoHtml(html) {
       console.warn('Humanizer pass 3 returned unusable HTML - using pass 1 output');
       return pass1;
     }
+    console.log('Humanizer pass 3 final rewrite complete');
     return pass3;
   } catch (err) {
     console.warn('Humanizer pass 3 failed - using pass 1 output:', err.message);
