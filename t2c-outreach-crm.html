@@ -13045,6 +13045,7 @@ async function loadSeoGscDashboard(force){
   if(window.__seoGscDashboard !== undefined && !force) return;
   if(window.__seoGscDashboardLoading) return;
   window.__seoGscDashboardLoading = true;
+  if(force) window.__seoGscInsights = undefined;
   if(force && state.currentPage === 'content' && window.__contentSubTab === 'seo') renderPage();
   try {
     const res = await fetch('/api/seo/gsc-dashboard');
@@ -13063,7 +13064,11 @@ function seoGscFmtPos(n){ return n ? Number(n).toFixed(1) : '—'; }
 
 function renderSeoGscDashboard(){
   const d = window.__seoGscDashboard;
+  const canInsight = d && !d.error && !window.__seoGscDashboardLoading;
   const refreshBtn = `<button class="btn btn-secondary btn-sm" onclick="loadSeoGscDashboard(true)"><i class="ti ti-refresh"></i> Refresh</button>`;
+  const insightsBtn = canInsight
+    ? `<button class="btn btn-primary btn-sm" ${window.__seoGscInsightsLoading?'disabled':''} onclick="loadSeoGscInsights()"><i class="ti ${window.__seoGscInsightsLoading?'ti-loader-2':'ti-bulb-filled'}"></i> ${window.__seoGscInsightsLoading?'Analysing...':'Engine Insights'}</button>`
+    : '';
   let bodyHtml;
   if(window.__seoGscDashboardLoading || d === undefined){
     bodyHtml = '<div class="muted"><i class="ti ti-loader-2"></i> Loading Search Console data...</div>';
@@ -13110,10 +13115,124 @@ function renderSeoGscDashboard(){
   <div class="card" style="margin-bottom:18px;">
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-chart-line"></i> GSC Dashboard</div>
-      ${refreshBtn}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">${insightsBtn}${refreshBtn}</div>
     </div>
     ${bodyHtml}
+    ${renderSeoGscInsights()}
   </div>`;
+}
+
+const SEO_INSIGHT_PRIORITY_CLASS = { high:'tag-lost', medium:'tag-messaging', low:'tag-pending' };
+const SEO_INSIGHT_PRIORITY_RANK = { high:0, medium:1, low:2 };
+
+async function loadSeoGscInsights(){
+  const d = window.__seoGscDashboard;
+  if(!d || d.error){ toast('Load the GSC dashboard first', 'warn'); return; }
+  if(window.__seoGscInsightsLoading) return;
+  window.__seoGscInsightsLoading = true;
+  renderPage();
+  try {
+    const res = await fetch('/api/seo/gsc-insights', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ totals: d.totals, queries: d.queries, daily: d.daily })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__seoGscInsights = Array.isArray(data.insights) ? data.insights : [];
+  } catch(err){
+    window.__seoGscInsights = { error: err.message };
+  }
+  window.__seoGscInsightsLoading = false;
+  renderPage();
+}
+
+function renderSeoGscInsights(){
+  const list = window.__seoGscInsights;
+  if(window.__seoGscInsightsLoading) return '<div class="muted" style="margin-top:16px;border-top:1px solid var(--border);padding-top:14px;"><i class="ti ti-loader-2"></i> Analysing Search Console data...</div>';
+  if(list === undefined) return '';
+  const wrap = inner => `<div style="margin-top:16px;border-top:1px solid var(--border);padding-top:14px;">
+      <div class="section-title" style="font-size:13px;margin-bottom:10px;"><i class="ti ti-bulb-filled"></i> Engine Insights</div>
+      ${inner}
+    </div>`;
+  if(list && list.error) return wrap(`<div class="muted">Could not load insights: ${esc(list.error)}</div>`);
+  if(!list.length) return wrap('<div class="empty-state">No insights surfaced from the current data.</div>');
+  const sorted = list.slice().sort((a,b) => (SEO_INSIGHT_PRIORITY_RANK[a.priority] ?? 3) - (SEO_INSIGHT_PRIORITY_RANK[b.priority] ?? 3));
+  return wrap(`<div style="display:flex;flex-direction:column;gap:10px;">${sorted.map(renderSeoGscInsightCard).join('')}</div>`);
+}
+
+function renderSeoGscInsightCard(ins){
+  const badge = `<span class="tag ${SEO_INSIGHT_PRIORITY_CLASS[ins.priority] || 'tag-pending'}">${esc(ins.priority || '—')}</span>`;
+  const meta = [ins.keyword ? `Keyword: ${esc(ins.keyword)}` : '', ins.url ? esc(ins.url) : ''].filter(Boolean).join(' &middot; ');
+  return `
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card);padding:14px;">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
+      <div style="font-weight:700;font-size:13px;">${esc(ins.title || 'Insight')}</div>
+      ${badge}
+    </div>
+    ${ins.finding ? `<div class="muted" style="font-size:12px;margin-top:6px;"><strong>Finding:</strong> ${esc(ins.finding)}</div>` : ''}
+    ${ins.action ? `<div style="font-size:12px;margin-top:4px;"><strong>Action:</strong> ${esc(ins.action)}</div>` : ''}
+    ${meta ? `<div class="muted" style="font-size:11px;margin-top:6px;">${meta}</div>` : ''}
+    <div style="margin-top:10px;">${seoGscInsightActionButton(ins)}</div>
+  </div>`;
+}
+
+function seoKeywordIdByText(kw){
+  if(!kw || !Array.isArray(window.__seoKeywords)) return null;
+  const t = kw.toLowerCase().trim();
+  const hit = window.__seoKeywords.find(k => (k.keyword || '').toLowerCase().trim() === t);
+  return hit ? hit.id : null;
+}
+
+function seoGscInsightActionButton(ins){
+  if(ins.type === 'indexing_issue'){
+    const url = ins.url || '';
+    if(!url) return '<span class="muted" style="font-size:11px;">No URL on this insight</span>';
+    return `<button class="btn btn-secondary btn-sm" onclick='resubmitSeoUrlToGsc(${JSON.stringify(url)}, this)'><i class="ti ti-refresh"></i> Resubmit to GSC</button>`;
+  }
+  const kwId = ins.keywordId || seoKeywordIdByText(ins.keyword);
+  if(!kwId) return `<span class="muted" style="font-size:11px;">Keyword not in the library${ins.keyword ? ` ("${esc(ins.keyword)}")` : ''}</span>`;
+  if(ins.type === 'create_content'){
+    return `<button class="btn btn-primary btn-sm" onclick="generateSeoPost('${kwId}')"><i class="ti ti-sparkles"></i> Generate Post</button>`;
+  }
+  if(ins.type === 'fix_meta'){
+    return `<button class="btn btn-secondary btn-sm" onclick="openSeoInsightKeyword('${kwId}', true)"><i class="ti ti-edit"></i> Fix Meta</button>`;
+  }
+  return `<button class="btn btn-secondary btn-sm" onclick="openSeoInsightKeyword('${kwId}', false)"><i class="ti ti-file-text"></i> Update Post</button>`;
+}
+
+// Opens a keyword in the SEO preview panel. If nothing has been generated
+// for it yet, kicks off generation instead. focusMeta jumps the cursor to
+// the meta title field (for a fix_meta insight).
+function openSeoInsightKeyword(id, focusMeta){
+  const k = Array.isArray(window.__seoKeywords) ? window.__seoKeywords.find(x => x.id === id) : null;
+  if(!k){ toast('Keyword not found in the library', 'warn'); return; }
+  if(!k.postHtml){
+    toast('No post generated for this keyword yet - generating now', 'info');
+    generateSeoPost(id);
+    return;
+  }
+  openSeoPreview(id);
+  setTimeout(() => {
+    const el = document.getElementById(focusMeta ? 'seoPreviewMetaTitle' : 'seoPreviewTitle');
+    if(el){ el.focus(); if(el.scrollIntoView) el.scrollIntoView({ block:'center' }); }
+  }, 60);
+}
+
+async function resubmitSeoUrlToGsc(url, btn){
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Resubmitting...'; }
+  try {
+    const res = await fetch('/api/seo/gsc-submit', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ url })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Submit failed');
+    toast(data.submitted ? 'Resubmitted to Google Search Console' : 'Submit attempted - check server logs for detail', data.submitted ? 'success' : 'warn');
+    if(btn){ btn.innerHTML = '<i class="ti ti-check"></i> Resubmitted'; }
+  } catch(err){
+    toast('Could not resubmit: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-refresh"></i> Resubmit to GSC'; }
+  }
 }
 
 function initSeoGscCharts(){

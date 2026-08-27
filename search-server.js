@@ -10324,6 +10324,101 @@ app.get('/api/seo/gsc-dashboard', async (req, res) => {
   }
 });
 
+// Manual GSC (re)submit for one URL - backs the "Resubmit to GSC" button
+// on an indexing_issue insight. Reuses submitUrlToGsc (Indexing API +
+// sitemap resubmit); that function never throws.
+app.post('/api/seo/gsc-submit', async (req, res) => {
+  const url = ((req.body && req.body.url) || '').trim();
+  if (!url) return res.status(400).json({ error: 'url is required' });
+  try {
+    const result = await submitUrlToGsc(url);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('GSC manual submit error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// AI Insights over the GSC dashboard data. Takes the dashboard payload the
+// frontend already has (totals / queries / daily), cross-references the
+// Airtable Keywords table to find target keywords with no GSC impressions
+// yet, and asks claude-opus-4-6 for a structured insight list. Each
+// returned insight is decorated with the matching Keywords record id (when
+// the keyword is tracked) so the frontend action buttons can open the SEO
+// preview / trigger generation without a second lookup.
+const GSC_INSIGHTS_SYSTEM_PROMPT = `You are an SEO strategist analysing Google Search Console data for Twenty2 Collective, a Perth-based Agile and change management consultancy. Analyse the data and return a JSON array of insights. Each insight must have: type (one of: quick_win, fix_meta, create_content, update_post, indexing_issue), priority (high/medium/low), title (short, specific), finding (one sentence, specific data point), action (exactly what to do), keyword (the specific keyword if applicable), url (the specific page URL if applicable). Focus on: (1) keywords ranking 11-30 that could reach page 1 with a post update, (2) keywords with impressions over 50 but CTR under 2% indicating a weak meta title, (3) keywords from the target list that have zero impressions indicating no content yet, (4) overall position trend, improving or declining. Return only valid JSON, no commentary.`;
+
+app.post('/api/seo/gsc-insights', async (req, res) => {
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const { totals, queries, daily } = req.body || {};
+  const gscQueries = Array.isArray(queries) ? queries : [];
+  if (!totals && !gscQueries.length) return res.status(400).json({ error: 'GSC dashboard data (totals, queries, daily) is required' });
+
+  try {
+    await ensureKeywordsTable();
+    const keywordRecords = await airtableFetchAllRecords(KEYWORDS_TABLE);
+
+    const norm = s => (s || '').toLowerCase().trim();
+    const gscQuerySet = new Set(gscQueries.map(q => norm(q.query)));
+    const keywordByText = {};
+    keywordRecords.forEach(r => { keywordByText[norm(r.fields['Keyword'])] = r; });
+
+    const targetKeywords = keywordRecords
+      .map(r => ({
+        keyword: r.fields['Keyword'] || '',
+        status: r.fields['Status'] || '',
+        publishedUrl: r.fields['Published URL'] || '',
+        hasGscImpressions: gscQuerySet.has(norm(r.fields['Keyword']))
+      }))
+      .filter(k => k.keyword);
+    const targetKeywordsNoImpressions = targetKeywords.filter(k => !k.hasGscImpressions).map(k => k.keyword);
+
+    const userContent = `GOOGLE SEARCH CONSOLE DATA (last 28 days)
+
+SITE TOTALS:
+${JSON.stringify(totals || {}, null, 2)}
+
+PER-KEYWORD PERFORMANCE (top queries - query, clicks, impressions, ctr, position):
+${JSON.stringify(gscQueries, null, 2)}
+
+DAILY TREND (date, clicks, impressions, position):
+${JSON.stringify(Array.isArray(daily) ? daily : [], null, 2)}
+
+TARGET KEYWORDS FROM THE CONTENT PLAN (Airtable Keywords table):
+${JSON.stringify(targetKeywords, null, 2)}
+
+TARGET KEYWORDS WITH ZERO GSC IMPRESSIONS (no content ranking for them yet):
+${JSON.stringify(targetKeywordsNoImpressions, null, 2)}`;
+
+    const raw = await callClaudeMessages(userContent, 4000, GSC_INSIGHTS_SYSTEM_PROMPT);
+    const cleaned = stripCodeFences(raw);
+    let insights = [];
+    try {
+      const parsed = JSON.parse(cleaned);
+      insights = Array.isArray(parsed) ? parsed : (Array.isArray(parsed && parsed.insights) ? parsed.insights : []);
+    } catch (parseErr) {
+      const m = cleaned.match(/\[[\s\S]*\]/);
+      if (m) { try { insights = JSON.parse(m[0]); } catch (e) { insights = []; } }
+    }
+
+    insights = (Array.isArray(insights) ? insights : []).map(ins => {
+      const rec = ins && ins.keyword ? keywordByText[norm(ins.keyword)] : null;
+      return {
+        ...ins,
+        keywordId: rec ? rec.id : null,
+        url: (ins && ins.url) || (rec ? (rec.fields['Published URL'] || '') : '') || null
+      };
+    });
+
+    res.json({ insights });
+  } catch (err) {
+    console.error('GSC insights error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---- Service pages (city zipper model) ----
 // One page per {service} x {location} keyword (e.g. "change management
 // consulting Fremantle"). Same Serper-scrape-the-top-3 + Claude-write-to-
