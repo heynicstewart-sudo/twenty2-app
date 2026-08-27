@@ -6324,6 +6324,32 @@ app.patch('/api/contacts/:id/job-title', async (req, res) => {
   }
 });
 
+// Contact drawer's editable Company field (t2c-outreach-crm.html,
+// saveContactCompany) - same reasoning as PATCH /api/contacts/:id/job-title
+// above: Serper/Apollo-sourced company data goes stale once someone moves
+// employers. Unlike job title, the new value might not exist in Airtable
+// at all yet, so this reuses findOrCreateCompanyRecord (the same helper
+// the Grid's "Add company" and fill-missing-company flows already use)
+// rather than requiring the company to already exist. gridName (optional)
+// tags the company's Grid Name the same way a manually-added grid company
+// gets tagged, so it shows up correctly scoped if it's a brand new record.
+app.patch('/api/contacts/:id/company', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const companyName = ((req.body || {}).companyName || '').trim();
+  const gridName = (req.body || {}).gridName || null;
+  if (!companyName) return res.status(400).json({ error: 'companyName is required' });
+  try {
+    const contactRecord = await airtableGetRecord('Contacts', req.params.id);
+    if (!contactRecord) return res.status(404).json({ error: 'Contact not found' });
+    const companyRecord = await findOrCreateCompanyRecord(companyName, gridName);
+    await airtableRequest('PATCH', 'Contacts', { records: [{ id: req.params.id, fields: { 'Company': [companyRecord.id] } }] });
+    res.json({ success: true, companyName, companyId: companyRecord.id, created: !companyRecord.skipped });
+  } catch (err) {
+    console.error('Update contact company error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Contact drawer's "Clean up notes" button (t2c-outreach-crm.html,
 // cleanUpContactNotes) - Notes (POST /api/contacts/notes) is a plain
 // append-log, so a big copy-pasted LinkedIn bio/job-history dump just sits

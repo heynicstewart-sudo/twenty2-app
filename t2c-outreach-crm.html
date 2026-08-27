@@ -7574,6 +7574,16 @@ async function updateContactDrawerStage(newStage){
 // button, since this is a single short field people will fix in passing.
 // No-ops if unchanged so leaving the field without editing it never fires
 // an unnecessary write.
+//
+// Also keeps the contact's Grid placement in sync: contactsForCell matches
+// a contact into a (company, role) cell by c.role, a separate local field
+// this write never used to touch, so a corrected title updated Airtable
+// but left the Grid showing the stale one until a full reload re-hydrated
+// state.contacts. If the corrected title doesn't match any of that grid's
+// existing columns (e.g. their real title changed to something the
+// campaign doesn't have a column for yet, but they're still relevant to
+// it), adds one automatically rather than leaving them with an accurate
+// title but nowhere on the matrix to show up.
 async function saveContactJobTitle(){
   const input = document.getElementById('contactJobTitleInput');
   const profile = window.__drawerContactProfile;
@@ -7591,9 +7601,74 @@ async function saveContactJobTitle(){
     profile.contact.jobTitle = data.jobTitle;
     input.value = data.jobTitle;
     toast('Job title updated', 'success');
+
+    const localContact = state.contacts.find(x => x.id === profile.contact.id);
+    const grid = localContact && localContact.gridId ? state.grids.find(g => g.id === localContact.gridId) : null;
+    if(localContact && grid){
+      const existingCol = grid.columns.find(col => col.trim().toLowerCase() === data.jobTitle.toLowerCase());
+      if(existingCol){
+        localContact.role = existingCol;
+      } else {
+        grid.columns.push(data.jobTitle);
+        localContact.role = data.jobTitle;
+        touchGrid(grid.id);
+        toast(`Added "${data.jobTitle}" as a new column on ${grid.name} so they still show up on the matrix`, 'success');
+      }
+      renderPage();
+    }
   } catch(err){
     input.value = profile.contact.jobTitle;
     toast('Could not update job title: ' + err.message, 'warn');
+  }
+}
+
+// Corrects a Serper/Apollo-sourced Company straight from the drawer header -
+// same save-on-blur/Enter convention as saveContactJobTitle above, for the
+// same reason: a contact's company can go stale (they've moved employers)
+// and there was no way to fix it without editing Airtable directly. Unlike
+// job title, a company might not exist in Airtable yet at all - the server
+// creates it (PATCH /api/contacts/:id/company, reusing the same
+// findOrCreateCompanyRecord the Grid's own "Add company"/fill-missing flows
+// use) rather than rejecting an unrecognised name.
+//
+// Also keeps Grid placement in sync, same reasoning as job title: adds the
+// new company as a row on this contact's grid if it isn't already one,
+// rather than leaving them with an accurate company but no row to sit in.
+async function saveContactCompany(){
+  const input = document.getElementById('contactCompanyInput');
+  const profile = window.__drawerContactProfile;
+  if(!input || !profile) return;
+  const newCompany = input.value.trim();
+  if(!newCompany || newCompany === profile.contact.companyName) { input.value = profile.contact.companyName; return; }
+
+  const localContact = state.contacts.find(x => x.id === profile.contact.id);
+  const grid = localContact && localContact.gridId ? state.grids.find(g => g.id === localContact.gridId) : null;
+
+  try {
+    const res = await fetch(`/api/contacts/${encodeURIComponent(profile.contact.id)}/company`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ companyName: newCompany, gridName: grid ? grid.name : undefined })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
+    profile.contact.companyName = data.companyName;
+    profile.contact.companyId = data.companyId;
+    input.value = data.companyName;
+    toast(data.created ? `Company updated - "${data.companyName}" was created in Airtable` : 'Company updated', 'success');
+
+    if(localContact && grid){
+      localContact.company = data.companyName;
+      if(!grid.companies.includes(data.companyName)){
+        grid.companies.push(data.companyName);
+        touchGrid(grid.id);
+        toast(`Added "${data.companyName}" as a new row on ${grid.name}`, 'success');
+      }
+      renderPage();
+    }
+  } catch(err){
+    input.value = profile.contact.companyName;
+    toast('Could not update company: ' + err.message, 'warn');
   }
 }
 
@@ -7697,9 +7772,12 @@ function renderContactDrawerContent(data, campaignName){
     <div class="drawer-avatar">${esc(initials(c.fullName))}</div>
     <div style="flex:1;min-width:0;">
       <div style="font-weight:800;font-size:16px;">${esc(c.fullName)}</div>
-      <div style="display:flex;align-items:center;gap:5px;">
-        <input id="contactJobTitleInput" class="muted" value="${esc(c.jobTitle)}" placeholder="Job title" title="Click to correct - useful if the Serper/Apollo search got it wrong" style="font-size:12.5px;border:1px solid transparent;border-radius:4px;padding:1px 4px;margin-left:-4px;background:transparent;min-width:0;flex:0 1 auto;" size="${Math.max(8, c.jobTitle.length)}" onfocus="this.style.borderColor='var(--border,#ddd)';" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}" onblur="this.style.borderColor='transparent';saveContactJobTitle();" />
-        ${c.companyName ? `<span class="muted" style="font-size:12.5px;">· ${esc(c.companyName)}</span>` : ''}
+      <div style="display:flex;align-items:center;gap:3px;flex-wrap:wrap;">
+        <input id="contactJobTitleInput" class="muted" value="${esc(c.jobTitle)}" placeholder="Job title" title="Click to correct - useful if the Serper/Apollo search got it wrong, or if their real title just changed" style="font-size:12.5px;border:1px dashed var(--border,#ccc);border-radius:4px;padding:1px 4px;margin-left:-4px;background:transparent;min-width:0;flex:0 1 auto;" size="${Math.max(8, c.jobTitle.length)}" onfocus="this.style.borderColor='var(--blue)';this.style.borderStyle='solid';" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}" onblur="this.style.borderColor='var(--border,#ccc)';this.style.borderStyle='dashed';saveContactJobTitle();" />
+        <i class="ti ti-pencil" style="font-size:11px;color:var(--muted);flex-shrink:0;" title="Job title is editable"></i>
+        <span class="muted" style="font-size:12.5px;">·</span>
+        <input id="contactCompanyInput" class="muted" value="${esc(c.companyName)}" placeholder="Company" title="Click to correct - useful if Serper/Apollo data is outdated or they've moved companies. Creates the company in Airtable if it doesn't exist yet." style="font-size:12.5px;border:1px dashed var(--border,#ccc);border-radius:4px;padding:1px 4px;background:transparent;min-width:0;flex:0 1 auto;" size="${Math.max(8, (c.companyName||'').length)}" onfocus="this.style.borderColor='var(--blue)';this.style.borderStyle='solid';" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}" onblur="this.style.borderColor='var(--border,#ccc)';this.style.borderStyle='dashed';saveContactCompany();" />
+        <i class="ti ti-pencil" style="font-size:11px;color:var(--muted);flex-shrink:0;" title="Company is editable"></i>
       </div>
       <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
         ${c.linkedinUrl ? `<a href="${esc(c.linkedinUrl)}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm"><i class="ti ti-brand-linkedin"></i></a>` : ''}
