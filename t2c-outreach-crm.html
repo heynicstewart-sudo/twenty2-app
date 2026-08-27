@@ -1368,6 +1368,8 @@ function afterRender(page){
     if(tab === 'seo' && window.__seoSuggestions === undefined) loadSeoSuggestions();
     if(tab === 'seo' && window.__seoVoiceProfile === undefined) loadSeoVoiceProfile();
     if(tab === 'seo' && window.__seoSitemap === undefined) loadSeoSitemap();
+    if(tab === 'seo' && window.__seoGscDashboard === undefined) loadSeoGscDashboard();
+    if(tab === 'seo') initSeoGscCharts();
     if(tab === 'settings' && window.__contentSettings === undefined) loadContentSettings();
   }
   if(page === 'home' && window.__homeContactSignals === undefined) loadHomeContactSignals();
@@ -13034,10 +13036,151 @@ async function loadSeoSitemap(force){
 // T2C's core services - the dropdown source for the Service Pages form.
 const SEO_SERVICE_OPTIONS = ['Change Management Consulting','Agile Coaching','Agile Training','Organisational Design','Change Management Training'];
 
+// ---- GSC Dashboard ----
+// Last 28 days of Search Console performance for the connected property,
+// via GET /api/seo/gsc-dashboard. Charts render in initSeoGscCharts(),
+// called from afterRender once the canvases exist.
+
+async function loadSeoGscDashboard(force){
+  if(window.__seoGscDashboard !== undefined && !force) return;
+  if(window.__seoGscDashboardLoading) return;
+  window.__seoGscDashboardLoading = true;
+  if(force && state.currentPage === 'content' && window.__contentSubTab === 'seo') renderPage();
+  try {
+    const res = await fetch('/api/seo/gsc-dashboard');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__seoGscDashboard = data;
+  } catch(err){
+    window.__seoGscDashboard = { error: err.message };
+  }
+  window.__seoGscDashboardLoading = false;
+  if(state.currentPage === 'content' && window.__contentSubTab === 'seo') renderPage();
+}
+
+function seoGscFmtInt(n){ return Math.round(n || 0).toLocaleString(); }
+function seoGscFmtPos(n){ return n ? Number(n).toFixed(1) : '—'; }
+
+function renderSeoGscDashboard(){
+  const d = window.__seoGscDashboard;
+  const refreshBtn = `<button class="btn btn-secondary btn-sm" onclick="loadSeoGscDashboard(true)"><i class="ti ti-refresh"></i> Refresh</button>`;
+  let bodyHtml;
+  if(window.__seoGscDashboardLoading || d === undefined){
+    bodyHtml = '<div class="muted"><i class="ti ti-loader-2"></i> Loading Search Console data...</div>';
+  } else if(d && d.error){
+    bodyHtml = `<div class="muted">Could not load GSC data: ${esc(d.error)}</div>`;
+  } else {
+    const totals = d.totals || {};
+    const queries = (d.queries || []).slice().sort((a,b) => (a.position || 9999) - (b.position || 9999));
+    const hasDaily = Array.isArray(d.daily) && d.daily.length > 0;
+    bodyHtml = `
+      <div class="mini-cards">
+        <div class="mini-card"><div class="num">${seoGscFmtInt(totals.clicks)}</div><div class="label">Total clicks</div></div>
+        <div class="mini-card"><div class="num">${seoGscFmtInt(totals.impressions)}</div><div class="label">Total impressions</div></div>
+        <div class="mini-card"><div class="num">${seoGscFmtPos(totals.position)}</div><div class="label">Avg position</div></div>
+      </div>
+      ${hasDaily ? `
+      <div class="row" style="gap:16px;margin-bottom:6px;">
+        <div class="field" style="flex:1;min-width:280px;margin-bottom:0;">
+          <label>Clicks &amp; impressions &middot; last 28 days</label>
+          <div style="position:relative;height:230px;"><canvas id="seoGscTrafficChart"></canvas></div>
+        </div>
+        <div class="field" style="flex:1;min-width:280px;margin-bottom:0;">
+          <label>Average position &middot; last 28 days</label>
+          <div style="position:relative;height:230px;"><canvas id="seoGscPositionChart"></canvas></div>
+        </div>
+      </div>` : ''}
+      ${queries.length ? `
+      <div class="perf-table-wrap">
+      <table class="perf-table">
+        <thead><tr><th>Keyword</th><th>Position</th><th>Clicks</th><th>Impressions</th></tr></thead>
+        <tbody>
+        ${queries.map(q => `<tr>
+          <td>${esc(q.query || '—')}</td>
+          <td>${seoGscFmtPos(q.position)}</td>
+          <td>${seoGscFmtInt(q.clicks)}</td>
+          <td>${seoGscFmtInt(q.impressions)}</td>
+        </tr>`).join('')}
+        </tbody>
+      </table>
+      </div>` : '<div class="empty-state">No query data for the last 28 days yet.</div>'}
+    `;
+  }
+  return `
+  <div class="card" style="margin-bottom:18px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-chart-line"></i> GSC Dashboard</div>
+      ${refreshBtn}
+    </div>
+    ${bodyHtml}
+  </div>`;
+}
+
+function initSeoGscCharts(){
+  if(typeof Chart === 'undefined') return;
+  window.__seoGscCharts = window.__seoGscCharts || {};
+  ['traffic','position'].forEach(k => { if(window.__seoGscCharts[k]){ window.__seoGscCharts[k].destroy(); window.__seoGscCharts[k] = null; } });
+
+  const d = window.__seoGscDashboard;
+  if(!d || d.error || !Array.isArray(d.daily) || !d.daily.length) return;
+
+  const css = getComputedStyle(document.documentElement);
+  const muted = (css.getPropertyValue('--muted') || '#888').trim();
+  const gridColor = (css.getPropertyValue('--border-light') || 'rgba(128,128,128,0.15)').trim();
+  const labels = d.daily.map(r => r.date);
+
+  const trafficEl = document.getElementById('seoGscTrafficChart');
+  if(trafficEl){
+    window.__seoGscCharts.traffic = new Chart(trafficEl, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          { label:'Clicks', data: d.daily.map(r => r.clicks), borderColor:'#2563eb', backgroundColor:'rgba(37,99,235,0.12)', fill:true, tension:0.3, pointRadius:0, borderWidth:2, yAxisID:'y' },
+          { label:'Impressions', data: d.daily.map(r => r.impressions), borderColor:'#FF834C', backgroundColor:'rgba(255,131,76,0.08)', fill:false, tension:0.3, pointRadius:0, borderWidth:2, yAxisID:'y1' }
+        ]
+      },
+      options: {
+        responsive:true, maintainAspectRatio:false,
+        interaction:{ mode:'index', intersect:false },
+        scales:{
+          x:{ ticks:{ maxTicksLimit:7, font:{ size:10 }, color:muted }, grid:{ display:false } },
+          y:{ position:'left', beginAtZero:true, title:{ display:true, text:'Clicks', font:{ size:10 }, color:muted }, ticks:{ precision:0, font:{ size:10 }, color:muted }, grid:{ color:gridColor } },
+          y1:{ position:'right', beginAtZero:true, title:{ display:true, text:'Impressions', font:{ size:10 }, color:muted }, ticks:{ precision:0, font:{ size:10 }, color:muted }, grid:{ drawOnChartArea:false } }
+        },
+        plugins:{ legend:{ position:'bottom', labels:{ boxWidth:10, font:{ size:11 } } } }
+      }
+    });
+  }
+
+  const positionEl = document.getElementById('seoGscPositionChart');
+  if(positionEl){
+    window.__seoGscCharts.position = new Chart(positionEl, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          { label:'Avg position', data: d.daily.map(r => r.position ? Number(r.position.toFixed(1)) : null), borderColor:'#44A574', backgroundColor:'rgba(68,165,116,0.12)', fill:true, tension:0.3, pointRadius:0, borderWidth:2, spanGaps:true }
+        ]
+      },
+      options: {
+        responsive:true, maintainAspectRatio:false,
+        scales:{
+          x:{ ticks:{ maxTicksLimit:7, font:{ size:10 }, color:muted }, grid:{ display:false } },
+          y:{ reverse:true, title:{ display:true, text:'Position (1 = top)', font:{ size:10 }, color:muted }, ticks:{ precision:0, font:{ size:10 }, color:muted }, grid:{ color:gridColor } }
+        },
+        plugins:{ legend:{ display:false } }
+      }
+    });
+  }
+}
+
 function renderContentSeoTab(){
   if(window.__seoPreview) return renderSeoPreviewPanel();
   if(window.__seoServicePreview) return renderSeoServicePreviewPanel();
   return `
+  ${renderSeoGscDashboard()}
+
   <div class="card" style="margin-bottom:18px;">
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:10px;">
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-key"></i> Keyword Library</div>

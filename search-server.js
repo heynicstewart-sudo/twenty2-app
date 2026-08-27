@@ -10257,6 +10257,73 @@ app.post('/api/seo/sitemap/:id/send-to-draft-centre', async (req, res) => {
   }
 });
 
+// GSC Dashboard - reads the last 28 days of Search Console performance for
+// the configured property (GSC_PROPERTY, or sc-domain:<FRAMER_SITE_URL
+// host>), authenticating with the same GSC_SERVICE_ACCOUNT_JSON service
+// account as the publish-time submission. Two searchAnalytics.query calls:
+// one with no dimensions for the site-wide totals, one dimensioned by
+// query for the top 50 queries (default ordering is clicks descending).
+async function gscSearchAnalyticsQuery(token, property, body) {
+  const endpoint = `https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(property)}/searchAnalytics/query`;
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) throw new Error(`Search Console API ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+app.get('/api/seo/gsc-dashboard', async (req, res) => {
+  if (!process.env.GSC_SERVICE_ACCOUNT_JSON) return res.status(500).json({ error: 'GSC_SERVICE_ACCOUNT_JSON not configured' });
+  const property = gscPropertyForSite();
+  if (!property) return res.status(500).json({ error: 'GSC property not resolvable - set GSC_PROPERTY or FRAMER_SITE_URL' });
+
+  try {
+    const token = await getGscAccessToken();
+
+    const endDate = new Date().toISOString().slice(0, 10);
+    const startDate = new Date(Date.now() - 28 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+    const [totalsData, queryData, dailyData] = await Promise.all([
+      gscSearchAnalyticsQuery(token, property, { startDate, endDate, dimensions: [] }),
+      gscSearchAnalyticsQuery(token, property, { startDate, endDate, dimensions: ['query'], rowLimit: 50 }),
+      gscSearchAnalyticsQuery(token, property, { startDate, endDate, dimensions: ['date'], rowLimit: 400 })
+    ]);
+
+    const t = (totalsData.rows && totalsData.rows[0]) || {};
+    const totals = {
+      clicks: t.clicks || 0,
+      impressions: t.impressions || 0,
+      ctr: t.ctr || 0,
+      position: t.position || 0
+    };
+
+    const queries = (queryData.rows || []).map(r => ({
+      query: (r.keys && r.keys[0]) || '',
+      clicks: r.clicks || 0,
+      impressions: r.impressions || 0,
+      ctr: r.ctr || 0,
+      position: r.position || 0
+    }));
+
+    const daily = (dailyData.rows || [])
+      .map(r => ({
+        date: (r.keys && r.keys[0]) || '',
+        clicks: r.clicks || 0,
+        impressions: r.impressions || 0,
+        ctr: r.ctr || 0,
+        position: r.position || 0
+      }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    res.json({ property, range: { startDate, endDate }, totals, queries, daily });
+  } catch (err) {
+    console.error('GSC dashboard error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---- Service pages (city zipper model) ----
 // One page per {service} x {location} keyword (e.g. "change management
 // consulting Fremantle"). Same Serper-scrape-the-top-3 + Claude-write-to-
