@@ -10732,6 +10732,293 @@ app.post('/api/seo/generate-service-page', async (req, res) => {
   }
 });
 
+// ===================== SEO CAMPAIGNS =====================
+// The Campaigns section at the top of the Marketing > SEO sub-tab. A
+// campaign bundles a goal, a start date, a status, and a target keyword
+// set - the Target Keywords field is a comma-separated list of Keywords
+// record ids OR literal keyword strings, resolved loosely against the
+// Keywords table at read time. Nothing about "progress" is stored: GET
+// /api/seo/campaigns/:id/progress recomputes it live from Search Console
+// + the Sitemap table each call.
+
+const SEO_CAMPAIGNS_TABLE = 'SEO Campaigns';
+
+// Best-effort provisioning, same swallow-and-warn contract as
+// ensureKeywordsTable / ensureSitemapTable above - needs schema.bases:write
+// on the connected token, or the table can be created once by hand with
+// these exact names/types.
+async function ensureSeoCampaignsTable() {
+  try {
+    return await ensureAirtableTable(SEO_CAMPAIGNS_TABLE, [
+      { name: 'Campaign Name', type: 'singleLineText' },
+      { name: 'Start Date', type: 'date', options: { dateFormat: { name: 'iso' } } },
+      { name: 'Goal', type: 'multilineText' },
+      { name: 'Status', type: 'singleSelect', options: { choices: [{ name: 'Active' }, { name: 'Completed' }, { name: 'Paused' }] } },
+      { name: 'Target Keywords', type: 'multilineText' },
+      { name: 'Notes', type: 'multilineText' }
+    ]);
+  } catch (err) {
+    warnOnce('provision:seo-campaigns-table', 'Could not auto-provision the SEO Campaigns table (create it by hand if it does not exist yet):', err.message);
+  }
+}
+
+function parseSeoCampaignRecord(r) {
+  return {
+    id: r.id,
+    name: r.fields['Campaign Name'] || '',
+    startDate: r.fields['Start Date'] || '',
+    goal: r.fields['Goal'] || '',
+    status: r.fields['Status'] || 'Active',
+    targetKeywords: r.fields['Target Keywords'] || '',
+    notes: r.fields['Notes'] || ''
+  };
+}
+
+// "kw1, kw2 , rec123" -> ["kw1","kw2","rec123"]
+function splitSeoCampaignKeywordTokens(raw) {
+  return String(raw || '').split(',').map(s => s.trim()).filter(Boolean);
+}
+
+// Resolves each Target Keywords token (a Keywords record id OR keyword
+// text) against the Keywords table. Tokens that match nothing are still
+// returned, with id null, so the UI can show them as untracked.
+function resolveSeoCampaignKeywords(tokens, keywordRecords) {
+  const byId = {};
+  const byText = {};
+  keywordRecords.forEach(r => {
+    byId[r.id] = r;
+    byText[(r.fields['Keyword'] || '').toLowerCase().trim()] = r;
+  });
+  const seen = new Set();
+  const out = [];
+  tokens.forEach(tok => {
+    const rec = byId[tok] || byText[tok.toLowerCase()];
+    const keyword = rec ? (rec.fields['Keyword'] || '') : tok;
+    const key = (rec ? rec.id : keyword.toLowerCase());
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ id: rec ? rec.id : null, keyword });
+  });
+  return out;
+}
+
+// One-time starter campaign so the SEO sub-tab isn't empty on a fresh
+// deploy. Runs at most once per process, and only writes when the table
+// has zero rows - so deleting it in the UI sticks for the life of the
+// process (a restart with an empty table would re-seed, which is the
+// intended "first deploy" behaviour).
+let seoCampaignSeedChecked = false;
+async function maybeSeedSeoCampaign() {
+  if (seoCampaignSeedChecked) return;
+  seoCampaignSeedChecked = true;
+  try {
+    const existing = await airtableFetchAllRecords(SEO_CAMPAIGNS_TABLE);
+    if (existing.length) return;
+    await ensureKeywordsTable();
+    const keywordRecords = await airtableFetchAllRecords(KEYWORDS_TABLE);
+    const allKeywordIds = keywordRecords.map(r => r.id).join(', ');
+    await airtableRequest('POST', SEO_CAMPAIGNS_TABLE, {
+      records: [{
+        fields: {
+          'Campaign Name': 'Organic Growth — Site Refresh',
+          'Start Date': new Date().toISOString().slice(0, 10),
+          'Goal': 'Increase organic traffic from zero baseline. Fix toxic backlink profile, disavow spam links, recover link equity from dead Wix URLs by republishing state of agile, product owner, and agile learning journey posts. Rank 20+ target keywords in top 100 within 90 days.',
+          'Status': 'Active',
+          'Target Keywords': allKeywordIds
+        }
+      }],
+      typecast: true
+    });
+    console.log('Seeded starter SEO campaign "Organic Growth — Site Refresh" with', keywordRecords.length, 'target keywords');
+  } catch (err) {
+    warnOnce('seed:seo-campaign', 'Could not seed the starter SEO campaign:', err.message);
+  }
+}
+
+app.get('/api/seo/campaigns', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    await ensureSeoCampaignsTable();
+    await maybeSeedSeoCampaign();
+    const records = await airtableFetchAllRecords(SEO_CAMPAIGNS_TABLE);
+    const campaigns = records
+      .map(parseSeoCampaignRecord)
+      .sort((a, b) => String(b.startDate).localeCompare(String(a.startDate)));
+    res.json({ campaigns });
+  } catch (err) {
+    console.error('List SEO campaigns error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/seo/campaigns', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { name, startDate, goal, status, targetKeywords, notes } = req.body || {};
+  if (!name || !String(name).trim()) return res.status(400).json({ error: 'name is required' });
+  try {
+    await ensureSeoCampaignsTable();
+    const fields = {
+      'Campaign Name': String(name).trim(),
+      'Start Date': startDate || new Date().toISOString().slice(0, 10),
+      'Goal': goal || '',
+      'Status': status || 'Active',
+      'Target Keywords': Array.isArray(targetKeywords) ? targetKeywords.join(', ') : (targetKeywords || ''),
+      'Notes': notes || ''
+    };
+    const data = await airtableRequest('POST', SEO_CAMPAIGNS_TABLE, { records: [{ fields }], typecast: true });
+    res.json({ success: true, campaign: parseSeoCampaignRecord(data.records[0]) });
+  } catch (err) {
+    console.error('Create SEO campaign error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/seo/campaigns/:id', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { name, startDate, goal, status, targetKeywords, notes } = req.body || {};
+  try {
+    const fields = {};
+    if (name !== undefined) fields['Campaign Name'] = name;
+    if (startDate !== undefined) fields['Start Date'] = startDate;
+    if (goal !== undefined) fields['Goal'] = goal;
+    if (status !== undefined) fields['Status'] = status;
+    if (targetKeywords !== undefined) fields['Target Keywords'] = Array.isArray(targetKeywords) ? targetKeywords.join(', ') : targetKeywords;
+    if (notes !== undefined) fields['Notes'] = notes;
+    if (!Object.keys(fields).length) return res.status(400).json({ error: 'Nothing to update' });
+    const data = await airtableRequest('PATCH', SEO_CAMPAIGNS_TABLE, { records: [{ id: req.params.id, fields }], typecast: true });
+    res.json({ success: true, campaign: parseSeoCampaignRecord(data.records[0]) });
+  } catch (err) {
+    console.error('Update SEO campaign error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/seo/campaigns/:id', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const url = `${AIRTABLE_URL}/${encodeURIComponent(SEO_CAMPAIGNS_TABLE)}?records[]=${encodeURIComponent(req.params.id)}`;
+    const resp = await airtableFetchWithRetry(url, { method: 'DELETE', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } });
+    if (!resp.ok) { const err = await resp.text(); throw new Error(`Airtable error ${resp.status}: ${err}`); }
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Delete SEO campaign error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Live campaign progress:
+//   - GSC clicks/impressions/position from the campaign start date to today
+//   - count + list of pages published (Sitemap) since the start date
+//   - per target keyword: position in the 7 days opening on the start date
+//     ("start position") vs the most recent 7 days ("current position"),
+//     and the movement between them (positive = moved up the results).
+// GSC has a ~2-3 day reporting lag, hence the 7-day windows rather than
+// single-day snapshots. The whole GSC section is best-effort: if Search
+// Console isn't configured the rest of the payload still returns.
+app.get('/api/seo/campaigns/:id/progress', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    await ensureSeoCampaignsTable();
+    const record = await airtableGetRecord(SEO_CAMPAIGNS_TABLE, req.params.id);
+    if (!record) return res.status(404).json({ error: 'Campaign not found' });
+    const campaign = parseSeoCampaignRecord(record);
+    const today = new Date().toISOString().slice(0, 10);
+    const startDate = campaign.startDate || today;
+
+    await ensureKeywordsTable();
+    await ensureSitemapTable();
+    const [keywordRecords, sitemapRecords] = await Promise.all([
+      airtableFetchAllRecords(KEYWORDS_TABLE),
+      airtableFetchAllRecords(SITEMAP_TABLE)
+    ]);
+
+    const resolved = resolveSeoCampaignKeywords(splitSeoCampaignKeywordTokens(campaign.targetKeywords), keywordRecords);
+
+    const postsPublished = sitemapRecords
+      .filter(r => {
+        const d = r.fields['Published Date'] || '';
+        return d && d >= startDate && d <= today;
+      })
+      .map(r => ({
+        url: r.fields['URL'] || '',
+        title: r.fields['Title'] || '',
+        type: r.fields['Type'] || '',
+        keyword: r.fields['Keyword'] || '',
+        publishedDate: r.fields['Published Date'] || ''
+      }))
+      .sort((a, b) => String(b.publishedDate).localeCompare(String(a.publishedDate)));
+
+    let gsc = null;
+    let keywordMovement = resolved.map(k => ({ keyword: k.keyword, keywordId: k.id, startPosition: null, currentPosition: null, movement: null }));
+
+    if (process.env.GSC_SERVICE_ACCOUNT_JSON) {
+      const property = gscPropertyForSite();
+      if (!property) {
+        gsc = { error: 'GSC property not resolvable - set GSC_PROPERTY or FRAMER_SITE_URL' };
+      } else {
+        try {
+          const token = await getGscAccessToken();
+          const startWindowEnd = new Date(Math.min(Date.parse(startDate) + 7 * 86400000, Date.now())).toISOString().slice(0, 10);
+          const currentWindowStart = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+          const [totalsData, dailyData, startQueryData, currentQueryData] = await Promise.all([
+            gscSearchAnalyticsQuery(token, property, { startDate, endDate: today, dimensions: [] }),
+            gscSearchAnalyticsQuery(token, property, { startDate, endDate: today, dimensions: ['date'], rowLimit: 1000 }),
+            gscSearchAnalyticsQuery(token, property, { startDate, endDate: startWindowEnd, dimensions: ['query'], rowLimit: 2000 }),
+            gscSearchAnalyticsQuery(token, property, { startDate: currentWindowStart, endDate: today, dimensions: ['query'], rowLimit: 2000 })
+          ]);
+
+          const t = (totalsData.rows && totalsData.rows[0]) || {};
+          const daily = (dailyData.rows || [])
+            .map(r => ({ date: (r.keys && r.keys[0]) || '', clicks: r.clicks || 0, impressions: r.impressions || 0, ctr: r.ctr || 0, position: r.position || 0 }))
+            .sort((a, b) => a.date.localeCompare(b.date));
+          gsc = {
+            range: { startDate, endDate: today },
+            totals: { clicks: t.clicks || 0, impressions: t.impressions || 0, ctr: t.ctr || 0, position: t.position || 0 },
+            daily
+          };
+
+          const norm = s => (s || '').toLowerCase().trim();
+          const startPos = {};
+          (startQueryData.rows || []).forEach(r => { startPos[norm(r.keys && r.keys[0])] = r.position; });
+          const curPos = {};
+          (currentQueryData.rows || []).forEach(r => { curPos[norm(r.keys && r.keys[0])] = r.position; });
+
+          keywordMovement = resolved.map(k => {
+            const sp = startPos[norm(k.keyword)];
+            const cp = curPos[norm(k.keyword)];
+            const startPosition = (typeof sp === 'number') ? Number(sp.toFixed(1)) : null;
+            const currentPosition = (typeof cp === 'number') ? Number(cp.toFixed(1)) : null;
+            const movement = (startPosition != null && currentPosition != null) ? Number((startPosition - currentPosition).toFixed(1)) : null;
+            return { keyword: k.keyword, keywordId: k.id, startPosition, currentPosition, movement };
+          });
+        } catch (err) {
+          console.warn('SEO campaign progress GSC fetch failed:', err.message);
+          gsc = { error: err.message };
+        }
+      }
+    }
+
+    const rankedKeywordCount = keywordMovement.filter(k => k.currentPosition != null).length;
+    const daysRunning = Math.max(0, Math.floor((Date.now() - Date.parse(startDate)) / 86400000));
+
+    res.json({
+      campaign,
+      startDate,
+      today,
+      daysRunning,
+      targetKeywordCount: resolved.length,
+      rankedKeywordCount,
+      postsPublishedCount: postsPublished.length,
+      postsPublished,
+      keywordMovement,
+      gsc
+    });
+  } catch (err) {
+    console.error('SEO campaign progress error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ===================== SCHEDULED SYNC JOBS =====================
 // Both run silently in the background and never block the UI - failures
 // are logged, not thrown, same as every other cron-eligible job in this
