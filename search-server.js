@@ -9468,6 +9468,67 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
   }
 }
 
+// Internal linking - once a post is drafted, pull every page already in
+// the Sitemap table and ask Claude to weave contextual links to the 2-3
+// most topically-relevant ones into the body prose. Best-effort: no
+// Sitemap rows yet (nothing to link to), a failed Claude call, or a
+// structurally-broken result all fall back to the un-linked html rather
+// than failing generation. Runs after drafting and before the post is
+// saved/published, so the links are baked into what reaches Framer.
+async function injectInternalLinks(html, keyword, sitemapRecords) {
+  const candidates = (sitemapRecords || [])
+    .map(r => ({
+      url: r.fields['URL'] || '',
+      title: r.fields['Title'] || '',
+      keyword: r.fields['Keyword'] || ''
+    }))
+    .filter(c => c.url && !html.includes(c.url));
+  if (!candidates.length) return html;
+
+  // Bound the prompt: pages sharing a meaningful word with this keyword
+  // first, then fill up to 25 with the rest.
+  const kwWords = new Set((keyword || '').toLowerCase().split(/\s+/).filter(w => w.length > 3));
+  const scored = candidates
+    .map(c => {
+      const hay = `${c.title} ${c.keyword}`.toLowerCase();
+      let score = 0;
+      kwWords.forEach(w => { if (hay.includes(w)) score++; });
+      return { ...c, score };
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 25);
+
+  const prompt = `You are adding internal links to a blog post for T2C Outreach, Twenty2 Collective.
+
+POST PRIMARY KEYWORD: "${keyword}"
+
+EXISTING PUBLISHED PAGES (candidates to link to):
+${scored.map((c, i) => `${i + 1}. ${c.url} - "${c.title}"${c.keyword ? ' (targets: ' + c.keyword + ')' : ''}`).join('\n')}
+
+Choose the 2-3 pages most topically relevant to this post and insert a natural, contextual internal link to each: an <a href="EXACT_URL_FROM_LIST">descriptive anchor text</a> placed inside an existing body <p> where that topic is actually discussed. Rules:
+- Use only URLs from the list above, exactly as written
+- No links inside headings, <summary> elements, or the closing call to action
+- Spread the links across different paragraphs, do not stack them together
+- Change nothing else: keep every heading, paragraph, FAQ item, image, and existing link exactly as-is
+- If fewer than 2 pages are genuinely relevant, add only the ones that are (or none at all)
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "html": string }`;
+
+  try {
+    const result = await callClaudeJson(prompt, 8000);
+    if (!result.html) return html;
+    if (!validateSeoStructure(result.html).valid) {
+      console.warn('Internal linking pass returned structurally-broken html - keeping the un-linked version');
+      return html;
+    }
+    return result.html;
+  } catch (err) {
+    console.warn('Internal linking pass failed:', err.message);
+    return html;
+  }
+}
+
 app.post('/api/seo/generate-post', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
@@ -9478,6 +9539,7 @@ app.post('/api/seo/generate-post', async (req, res) => {
 
   try {
     await ensureKeywordsTable();
+    await ensureSitemapTable();
     const keywordRecord = await airtableGetRecord(KEYWORDS_TABLE, keywordId);
     if (!keywordRecord) return res.status(404).json({ error: 'Keyword not found' });
 
@@ -9485,6 +9547,15 @@ app.post('/api/seo/generate-post', async (req, res) => {
       .catch(err => console.warn('Could not mark keyword Generating:', err.message));
 
     const post = await generateSeoPostForKeyword(keywordRecord);
+
+    // Weave in internal links to already-published pages before saving, so
+    // they travel with the post through preview and on to Framer.
+    try {
+      const sitemapRecords = await airtableFetchAllRecords(SITEMAP_TABLE);
+      post.html = await injectInternalLinks(post.html, keywordRecord.fields['Keyword'], sitemapRecords);
+    } catch (err) {
+      console.warn('Internal linking skipped:', err.message);
+    }
 
     await airtableRequest('PATCH', KEYWORDS_TABLE, {
       records: [{
