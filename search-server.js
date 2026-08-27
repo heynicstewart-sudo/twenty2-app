@@ -9072,31 +9072,118 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
   return (result.post || '').trim();
 }
 
-// Pings Google to (re)crawl a newly published URL via the Indexing API's
-// urlNotifications:publish endpoint. Per the brief this authenticates with
-// the GSC_API_KEY env var (set in Railway) passed as the ?key= query
-// param. Missing key or any non-2xx response is logged and swallowed.
-async function submitUrlToGsc(url) {
-  if (!process.env.GSC_API_KEY) {
-    console.warn('GSC_API_KEY not configured - skipping Search Console submission for', url);
-    return { submitted: false, reason: 'GSC_API_KEY not configured' };
-  }
+// Nudges Google to (re)crawl freshly published pages. Two best-effort
+// calls, each logged independently, both authenticated with an OAuth2
+// Bearer token minted from the service account in GSC_SERVICE_ACCOUNT_JSON
+// (the raw service-account JSON string) via google-auth-library:
+//   1. Indexing API urlNotifications:publish - a direct per-URL recrawl
+//      signal. Google documents this for JobPosting/BroadcastEvent pages,
+//      but it is widely used as a general recrawl ping.
+//   2. Search Console sitemaps.submit - resubmits the site's sitemap.xml,
+//      which covers every page type. This is the supported replacement for
+//      the old (removed) google.com/ping?sitemap= endpoint.
+// The GSC property defaults to sc-domain:<host of FRAMER_SITE_URL>; set
+// GSC_PROPERTY to override (e.g. "https://www.example.com/" for a
+// URL-prefix property). The sitemap defaults to <FRAMER_SITE_URL>/sitemap.xml;
+// set GSC_SITEMAP_URL to override. Returns { submitted } true if either
+// call succeeded, plus per-call detail. Never throws - a failure here
+// never touches the publish that already happened.
+const GSC_SCOPES = [
+  'https://www.googleapis.com/auth/indexing',
+  'https://www.googleapis.com/auth/webmasters'
+];
+
+async function getGscAccessToken() {
+  const raw = process.env.GSC_SERVICE_ACCOUNT_JSON;
+  if (!raw) throw new Error('GSC_SERVICE_ACCOUNT_JSON not configured');
+  let creds;
   try {
-    const gscRes = await fetch(`https://indexing.googleapis.com/v3/urlNotifications:publish?key=${encodeURIComponent(process.env.GSC_API_KEY)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, type: 'URL_UPDATED' })
-    });
-    if (!gscRes.ok) {
-      const text = await gscRes.text();
-      console.warn(`GSC submission for ${url} returned ${gscRes.status}: ${text}`);
-      return { submitted: false, reason: `HTTP ${gscRes.status}` };
-    }
-    return { submitted: true };
+    creds = JSON.parse(raw);
   } catch (err) {
-    console.warn('GSC submission failed for', url, '-', err.message);
+    throw new Error('GSC_SERVICE_ACCOUNT_JSON is not valid JSON');
+  }
+  const { JWT } = require('google-auth-library');
+  const client = new JWT({ email: creds.client_email, key: creds.private_key, scopes: GSC_SCOPES });
+  const { token } = await client.getAccessToken();
+  if (!token) throw new Error('google-auth-library returned no access token');
+  return token;
+}
+
+function gscPropertyForSite() {
+  if (process.env.GSC_PROPERTY) return process.env.GSC_PROPERTY;
+  try {
+    return `sc-domain:${new URL(process.env.FRAMER_SITE_URL || '').hostname}`;
+  } catch (err) {
+    return '';
+  }
+}
+
+function gscSitemapUrl() {
+  if (process.env.GSC_SITEMAP_URL) return process.env.GSC_SITEMAP_URL;
+  const siteUrl = (process.env.FRAMER_SITE_URL || '').replace(/\/$/, '');
+  return siteUrl ? `${siteUrl}/sitemap.xml` : '';
+}
+
+async function submitUrlToGsc(url) {
+  if (!process.env.GSC_SERVICE_ACCOUNT_JSON) {
+    console.warn('GSC_SERVICE_ACCOUNT_JSON not configured - skipping Search Console submission for', url);
+    return { submitted: false, reason: 'GSC_SERVICE_ACCOUNT_JSON not configured' };
+  }
+
+  let token;
+  try {
+    token = await getGscAccessToken();
+  } catch (err) {
+    console.warn('GSC OAuth token generation failed - skipping submission for', url, '-', err.message);
     return { submitted: false, reason: err.message };
   }
+  const authHeaders = { 'Authorization': `Bearer ${token}` };
+
+  // 1. Indexing API - per-URL recrawl signal.
+  const indexing = { ok: false };
+  try {
+    const res = await fetch('https://indexing.googleapis.com/v3/urlNotifications:publish', {
+      method: 'POST',
+      headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, type: 'URL_UPDATED' })
+    });
+    if (res.ok) {
+      indexing.ok = true;
+      console.log('GSC Indexing API accepted', url);
+    } else {
+      indexing.reason = `HTTP ${res.status}`;
+      console.warn(`GSC Indexing API for ${url} returned ${res.status}: ${await res.text()}`);
+    }
+  } catch (err) {
+    indexing.reason = err.message;
+    console.warn('GSC Indexing API call failed for', url, '-', err.message);
+  }
+
+  // 2. Search Console sitemaps.submit - covers all page types.
+  const sitemap = { ok: false };
+  const property = gscPropertyForSite();
+  const sitemapUrl = gscSitemapUrl();
+  if (!property || !sitemapUrl) {
+    sitemap.reason = 'GSC property or sitemap URL not resolvable (set GSC_PROPERTY / GSC_SITEMAP_URL or FRAMER_SITE_URL)';
+    console.warn('GSC sitemap submit skipped -', sitemap.reason);
+  } else {
+    try {
+      const endpoint = `https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(property)}/sitemaps/${encodeURIComponent(sitemapUrl)}`;
+      const res = await fetch(endpoint, { method: 'PUT', headers: authHeaders });
+      if (res.ok) {
+        sitemap.ok = true;
+        console.log('GSC sitemap resubmitted:', sitemapUrl);
+      } else {
+        sitemap.reason = `HTTP ${res.status}`;
+        console.warn(`GSC sitemap submit for ${sitemapUrl} returned ${res.status}: ${await res.text()}`);
+      }
+    } catch (err) {
+      sitemap.reason = err.message;
+      console.warn('GSC sitemap submit failed for', sitemapUrl, '-', err.message);
+    }
+  }
+
+  return { submitted: indexing.ok || sitemap.ok, indexing, sitemap };
 }
 
 // Shared tail for both publish paths (blog /api/seo/publish and the
