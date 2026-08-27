@@ -7531,7 +7531,8 @@ app.post('/api/messages/generate', async (req, res) => {
     const content = imgs.map(img => ({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.base64 } }));
     content.push({ type: 'text', text: promptText });
 
-    const message = await callClaudeText(content, 400);
+    const rawMessage = await callClaudeText(content, 400);
+    const message = await humanizePlainText(rawMessage);
     res.json({ success: true, message });
   } catch (err) {
     console.error('Message generate error:', err.message);
@@ -9192,6 +9193,7 @@ async function runSeoPublishFollowUps({ sitemapRecordId, url, title, html }) {
   let linkedInDraft = '';
   try {
     linkedInDraft = await generateLinkedInPostDraft(title, html, url);
+    if (linkedInDraft) linkedInDraft = await humanizePlainText(linkedInDraft);
     if (linkedInDraft && sitemapRecordId) {
       await ensureSitemapLinkedInDraftField();
       await airtableRequest('PATCH', SITEMAP_TABLE, {
@@ -9575,9 +9577,11 @@ function isBlockedScrapeDomain(url) {
 // or a failed call, falls back to the best output so far (pass 1, then the
 // pre-humanizer HTML) rather than failing generation. All three passes use
 // claude-opus-4-6 via callClaudeMessages.
-const SEO_HUMANIZER_SYSTEM_PROMPT = `You are a writing editor that removes AI writing patterns to make content sound natural and human. Rewrite the HTML content provided, preserving all HTML tags and SEO structure, but fixing every instance of the following patterns:
-
-1. Inflated significance language: remove words like stands as, serves as, testament, pivotal, crucial, underscores, highlights, reflects broader, evolving landscape, indelible mark
+// Shared by the HTML humanizer (humanizeSeoHtml / runHumanizerChain) and
+// the plain-text one (humanizePlainText / runPlainTextHumanizerChain) - the
+// numbered patterns are about writing, not markup, so both chains fix the
+// same list; only the wrapper instructions differ.
+const HUMANIZER_PATTERNS = `1. Inflated significance language: remove words like stands as, serves as, testament, pivotal, crucial, underscores, highlights, reflects broader, evolving landscape, indelible mark
 2. Notability inflation: remove claims about media coverage, leading experts, active presence
 3. Promotional language: remove puffery, superlatives, and marketing speak
 4. Superficial -ing openers: rewrite sentences starting with present participles like Looking at, Navigating, Drawing on
@@ -9595,11 +9599,32 @@ const SEO_HUMANIZER_SYSTEM_PROMPT = `You are a writing editor that removes AI wr
 16. Inflated symbolism: do not read significance into ordinary things
 17. Superficial -ing phrases: rewrite present-participle phrases anywhere in a sentence, not just as sentence openers
 18. Sentence length uniformity: break up even mid-length cadence with genuinely short sentences and genuinely long ones
-19. AI punctuation habits: fix formulaic comma splices
+19. AI punctuation habits: fix formulaic comma splices`;
+
+const SEO_HUMANIZER_SYSTEM_PROMPT = `You are a writing editor that removes AI writing patterns to make content sound natural and human. Rewrite the HTML content provided, preserving all HTML tags and SEO structure, but fixing every instance of the following patterns:
+
+${HUMANIZER_PATTERNS}
 
 Preserve all H1, H2, H3, p, ul, li, and other HTML tags exactly. Keep keyword placement intact. Do not add new sections. Match the voice of a confident, opinionated Perth-based consultancy writing for corporate professionals. Return only the rewritten HTML with no commentary.`;
 
 const SEO_HUMANIZER_AUDIT_PROMPT = `Read this HTML content. List only the remaining AI writing tells as short bullet points. Focus on: any em dashes or en dashes still present, anything that still sounds like neutral reporting with no opinion, sentences that are all roughly the same length, any remaining AI vocabulary words, any sections that wrap up too neatly, any missing human texture like asides, mixed feelings, or unresolved tension. Return only the bullet list, no commentary.`;
+
+// Plain-text counterparts - same three-pass chain, no HTML awareness.
+const PLAIN_TEXT_HUMANIZER_SYSTEM_PROMPT = `You are a writing editor that removes AI writing patterns to make content sound natural and human. Rewrite the text provided, keeping its meaning, key points, and any links, names, or handles intact, but fixing every instance of the following patterns:
+
+${HUMANIZER_PATTERNS}
+
+This is plain text, not HTML - do not add any HTML tags or markdown formatting. Keep it roughly the same length. Do not add new points or sections. Match the voice of a confident, opinionated Perth-based consultancy writing for corporate professionals. Return only the rewritten text with no commentary.`;
+
+const PLAIN_TEXT_HUMANIZER_AUDIT_PROMPT = `Read this text. List only the remaining AI writing tells as short bullet points. Focus on: any em dashes or en dashes still present, anything that still sounds like neutral reporting with no opinion, sentences that are all roughly the same length, any remaining AI vocabulary words, any ending that wraps up too neatly, any missing human texture like asides, mixed feelings, or unresolved tension. Return only the bullet list, no commentary.`;
+
+function plainTextHumanizerFinalPrompt(auditBullets) {
+  return `Rewrite this text to fix the issues listed below. Add genuine asides and self-corrections where natural. Add mixed feelings or unresolved tension where the content allows. Make sure sentence length varies dramatically, including some very short sentences and some long winding ones. Use no em dashes or en dashes anywhere; use commas, full stops, or restructured sentences instead, including for any asides you add. Do not undo any of the anti-AI-pattern fixes already made. Keep it plain text with no HTML tags or markdown. Return only the final rewritten text with no commentary. Issues to fix:\n${auditBullets}`;
+}
+
+function isUsablePlainText(candidate) {
+  return !!(candidate && candidate.trim());
+}
 
 function seoHumanizerFinalPrompt(auditBullets) {
   return `Rewrite this HTML content to fix the issues listed below. Add genuine asides and self-corrections where natural. Add mixed feelings or unresolved tension where the content allows. Make sure sentence length varies dramatically, including some very short sentences and some long winding ones. Use no em dashes or en dashes anywhere; use commas, full stops, or restructured sentences instead, including for any asides you add. Do not undo any of the anti-AI-pattern fixes already made. Preserve all HTML tags and keyword placement. Return only the final rewritten HTML with no commentary. Issues to fix:\n${auditBullets}`;
@@ -9675,6 +9700,69 @@ async function runHumanizerChain(html) {
     return pass3;
   } catch (err) {
     console.warn('Humanizer pass 3 failed - using pass 1 output:', err.message);
+    return pass1;
+  }
+}
+
+// Plain-text sibling of humanizeSeoHtml - same three-pass chain (draft
+// rewrite, audit, final rewrite) and the same best-effort fallbacks, but
+// with no HTML/SEO-structure awareness. Used for the repurposed LinkedIn
+// draft and for outbound message drafts.
+async function humanizePlainText(text) {
+  return stripEnEmDashes(await runPlainTextHumanizerChain(text));
+}
+
+async function runPlainTextHumanizerChain(text) {
+  if (!text || !text.trim()) return text;
+
+  // Pass 1 - draft rewrite.
+  console.log('Plain-text humanizer pass 1 starting');
+  let pass1;
+  try {
+    const raw = await callClaudeMessages(`Text to rewrite:\n\n${text}`, 4000, PLAIN_TEXT_HUMANIZER_SYSTEM_PROMPT);
+    pass1 = stripCodeFences(raw).trim();
+  } catch (err) {
+    console.warn('Plain-text humanizer pass 1 failed - keeping the original:', err.message);
+    return text;
+  }
+  if (!isUsablePlainText(pass1)) {
+    console.warn('Plain-text humanizer pass 1 returned nothing - keeping the original');
+    return text;
+  }
+  console.log('Plain-text humanizer pass 1 complete');
+
+  // Pass 2 - audit pass 1 for remaining tells.
+  console.log('Plain-text humanizer pass 2 audit starting');
+  let auditBullets = '';
+  try {
+    auditBullets = stripCodeFences(await callClaudeMessages(
+      `${PLAIN_TEXT_HUMANIZER_AUDIT_PROMPT}\n\nText:\n\n${pass1}`, 1200
+    )).trim();
+  } catch (err) {
+    console.warn('Plain-text humanizer pass 2 (audit) failed - using pass 1 output:', err.message);
+    return pass1;
+  }
+  if (!auditBullets) {
+    console.log('Plain-text humanizer pass 2 audit returned no findings - using pass 1 output');
+    return pass1;
+  }
+  console.log('Plain-text humanizer pass 2 audit complete');
+
+  // Pass 3 - final rewrite fixing the audit findings.
+  console.log('Plain-text humanizer pass 3 final rewrite starting');
+  try {
+    const raw = await callClaudeMessages(
+      `${plainTextHumanizerFinalPrompt(auditBullets)}\n\nText:\n\n${pass1}`, 4000
+    );
+    const pass3 = stripCodeFences(raw).trim();
+    if (!isUsablePlainText(pass3)) {
+      console.warn('Plain-text humanizer pass 3 returned nothing - using pass 1 output');
+      return pass1;
+    }
+    console.log('Plain-text humanizer pass 3 final rewrite complete');
+    return pass3;
+  } catch (err) {
+    console.warn('Plain-text humanizer pass 3 failed - using pass 1 output:', err.message);
     return pass1;
   }
 }
