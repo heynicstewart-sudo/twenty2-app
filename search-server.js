@@ -1654,6 +1654,31 @@ app.post('/api/airtable/touchpoint', async (req, res) => {
       }
     }
 
+    // A "LinkedIn Conversation" touch point (the contact drawer's "Save
+    // history" box, or a manually logged one from the Logger tab) is a full
+    // pasted transcript, not a one-line note - fold it onto each linked
+    // contact's Conversation Context too (same append-log convention as
+    // POST /api/context/parse-screenshot), since that's the field
+    // POST /api/campaign/:id/contacts/:contactId/generate-message actually
+    // reads to know what the contact has already said. Without this, a
+    // pasted transcript only ever reached AI Summary (via the background
+    // /api/contacts/update-summary call the drawer also fires), so
+    // generate-message kept reporting "none yet - this is the first
+    // message" and ignored replies that were sitting right there in Airtable.
+    if (type === 'LinkedIn Conversation' && notes && contactIds.length) {
+      try {
+        await Promise.all(contactIds.map(async (id) => {
+          const contactRecord = await airtableGetRecord('Contacts', id);
+          if (!contactRecord) return;
+          const existingContext = contactRecord.fields['Conversation Context'] || '';
+          const newContext = (existingContext ? existingContext + '\n\n' : '') + `[${dateValue}] ${notes}`;
+          await airtableRequest('PATCH', 'Contacts', { records: [{ id, fields: { 'Conversation Context': newContext } }] });
+        }));
+      } catch (convoErr) {
+        console.warn('Best-effort Conversation Context append on touch point failed:', convoErr.message);
+      }
+    }
+
     res.json({ success: true, recordId });
     detectContentSignals().catch(err => console.warn('Content signal detection trigger failed:', err.message));
   } catch (err) {
