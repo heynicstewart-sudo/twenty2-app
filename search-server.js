@@ -9735,11 +9735,14 @@ app.post('/api/seo/generate-post', async (req, res) => {
 // route. Requires FRAMER_API_KEY and FRAMER_PROJECT_URL (the project URL
 // from Framer's own address bar, without any ?node=/&view= query string -
 // e.g. "https://framer.com/projects/Website--aabbccdd1122") in the
-// environment. FRAMER_SITE_URL (the live domain) and
-// FRAMER_BLOG_PATH_PREFIX (the collection's page path, e.g. "/research" -
-// confirmed against an existing T2C post's URL, may differ per project) are
-// used only to build the preview URL shown in the UI; FRAMER_BLOG_COLLECTION_NAME
-// picks the collection by exact name when a project has more than one.
+// environment. FRAMER_SITE_URL (the live domain) and the path-prefix vars
+// (FRAMER_BLOG_PATH_PREFIX, default "/research"; FRAMER_SERVICE_PATH_PREFIX,
+// default "/services" - confirmed against an existing T2C URL, may differ
+// per project) are used only to build the preview URL shown in the UI.
+// Collection selection (see resolveFramerCollection): blog posts go to the
+// blog/post/article collection (or FRAMER_BLOG_COLLECTION_NAME by exact
+// name), service pages go to the "service-pages" collection (or
+// FRAMER_SERVICE_COLLECTION_NAME by exact name).
 
 const FRAMER_FIELD_ALIASES = {
   title: ['title', 'name', 'headline'],
@@ -9801,16 +9804,37 @@ function buildFramerTextFieldEntry(field, value) {
   return null;
 }
 
-async function publishToFramer(post) {
+// Picks the target CMS collection out of the project's collection list.
+// kind 'service' resolves the dedicated service-pages collection (exact
+// name "service-pages", any punctuation/casing, or FRAMER_SERVICE_COLLECTION_NAME
+// to override) and throws if there isn't one, rather than silently
+// dumping a service page into the blog. kind 'blog' (the default) keeps
+// the existing blog/post/article heuristic with collections[0] as a last
+// resort.
+function resolveFramerCollection(collections, kind) {
+  const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  if (kind === 'service') {
+    const envHint = process.env.FRAMER_SERVICE_COLLECTION_NAME;
+    const match = (envHint && collections.find(c => c.name.toLowerCase() === envHint.toLowerCase()))
+      || collections.find(c => norm(c.name) === 'servicepages')
+      || collections.find(c => /service/i.test(c.name));
+    if (!match) throw new Error('No Framer CMS collection named "service-pages" found (set FRAMER_SERVICE_COLLECTION_NAME to override)');
+    return match;
+  }
+  const blogHint = process.env.FRAMER_BLOG_COLLECTION_NAME;
+  return (blogHint && collections.find(c => c.name.toLowerCase() === blogHint.toLowerCase()))
+    || collections.find(c => /blog|post|article/i.test(c.name))
+    || collections[0];
+}
+
+async function publishToFramer(post, options = {}) {
+  const kind = options.collectionKind || 'blog';
   const { connect } = await import('framer-api');
   const framer = await connect(process.env.FRAMER_PROJECT_URL, process.env.FRAMER_API_KEY);
   try {
     const collections = await framer.getCollections();
     if (!collections.length) throw new Error('No CMS collections found in the connected Framer project');
-    const nameHint = process.env.FRAMER_BLOG_COLLECTION_NAME;
-    const collection = (nameHint && collections.find(c => c.name.toLowerCase() === nameHint.toLowerCase()))
-      || collections.find(c => /blog|post|article/i.test(c.name))
-      || collections[0];
+    const collection = resolveFramerCollection(collections, kind);
 
     const fields = await collection.getFields();
     const titleField = findFramerField(fields, 'title');
@@ -9865,7 +9889,10 @@ async function publishToFramer(post) {
     // reviews it and presses Publish in the Framer UI themselves.
 
     const siteUrl = (process.env.FRAMER_SITE_URL || '').replace(/\/$/, '');
-    const pathPrefix = (process.env.FRAMER_BLOG_PATH_PREFIX || '/research').replace(/\/$/, '');
+    const defaultPrefix = kind === 'service'
+      ? (process.env.FRAMER_SERVICE_PATH_PREFIX || '/services')
+      : (process.env.FRAMER_BLOG_PATH_PREFIX || '/research');
+    const pathPrefix = defaultPrefix.replace(/\/$/, '');
     const url = siteUrl ? `${siteUrl}${pathPrefix}/${slug}` : slug;
     return { url, slug, collectionName: collection.name };
   } finally {
@@ -10108,7 +10135,7 @@ app.post('/api/seo/generate-service-page', async (req, res) => {
     await ensureSitemapTypeField();
 
     const page = await generateServicePage(service, location);
-    const published = await publishToFramer(page);
+    const published = await publishToFramer(page, { collectionKind: 'service' });
     const today = new Date().toISOString().slice(0, 10);
 
     const sitemapWrite = await airtableRequest('POST', SITEMAP_TABLE, {
