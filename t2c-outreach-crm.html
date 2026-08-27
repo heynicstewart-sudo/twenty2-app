@@ -13303,7 +13303,9 @@ function renderContentSeoTab(){
   <div class="card" style="margin-bottom:18px;">
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:10px;">
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-key"></i> Keyword Library</div>
-      <div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <input type="text" id="seoAddKeywordInput" placeholder="Add keyword" style="width:180px;height:30px;" onkeydown="if(event.key==='Enter')addSeoKeywordSingle()">
+        <button class="btn btn-secondary btn-sm" onclick="addSeoKeywordSingle()"><i class="ti ti-plus"></i> Add</button>
         <input type="file" id="seoKeywordCsvInput" accept=".csv" style="display:none;" onchange="handleSeoKeywordCsv(event)">
         <button class="btn btn-primary btn-sm" onclick="document.getElementById('seoKeywordCsvInput').click()"><i class="ti ti-upload"></i> Upload Ubersuggest CSV</button>
       </div>
@@ -13591,6 +13593,26 @@ async function handleSeoKeywordCsv(event){
   };
   reader.onerror = () => toast('Could not read that file', 'warn');
   reader.readAsText(file);
+}
+
+async function addSeoKeywordSingle(){
+  const input = document.getElementById('seoAddKeywordInput');
+  const keyword = (input && input.value || '').trim();
+  if(!keyword){ toast('Type a keyword first', 'warn'); return; }
+  try {
+    const res = await fetch('/api/seo/keywords/add-single', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ keyword })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Add failed');
+    if(input) input.value = '';
+    toast(`Added "${keyword}" to the library`, 'success');
+    window.__seoKeywords = undefined;
+    loadSeoKeywords();
+  } catch(err){
+    toast('Could not add keyword: ' + err.message, 'warn');
+  }
 }
 
 async function importSeoKeywords(rows){

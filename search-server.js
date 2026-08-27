@@ -9407,6 +9407,31 @@ app.post('/api/seo/keywords/add-to-queue', async (req, res) => {
   }
 });
 
+// Manual single-keyword add from the Keyword Library's "Add keyword" field
+// - like the CSV import but for one hand-typed keyword with no metrics, so
+// Volume/KD are seeded to 0.
+app.post('/api/seo/keywords/add-single', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const keyword = ((req.body && req.body.keyword) || '').trim();
+  if (!keyword) return res.status(400).json({ error: 'keyword is required' });
+  try {
+    await ensureKeywordsTable();
+    const existing = await airtableFetchAllRecords(KEYWORDS_TABLE);
+    if (existing.some(r => (r.fields['Keyword'] || '').toLowerCase().trim() === keyword.toLowerCase())) {
+      return res.status(409).json({ error: 'That keyword is already in the library' });
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    const data = await airtableRequest('POST', KEYWORDS_TABLE, {
+      records: [{ fields: { 'Keyword': keyword, 'Status': 'Queued', 'Volume': 0, 'KD': 0, 'Created Date': today } }],
+      typecast: true
+    });
+    res.json({ success: true, id: data.records[0].id });
+  } catch (err) {
+    console.error('Add single SEO keyword error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---- Suggested keywords ----
 // Same "mine recent logged activity with Claude" shape as
 // detectContentSignals() above, but pointed at Touch Points + Research
