@@ -9935,6 +9935,31 @@ app.post('/api/seo/publish', async (req, res) => {
   }
 });
 
+// Everything logged to the Sitemap table - blog posts and service pages
+// alike - newest first, for the Published Content view in the SEO tab.
+app.get('/api/seo/sitemap', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    await ensureSitemapTable();
+    const records = await airtableFetchAllRecords(SITEMAP_TABLE);
+    const pages = records
+      .map(r => ({
+        id: r.id,
+        url: r.fields['URL'] || '',
+        title: r.fields['Title'] || '',
+        type: r.fields['Type'] || '',
+        keyword: r.fields['Keyword'] || '',
+        publishedDate: r.fields['Published Date'] || '',
+        linkedInDraft: r.fields['LinkedIn Draft'] || ''
+      }))
+      .sort((a, b) => String(b.publishedDate).localeCompare(String(a.publishedDate)));
+    res.json({ pages });
+  } catch (err) {
+    console.error('List SEO sitemap error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---- Service pages (city zipper model) ----
 // One page per {service} x {location} keyword (e.g. "change management
 // consulting Fremantle"). Same Serper-scrape-the-top-3 + Claude-write-to-

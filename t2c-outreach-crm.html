@@ -1367,6 +1367,7 @@ function afterRender(page){
     if(tab === 'seo' && window.__seoKeywords === undefined) loadSeoKeywords();
     if(tab === 'seo' && window.__seoSuggestions === undefined) loadSeoSuggestions();
     if(tab === 'seo' && window.__seoVoiceProfile === undefined) loadSeoVoiceProfile();
+    if(tab === 'seo' && window.__seoSitemap === undefined) loadSeoSitemap();
     if(tab === 'settings' && window.__contentSettings === undefined) loadContentSettings();
   }
   if(page === 'home' && window.__homeContactSignals === undefined) loadHomeContactSignals();
@@ -13017,8 +13018,25 @@ async function loadSeoVoiceProfile(){
   if(state.currentPage === 'content' && window.__contentSubTab === 'seo') renderPage();
 }
 
+async function loadSeoSitemap(force){
+  if(window.__seoSitemap !== undefined && !force) return;
+  try {
+    const res = await fetch('/api/seo/sitemap');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__seoSitemap = data.pages || [];
+  } catch(err){
+    window.__seoSitemap = { error: err.message };
+  }
+  if(state.currentPage === 'content' && window.__contentSubTab === 'seo') renderPage();
+}
+
+// T2C's core services - the dropdown source for the Service Pages form.
+const SEO_SERVICE_OPTIONS = ['Change Management Consulting','Agile Coaching','Agile Training','Organisational Design','Change Management Training'];
+
 function renderContentSeoTab(){
   if(window.__seoPreview) return renderSeoPreviewPanel();
+  if(window.__seoServicePreview) return renderSeoServicePreviewPanel();
   return `
   <div class="card" style="margin-bottom:18px;">
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:10px;">
@@ -13045,12 +13063,164 @@ function renderContentSeoTab(){
     ${renderSeoSuggestions()}
   </div>
 
+  <div class="card" style="margin-bottom:18px;">
+    <div class="section-title"><i class="ti ti-map-pin"></i> Service Pages</div>
+    <p class="muted" style="font-size:12px;margin-bottom:12px;">City zipper model - one page per service x location. Generates against the same on-page SEO checklist as blog posts, then sends it to Framer as a draft and logs it below.</p>
+    <div class="row">
+      <div class="field"><label>Service</label>
+        <select id="seoServiceSelect">
+          ${SEO_SERVICE_OPTIONS.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field"><label>Location</label><input id="seoServiceLocation" placeholder="e.g. Perth, Fremantle, Joondalup"></div>
+    </div>
+    <button class="btn btn-primary btn-sm" id="seoServiceGenerateBtn" onclick="generateSeoServicePage()"><i class="ti ti-sparkles"></i> Generate Service Page</button>
+  </div>
+
+  <div class="card" style="margin-bottom:18px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:10px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-world-www"></i> Published Content</div>
+      <button class="btn btn-ghost btn-sm" onclick="loadSeoSitemap(true)"><i class="ti ti-refresh"></i> Refresh</button>
+    </div>
+    ${renderSeoSitemapTable()}
+  </div>
+
   <div class="card">
     <div class="section-title"><i class="ti ti-microphone-2"></i> SEO Voice Profile</div>
     <p class="muted" style="font-size:12px;margin-bottom:10px;">Read by the Engine before every generated post. Leave blank to use T2C's default profile.</p>
     ${renderSeoVoiceProfileEditor()}
   </div>
   `;
+}
+
+function renderSeoSitemapTable(){
+  const list = window.__seoSitemap;
+  if(list === undefined) return '<div class="muted"><i class="ti ti-loader-2"></i> Loading published content...</div>';
+  if(list && list.error) return `<div class="muted">Could not load published content: ${esc(list.error)}</div>`;
+  if(!list.length) return '<div class="empty-state">Nothing published yet. Blog posts and service pages sent to Framer show up here.</div>';
+  return `
+  <div class="perf-table-wrap">
+  <table class="perf-table">
+    <thead><tr><th>URL</th><th>Type</th><th>Keyword</th><th>Published</th><th>LinkedIn Draft</th></tr></thead>
+    <tbody>
+    ${list.map((row,i) => `
+      <tr>
+        <td>${row.url ? `<a href="${esc(row.url)}" target="_blank" rel="noopener">${esc(row.title || row.url)}</a>` : esc(row.title || '—')}</td>
+        <td>${row.type ? `<span class="tag ${row.type==='Service'?'tag-messaging':'tag-started'}">${esc(row.type)}</span>` : '<span class="muted">—</span>'}</td>
+        <td>${esc(row.keyword || '—')}</td>
+        <td>${esc(row.publishedDate || '—')}</td>
+        <td>${row.linkedInDraft
+          ? `<button class="btn btn-secondary btn-sm" onclick="copySeoLinkedInDraft(${i})"><i class="ti ti-copy"></i> Copy</button>`
+          : '<span class="muted">—</span>'}</td>
+      </tr>`).join('')}
+    </tbody>
+  </table>
+  </div>`;
+}
+
+function copySeoLinkedInDraft(index){
+  const list = window.__seoSitemap;
+  const row = Array.isArray(list) ? list[index] : null;
+  if(!row || !row.linkedInDraft){ toast('No LinkedIn draft for that row', 'warn'); return; }
+  fallbackCopyOrClipboard(row.linkedInDraft, () => toast('LinkedIn draft copied', 'success'));
+}
+
+function fallbackCopy(text, done){
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); done(); } catch(err){ toast('Could not copy: ' + err.message, 'warn'); }
+  document.body.removeChild(ta);
+}
+
+async function generateSeoServicePage(){
+  const service = document.getElementById('seoServiceSelect').value;
+  const location = (document.getElementById('seoServiceLocation').value || '').trim();
+  if(!location){ toast('Add a location first', 'warn'); return; }
+  const btn = document.getElementById('seoServiceGenerateBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Generating and sending to Framer...'; }
+  try {
+    const res = await fetch('/api/seo/generate-service-page', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ service, location })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Generation failed');
+    window.__seoServicePreview = {
+      keyword: data.keyword || (service + ' ' + location),
+      title: data.title, html: data.html, metaTitle: data.metaTitle, metaDescription: data.metaDescription,
+      publishedUrl: data.url, linkedInDraft: data.linkedInDraft || '',
+      gscSubmitted: data.gscSubmitted, usedCustomVoiceProfile: data.usedCustomVoiceProfile
+    };
+    window.__seoSitemap = undefined;
+    loadSeoSitemap(true);
+    toast('Service page generated and sent to Framer as a draft', 'success');
+    renderPage();
+  } catch(err){
+    toast('Could not generate service page: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-sparkles"></i> Generate Service Page'; }
+  }
+}
+
+function closeSeoServicePreview(){
+  window.__seoServicePreview = null;
+  renderPage();
+}
+
+function renderSeoServicePreviewPanel(){
+  const p = window.__seoServicePreview;
+  return `
+  <div style="margin-bottom:14px;">
+    <button class="btn btn-ghost btn-sm" onclick="closeSeoServicePreview()"><i class="ti ti-arrow-left"></i> Back to library</button>
+  </div>
+  <div class="two-col">
+    <div class="card">
+      ${p.usedCustomVoiceProfile === true ? `<div class="muted" style="font-size:11.5px;margin-bottom:10px;"><i class="ti ti-circle-check" style="color:#2f9e44;"></i> Generated using your saved SEO Voice Profile</div>` : ''}
+      ${p.usedCustomVoiceProfile === false ? `<div class="muted" style="font-size:11.5px;margin-bottom:10px;"><i class="ti ti-alert-triangle" style="color:#a1701c;"></i> Generated using T2C's default voice profile</div>` : ''}
+      <div class="field"><label>Keyword</label><input value="${esc(p.keyword)}" disabled></div>
+      <div class="field"><label>Title</label><input id="seoServicePreviewTitle" value="${esc(p.title)}"></div>
+      <div class="field"><label>Meta title <span class="muted">(${(p.metaTitle||'').length}/60)</span></label><input id="seoServicePreviewMetaTitle" value="${esc(p.metaTitle)}"></div>
+      <div class="field"><label>Meta description <span class="muted">(${(p.metaDescription||'').length}/160)</span></label><textarea id="seoServicePreviewMetaDesc" rows="2">${esc(p.metaDescription)}</textarea></div>
+      <div class="field"><label>Body (HTML)</label><textarea id="seoServicePreviewHtml" rows="20" style="font-family:monospace;font-size:12px;">${esc(p.html)}</textarea></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <button class="btn btn-secondary btn-sm" onclick="copySeoServiceField('seoServicePreviewHtml','HTML')"><i class="ti ti-copy"></i> Copy HTML</button>
+        ${p.linkedInDraft ? `<button class="btn btn-secondary btn-sm" onclick="copySeoServiceLinkedIn()"><i class="ti ti-brand-linkedin"></i> Copy LinkedIn draft</button>` : ''}
+        ${p.publishedUrl ? `<a class="btn btn-primary btn-sm" href="${esc(p.publishedUrl)}" target="_blank" rel="noopener"><i class="ti ti-external-link"></i> Open in Framer</a>` : ''}
+      </div>
+      ${p.publishedUrl ? `<div class="muted" style="font-size:12px;margin-top:8px;">Added to Framer as a draft - review and hit Publish there to go live at <a href="${esc(p.publishedUrl)}" target="_blank" rel="noopener">${esc(p.publishedUrl)}</a>. Edits above are for copying out; they are not written back to the Framer draft.</div>` : ''}
+      ${p.gscSubmitted ? `<div class="muted" style="font-size:12px;margin-top:6px;"><i class="ti ti-brand-google" ></i> Submitted to Google Search Console for indexing.</div>` : ''}
+    </div>
+    <div class="card">
+      <div class="section-title" style="font-size:13px;margin-bottom:10px;"><i class="ti ti-eye"></i> Preview</div>
+      <div style="border:1px solid var(--border);border-radius:8px;padding:14px;max-height:600px;overflow-y:auto;font-size:13px;line-height:1.6;">
+        ${p.html || '<span class="muted">Nothing generated yet.</span>'}
+      </div>
+    </div>
+  </div>
+  `;
+}
+
+function copySeoServiceField(elId, label){
+  const el = document.getElementById(elId);
+  if(!el) return;
+  fallbackCopyOrClipboard(el.value, () => toast(label + ' copied', 'success'));
+}
+
+function copySeoServiceLinkedIn(){
+  const p = window.__seoServicePreview;
+  if(!p || !p.linkedInDraft){ toast('No LinkedIn draft', 'warn'); return; }
+  fallbackCopyOrClipboard(p.linkedInDraft, () => toast('LinkedIn draft copied', 'success'));
+}
+
+function fallbackCopyOrClipboard(text, done){
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
+  } else {
+    fallbackCopy(text, done);
+  }
 }
 
 function seoFilteredKeywords(){
