@@ -9309,12 +9309,41 @@ app.get('/api/seo/keywords', async (req, res) => {
         metaDescription: r.fields['Meta Description'] || '',
         publishedUrl: r.fields['Published URL'] || '',
         suggestedReason: r.fields['Notes'] || '',
+        referenceContent: r.fields['Reference Content'] || '',
         createdDate: r.fields['Created Date'] || ''
       }))
       .sort((a, b) => (b.volume || 0) - (a.volume || 0));
     res.json({ keywords });
   } catch (err) {
     console.error('List SEO keywords error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// The Reference Content field holds source material (an old post, research
+// notes, a transcript) the writer wants generate-post to draw on. Added to
+// an existing Keywords table best-effort, same swallow-and-warn contract
+// as the other ensure* helpers.
+async function ensureKeywordsReferenceContentField() {
+  try {
+    return await ensureAirtableField(KEYWORDS_TABLE, 'Reference Content', { type: 'multilineText' });
+  } catch (err) {
+    warnOnce('provision:keywords-reference-content-field', 'Could not auto-provision the Keywords Reference Content field (add it by hand if it does not exist yet):', err.message);
+  }
+}
+
+app.post('/api/seo/keywords/:id/reference-content', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const referenceContent = ((req.body && (req.body.referenceContent ?? req.body.text)) || '').toString();
+  try {
+    await ensureKeywordsReferenceContentField();
+    await airtableRequest('PATCH', KEYWORDS_TABLE, {
+      records: [{ id: req.params.id, fields: { 'Reference Content': referenceContent } }],
+      typecast: true
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Save SEO reference content error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -9816,6 +9845,18 @@ async function generateSeoPostForKeyword(keywordRecord) {
   const usedCustomVoiceProfile = !!(savedVoiceProfile && savedVoiceProfile.trim());
   const voiceProfile = usedCustomVoiceProfile ? savedVoiceProfile : DEFAULT_SEO_VOICE_PROFILE;
 
+  // Reference Content, when the writer has attached some, becomes the
+  // primary source of truth for opinions/examples/data over the scraped
+  // competitor pages (which are only there for structure).
+  const referenceContent = (keywordRecord.fields['Reference Content'] || '').trim();
+  const referenceContentBlock = referenceContent
+    ? `\nThe following is reference content provided by Twenty2 Collective. Use it as the primary source of truth for opinions, specific examples, real experiences, data points, and insights. Do not invent facts. Where the reference content provides a specific view or experience, incorporate it directly into the post rather than writing generically.
+---
+${referenceContent}
+---
+`
+    : '';
+
   // Only averages pages that actually scraped successfully - a failed
   // scrape stubs in wordCount: 0, and folding that into the average would
   // silently pull the target length down every time a competitor page
@@ -9831,7 +9872,7 @@ VOICE PROFILE:
 ${voiceProfile}
 
 PRIMARY KEYWORD: "${keyword}"
-
+${referenceContentBlock}
 TOP-RANKING PAGES FOR THIS KEYWORD (match the average structure and topic coverage of these):
 ${scrapedSummaries.map((s, i) => `${i + 1}. ${s.url}${s.title ? ' - "' + s.title + '"' : ''}
    Approx word count: ${s.wordCount || 'unknown'}

@@ -13599,6 +13599,7 @@ function renderSeoKeywordTable(list){
             ? `<button class="btn btn-ghost btn-sm" onclick="openSeoPreview('${k.id}')"><i class="ti ti-eye"></i> View</button>`
             : `<button class="btn btn-primary btn-sm" ${k.status==='Generating'?'disabled':''} onclick="generateSeoPost('${k.id}')"><i class="ti ${k.status==='Generating'?'ti-loader-2':'ti-sparkles'}"></i> ${k.status==='Generating'?'Generating...':'Generate post'}</button>`
           }
+          <button class="btn btn-ghost btn-sm" title="${k.referenceContent ? 'Edit reference content' : 'Add reference content'}" onclick="openSeoReferenceContentModal('${k.id}')"><i class="ti ${k.referenceContent ? 'ti-file-check' : 'ti-file-plus'}"></i> ${k.referenceContent ? 'Context' : 'Add context'}</button>
           <button class="btn btn-ghost btn-sm" title="Delete keyword" onclick="deleteSeoKeyword('${k.id}','${esc(k.keyword).replace(/'/g,"\\'")}')"><i class="ti ti-trash"></i></button>
         </td>
       </tr>
@@ -13620,6 +13621,38 @@ async function deleteSeoKeyword(id, keyword){
     renderPage();
   } catch(err){
     toast('Could not delete keyword: ' + err.message, 'warn');
+  }
+}
+
+function openSeoReferenceContentModal(id){
+  const k = Array.isArray(window.__seoKeywords) ? window.__seoKeywords.find(x => x.id === id) : null;
+  if(!k){ toast('Keyword not found', 'warn'); return; }
+  const body = `
+    <p class="muted" style="font-size:12.5px;margin-bottom:10px;">Paste an existing article, an old blog post, research notes, or a transcript. When you generate a post for "${esc(k.keyword)}", the Engine uses this as the primary source of truth for opinions, examples, and data instead of writing generically.</p>
+    <textarea id="seoReferenceContentInput" rows="14" style="width:100%;font-size:12.5px;line-height:1.5;" placeholder="Paste reference content here...">${esc(k.referenceContent || '')}</textarea>`;
+  const footer = `
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="saveSeoReferenceContent('${id}')"><i class="ti ti-device-floppy"></i> Save</button>`;
+  openModal(`Reference content`, body, footer);
+}
+
+async function saveSeoReferenceContent(id){
+  const el = document.getElementById('seoReferenceContentInput');
+  const referenceContent = el ? el.value : '';
+  try {
+    const res = await fetch(`/api/seo/keywords/${id}/reference-content`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ referenceContent })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Save failed');
+    const k = Array.isArray(window.__seoKeywords) ? window.__seoKeywords.find(x => x.id === id) : null;
+    if(k) k.referenceContent = referenceContent;
+    closeModal();
+    toast(referenceContent.trim() ? 'Reference content saved' : 'Reference content cleared', 'success');
+    renderPage();
+  } catch(err){
+    toast('Could not save reference content: ' + err.message, 'warn');
   }
 }
 
