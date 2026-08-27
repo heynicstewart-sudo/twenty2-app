@@ -1396,7 +1396,7 @@ app.get('/api/airtable/grid', async (req, res) => {
 
 app.post('/api/airtable/grid', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
-  const { gridId, name, columns, createdAt, updatedAt } = req.body;
+  const { gridId, name, columns, searchedCells, createdAt, updatedAt } = req.body;
   if (!gridId) return res.status(400).json({ error: 'gridId is required' });
 
   try {
@@ -1409,6 +1409,13 @@ app.post('/api/airtable/grid', async (req, res) => {
       const patchFields = {};
       if (name) patchFields['Name'] = name;
       if (Array.isArray(columns) && columns.length) patchFields['Columns'] = columns.join(', ');
+      // searchedCells is legitimately allowed to shrink back toward empty
+      // (a company/column removed and re-added starts fresh), unlike the
+      // fields above where an empty value on this request just means
+      // "this write didn't touch it" - so it's keyed off the array being
+      // present at all, not non-empty, same as the array-length checks
+      // elsewhere in this file that guard against blanking a real value.
+      if (Array.isArray(searchedCells)) patchFields['Searched Cells'] = searchedCells.join('\n');
       if (updatedAt) patchFields['Updated At'] = updatedAt;
       if (Object.keys(patchFields).length) {
         await airtableRequest('PATCH', 'Grids', { records: [{ id: existing.id, fields: patchFields }] });
@@ -1421,6 +1428,7 @@ app.post('/api/airtable/grid', async (req, res) => {
       'Grid ID': gridId,
       'Name': name,
       'Columns': (columns || []).join(', '),
+      'Searched Cells': (searchedCells || []).join('\n'),
       'Created At': createdAt || '',
       'Updated At': updatedAt || createdAt || ''
     };

@@ -1036,6 +1036,12 @@ async function hydrateGridsFromAirtable(){
         id: f['Grid ID'],
         name: f['Name'] || '',
         columns: (f['Columns'] || '').split(',').map(c => c.trim()).filter(Boolean),
+        // (company, role) pairs "Run daily search" has already attempted at
+        // least once (found or not) - see runDailySearch/applyGridSearchResult
+        // - so a later run only spends Serper credits on genuinely new
+        // additions (a new company, a new column) instead of re-searching
+        // the whole grid every time.
+        searchedCells: (f['Searched Cells'] || '').split('\n').map(s => s.trim()).filter(Boolean),
         companies: prior ? prior.companies : [],
         companyLinkedIn: prior ? prior.companyLinkedIn : {},
         createdAt: f['Created At'] || '',
@@ -1054,7 +1060,7 @@ async function hydrateGridsFromAirtable(){
 }
 
 function syncGridToAirtable(grid){
-  const fields = { gridId: grid.id, name: grid.name, columns: grid.columns, createdAt: grid.createdAt, updatedAt: grid.updatedAt };
+  const fields = { gridId: grid.id, name: grid.name, columns: grid.columns, searchedCells: grid.searchedCells || [], createdAt: grid.createdAt, updatedAt: grid.updatedAt };
   if(!airtableWriteGuard('grid', fields, ['gridId','name'])) return;
   fetch('/api/airtable/grid', {
     method: 'POST',
@@ -5608,12 +5614,25 @@ function incompleteGridContacts(gridId){
 // e.g. an Apollo import that came in with a job title but no company. Both
 // share the same job/poll/cancel machinery so there's one progress bar and
 // one Cancel button for the whole run.
+// Shared key format for grid.searchedCells - see runDailySearch (checks it
+// before adding a cell to this run) and applyGridSearchResult (adds to it
+// once a cell's search actually completes without erroring).
+function gridCellKey(company, role){ return `${company}|||${role}`; }
+
 async function runDailySearch(){
   const grid = currentGrid();
   if(isGridSearchRunning(grid.id)) return;
   const cols = grid.columns;
+  const searchedSet = new Set(grid.searchedCells || []);
   const emptyCells = [];
-  grid.companies.forEach(company => cols.forEach(role => { if(!findContact(company, role)) emptyCells.push({ kind:'newContact', company, role }); }));
+  // Skips a cell that's already been searched at least once (found or not)
+  // as well as one that already has a contact - only genuinely new
+  // additions (a new company, a new column) get searched on a repeat run,
+  // instead of re-spending Serper credits on the same combination every
+  // single time "Run daily search" fires.
+  grid.companies.forEach(company => cols.forEach(role => {
+    if(!findContact(company, role) && !searchedSet.has(gridCellKey(company, role))) emptyCells.push({ kind:'newContact', company, role });
+  }));
 
   const fillCells = incompleteGridContacts(grid.id).map(c => ({
     kind: 'fillMissing',
@@ -5627,7 +5646,7 @@ async function runDailySearch(){
   }));
 
   const cells = [...emptyCells, ...fillCells];
-  if(!cells.length){ toast('No open roles left to search — every cell has a contact','warn'); return; }
+  if(!cells.length){ toast('Nothing new to search — every cell either has a contact or has already been checked','warn'); return; }
 
   const btn = document.getElementById('runSearchBtn');
   if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Searching...'; }
@@ -5782,6 +5801,17 @@ function applyGridSearchResult(grid, result){
   const { company, role, found, error } = result;
   const matches = result.contacts || (result.found && result.name && result.url ? [{ name: result.name, url: result.url, recordId: result.recordId }] : []);
   const cellEl = document.querySelector(`.cell-searching[data-company="${cssEscape(company)}"][data-role="${cssEscape(role)}"]`);
+
+  // Marked as searched on any completed attempt, found or not - only a
+  // genuine request failure (network/API error) leaves it eligible for a
+  // retry on the next run. Deferred to one touchGrid call below rather than
+  // syncing per cell, since a job can resolve dozens of cells in one run.
+  if(!error){
+    grid.searchedCells = grid.searchedCells || [];
+    const key = gridCellKey(company, role);
+    if(!grid.searchedCells.includes(key)) grid.searchedCells.push(key);
+  }
+
   if(found && matches.length){
     const seqId = role === 'Digital and Tech' ? 'digitalTech' : 'seniorLeaders';
     const newContacts = matches.map(({ name, url, recordId }) => ({
@@ -5802,7 +5832,42 @@ function applyGridSearchResult(grid, result){
   } else if(error){
     if(cellEl) cellEl.outerHTML = `<div class="cell-empty" data-company="${esc(company)}" data-role="${esc(role)}" title="The search request itself failed — try again">Search error — try again</div>`;
   } else {
-    if(cellEl) cellEl.outerHTML = `<div class="cell-empty" data-company="${esc(company)}" data-role="${esc(role)}" title="Couldn't find a verified LinkedIn profile — try an alternative search method">No confident match — try again</div>`;
+    touchGrid(grid.id);
+    // No longer picked up by the next "Run daily search" (that's the whole
+    // point of searchedCells), so this cell needs its own explicit way
+    // back for the case a rep actually knows something's changed here -
+    // see retryGridCell.
+    if(cellEl) cellEl.outerHTML = `<div class="cell-empty" data-company="${esc(company)}" data-role="${esc(role)}" style="cursor:pointer;" onclick="retryGridCell('${esc(company)}','${esc(role)}')" title="Couldn't find a verified LinkedIn profile last search (checked ${fmtDate(isoDate(TODAY))}) - won't be retried automatically to save Serper credits. Click to check this one cell again.">No confident match — checked ${fmtDate(isoDate(TODAY))}, click to retry</div>`;
+  }
+}
+
+// Re-checks a single cell that was previously marked searched-and-found-
+// nothing (see the "No confident match" branch above) - the counterpart to
+// searchedCells suppressing it from the next full "Run daily search", for
+// when a rep actually has reason to believe this one cell's changed (e.g.
+// a new hire at that company). Reuses the same job/poll machinery as a
+// full run, just scoped to one cell.
+async function retryGridCell(company, role){
+  const grid = currentGrid();
+  if(isGridSearchRunning(grid.id)) return;
+  grid.searchedCells = (grid.searchedCells || []).filter(k => k !== gridCellKey(company, role));
+  const cell = { kind:'newContact', company, role };
+  const td = document.querySelector(`.cell-empty[data-company="${cssEscape(company)}"][data-role="${cssEscape(role)}"]`);
+  if(td) td.outerHTML = `<div class="cell-searching" data-company="${esc(company)}" data-role="${esc(role)}"><i class="ti ti-loader-2"></i>&nbsp;Searching...</div>`;
+  try {
+    const startRes = await fetch('/api/grid/run-search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gridId: grid.id, cells: [cell], campaignName: currentGridCampaignName() })
+    });
+    const startData = await startRes.json();
+    if(!startRes.ok || !startData.jobId) throw new Error(startData.error || 'Could not start search');
+    markGridSearchRunning(grid.id);
+    await pollGridSearchJob(startData.jobId, grid, [cell]);
+  } catch(err){
+    console.warn('Retry cell search failed:', err.message);
+    resetStuckSearchingCells([cell]);
+    finishGridSearchUI(grid.id, { status:'error', error: err.message, foundCount:0, filledCount:0, total: 1 });
   }
 }
 
