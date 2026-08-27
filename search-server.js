@@ -7295,6 +7295,17 @@ app.post('/api/campaign/:id/check-timeouts', async (req, res) => {
 // Same "message ${n} in this contact's sequence" CTA-timing logic as the
 // client's ctaStrategyNote() (t2c-outreach-crm.html) - ported here so
 // POST /api/messages/generate can build the identical prompt server-side.
+// A rep's note often carries an explicit instruction rather than just more
+// biographical colour - e.g. "he's been in this role two years, don't frame
+// it as new" (see refreshContactAndCompanySummaries, which folds notes like
+// that into AI Summary as plain prose alongside everything else on file).
+// Buried in a long summary next to a much more "interesting" career-change
+// narrative, a drafting prompt can still reach for the career change as its
+// hook and quietly ignore the instruction not to. Appended to every
+// drafting prompt that reads AI Summary/Conversation Context, so an
+// explicit constraint always outranks whatever else the summary offers.
+const RESPECT_SUMMARY_INSTRUCTIONS_NOTE = " If the AI summary, profile notes, or conversation above state an explicit instruction about how to approach this contact (e.g. what not to mention, or how not to frame something - such as not treating a well-established role change as recent or newsworthy), treat that as a hard constraint that overrides any other angle the summary might otherwise suggest, however interesting.";
+
 function ctaStrategyNoteText(stageKey, messageNumber, messagesBeforeCta) {
   const n = parseInt(messagesBeforeCta, 10) || 2;
   const num = messageNumber || 0;
@@ -7366,7 +7377,7 @@ app.post('/api/messages/generate', async (req, res) => {
       console.warn('Could not load contact conversation history for message generation (non-fatal):', lookupErr.message);
     }
 
-    const promptText = `Template for this stage:\n${stage.template || ''}\n\nContact: ${contact.name}, ${contact.role || ''} at ${contact.company || ''}. Sequence stage: ${stage.label || stage.key} (message ${stage.messageNumber || 'n/a'} in the sequence). Profile notes: ${contact.notes || 'none'}.${conversationNote}\n\n${ctaStrategyNoteText(stage.key, stage.messageNumber, voice && voice.messagesBeforeCta)}\n\n${voiceRulesPromptText(voice)}${imageNote}${campaignNote}${enrichmentNote}\n\nWrite the actual message for this specific contact, replacing placeholders naturally - if the conversation so far shows they've already replied, respond to what they actually said rather than reintroducing yourself. Return only the message text.`;
+    const promptText = `Template for this stage:\n${stage.template || ''}\n\nContact: ${contact.name}, ${contact.role || ''} at ${contact.company || ''}. Sequence stage: ${stage.label || stage.key} (message ${stage.messageNumber || 'n/a'} in the sequence). Profile notes: ${contact.notes || 'none'}.${conversationNote}\n\n${ctaStrategyNoteText(stage.key, stage.messageNumber, voice && voice.messagesBeforeCta)}\n\n${voiceRulesPromptText(voice)}${imageNote}${campaignNote}${enrichmentNote}\n\nWrite the actual message for this specific contact, replacing placeholders naturally - if the conversation so far shows they've already replied, respond to what they actually said rather than reintroducing yourself.${RESPECT_SUMMARY_INSTRUCTIONS_NOTE} Return only the message text.`;
 
     const content = imgs.map(img => ({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.base64 } }));
     content.push({ type: 'text', text: promptText });
@@ -7460,7 +7471,7 @@ Contact: ${cf['Full Name'] || 'Unknown'}, ${cf['Job Title'] || ''}. AI summary: 
 Recent posts (last 30 days only): ${recentPosts}
 ${offer && offer.summary ? `\nThis campaign's offer: ${offer.summary}\nWeave the offer above into this message naturally, in your own words - do not paste it verbatim.` : ''}
 
-Write only message ${messageNumber} in this contact's sequence for this specific campaign, following on naturally from the conversation so far (if any). UK English, no em dashes, peer to peer tone, 3-4 sentences, signed off "Twenty2 Collective". Return only the message text, no preamble.${examplesNote}`;
+Write only message ${messageNumber} in this contact's sequence for this specific campaign, following on naturally from the conversation so far (if any). UK English, no em dashes, peer to peer tone, 3-4 sentences, signed off "Twenty2 Collective".${RESPECT_SUMMARY_INSTRUCTIONS_NOTE} Return only the message text, no preamble.${examplesNote}`;
 
     const message = await callClaudeText(prompt, 400);
     await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, { records: [{ id: row.id, fields: { 'Next Message Draft': message } }] });
@@ -8292,7 +8303,7 @@ AI Summary: ${f['AI Summary'] || 'none yet'}
 Recent posts (last 30 days only): ${recentPosts}
 ${offer && offer.summary ? `This campaign's offer: ${offer.summary}\nWeave the offer above into this message naturally, in your own words - do not paste it verbatim.\n` : ''}Conversation so far: ${newContext}
 
-Write the next message in the conversation, following on naturally from what they just said. UK English, no em dashes, peer to peer tone, 3-4 sentences, one observation and one question, signed off "Twenty2 Collective". Return only the message text.`;
+Write the next message in the conversation, following on naturally from what they just said. UK English, no em dashes, peer to peer tone, 3-4 sentences, one observation and one question, signed off "Twenty2 Collective".${RESPECT_SUMMARY_INSTRUCTIONS_NOTE} Return only the message text.`;
           draft = await callClaudeText(draftPrompt, 400);
           rowUpdateFields['Next Message Draft'] = draft;
         }
