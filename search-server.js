@@ -9512,10 +9512,10 @@ const SEO_HUMANIZER_SYSTEM_PROMPT = `You are a writing editor that removes AI wr
 
 Preserve all H1, H2, H3, p, ul, li, and other HTML tags exactly. Keep keyword placement intact. Do not add new sections. Match the voice of a confident, opinionated Perth-based consultancy writing for corporate professionals. Return only the rewritten HTML with no commentary.`;
 
-const SEO_HUMANIZER_AUDIT_PROMPT = `Read this HTML content. List only the remaining AI writing tells as short bullet points. Focus on: anything that still sounds like neutral reporting with no opinion, sentences that are all roughly the same length, any remaining AI vocabulary words, any sections that wrap up too neatly, any missing human texture like asides, mixed feelings, or unresolved tension. Return only the bullet list, no commentary.`;
+const SEO_HUMANIZER_AUDIT_PROMPT = `Read this HTML content. List only the remaining AI writing tells as short bullet points. Focus on: any em dashes or en dashes still present, anything that still sounds like neutral reporting with no opinion, sentences that are all roughly the same length, any remaining AI vocabulary words, any sections that wrap up too neatly, any missing human texture like asides, mixed feelings, or unresolved tension. Return only the bullet list, no commentary.`;
 
 function seoHumanizerFinalPrompt(auditBullets) {
-  return `Rewrite this HTML content to fix the issues listed below. Add genuine asides and self-corrections where natural. Add mixed feelings or unresolved tension where the content allows. Make sure sentence length varies dramatically, including some very short sentences and some long winding ones. Preserve all HTML tags and keyword placement. Return only the final rewritten HTML with no commentary. Issues to fix:\n${auditBullets}`;
+  return `Rewrite this HTML content to fix the issues listed below. Add genuine asides and self-corrections where natural. Add mixed feelings or unresolved tension where the content allows. Make sure sentence length varies dramatically, including some very short sentences and some long winding ones. Use no em dashes or en dashes anywhere; use commas, full stops, or restructured sentences instead, including for any asides you add. Do not undo any of the anti-AI-pattern fixes already made. Preserve all HTML tags and keyword placement. Return only the final rewritten HTML with no commentary. Issues to fix:\n${auditBullets}`;
 }
 
 function isUsableHumanizedHtml(candidate) {
@@ -9524,7 +9524,20 @@ function isUsableHumanizedHtml(candidate) {
   return validateSeoStructure(candidate).valid;
 }
 
+// Deterministic backstop for the humanizer's no-dash rule - pass 3 is told
+// not to use em/en dashes but "add asides and self-corrections" still
+// tempts it. Only touches a dash with whitespace on at least one side (so
+// numeric ranges like 150-300 are left alone) and collapses it to a comma.
+function stripEnEmDashes(html) {
+  if (!html) return html;
+  return html.replace(/\s+[—–]\s*|\s*[—–]\s+/g, ', ');
+}
+
 async function humanizeSeoHtml(html) {
+  return stripEnEmDashes(await runHumanizerChain(html));
+}
+
+async function runHumanizerChain(html) {
   if (!html || !html.trim()) return html;
 
   // Pass 1 - draft rewrite.
