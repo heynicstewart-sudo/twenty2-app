@@ -6656,6 +6656,30 @@ app.post('/api/contacts/notes', async (req, res) => {
   }
 });
 
+// "Write & copy message" modal's Profile notes field (t2c-outreach-crm.html,
+// saveGenModalNotes) - distinct from POST /api/contacts/notes above, which
+// only appends one new dated line. That modal's textarea already shows the
+// contact's full existing Notes text as editable content (there was
+// previously no way to persist it at all - it only ever updated the
+// in-memory contact), so a straight overwrite is the correct semantics
+// here, not appending the whole box's contents as if it were one new line
+// every save. Id-based like PATCH /api/contacts/:id/job-title, since the
+// Roadmap already has the contact's Airtable record id in hand.
+app.patch('/api/contacts/:id/notes', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const notes = (req.body || {}).notes;
+  if (typeof notes !== 'string') return res.status(400).json({ error: 'notes is required' });
+  try {
+    const contactRecord = await airtableGetRecord('Contacts', req.params.id);
+    if (!contactRecord) return res.status(404).json({ error: 'Contact not found' });
+    await airtableRequest('PATCH', 'Contacts', { records: [{ id: req.params.id, fields: { 'Notes': notes } }] });
+    res.json({ success: true, notes });
+  } catch (err) {
+    console.error('Update contact notes error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/contacts/update-summary', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });

@@ -8460,11 +8460,24 @@ function openGenerateModal(cid, stageKey, onDone){
   const st = STAGE_META.find(s=>s.key===stageKey);
   const body = `
     <div class="row">
-      <div class="field"><label>Contact</label><input value="${esc(c.name)}" disabled></div>
+      <div class="field">
+        <label>Contact</label>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <input value="${esc(c.name)}" disabled style="flex:1;min-width:0;">
+          ${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" title="Open on LinkedIn"><i class="ti ti-brand-linkedin"></i></a>` : ''}
+        </div>
+      </div>
       <div class="field"><label>Company</label><input value="${esc(c.company)}" disabled></div>
     </div>
     <div class="field"><label>Role / Stage</label><input value="${esc(c.role)} — ${esc(st.label)}" disabled></div>
-    <div class="field"><label>Profile notes</label><textarea id="genNotes" rows="2">${esc(c.notes)}</textarea></div>
+    <div class="field">
+      <label style="display:flex;justify-content:space-between;align-items:center;">
+        <span>Profile notes</span>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="saveGenModalNotes('${cid}')" id="saveGenNotesBtn"><i class="ti ti-device-floppy"></i> Save notes</button>
+      </label>
+      <textarea id="genNotes" rows="2">${esc(c.notes)}</textarea>
+      <div class="muted" style="font-size:11px;margin-top:4px;">Saves straight to this contact's Notes in Airtable and feeds their AI Summary, same as the profile drawer - so future message generation (here or anywhere else) reads it too.</div>
+    </div>
     <div class="field">
       <label>Their profile</label>
       ${screenshotBoxHtml('profile', "Send screenshot/s of their profile — bio, posts, work history — and I'll use it to write a sharper message.")}
@@ -8484,6 +8497,48 @@ function openGenerateModal(cid, stageKey, onDone){
   window.__genCtx = { cid, stageKey, onDone, profileImages: [], convoImages: [] };
   openModal('Write message — '+st.label, body, footer);
   generateMessageForModal(cid, stageKey);
+}
+
+// "Save notes" (Profile notes field, Write & copy message modal) - this
+// textarea previously only ever updated the in-memory contact (see
+// saveGeneratedMessage's `c.notes = ...` line) with nothing written to
+// Airtable, so anything typed here was lost on reload and never reached
+// this contact's AI Summary. Reuses the same overwrite endpoint the
+// account-level Roadmap has no other Notes-editing surface for (unlike the
+// campaign drawer's "Save note", which only appends a new dated line - this
+// textarea already shows the full existing Notes text, so an overwrite is
+// the correct semantics here rather than appending the whole box's
+// contents as if it were one new note every time). Also fires the same
+// background AI Summary refresh the drawer's note/conversation saves use,
+// so generate-message picks up whatever was just written here too.
+async function saveGenModalNotes(cid){
+  const input = document.getElementById('genNotes');
+  const c = state.contacts.find(x => x.id === cid);
+  if(!input || !c) return;
+  const newNotes = input.value;
+  const btn = document.getElementById('saveGenNotesBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i>'; }
+  try {
+    const res = await fetch(`/api/contacts/${encodeURIComponent(cid)}/notes`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notes: newNotes })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
+    c.notes = newNotes;
+    if(window.__drawerContactProfile && window.__drawerContactProfile.contact.id === cid) window.__drawerContactProfile.contact.notes = newNotes;
+    toast('Notes saved', 'success');
+
+    if(newNotes.trim()){
+      fetch('/api/contacts/update-summary', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: c.name, noteText: newNotes }) })
+        .catch(err => console.warn('Background summary update failed:', err.message));
+    }
+  } catch(err){
+    toast('Could not save notes: ' + err.message, 'warn');
+  } finally {
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-device-floppy"></i> Save notes'; }
+  }
 }
 
 function screenshotBoxHtml(kind, hint){
