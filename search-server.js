@@ -9435,10 +9435,30 @@ function isUgcOrSocialDomain(url) {
   }
 }
 
+// Hard blocklist - job boards, review sites, and social/UGC domains that
+// are never useful as an on-page structure sample. Unlike
+// SEO_STRUCTURE_EXCLUDE_DOMAINS above (which only de-prioritises), a match
+// here is dropped from the candidate pool entirely and the next Serper
+// result is used in its place.
+const SEO_SCRAPE_BLOCKLIST = [
+  'seek.com.au', 'indeed.com', 'linkedin.com', 'glassdoor.com', 'facebook.com',
+  'twitter.com', 'instagram.com', 'youtube.com', 'reddit.com', 'quora.com',
+  'pinterest.com', 'yelp.com', 'yellowpages.com.au', 'truelocal.com.au'
+];
+
+function isBlockedScrapeDomain(url) {
+  try {
+    const host = new URL(url).hostname.replace(/^www\./, '');
+    return SEO_SCRAPE_BLOCKLIST.some(d => host === d || host.endsWith('.' + d));
+  } catch (err) {
+    return false;
+  }
+}
+
 async function generateSeoPostForKeyword(keywordRecord) {
   const keyword = keywordRecord.fields['Keyword'];
 
-  const organic = await serperSearchTop(keyword, 10);
+  const organic = (await serperSearchTop(keyword, 10)).filter(r => r.link && !isBlockedScrapeDomain(r.link));
   const editorialResults = organic.filter(r => !isUgcOrSocialDomain(r.link));
   const ugcResults = organic.filter(r => isUgcOrSocialDomain(r.link));
   const topResults = [...editorialResults, ...ugcResults].slice(0, 3);
@@ -9982,7 +10002,7 @@ const SERVICE_PAGE_SECTIONS = `The page MUST contain, in this order:
 async function generateServicePage(service, location) {
   const keyword = `${service} ${location}`.replace(/\s+/g, ' ').trim();
 
-  const organic = await serperSearchTop(keyword, 10);
+  const organic = (await serperSearchTop(keyword, 10)).filter(r => r.link && !isBlockedScrapeDomain(r.link));
   const editorialResults = organic.filter(r => !isUgcOrSocialDomain(r.link));
   const ugcResults = organic.filter(r => isUgcOrSocialDomain(r.link));
   const topResults = [...editorialResults, ...ugcResults].slice(0, 3);
