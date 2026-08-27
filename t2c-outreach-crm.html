@@ -6861,25 +6861,31 @@ function renderThread(c){
     </div>
     ${renderMsgStep(c,'m1','Message 1')}
     ${renderMsgStep(c,'m2','Message 2')}
-    <div class="thread-step">
-      <div class="thread-step-head"><span>CTA</span></div>
-      <div class="thread-step-body">
-        ${(!t.cta && !t.booked) ? `<button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();openGenerateModal('${c.id}','cta', ()=>renderPage())"><i class="ti ti-copy"></i> Write &amp; copy message</button>` : ''}
-        <select onchange="setCta('${c.id}',this.value)">
-          <option value="">Select CTA...</option>
-          ${CTA_OPTIONS.map(o=>`<option value="${esc(o)}" ${t.cta===o?'selected':''}>${esc(o)}</option>`).join('')}
-        </select>
-      </div>
-      <button class="btn btn-primary btn-sm" style="margin-top:6px;" onclick="openBookingModal('${c.id}')" ${t.booked?'disabled':''}>
+    ${renderMsgStep(c,'cta','CTA', `
+      <select onchange="setCta('${c.id}',this.value)" style="margin-top:8px;">
+        <option value="">Select CTA...</option>
+        ${CTA_OPTIONS.map(o=>`<option value="${esc(o)}" ${t.ctaOption===o?'selected':''}>${esc(o)}</option>`).join('')}
+      </select>
+      <button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="event.stopPropagation();openBookingModal('${c.id}')" ${t.booked?'disabled':''}>
         <i class="ti ti-calendar-check"></i> ${t.booked ? 'Meeting booked' : 'Mark as meeting booked'}
       </button>
-    </div>
+    `)}
     ${renderTouchPoints(c)}
     ${renderRecommendedProducts(c)}
   </div>`;
 }
 
-function renderMsgStep(c, key, label){
+// label -> {activity log text, mark-sent fallback message} - previously a
+// bare key==='m1'?'Message 1':'Message 2' ternary in markSent/
+// saveGeneratedMessage, which silently mislabelled anything else (the CTA
+// step included, once it got the same treatment - see below).
+const MSG_STEP_LABELS = { m1: 'Message 1', m2: 'Message 2', cta: 'CTA message' };
+
+// extraBodyHtml (used by the CTA step in renderThread above) renders inside
+// the same thread-step-body as the Write&copy/Already-sent buttons or the
+// Reply toggle, so the CTA-option select and "Mark as meeting booked"
+// button sit under whichever of those is currently showing.
+function renderMsgStep(c, key, label, extraBodyHtml){
   const step = c.thread[key];
   return `
   <div class="thread-step">
@@ -6895,6 +6901,7 @@ function renderMsgStep(c, key, label){
         <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();openGenerateModal('${c.id}','${key}', ()=>renderPage())"><i class="ti ti-copy"></i> Write &amp; copy message</button>
         <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();markSent('${c.id}','${key}')">Already sent, mark done</button>
       `}
+      ${extraBodyHtml || ''}
     </div>
   </div>`;
 }
@@ -7054,7 +7061,7 @@ async function markSent(cid, key){
   const c = state.contacts.find(x=>x.id===cid);
   c.thread[key] = { sent: isoDate(TODAY), replied:false };
   if(c.state !== 'messaging') c.state = 'messaging';
-  const activityEntry = { type:'message', text:`${key==='m1'?'Message 1':'Message 2'} sent to ${c.name} (${c.company})`, date: isoDate(TODAY) };
+  const activityEntry = { type:'message', text:`${MSG_STEP_LABELS[key] || key} sent to ${c.name} (${c.company})`, date: isoDate(TODAY) };
   state.activity.unshift(activityEntry);
   syncActivityToAirtable(activityEntry);
   notifyWebhook(c);
@@ -7070,7 +7077,7 @@ async function markSent(cid, key){
   // or a placeholder noting there's no draft on file.
   const campaign = state.campaigns.find(x => x.id === window.__roadmapCampaignId) || activeCampaignForContact(c);
   if(!campaign) return;
-  const message = (c.generated && c.generated[key]) || `${key==='m1'?'Message 1':'Message 2'} to ${c.name} — marked as sent manually, no draft on file.`;
+  const message = (c.generated && c.generated[key]) || `${MSG_STEP_LABELS[key] || key} to ${c.name} — marked as sent manually, no draft on file.`;
   try {
     const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/contacts/${cid}/mark-sent`, {
       method: 'POST',
@@ -7112,9 +7119,13 @@ async function setReply(cid, key, val){
     toast('Marked locally, but could not sync reply to Airtable: ' + err.message, 'warn');
   }
 }
+// Renamed from writing straight to c.thread.cta - that field is now the
+// CTA message's {sent, replied} tracking object, same shape as
+// c.thread.m1/m2 (see renderMsgStep/markSent/setReply), so which CTA copy
+// was actually used needs its own field to avoid clobbering that.
 function setCta(cid, val){
   const c = state.contacts.find(x=>x.id===cid);
-  c.thread.cta = val || null;
+  c.thread.ctaOption = val || null;
 }
 
 function removeDeadContact(cid){
@@ -8074,7 +8085,7 @@ function openBookingModal(cid){
     </div>
     <div class="field"><label>Delivery date</label><input type="date" id="bkDate" value="${isoDate(TODAY)}"></div>
     <div class="field"><label>What converted them?</label>
-      <select id="bkCta">${CTA_OPTIONS.map(o=>`<option value="${esc(o)}" ${c.thread.cta===o?'selected':''}>${esc(o)}</option>`).join('')}</select>
+      <select id="bkCta">${CTA_OPTIONS.map(o=>`<option value="${esc(o)}" ${c.thread.ctaOption===o?'selected':''}>${esc(o)}</option>`).join('')}</select>
     </div>
     <div class="field"><label>Conversion notes</label><textarea id="bkNotes" rows="3" placeholder="What tipped it over the line?"></textarea></div>
   `;
@@ -8092,7 +8103,7 @@ async function confirmBooking(cid){
   c.thread.bookedDate = date;
   c.thread.bookedCta = cta;
   c.thread.bookedNotes = notes;
-  c.thread.cta = cta;
+  c.thread.ctaOption = cta;
   c.state = 'messaging';
   const booking = { contactId:c.id, name:c.name, company:c.company, service, date, cta, notes };
   state.bookings.push(booking);
@@ -8427,9 +8438,9 @@ function onChipDrop(e, seqId, stageKey){
   if(forward){
     openGenerateModal(c.id, stageKey, ()=>renderPage());
   } else {
-    if(stageKey==='connect'){ c.connDate=null; c.thread.connSent=null; c.thread.m1=null; c.thread.m2=null; c.thread.cta=null; c.state='found'; }
-    if(stageKey==='m1'){ c.thread.m2=null; c.thread.cta=null; c.state='connected'; }
-    if(stageKey==='m2'){ c.thread.cta=null; }
+    if(stageKey==='connect'){ c.connDate=null; c.thread.connSent=null; c.thread.m1=null; c.thread.m2=null; c.thread.cta=null; c.thread.ctaOption=null; c.state='found'; }
+    if(stageKey==='m1'){ c.thread.m2=null; c.thread.cta=null; c.thread.ctaOption=null; c.state='connected'; }
+    if(stageKey==='m2'){ c.thread.cta=null; c.thread.ctaOption=null; }
     renderPage();
   }
   dragChipId = null;
@@ -8696,7 +8707,7 @@ async function saveGeneratedMessage(cid, stageKey){
   if(stageKey==='connect'){ c.connReqDate = c.connReqDate || isoDate(TODAY); }
   if(stageKey==='m1'){ c.connDate = c.connDate || isoDate(TODAY); c.thread.connSent = c.thread.connSent || isoDate(TODAY); c.thread.m1 = { sent: isoDate(TODAY), replied:false }; c.state='messaging'; const activityEntry = { type:'message', text:`Message 1 sent to ${c.name} (${c.company})`, date: isoDate(TODAY) }; state.activity.unshift(activityEntry); syncActivityToAirtable(activityEntry); }
   if(stageKey==='m2'){ c.thread.m2 = { sent: isoDate(TODAY), replied:false }; const activityEntry = { type:'message', text:`Message 2 sent to ${c.name} (${c.company})`, date: isoDate(TODAY) }; state.activity.unshift(activityEntry); syncActivityToAirtable(activityEntry); }
-  if(stageKey==='cta'){ c.thread.cta = c.thread.cta || CTA_OPTIONS[0]; }
+  if(stageKey==='cta'){ c.thread.cta = c.thread.cta || { sent: isoDate(TODAY), replied:false }; c.thread.ctaOption = c.thread.ctaOption || CTA_OPTIONS[0]; const activityEntry = { type:'message', text:`CTA message sent to ${c.name} (${c.company})`, date: isoDate(TODAY) }; state.activity.unshift(activityEntry); syncActivityToAirtable(activityEntry); }
   const originalDraft = (window.__genCtx && window.__genCtx.originalDraft) || '';
   notifyWebhook(c);
   closeModal();
@@ -8707,18 +8718,24 @@ async function saveGeneratedMessage(cid, stageKey){
   const campaign = state.campaigns.find(x => x.id === window.__roadmapCampaignId) || activeCampaignForContact(c);
   if(!campaign) return;
 
-  // m1/m2 are the two stages this campaign's Sequence Stage actually tracks
-  // (see SEQUENCE_STAGE_NEXT in search-server.js) - for those, "Save &
-  // advance" needs to do the same Airtable writes as the Today's Actions
-  // "Copy & mark sent" fast-action (POST .../mark-sent): log a Touch Point,
-  // advance Sequence Stage, and record Final/Original Message + Draft
-  // Outcome. It used to only PATCH Next Message Draft, so a message sent
-  // this way never advanced Sequence Stage or showed up in the Touch Points
-  // history at all - Airtable had no record the send ever happened.
-  // connect/cta aren't part of that Sequence Stage vocabulary (connection
-  // requests and CTAs are tracked elsewhere), so they keep the old
-  // draft-only PATCH.
-  if(stageKey === 'm1' || stageKey === 'm2'){
+  // m1/m2/cta are the three stages this campaign's Sequence Stage actually
+  // tracks (see SEQUENCE_STAGE_NEXT in search-server.js - message 3 IS the
+  // CTA message in that vocabulary) - for those, "Save & advance" needs to
+  // do the same Airtable writes as the Today's Actions "Copy & mark sent"
+  // fast-action (POST .../mark-sent): log a Touch Point, advance Sequence
+  // Stage, and record Final/Original Message + Draft Outcome. It used to
+  // only PATCH Next Message Draft, so a message sent this way never
+  // advanced Sequence Stage or showed up in the Touch Points history at all
+  // - Airtable had no record the send ever happened. cta was wrongly
+  // excluded from this alongside connect (a real gap: without it, a CTA
+  // send here never logged a Touch Point or advanced past "Message 2
+  // Sent", so there was no way to later record whether it converted or
+  // went cold - see setReply/renderMsgStep's Reply toggle, now also
+  // rendered for the CTA step). connect genuinely isn't part of this
+  // vocabulary (a connection request is tracked via PATCH
+  // /api/context/contact-fields instead), so it alone keeps the old
+  // draft-only PATCH below.
+  if(stageKey === 'm1' || stageKey === 'm2' || stageKey === 'cta'){
     const draftOutcome = output === originalDraft ? 'Sent verbatim' : 'Sent edited';
     try {
       const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/contacts/${cid}/mark-sent`, {

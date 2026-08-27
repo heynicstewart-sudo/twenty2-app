@@ -7148,18 +7148,34 @@ function normalizeSequenceStage(stage) {
 // isn't reached by "mark sent" (Found has no message to send yet;
 // Connection Pending advances to Connected via the "Connected" branch of
 // PATCH /api/context/contact-fields once accepted, not by sending anything).
+// "Ready for Message N" (from SEQUENCE_STAGE_ADVANCE, once a reply's
+// cleared the gate) maps to the same next stage as the "N-1 Sent" it
+// followed - without these, a contact whose reply came in via a DM
+// screenshot (landing them on "Ready for Message N") couldn't have that
+// message sent through mark-sent at all: this map had no entry for that
+// stage, so the route 400'd with "already at the final stage" - wrong on
+// a contact who's very much not done, just reached this stage by the
+// other route. "Pending Reply MN" (still waiting, gate not yet cleared) is
+// deliberately left out - the client doesn't offer a way to send early
+// from there either (see renderMsgStep's Reply toggle only appearing once
+// a message is marked sent).
 const SEQUENCE_STAGE_NEXT = {
   'Connected': 'Message 1 Sent',
   'Message 1 Sent': 'Message 2 Sent',
-  'Message 2 Sent': 'Message 3 Sent'
+  'Ready for Message 2': 'Message 2 Sent',
+  'Message 2 Sent': 'Message 3 Sent',
+  'Ready for Message 3': 'Message 3 Sent'
 };
 
 // Which message number a "Generate message" click should draft, given the
-// contact's current (normalised) Sequence Stage.
+// contact's current (normalised) Sequence Stage. Same "Ready for Message
+// N" equivalence as SEQUENCE_STAGE_NEXT above.
 const MESSAGE_NUMBER_FOR_STAGE = {
   'Connected': 1,
   'Message 1 Sent': 2,
-  'Message 2 Sent': 3
+  'Ready for Message 2': 2,
+  'Message 2 Sent': 3,
+  'Ready for Message 3': 3
 };
 
 // Airtable caps batch writes at 10 records per request. typecast:true so a
@@ -7330,6 +7346,21 @@ app.post('/api/campaign/:id/check-timeouts', async (req, res) => {
 // explicit constraint always outranks whatever else the summary offers.
 const RESPECT_SUMMARY_INSTRUCTIONS_NOTE = " If the AI summary, profile notes, or conversation above state an explicit instruction about how to approach this contact (e.g. what not to mention, or how not to frame something - such as not treating a well-established role change as recent or newsworthy), treat that as a hard constraint that overrides any other angle the summary might otherwise suggest, however interesting.";
 
+// A campaign's CTAs (Campaigns.CTAs, one per line) were previously only
+// ever read for the Sales tab's "CTA converting to bookings" chart -
+// matched against whatever a rep manually typed into a Touch Point's CTA
+// field - never fed into drafting at all. Adding more than one CTA to a
+// campaign made no difference to what got written; the CTA-stage prompt
+// always reached for the same generic pitch regardless. Handing the whole
+// list to the drafting prompt (only when there's an actual choice to make)
+// lets it pick whichever one fits what the contact has actually said - the
+// same "read the conversation, don't push blind" judgment
+// ctaStrategyNoteText's 'cta' branch now applies to cadence.
+function ctaOptionsPromptText(ctaOptions) {
+  if (!ctaOptions || ctaOptions.length < 2) return '';
+  return `\n\nThis campaign has more than one CTA on file - pick whichever one actually fits what the contact has said rather than defaulting to the same one every time:\n${ctaOptions.map(c => `- ${c}`).join('\n')}`;
+}
+
 // The 'cta' branch used to be an unconditional command ("make the ask
 // directly here... don't hold back") regardless of what the contact had
 // actually said - cadence alone decided it was time to pitch, with no
@@ -7412,7 +7443,21 @@ app.post('/api/messages/generate', async (req, res) => {
       console.warn('Could not load contact conversation history for message generation (non-fatal):', lookupErr.message);
     }
 
-    const promptText = `Template for this stage:\n${stage.template || ''}\n\nContact: ${contact.name}, ${contact.role || ''} at ${contact.company || ''}. Sequence stage: ${stage.label || stage.key} (message ${stage.messageNumber || 'n/a'} in the sequence). Profile notes: ${contact.notes || 'none'}.${conversationNote}\n\n${ctaStrategyNoteText(stage.key, stage.messageNumber, voice && voice.messagesBeforeCta)}\n\n${voiceRulesPromptText(voice)}${imageNote}${campaignNote}${enrichmentNote}\n\nWrite the actual message for this specific contact, replacing placeholders naturally - if the conversation so far shows they've already replied, respond to what they actually said rather than reintroducing yourself.${RESPECT_SUMMARY_INSTRUCTIONS_NOTE} Return only the message text.`;
+    // CTAs live on the Campaigns record itself (Campaigns.CTAs), not on the
+    // lightweight {name, goal, strategyBrief} object the client sends up as
+    // `campaign` - only worth the extra fetch at the CTA stage, where
+    // there's actually a choice to make.
+    let ctaOptions = [];
+    if (campaign && campaign.name && stage.key === 'cta') {
+      try {
+        const campaignRecord = await findCampaignRecordByName(campaign.name);
+        if (campaignRecord) ctaOptions = parseCtaList(campaignRecord.fields['CTAs']);
+      } catch (ctaErr) {
+        console.warn('Could not load campaign CTAs for message generation (non-fatal):', ctaErr.message);
+      }
+    }
+
+    const promptText = `Template for this stage:\n${stage.template || ''}\n\nContact: ${contact.name}, ${contact.role || ''} at ${contact.company || ''}. Sequence stage: ${stage.label || stage.key} (message ${stage.messageNumber || 'n/a'} in the sequence). Profile notes: ${contact.notes || 'none'}.${conversationNote}\n\n${ctaStrategyNoteText(stage.key, stage.messageNumber, voice && voice.messagesBeforeCta)}${ctaOptionsPromptText(ctaOptions)}\n\n${voiceRulesPromptText(voice)}${imageNote}${campaignNote}${enrichmentNote}\n\nWrite the actual message for this specific contact, replacing placeholders naturally - if the conversation so far shows they've already replied, respond to what they actually said rather than reintroducing yourself.${RESPECT_SUMMARY_INSTRUCTIONS_NOTE} Return only the message text.`;
 
     const content = imgs.map(img => ({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.base64 } }));
     content.push({ type: 'text', text: promptText });
