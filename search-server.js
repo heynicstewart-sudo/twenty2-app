@@ -7306,11 +7306,22 @@ app.post('/api/campaign/:id/check-timeouts', async (req, res) => {
 // explicit constraint always outranks whatever else the summary offers.
 const RESPECT_SUMMARY_INSTRUCTIONS_NOTE = " If the AI summary, profile notes, or conversation above state an explicit instruction about how to approach this contact (e.g. what not to mention, or how not to frame something - such as not treating a well-established role change as recent or newsworthy), treat that as a hard constraint that overrides any other angle the summary might otherwise suggest, however interesting.";
 
+// The 'cta' branch used to be an unconditional command ("make the ask
+// directly here... don't hold back") regardless of what the contact had
+// actually said - cadence alone decided it was time to pitch, with no
+// allowance for a reply that revealed something the standard offer doesn't
+// fit. A real case: a contact at the CTA stage described a genuine,
+// specific organisational problem (no enterprise architect, real risk of
+// duplicated work) and the draft still pushed the course pitch straight at
+// it, reading as tone-deaf next to what she'd actually raised - exactly
+// what a rep reading the same reply would soften into an informal
+// conversation instead. Cadence is a target to aim for, not a script to
+// follow blind to the conversation's content.
 function ctaStrategyNoteText(stageKey, messageNumber, messagesBeforeCta) {
   const n = parseInt(messagesBeforeCta, 10) || 2;
   const num = messageNumber || 0;
   if (stageKey === 'cta') {
-    return `Strategy: this is the CTA ask (message ${num} in the sequence). Per the outreach strategy the CTA should land by message ${n}, so make the ask directly here${num > n ? ", it's already overdue so don't hold back" : ''}.`;
+    return `Strategy: the outreach cadence calls for the CTA ask around message ${num} in the sequence${num > n ? ` (already past the usual message ${n} target - don't let it drift further without some kind of forward step)` : ''}. Treat that as a target, not a script: read what they've actually said in the conversation so far first. If their replies describe a genuine, specific problem or complexity - not just general interest or small talk - matching that with a direct pitch for the course/workshop can read as tone-deaf, since it undersells what they've actually raised. In that case, respond to the substance of what they said, and offer a lighter-touch next step instead (e.g. a quick call or informal chat to talk it through) rather than the standard scripted ask - still move things forward, just not with the same pitch. If nothing in the conversation suggests that kind of complexity, go ahead and make the direct ask as normal.`;
   }
   if (!num) return '';
   if (num >= n) {
