@@ -8982,7 +8982,8 @@ async function ensureSitemapTable() {
       { name: 'Title', type: 'singleLineText' },
       { name: 'Published Date', type: 'date', options: { dateFormat: { name: 'iso' } } },
       { name: 'Keyword', type: 'singleLineText' },
-      { name: 'Type', type: 'singleSelect', options: { choices: [{ name: 'Blog' }, { name: 'Service' }] } }
+      { name: 'Type', type: 'singleSelect', options: { choices: [{ name: 'Blog' }, { name: 'Service' }] } },
+      { name: 'LinkedIn Draft', type: 'multilineText' }
     ]);
   } catch (err) {
     console.warn('Could not auto-provision the Sitemap table (create it by hand if it does not exist yet):', err.message);
@@ -9003,6 +9004,99 @@ async function ensureSitemapTypeField() {
   } catch (err) {
     console.warn('Could not auto-provision the Sitemap Type field (add it by hand if it does not exist yet):', err.message);
   }
+}
+
+// Holds the repurposed LinkedIn post for each published page. Same
+// best-effort provisioning contract as ensureSitemapTypeField.
+async function ensureSitemapLinkedInDraftField() {
+  try {
+    return await ensureAirtableField(SITEMAP_TABLE, 'LinkedIn Draft', { type: 'multilineText' });
+  } catch (err) {
+    console.warn('Could not auto-provision the Sitemap LinkedIn Draft field (add it by hand if it does not exist yet):', err.message);
+  }
+}
+
+// ---- Post-publish follow-ups (LinkedIn repurposing + Search Console) ----
+// Run once a page is live in Framer's CMS as a draft and logged to
+// Sitemap. Both steps are best-effort - a failure is logged and swallowed,
+// never rolls back or fails the publish that already happened.
+
+// Repurposes the published page into a short LinkedIn post in T2C voice.
+async function generateLinkedInPostDraft(title, html, url) {
+  const plainText = String(html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 6000);
+  const settingsRecord = await getSettingsRecord();
+  const voiceProfile = getSeoVoiceProfileText(settingsRecord && settingsRecord.fields);
+
+  const prompt = `You are writing a LinkedIn post for T2C Outreach, Twenty2 Collective, to promote a new page on our website.
+
+VOICE PROFILE:
+${voiceProfile}
+
+PAGE TITLE: "${title}"
+PAGE URL: ${url}
+
+PAGE CONTENT (plain-text extract):
+${plainText}
+
+Write a LinkedIn post that:
+- Is under 200 words in total
+- Opens with a one or two line hook that earns the scroll-stop
+- Has exactly 3 insight bullets drawn from the page, each starting with "- "
+- Ends with a short line pointing readers to the page, then the URL (${url}) on its own final line
+- Is in T2C's voice, UK/AU English, no em dashes, at most 3 hashtags
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "post": string }`;
+
+  const result = await callClaudeJson(prompt, 1200);
+  return (result.post || '').trim();
+}
+
+// Pings Google to (re)crawl a newly published URL via the Indexing API's
+// urlNotifications:publish endpoint. Per the brief this authenticates with
+// the GSC_API_KEY env var (set in Railway) passed as the ?key= query
+// param. Missing key or any non-2xx response is logged and swallowed.
+async function submitUrlToGsc(url) {
+  if (!process.env.GSC_API_KEY) {
+    console.warn('GSC_API_KEY not configured - skipping Search Console submission for', url);
+    return { submitted: false, reason: 'GSC_API_KEY not configured' };
+  }
+  try {
+    const gscRes = await fetch(`https://indexing.googleapis.com/v3/urlNotifications:publish?key=${encodeURIComponent(process.env.GSC_API_KEY)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, type: 'URL_UPDATED' })
+    });
+    if (!gscRes.ok) {
+      const text = await gscRes.text();
+      console.warn(`GSC submission for ${url} returned ${gscRes.status}: ${text}`);
+      return { submitted: false, reason: `HTTP ${gscRes.status}` };
+    }
+    return { submitted: true };
+  } catch (err) {
+    console.warn('GSC submission failed for', url, '-', err.message);
+    return { submitted: false, reason: err.message };
+  }
+}
+
+// Shared tail for both publish paths (blog /api/seo/publish and the
+// one-shot /api/seo/generate-service-page).
+async function runSeoPublishFollowUps({ sitemapRecordId, url, title, html }) {
+  let linkedInDraft = '';
+  try {
+    linkedInDraft = await generateLinkedInPostDraft(title, html, url);
+    if (linkedInDraft && sitemapRecordId) {
+      await ensureSitemapLinkedInDraftField();
+      await airtableRequest('PATCH', SITEMAP_TABLE, {
+        records: [{ id: sitemapRecordId, fields: { 'LinkedIn Draft': linkedInDraft } }],
+        typecast: true
+      });
+    }
+  } catch (err) {
+    console.warn('LinkedIn draft generation/save failed:', err.message);
+  }
+  const gsc = await submitUrlToGsc(url);
+  return { linkedInDraft, gsc };
 }
 
 async function ensureSeoVoiceProfileField() {
@@ -9821,17 +9915,20 @@ app.post('/api/seo/publish', async (req, res) => {
     const published = await publishToFramer(post);
     const today = new Date().toISOString().slice(0, 10);
 
-    await airtableRequest('POST', SITEMAP_TABLE, {
+    const sitemapWrite = await airtableRequest('POST', SITEMAP_TABLE, {
       records: [{ fields: { 'URL': published.url, 'Title': post.title, 'Published Date': today, 'Keyword': kf['Keyword'] || '', 'Type': 'Blog' } }],
       typecast: true
     });
+    const sitemapRecordId = sitemapWrite && sitemapWrite.records && sitemapWrite.records[0] && sitemapWrite.records[0].id;
 
     await airtableRequest('PATCH', KEYWORDS_TABLE, {
       records: [{ id: keywordId, fields: { 'Status': 'Published', 'Published URL': published.url } }],
       typecast: true
     });
 
-    res.json({ success: true, url: published.url });
+    const followUps = await runSeoPublishFollowUps({ sitemapRecordId, url: published.url, title: post.title, html: post.html });
+
+    res.json({ success: true, url: published.url, linkedInDraft: followUps.linkedInDraft, gscSubmitted: followUps.gsc.submitted });
   } catch (err) {
     console.error('Publish SEO post error:', err.message);
     res.status(500).json({ error: err.message });
@@ -9949,7 +10046,7 @@ app.post('/api/seo/generate-service-page', async (req, res) => {
     const published = await publishToFramer(page);
     const today = new Date().toISOString().slice(0, 10);
 
-    await airtableRequest('POST', SITEMAP_TABLE, {
+    const sitemapWrite = await airtableRequest('POST', SITEMAP_TABLE, {
       records: [{
         fields: {
           'URL': published.url,
@@ -9961,6 +10058,9 @@ app.post('/api/seo/generate-service-page', async (req, res) => {
       }],
       typecast: true
     });
+    const sitemapRecordId = sitemapWrite && sitemapWrite.records && sitemapWrite.records[0] && sitemapWrite.records[0].id;
+
+    const followUps = await runSeoPublishFollowUps({ sitemapRecordId, url: published.url, title: page.title, html: page.html });
 
     res.json({
       success: true,
@@ -9972,6 +10072,8 @@ app.post('/api/seo/generate-service-page', async (req, res) => {
       keyword: page.keyword,
       service: page.service,
       location: page.location,
+      linkedInDraft: followUps.linkedInDraft,
+      gscSubmitted: followUps.gsc.submitted,
       usedCustomVoiceProfile: page.usedCustomVoiceProfile
     });
   } catch (err) {
