@@ -1372,6 +1372,9 @@ function afterRender(page){
     if(tab === 'seo' && window.__seoCampaigns === undefined) loadSeoCampaigns();
     if(tab === 'seo') initSeoGscCharts();
     if(tab === 'seo') initSeoCampaignCharts();
+    if(tab === 'aeo' && window.__aeoCampaigns === undefined) loadAeoCampaigns();
+    if(tab === 'aeo' && window.__aeoPrompts === undefined) loadAeoPrompts();
+    if(tab === 'aeo' && window.__aeoRecommendations === undefined) loadAeoRecommendations();
     if(tab === 'settings' && window.__contentSettings === undefined) loadContentSettings();
   }
   if(page === 'home' && window.__homeContactSignals === undefined) loadHomeContactSignals();
@@ -12175,7 +12178,7 @@ function renderLearningResult(kind, data, recordCount){
 // campaign-name-not-id scoping convention (the backend resolves a campaign
 // name to its Airtable record id itself, same as sales-overview/deals).
 
-const CONTENT_SUBTABS = [['signals','Signals'],['drafts','Draft Centre'],['calendar','Calendar'],['performance','My Performance'],['seo','SEO'],['settings','Settings']];
+const CONTENT_SUBTABS = [['signals','Signals'],['drafts','Draft Centre'],['calendar','Calendar'],['performance','My Performance'],['seo','SEO'],['aeo','AEO'],['settings','Settings']];
 const CONTENT_FORMATS = ['LinkedIn Post','Blog','Newsletter'];
 const CONTENT_FORMAT_META = {
   'LinkedIn Post': { dotClass:'format-linkedin', label:'LinkedIn' },
@@ -12201,6 +12204,7 @@ function renderContent(){
   ${tab==='calendar' ? renderContentCalendarTab() : ''}
   ${tab==='performance' ? renderContentPerformanceTab() : ''}
   ${tab==='seo' ? renderContentSeoTab() : ''}
+  ${tab==='aeo' ? renderContentAeoTab() : ''}
   ${tab==='settings' ? renderContentSettingsTab() : ''}
   `;
 }
@@ -14353,6 +14357,594 @@ async function deleteSeoPreviewPost(){
   } catch(err){
     toast('Could not delete post: ' + err.message, 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-trash"></i> Delete post'; }
+  }
+}
+
+/* ---- AEO sub-tab ---- */
+// Answer Engine Optimisation. AEO Campaigns (a product/service + the prompts
+// tracked for it in HubSpot), Engine Suggestions (Claude mines the CRM for
+// the highest-opportunity products), a Prompt Library (with a per-row
+// "Generate Content" flow that runs the SEO generators), and a
+// Recommendations inbox. All backed by /api/aeo/*.
+
+const AEO_CONTENT_TYPES = ['Blog Post','YouTube Script','LinkedIn Post','Service Page'];
+const AEO_STATUS_TAG_CLASS = { 'Not Started':'tag-pending', 'In Progress':'tag-messaging', 'Done':'tag-won' };
+const AEO_CAMPAIGN_STATUS_TAG_CLASS = { Active:'tag-won', Completed:'tag-started', Paused:'tag-pending' };
+
+function aeoRerender(){ if(state.currentPage === 'content' && window.__contentSubTab === 'aeo') renderPage(); }
+
+async function loadAeoPrompts(force){
+  if(window.__aeoPrompts !== undefined && !force) return;
+  try {
+    const res = await fetch('/api/aeo/prompts');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__aeoPrompts = data.prompts || [];
+  } catch(err){
+    window.__aeoPrompts = { error: err.message };
+  }
+  aeoRerender();
+}
+
+async function loadAeoRecommendations(force){
+  if(window.__aeoRecommendations !== undefined && !force) return;
+  try {
+    const res = await fetch('/api/aeo/recommendations');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__aeoRecommendations = data.recommendations || [];
+  } catch(err){
+    window.__aeoRecommendations = { error: err.message };
+  }
+  aeoRerender();
+}
+
+async function loadAeoCampaigns(force){
+  if(window.__aeoCampaigns !== undefined && !force) return;
+  try {
+    const res = await fetch('/api/aeo/campaigns');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__aeoCampaigns = data.campaigns || [];
+  } catch(err){
+    window.__aeoCampaigns = { error: err.message };
+  }
+  aeoRerender();
+}
+
+async function loadAeoSuggestions(){
+  window.__aeoSuggestionsLoading = true;
+  aeoRerender();
+  try {
+    const res = await fetch('/api/aeo/suggest-products', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__aeoSuggestions = data.suggestions || [];
+  } catch(err){
+    window.__aeoSuggestions = { error: err.message };
+  }
+  window.__aeoSuggestionsLoading = false;
+  aeoRerender();
+}
+
+function aeoStatusTag(status){
+  const s = status || 'Not Started';
+  return `<span class="tag ${AEO_STATUS_TAG_CLASS[s]||'tag-pending'}">${esc(s)}</span>`;
+}
+
+function renderContentAeoTab(){
+  return `
+  ${renderAeoCampaignsSection()}
+  ${renderAeoSuggestionsSection()}
+  ${renderAeoPromptLibrary()}
+  ${renderAeoRecommendationsSection()}
+  `;
+}
+
+/* ---- AEO Campaigns ---- */
+
+function toggleAeoCampaign(id){
+  window.__aeoCampaignExpanded = window.__aeoCampaignExpanded === id ? null : id;
+  renderPage();
+}
+
+function renderAeoCampaignsSection(){
+  const list = window.__aeoCampaigns;
+  const newBtn = `<button class="btn btn-primary btn-sm" onclick="openNewAeoCampaignModal()"><i class="ti ti-plus"></i> New Campaign</button>`;
+  const refreshBtn = `<button class="btn btn-secondary btn-sm" onclick="loadAeoCampaigns(true)"><i class="ti ti-refresh"></i> Refresh</button>`;
+  let body;
+  if(list === undefined){
+    body = '<div class="muted"><i class="ti ti-loader-2"></i> Loading campaigns...</div>';
+  } else if(list && list.error){
+    body = `<div class="muted">Could not load campaigns: ${esc(list.error)}</div>`;
+  } else if(!list.length){
+    body = '<div class="empty-state">No AEO campaigns yet. Create one to track a product or service and the prompts you want T2C to be the answer to.</div>';
+  } else {
+    const active = list.filter(c => c.status === 'Active');
+    const rest = list.filter(c => c.status !== 'Active');
+    body = `<div style="display:flex;flex-direction:column;gap:12px;">${active.concat(rest).map(renderAeoCampaignCard).join('')}</div>`;
+  }
+  return `
+  <div class="card" style="margin-bottom:18px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-target-arrow"></i> AEO Campaigns</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">${newBtn}${refreshBtn}</div>
+    </div>
+    ${body}
+  </div>`;
+}
+
+function renderAeoCampaignCard(c){
+  const expanded = window.__aeoCampaignExpanded === c.id;
+  const days = (c.daysRunning === null || c.daysRunning === undefined) ? null : c.daysRunning;
+  const daysLabel = days === null ? '—' : (days === 0 ? 'Day 1' : days + ' day' + (days === 1 ? '' : 's') + ' running');
+  const statusTag = `<span class="tag ${AEO_CAMPAIGN_STATUS_TAG_CLASS[c.status] || 'tag-pending'}">${esc(c.status || 'Active')}</span>`;
+  const goalSummary = (c.goal || '').trim();
+  const goalShort = goalSummary.length > 180 ? goalSummary.slice(0,177) + '...' : goalSummary;
+  return `
+  <div style="border:1px solid var(--border);border-radius:var(--radius-card);background:var(--surface);overflow:hidden;">
+    <div style="padding:14px 16px;cursor:pointer;" onclick="toggleAeoCampaign('${c.id}')">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
+        <div style="min-width:0;">
+          <div style="font-weight:700;font-size:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <i class="ti ti-chevron-${expanded ? 'down' : 'right'}" style="color:var(--muted);"></i>
+            ${esc(c.name || 'Untitled campaign')} ${statusTag}
+          </div>
+          <div class="muted" style="font-size:12px;margin-top:4px;">
+            ${c.productOrService ? `<span class="tag tag-messaging">${esc(c.productOrService)}</span> &middot; ` : ''}Started ${fmtDate(c.startDate)} &middot; ${daysLabel}
+          </div>
+        </div>
+        <div style="display:flex;gap:6px;flex-shrink:0;" onclick="event.stopPropagation();">
+          <button class="btn btn-ghost btn-sm" title="Edit" onclick="openEditAeoCampaignModal('${c.id}')"><i class="ti ti-edit"></i></button>
+          <button class="btn btn-ghost btn-sm" title="Delete" onclick="deleteAeoCampaign('${c.id}')"><i class="ti ti-trash"></i></button>
+        </div>
+      </div>
+      ${goalShort ? `<div style="font-size:12.5px;margin-top:8px;line-height:1.5;">${esc(goalShort)}</div>` : ''}
+      <div style="margin-top:12px;display:flex;gap:24px;align-items:center;flex-wrap:wrap;">
+        <div style="text-align:center;"><div style="font-size:18px;font-weight:800;color:var(--primary);">${c.trackedPromptCount || 0}</div><div class="muted" style="font-size:11px;">prompt${c.trackedPromptCount === 1 ? '' : 's'} tracked</div></div>
+        <div style="text-align:center;"><div style="font-size:18px;font-weight:800;color:var(--primary);">${c.contentPieceCount || 0}</div><div class="muted" style="font-size:11px;">content piece${c.contentPieceCount === 1 ? '' : 's'} produced</div></div>
+      </div>
+    </div>
+    ${expanded ? `<div style="border-top:1px solid var(--border);padding:16px;background:var(--bg);">${renderAeoCampaignDetail(c)}</div>` : ''}
+  </div>`;
+}
+
+function renderAeoCampaignDetail(c){
+  const prompts = Array.isArray(c.linkedPrompts) ? c.linkedPrompts : [];
+  if(!prompts.length) return '<div class="empty-state">No prompts on this campaign yet. Edit the campaign to add the prompts being tracked.</div>';
+  return `
+    <div class="perf-table-wrap">
+    <table class="perf-table">
+      <thead><tr><th>Prompt</th><th>Status</th><th>Content produced</th></tr></thead>
+      <tbody>
+      ${prompts.map(p => `
+        <tr>
+          <td>${esc(p.prompt || '—')}${p.matched ? '' : ' <span class="muted" style="font-size:11px;">(not in library)</span>'}</td>
+          <td>${p.matched ? aeoStatusTag(p.contentStatus) : '<span class="muted">—</span>'}</td>
+          <td>${p.generatedContentType
+            ? `<span class="tag tag-started">${esc(p.generatedContentType)}</span> <span class="muted" style="font-size:11px;">${esc(p.generatedTitle || '')}${p.generatedDate ? ' &middot; ' + fmtDate(p.generatedDate) : ''}</span>`
+            : '<span class="muted">Nothing yet</span>'}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+    </div>`;
+}
+
+function aeoCampaignModalBody(c, prefill){
+  const p = prefill || {};
+  const val = (k, d) => esc(c ? (c[k] || '') : (p[k] || d || ''));
+  const promptsVal = c
+    ? esc((c.prompts || '').split(/\r?\n/).map(s=>s.trim()).filter(Boolean).join('\n'))
+    : esc(p.prompts || '');
+  return `
+    <div class="field"><label>Campaign name</label><input id="aeoCampaignName" value="${val('name')}" placeholder="e.g. Change Management Consulting — AEO"></div>
+    <div class="field"><label>Product or service</label><input id="aeoCampaignProduct" value="${val('productOrService')}" placeholder="e.g. Change Management Consulting"></div>
+    <div class="row">
+      <div class="field"><label>Start date</label><input type="date" id="aeoCampaignStart" value="${c ? esc(c.startDate) : new Date().toISOString().slice(0,10)}"></div>
+      <div class="field"><label>Status</label>
+        <select id="aeoCampaignStatus">
+          ${['Active','Completed','Paused'].map(s => `<option value="${s}" ${(c && c.status === s) || (!c && s === 'Active') ? 'selected' : ''}>${s}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="field"><label>Goal</label><textarea id="aeoCampaignGoal" rows="3" placeholder="What this campaign is trying to achieve">${val('goal')}</textarea></div>
+    <div class="field"><label>Notes</label><textarea id="aeoCampaignNotes" rows="2">${val('notes')}</textarea></div>
+    <div class="field"><label>Prompts being tracked <span class="muted">(one per line)</span></label><textarea id="aeoCampaignPrompts" rows="5" placeholder="what is the best change management consultancy in Perth&#10;how do I choose a change management partner">${promptsVal}</textarea></div>
+  `;
+}
+
+function readAeoCampaignModal(){
+  const promptLines = (document.getElementById('aeoCampaignPrompts').value || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  return {
+    name: (document.getElementById('aeoCampaignName').value || '').trim(),
+    productOrService: (document.getElementById('aeoCampaignProduct').value || '').trim(),
+    startDate: document.getElementById('aeoCampaignStart').value || '',
+    status: document.getElementById('aeoCampaignStatus').value || 'Active',
+    goal: (document.getElementById('aeoCampaignGoal').value || '').trim(),
+    notes: (document.getElementById('aeoCampaignNotes').value || '').trim(),
+    prompts: promptLines
+  };
+}
+
+function openNewAeoCampaignModal(prefill){
+  openModal('New AEO Campaign', aeoCampaignModalBody(null, prefill), `
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="submitNewAeoCampaign(this)">Create campaign</button>
+  `);
+}
+
+function openEditAeoCampaignModal(id){
+  const c = (Array.isArray(window.__aeoCampaigns) ? window.__aeoCampaigns : []).find(x => x.id === id);
+  if(!c){ toast('Campaign not found', 'warn'); return; }
+  openModal('Edit AEO Campaign', aeoCampaignModalBody(c), `
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="submitEditAeoCampaign('${id}', this)">Save changes</button>
+  `);
+}
+
+async function submitNewAeoCampaign(btn){
+  const payload = readAeoCampaignModal();
+  if(!payload.name){ toast('Campaign name is required', 'warn'); return; }
+  if(btn){ btn.disabled = true; btn.textContent = 'Creating...'; }
+  try {
+    const res = await fetch('/api/aeo/campaigns', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Create failed');
+    toast('Campaign created', 'success');
+    closeModal();
+    loadAeoCampaigns(true);
+  } catch(err){
+    toast('Could not create campaign: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.textContent = 'Create campaign'; }
+  }
+}
+
+async function submitEditAeoCampaign(id, btn){
+  const payload = readAeoCampaignModal();
+  if(!payload.name){ toast('Campaign name is required', 'warn'); return; }
+  if(btn){ btn.disabled = true; btn.textContent = 'Saving...'; }
+  try {
+    const res = await fetch('/api/aeo/campaigns/' + encodeURIComponent(id), { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Update failed');
+    toast('Campaign updated', 'success');
+    closeModal();
+    loadAeoCampaigns(true);
+  } catch(err){
+    toast('Could not update campaign: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.textContent = 'Save changes'; }
+  }
+}
+
+async function deleteAeoCampaign(id){
+  if(!confirm('Delete this campaign? The prompts and any generated content are not affected.')) return;
+  try {
+    const res = await fetch('/api/aeo/campaigns/' + encodeURIComponent(id), { method:'DELETE' });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Delete failed');
+    toast('Campaign deleted', 'success');
+    if(window.__aeoCampaignExpanded === id) window.__aeoCampaignExpanded = null;
+    loadAeoCampaigns(true);
+  } catch(err){
+    toast('Could not delete campaign: ' + err.message, 'warn');
+  }
+}
+
+/* ---- Engine Suggestions ---- */
+
+function renderAeoSuggestionsSection(){
+  const list = window.__aeoSuggestions;
+  let body;
+  if(window.__aeoSuggestionsLoading){
+    body = '<div class="muted"><i class="ti ti-loader-2"></i> Analysing services, keywords, touch points and pipeline...</div>';
+  } else if(list === undefined){
+    body = '<div class="empty-state">Ask the Engine which products and services have the highest AEO opportunity right now.</div>';
+  } else if(list && list.error){
+    body = `<div class="muted">Could not load suggestions: ${esc(list.error)}</div>`;
+  } else if(!list.length){
+    body = '<div class="empty-state">No suggestions came back. Add services in Settings and keep logging touch points.</div>';
+  } else {
+    body = list.map((s,i) => `
+      <div class="signal-card">
+        <div style="font-weight:700;font-size:13.5px;margin-bottom:6px;">${esc(s.product || 'Untitled')}</div>
+        <div style="font-size:12.5px;margin-bottom:6px;"><span class="muted">Track in HubSpot:</span> <strong>${esc(s.trackingPrompt || '')}</strong></div>
+        <div class="muted" style="font-size:12px;margin-bottom:10px;line-height:1.5;">${esc(s.reason || '')}</div>
+        <button class="btn btn-primary btn-sm" onclick="createAeoCampaignFromSuggestion(${i})"><i class="ti ti-rocket"></i> Create Campaign</button>
+      </div>
+    `).join('');
+  }
+  return `
+  <div class="card" style="margin-bottom:18px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:10px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-bulb"></i> Engine Suggestions</div>
+      <button class="btn btn-secondary btn-sm" onclick="loadAeoSuggestions()" ${window.__aeoSuggestionsLoading ? 'disabled' : ''}><i class="ti ti-sparkles"></i> Generate Suggestions</button>
+    </div>
+    <p class="muted" style="font-size:12px;margin-bottom:10px;">Ranks T2C products/services by AEO opportunity from keyword intent, touch point topics, and pipeline volume.</p>
+    ${body}
+  </div>`;
+}
+
+function createAeoCampaignFromSuggestion(i){
+  const list = window.__aeoSuggestions || [];
+  const s = list[i];
+  if(!s) return;
+  openNewAeoCampaignModal({ productOrService: s.product || '', prompts: s.trackingPrompt || '' });
+}
+
+/* ---- Prompt Library ---- */
+
+function setAeoPromptSearch(v){
+  window.__aeoPromptSearch = v;
+  const wrap = document.getElementById('aeoPromptTableWrap');
+  if(wrap) wrap.innerHTML = renderAeoPromptTable(aeoFilteredPrompts());
+}
+
+function aeoFilteredPrompts(){
+  const list = window.__aeoPrompts;
+  if(!Array.isArray(list)) return list;
+  const q = (window.__aeoPromptSearch || '').toLowerCase().trim();
+  if(!q) return list;
+  return list.filter(p => (p.prompt || '').toLowerCase().includes(q));
+}
+
+function renderAeoPromptLibrary(){
+  return `
+  <div class="card" style="margin-bottom:18px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:10px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-message-question"></i> Prompt Library</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <input type="text" id="aeoAddPromptInput" placeholder="Paste a prompt" style="width:280px;height:30px;" onkeydown="if(event.key==='Enter')addAeoPrompt()">
+        <button class="btn btn-primary btn-sm" onclick="addAeoPrompt()"><i class="ti ti-plus"></i> Add</button>
+      </div>
+    </div>
+    <input type="text" id="aeoPromptSearchInput" placeholder="Search prompts..." style="width:100%;height:30px;margin-bottom:10px;" value="${esc(window.__aeoPromptSearch || '')}" oninput="setAeoPromptSearch(this.value)">
+    <div id="aeoPromptTableWrap">${renderAeoPromptTable(aeoFilteredPrompts())}</div>
+  </div>`;
+}
+
+function renderAeoPromptTable(list){
+  if(list === undefined) return '<div class="muted"><i class="ti ti-loader-2"></i> Loading prompts...</div>';
+  if(list && list.error) return `<div class="muted">Could not load prompts: ${esc(list.error)}</div>`;
+  if(!list.length) return '<div class="empty-state">No prompts yet. Paste one above, or promote a recommendation below.</div>';
+  return `
+  <div class="perf-table-wrap">
+  <table class="perf-table">
+    <thead><tr><th>Prompt</th><th>Date Added</th><th>Content Status</th><th></th></tr></thead>
+    <tbody>
+    ${list.map(p => `
+      <tr>
+        <td>${esc(p.prompt)}</td>
+        <td style="white-space:nowrap;">${fmtDate(p.dateAdded)}</td>
+        <td>
+          <select onchange="setAeoPromptStatus('${p.id}', this.value)" style="height:26px;font-size:11.5px;width:auto;">
+            ${['Not Started','In Progress','Done'].map(s => `<option value="${s}" ${p.contentStatus===s?'selected':''}>${s}</option>`).join('')}
+          </select>
+        </td>
+        <td style="white-space:nowrap;text-align:right;">
+          ${p.generatedContentType ? `<button class="btn btn-ghost btn-sm" title="View generated content" onclick="viewAeoPromptContent('${p.id}')"><i class="ti ti-file-text"></i> Content</button>` : ''}
+          <button class="btn btn-primary btn-sm" onclick="openAeoGenerateModal('${p.id}')"><i class="ti ti-sparkles"></i> Generate Content</button>
+          <button class="btn btn-ghost btn-sm" title="Delete prompt" onclick="deleteAeoPrompt('${p.id}')"><i class="ti ti-trash"></i></button>
+        </td>
+      </tr>
+    `).join('')}
+    </tbody>
+  </table>
+  </div>`;
+}
+
+async function addAeoPrompt(){
+  const input = document.getElementById('aeoAddPromptInput');
+  const prompt = (input && input.value || '').trim();
+  if(!prompt){ toast('Type a prompt first', 'warn'); return; }
+  try {
+    const res = await fetch('/api/aeo/prompts', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ prompt }) });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Could not add prompt');
+    if(input) input.value = '';
+    if(Array.isArray(window.__aeoPrompts)) window.__aeoPrompts.unshift(data.prompt);
+    toast('Prompt added', 'success');
+    aeoRerender();
+  } catch(err){
+    toast('Could not add prompt: ' + err.message, 'warn');
+  }
+}
+
+async function deleteAeoPrompt(id){
+  if(!confirm('Delete this prompt from the library? Any content already generated is not affected.')) return;
+  try {
+    const res = await fetch('/api/aeo/prompts/' + encodeURIComponent(id), { method:'DELETE' });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Delete failed');
+    if(Array.isArray(window.__aeoPrompts)) window.__aeoPrompts = window.__aeoPrompts.filter(p => p.id !== id);
+    toast('Prompt deleted', 'success');
+    aeoRerender();
+  } catch(err){
+    toast('Could not delete prompt: ' + err.message, 'warn');
+  }
+}
+
+async function setAeoPromptStatus(id, status){
+  try {
+    const res = await fetch('/api/aeo/prompts/' + encodeURIComponent(id), { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ contentStatus: status }) });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Update failed');
+    const p = (window.__aeoPrompts || []).find(x => x.id === id);
+    if(p) p.contentStatus = status;
+    toast('Status updated', 'success');
+  } catch(err){
+    toast('Could not update status: ' + err.message, 'warn');
+    aeoRerender();
+  }
+}
+
+function viewAeoPromptContent(id){
+  const p = (Array.isArray(window.__aeoPrompts) ? window.__aeoPrompts : []).find(x => x.id === id);
+  if(!p || !p.generatedContentType){ toast('No generated content on this prompt', 'warn'); return; }
+  const isHtml = p.generatedContentType === 'Blog Post' || p.generatedContentType === 'Service Page';
+  const body = `
+    <div class="muted" style="font-size:12px;margin-bottom:8px;"><span class="tag tag-started">${esc(p.generatedContentType)}</span> ${p.generatedDate ? ' &middot; generated ' + fmtDate(p.generatedDate) : ''}</div>
+    ${p.generatedTitle ? `<div class="field"><label>Title</label><input value="${esc(p.generatedTitle)}" readonly></div>` : ''}
+    <div class="field"><label>${isHtml ? 'Body (HTML)' : 'Content'}</label><textarea rows="16" readonly style="width:100%;font-family:monospace;font-size:12px;">${esc(p.generatedContent)}</textarea></div>`;
+  openModal('Generated content', body, `
+    <button class="btn btn-secondary" onclick="closeModal()">Close</button>
+    <button class="btn btn-primary" onclick="aeoCopyPromptContent('${p.id}', this)"><i class="ti ti-copy"></i> Copy</button>
+  `);
+}
+
+function aeoCopyPromptContent(id, btn){
+  const p = (Array.isArray(window.__aeoPrompts) ? window.__aeoPrompts : []).find(x => x.id === id);
+  const text = p ? (p.generatedContent || '') : '';
+  if(!text){ toast('Nothing to copy', 'warn'); return; }
+  const done = () => { if(btn){ btn.innerHTML = '<i class="ti ti-check"></i> Copied'; } };
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
+  } else {
+    fallbackCopy(text, done);
+  }
+}
+
+function openAeoGenerateModal(promptId){
+  const p = (Array.isArray(window.__aeoPrompts) ? window.__aeoPrompts : []).find(x => x.id === promptId);
+  if(!p){ toast('Prompt not found', 'warn'); return; }
+  const body = `
+    <p class="muted" style="font-size:12.5px;margin-bottom:12px;">Generates a piece of content built to answer this prompt, using it as the keyword/topic:<br><strong>${esc(p.prompt)}</strong></p>
+    <div class="field"><label>Content type</label>
+      <select id="aeoGenType" onchange="document.getElementById('aeoGenLocationField').style.display = this.value === 'Service Page' ? 'block' : 'none';">
+        ${AEO_CONTENT_TYPES.map(t => `<option value="${t}">${t}</option>`).join('')}
+      </select>
+    </div>
+    <div class="field" id="aeoGenLocationField" style="display:none;"><label>Location <span class="muted">(service pages)</span></label><input id="aeoGenLocation" value="Perth" placeholder="e.g. Perth, Fremantle"></div>
+  `;
+  openModal('Generate Content', body, `
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="submitAeoGenerate('${promptId}', this)"><i class="ti ti-sparkles"></i> Generate</button>
+  `);
+}
+
+async function submitAeoGenerate(promptId, btn){
+  const contentType = document.getElementById('aeoGenType').value;
+  const locationEl = document.getElementById('aeoGenLocation');
+  const location = locationEl ? (locationEl.value || '').trim() : '';
+  if(contentType === 'Service Page' && !location){ toast('Add a location for the service page', 'warn'); return; }
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Generating (this can take a minute)...'; }
+  const p = (window.__aeoPrompts || []).find(x => x.id === promptId);
+  if(p) p.contentStatus = 'In Progress';
+  try {
+    const res = await fetch('/api/aeo/prompts/' + encodeURIComponent(promptId) + '/generate', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ contentType, location })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Generation failed');
+    if(p) Object.assign(p, data.prompt || {});
+    closeModal();
+    loadAeoCampaigns(true);
+    toast(contentType + ' generated', 'success');
+    aeoRerender();
+    viewAeoPromptContent(promptId);
+  } catch(err){
+    if(p) p.contentStatus = 'Not Started';
+    toast('Could not generate content: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-sparkles"></i> Generate'; }
+    aeoRerender();
+  }
+}
+
+/* ---- Recommendations ---- */
+
+function toggleAeoRec(id){
+  window.__aeoRecExpanded = window.__aeoRecExpanded || {};
+  window.__aeoRecExpanded[id] = !window.__aeoRecExpanded[id];
+  renderPage();
+}
+
+function renderAeoRecommendationsSection(){
+  const list = window.__aeoRecommendations;
+  let body;
+  if(list === undefined){
+    body = '<div class="muted"><i class="ti ti-loader-2"></i> Loading recommendations...</div>';
+  } else if(list && list.error){
+    body = `<div class="muted">Could not load recommendations: ${esc(list.error)}</div>`;
+  } else if(!list.length){
+    body = '<div class="empty-state">No recommendations yet. Paste one in from HubSpot or add your own above.</div>';
+  } else {
+    const exp = window.__aeoRecExpanded || {};
+    body = `<div style="display:flex;flex-direction:column;gap:10px;">${list.map(r => {
+      const text = r.recommendation || '';
+      const long = text.length > 240;
+      const shown = (long && !exp[r.id]) ? text.slice(0, 237) + '...' : text;
+      return `
+      <div class="signal-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px;">
+          <div class="muted" style="font-size:11.5px;">${fmtDate(r.dateAdded)} ${r.source ? `&middot; <span class="tag tag-messaging">${esc(r.source)}</span>` : ''}</div>
+          <div style="display:flex;gap:6px;flex-shrink:0;">
+            <button class="btn btn-primary btn-sm" onclick="addRecToPromptLibrary('${r.id}')"><i class="ti ti-plus"></i> Add to Prompt Library</button>
+            <button class="btn btn-ghost btn-sm" title="Delete" onclick="deleteAeoRecommendation('${r.id}')"><i class="ti ti-trash"></i></button>
+          </div>
+        </div>
+        <div style="font-size:12.5px;line-height:1.55;">${esc(shown)}${long ? ` <a href="javascript:void(0)" onclick="toggleAeoRec('${r.id}')" style="font-size:11.5px;">${exp[r.id] ? 'Show less' : 'Expand'}</a>` : ''}</div>
+      </div>`;
+    }).join('')}</div>`;
+  }
+  return `
+  <div class="card" style="margin-bottom:18px;">
+    <div class="section-title"><i class="ti ti-clipboard-list"></i> Recommendations</div>
+    <div class="field"><label>Recommendation</label><textarea id="aeoRecInput" rows="3" placeholder="Paste an AEO recommendation..."></textarea></div>
+    <div class="row">
+      <div class="field"><label>Source</label><input id="aeoRecSource" placeholder="e.g. HubSpot, manual"></div>
+    </div>
+    <button class="btn btn-primary btn-sm" style="margin-bottom:14px;" onclick="saveAeoRecommendation()"><i class="ti ti-device-floppy"></i> Save</button>
+    ${body}
+  </div>`;
+}
+
+async function saveAeoRecommendation(){
+  const recEl = document.getElementById('aeoRecInput');
+  const srcEl = document.getElementById('aeoRecSource');
+  const recommendation = (recEl && recEl.value || '').trim();
+  const source = (srcEl && srcEl.value || '').trim();
+  if(!recommendation){ toast('Type a recommendation first', 'warn'); return; }
+  try {
+    const res = await fetch('/api/aeo/recommendations', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ recommendation, source }) });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Save failed');
+    if(recEl) recEl.value = '';
+    if(srcEl) srcEl.value = '';
+    if(Array.isArray(window.__aeoRecommendations)) window.__aeoRecommendations.unshift(data.recommendation);
+    toast('Recommendation saved', 'success');
+    aeoRerender();
+  } catch(err){
+    toast('Could not save recommendation: ' + err.message, 'warn');
+  }
+}
+
+async function deleteAeoRecommendation(id){
+  if(!confirm('Delete this recommendation?')) return;
+  try {
+    const res = await fetch('/api/aeo/recommendations/' + encodeURIComponent(id), { method:'DELETE' });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Delete failed');
+    if(Array.isArray(window.__aeoRecommendations)) window.__aeoRecommendations = window.__aeoRecommendations.filter(r => r.id !== id);
+    toast('Recommendation deleted', 'success');
+    aeoRerender();
+  } catch(err){
+    toast('Could not delete recommendation: ' + err.message, 'warn');
+  }
+}
+
+async function addRecToPromptLibrary(id){
+  const r = (Array.isArray(window.__aeoRecommendations) ? window.__aeoRecommendations : []).find(x => x.id === id);
+  if(!r){ toast('Recommendation not found', 'warn'); return; }
+  try {
+    const res = await fetch('/api/aeo/prompts', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ prompt: r.recommendation }) });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Could not add to library');
+    if(Array.isArray(window.__aeoPrompts)) window.__aeoPrompts.unshift(data.prompt);
+    else loadAeoPrompts(true);
+    toast('Added to the Prompt Library', 'success');
+    aeoRerender();
+  } catch(err){
+    toast('Could not add to library: ' + err.message, 'warn');
   }
 }
 

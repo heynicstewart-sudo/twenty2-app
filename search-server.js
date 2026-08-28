@@ -11019,6 +11019,633 @@ app.get('/api/seo/campaigns/:id/progress', async (req, res) => {
   }
 });
 
+// ===================== AEO ENGINE =====================
+// Marketing tab > AEO sub-tab: Answer Engine Optimisation. A Prompt Library
+// (prompts we want T2C to be the answer to in ChatGPT/Perplexity/etc), a
+// Recommendations inbox (pasted from HubSpot or added by hand), AEO
+// Campaigns (a product/service + the prompts tracked for it, mirroring the
+// SEO Campaigns model), and an Engine Suggestions route that mines the CRM
+// for the highest-opportunity products to track.
+//
+// Three Airtable tables back this - AEO Prompts, AEO Recommendations, AEO
+// Campaigns. AEO Campaigns is created up front (via Airtable AI); the other
+// two are auto-provisioned best-effort here with the same swallow-and-warn
+// contract as the SEO ensure* helpers (needs schema.bases:write on the
+// connected token, or they can be created once by hand with these exact
+// names/types). "Content produced" for a prompt is generated through the
+// existing SEO generation pipeline (blog / service page) or the two new
+// YouTube script / LinkedIn post generators below, and written back onto
+// the AEO Prompts row so the campaign cards can count it.
+
+const AEO_PROMPTS_TABLE = 'AEO Prompts';
+const AEO_RECOMMENDATIONS_TABLE = 'AEO Recommendations';
+const AEO_CAMPAIGNS_TABLE = 'AEO Campaigns';
+const AEO_CONTENT_TYPES = ['Blog Post', 'YouTube Script', 'LinkedIn Post', 'Service Page'];
+
+async function ensureAeoPromptsTable() {
+  try {
+    return await ensureAirtableTable(AEO_PROMPTS_TABLE, [
+      { name: 'Prompt', type: 'multilineText' },
+      { name: 'Date Added', type: 'date', options: { dateFormat: { name: 'iso' } } },
+      { name: 'Content Status', type: 'singleSelect', options: { choices: [{ name: 'Not Started' }, { name: 'In Progress' }, { name: 'Done' }] } },
+      { name: 'Generated Content Type', type: 'singleLineText' },
+      { name: 'Generated Title', type: 'singleLineText' },
+      { name: 'Generated Content', type: 'multilineText' },
+      { name: 'Generated URL', type: 'url' },
+      { name: 'Generated Date', type: 'date', options: { dateFormat: { name: 'iso' } } }
+    ]);
+  } catch (err) {
+    warnOnce('provision:aeo-prompts-table', 'Could not auto-provision the AEO Prompts table (create it by hand if it does not exist yet):', err.message);
+  }
+}
+
+async function ensureAeoRecommendationsTable() {
+  try {
+    return await ensureAirtableTable(AEO_RECOMMENDATIONS_TABLE, [
+      { name: 'Recommendation', type: 'multilineText' },
+      { name: 'Date Added', type: 'date', options: { dateFormat: { name: 'iso' } } },
+      { name: 'Source', type: 'singleLineText' }
+    ]);
+  } catch (err) {
+    warnOnce('provision:aeo-recommendations-table', 'Could not auto-provision the AEO Recommendations table (create it by hand if it does not exist yet):', err.message);
+  }
+}
+
+async function ensureAeoCampaignsTable() {
+  try {
+    return await ensureAirtableTable(AEO_CAMPAIGNS_TABLE, [
+      { name: 'Campaign Name', type: 'singleLineText' },
+      { name: 'Product or Service', type: 'singleLineText' },
+      { name: 'Start Date', type: 'date', options: { dateFormat: { name: 'iso' } } },
+      { name: 'Goal', type: 'multilineText' },
+      { name: 'Status', type: 'singleSelect', options: { choices: [{ name: 'Active' }, { name: 'Completed' }, { name: 'Paused' }] } },
+      { name: 'Prompts', type: 'multilineText' },
+      { name: 'Notes', type: 'multilineText' }
+    ]);
+  } catch (err) {
+    warnOnce('provision:aeo-campaigns-table', 'Could not auto-provision the AEO Campaigns table (create it by hand if it does not exist yet):', err.message);
+  }
+}
+
+function parseAeoPromptRecord(r) {
+  return {
+    id: r.id,
+    prompt: r.fields['Prompt'] || '',
+    dateAdded: r.fields['Date Added'] || '',
+    contentStatus: r.fields['Content Status'] || 'Not Started',
+    generatedContentType: r.fields['Generated Content Type'] || '',
+    generatedTitle: r.fields['Generated Title'] || '',
+    generatedContent: r.fields['Generated Content'] || '',
+    generatedUrl: r.fields['Generated URL'] || '',
+    generatedDate: r.fields['Generated Date'] || ''
+  };
+}
+
+function parseAeoRecommendationRecord(r) {
+  return {
+    id: r.id,
+    recommendation: r.fields['Recommendation'] || '',
+    dateAdded: r.fields['Date Added'] || '',
+    source: r.fields['Source'] || ''
+  };
+}
+
+function parseAeoCampaignRecord(r) {
+  return {
+    id: r.id,
+    name: r.fields['Campaign Name'] || '',
+    productOrService: r.fields['Product or Service'] || '',
+    startDate: r.fields['Start Date'] || '',
+    goal: r.fields['Goal'] || '',
+    status: r.fields['Status'] || 'Active',
+    prompts: r.fields['Prompts'] || '',
+    notes: r.fields['Notes'] || ''
+  };
+}
+
+// The modal writes one prompt per line; a hand edit in Airtable might use a
+// comma-separated list instead (the field's stated format). Split on
+// newlines first, and only fall back to commas when it's a single line -
+// prompts are natural-language questions that often contain commas.
+function splitAeoPromptTokens(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return [];
+  const byLine = s.split('\n').map(x => x.trim()).filter(Boolean);
+  if (byLine.length > 1) return byLine;
+  return s.split(',').map(x => x.trim()).filter(Boolean);
+}
+
+function aeoPromptHasContent(rec) {
+  return !!(rec.fields['Generated Date'] || rec.fields['Generated Content Type'] || rec.fields['Generated Content']);
+}
+
+// ---- AEO Prompts ----
+
+app.get('/api/aeo/prompts', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    await ensureAeoPromptsTable();
+    const records = await airtableFetchAllRecords(AEO_PROMPTS_TABLE);
+    const prompts = records
+      .map(parseAeoPromptRecord)
+      .sort((a, b) => String(b.dateAdded).localeCompare(String(a.dateAdded)));
+    res.json({ prompts });
+  } catch (err) {
+    console.error('List AEO prompts error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/aeo/prompts', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const prompt = ((req.body && req.body.prompt) || '').toString().trim();
+  if (!prompt) return res.status(400).json({ error: 'prompt is required' });
+  try {
+    await ensureAeoPromptsTable();
+    const existing = await airtableFetchAllRecords(AEO_PROMPTS_TABLE);
+    if (existing.some(r => (r.fields['Prompt'] || '').toLowerCase().trim() === prompt.toLowerCase())) {
+      return res.status(409).json({ error: 'That prompt is already in the library' });
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    const data = await airtableRequest('POST', AEO_PROMPTS_TABLE, {
+      records: [{ fields: { 'Prompt': prompt, 'Date Added': today, 'Content Status': 'Not Started' } }],
+      typecast: true
+    });
+    res.json({ success: true, prompt: parseAeoPromptRecord(data.records[0]) });
+  } catch (err) {
+    console.error('Create AEO prompt error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/aeo/prompts/:id', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { contentStatus, generatedContentType, generatedTitle, generatedContent, generatedUrl, generatedDate } = req.body || {};
+  try {
+    const fields = {};
+    if (contentStatus !== undefined) fields['Content Status'] = contentStatus;
+    if (generatedContentType !== undefined) fields['Generated Content Type'] = generatedContentType;
+    if (generatedTitle !== undefined) fields['Generated Title'] = generatedTitle;
+    if (generatedContent !== undefined) fields['Generated Content'] = generatedContent;
+    if (generatedUrl !== undefined) fields['Generated URL'] = generatedUrl;
+    if (generatedDate !== undefined) fields['Generated Date'] = generatedDate;
+    if (!Object.keys(fields).length) return res.status(400).json({ error: 'Nothing to update' });
+    const data = await airtableRequest('PATCH', AEO_PROMPTS_TABLE, { records: [{ id: req.params.id, fields }], typecast: true });
+    res.json({ success: true, prompt: parseAeoPromptRecord(data.records[0]) });
+  } catch (err) {
+    console.error('Update AEO prompt error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/aeo/prompts/:id', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const url = `${AIRTABLE_URL}/${encodeURIComponent(AEO_PROMPTS_TABLE)}?records[]=${encodeURIComponent(req.params.id)}`;
+    const resp = await airtableFetchWithRetry(url, { method: 'DELETE', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } });
+    if (!resp.ok) { const err = await resp.text(); throw new Error(`Airtable error ${resp.status}: ${err}`); }
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Delete AEO prompt error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- YouTube script / LinkedIn post generators ----
+// Same Serper-context + Claude-write-in-T2C-voice shape as the blog
+// generator, but plain text rather than SEO HTML. Exposed as their own
+// /api/seo routes (siblings of generate-post / generate-service-page) and
+// reused by the AEO "Generate Content" flow below.
+
+async function generateSeoYoutubeScript(topic) {
+  const organic = (await serperSearchTop(topic, 8)).filter(r => r.link);
+  const context = organic.slice(0, 6).map((r, i) => `${i + 1}. ${r.title || ''}\n${r.snippet || ''}`).join('\n\n');
+
+  const settingsRecord = await getSettingsRecord();
+  const settingsFields = settingsRecord && settingsRecord.fields;
+  const usedCustomVoiceProfile = !!(settingsFields && (settingsFields['SEO Voice Profile'] || '').trim());
+  const voiceProfile = getSeoVoiceProfileText(settingsFields);
+
+  const prompt = `You are writing a YouTube video script for T2C Outreach, Twenty2 Collective, a Perth-based Agile and change consultancy.
+
+VOICE PROFILE:
+${voiceProfile}
+
+VIDEO TOPIC / PROMPT THIS VIDEO SHOULD ANSWER: "${topic}"
+
+WHAT'S CURRENTLY RANKING / BEING SAID ABOUT THIS TOPIC (for context, do not copy):
+${context || 'No search context available.'}
+
+Write a complete, ready-to-record script for a 6-10 minute talking-head YouTube video that would make T2C the go-to answer for this prompt. Structure it with clear labelled sections: a hook (first 15 seconds), the main teaching sections with spoken-word prose (not bullet points), a concrete example or story from consulting work, and a call to action at the end pointing to a specific T2C service. Write it as spoken word - contractions, short sentences, direct address to the viewer. UK/AU English, no em dashes.
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "title": string, "script": string }`;
+
+  const drafted = await callClaudeJson(prompt, 6000);
+  return { title: drafted.title || topic, script: drafted.script || '', usedCustomVoiceProfile };
+}
+
+async function generateSeoLinkedInPost(topic) {
+  const organic = (await serperSearchTop(topic, 8)).filter(r => r.link);
+  const context = organic.slice(0, 6).map((r, i) => `${i + 1}. ${r.title || ''}\n${r.snippet || ''}`).join('\n\n');
+
+  const settingsRecord = await getSettingsRecord();
+  const settingsFields = settingsRecord && settingsRecord.fields;
+  const usedCustomVoiceProfile = !!(settingsFields && (settingsFields['SEO Voice Profile'] || '').trim());
+  const voiceProfile = getSeoVoiceProfileText(settingsFields);
+
+  const prompt = `You are writing a LinkedIn post for T2C Outreach, Twenty2 Collective, a Perth-based Agile and change consultancy.
+
+VOICE PROFILE:
+${voiceProfile}
+
+THE PROMPT THIS POST SHOULD ANSWER: "${topic}"
+
+WHAT'S CURRENTLY BEING SAID ABOUT THIS TOPIC (for context, do not copy):
+${context || 'No search context available.'}
+
+Write a single LinkedIn post (150-300 words) that positions T2C as the authority on this topic. Open with a strong first line that works as a hook before the "see more" cut, make one clear argument backed by a concrete example, and end with a light call to action or question. No hashtags stuffed at the end (one or two at most if they're genuinely relevant). UK/AU English, no em dashes, first person, peer-to-peer tone.
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "title": string, "post": string }`;
+
+  const drafted = await callClaudeJson(prompt, 2000);
+  const post = await humanizePlainText(drafted.post || '');
+  return { title: drafted.title || topic, post, usedCustomVoiceProfile };
+}
+
+app.post('/api/seo/generate-youtube-script', async (req, res) => {
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  if (!process.env.SERPER_API_KEY) return res.status(500).json({ error: 'SERPER_API_KEY not configured' });
+  const keyword = ((req.body && (req.body.keyword ?? req.body.topic)) || '').toString().trim();
+  if (!keyword) return res.status(400).json({ error: 'keyword is required' });
+  try {
+    const result = await generateSeoYoutubeScript(keyword);
+    res.json({ success: true, keyword, ...result });
+  } catch (err) {
+    console.error('Generate YouTube script error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/seo/generate-linkedin-post', async (req, res) => {
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  if (!process.env.SERPER_API_KEY) return res.status(500).json({ error: 'SERPER_API_KEY not configured' });
+  const keyword = ((req.body && (req.body.keyword ?? req.body.topic)) || '').toString().trim();
+  if (!keyword) return res.status(400).json({ error: 'keyword is required' });
+  try {
+    const result = await generateSeoLinkedInPost(keyword);
+    res.json({ success: true, keyword, ...result });
+  } catch (err) {
+    console.error('Generate LinkedIn post error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Finds a Keywords row for this exact keyword (case-insensitive) or creates
+// a bare one - the Blog Post path of AEO content generation reuses the SEO
+// blog pipeline, which is keyed on a Keywords record.
+async function findOrCreateKeywordRecord(keyword) {
+  await ensureKeywordsTable();
+  const existing = await airtableFetchAllRecords(KEYWORDS_TABLE);
+  const match = existing.find(r => (r.fields['Keyword'] || '').toLowerCase().trim() === keyword.toLowerCase().trim());
+  if (match) return match;
+  const today = new Date().toISOString().slice(0, 10);
+  const data = await airtableRequest('POST', KEYWORDS_TABLE, {
+    records: [{ fields: { 'Keyword': keyword, 'Status': 'Queued', 'Volume': 0, 'KD': 0, 'Created Date': today } }],
+    typecast: true
+  });
+  return data.records[0];
+}
+
+// Generate a piece of content for one AEO prompt and write the result back
+// onto the prompt row (so campaign cards can count it). contentType is one
+// of AEO_CONTENT_TYPES; the prompt text is used as the keyword/topic.
+app.post('/api/aeo/prompts/:id/generate', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  if (!process.env.SERPER_API_KEY) return res.status(500).json({ error: 'SERPER_API_KEY not configured' });
+
+  const contentType = ((req.body && req.body.contentType) || '').toString().trim();
+  const location = ((req.body && req.body.location) || 'Perth').toString().trim() || 'Perth';
+  if (!AEO_CONTENT_TYPES.includes(contentType)) {
+    return res.status(400).json({ error: `contentType must be one of: ${AEO_CONTENT_TYPES.join(', ')}` });
+  }
+
+  try {
+    await ensureAeoPromptsTable();
+    const record = await airtableGetRecord(AEO_PROMPTS_TABLE, req.params.id);
+    if (!record) return res.status(404).json({ error: 'Prompt not found' });
+    const promptText = (record.fields['Prompt'] || '').trim();
+    if (!promptText) return res.status(400).json({ error: 'This prompt row has no text' });
+
+    airtableRequest('PATCH', AEO_PROMPTS_TABLE, { records: [{ id: req.params.id, fields: { 'Content Status': 'In Progress' } }], typecast: true })
+      .catch(err => console.warn('Could not mark AEO prompt In Progress:', err.message));
+
+    let title = '';
+    let content = '';
+    let url = '';
+
+    if (contentType === 'Blog Post') {
+      const keywordRecord = await findOrCreateKeywordRecord(promptText);
+      const post = await generateSeoPostForKeyword(keywordRecord);
+      title = post.title;
+      content = post.html;
+      await airtableRequest('PATCH', KEYWORDS_TABLE, {
+        records: [{ id: keywordRecord.id, fields: { 'Post Title': post.title, 'Content': post.html, 'Meta Title': post.metaTitle, 'Meta Description': post.metaDescription, 'Status': 'Generated' } }],
+        typecast: true
+      }).catch(err => console.warn('Could not save AEO blog post onto the Keywords row:', err.message));
+    } else if (contentType === 'Service Page') {
+      const page = await generateServicePage(promptText, location);
+      title = page.title;
+      content = page.html;
+    } else if (contentType === 'YouTube Script') {
+      const script = await generateSeoYoutubeScript(promptText);
+      title = script.title;
+      content = script.script;
+    } else if (contentType === 'LinkedIn Post') {
+      const li = await generateSeoLinkedInPost(promptText);
+      title = li.title;
+      content = li.post;
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const data = await airtableRequest('PATCH', AEO_PROMPTS_TABLE, {
+      records: [{
+        id: req.params.id,
+        fields: {
+          'Content Status': 'Done',
+          'Generated Content Type': contentType,
+          'Generated Title': title || '',
+          'Generated Content': content || '',
+          'Generated URL': url || '',
+          'Generated Date': today
+        }
+      }],
+      typecast: true
+    });
+    res.json({ success: true, contentType, title, content, url, prompt: parseAeoPromptRecord(data.records[0]) });
+  } catch (err) {
+    console.error('Generate AEO content error:', err.message);
+    airtableRequest('PATCH', AEO_PROMPTS_TABLE, { records: [{ id: req.params.id, fields: { 'Content Status': 'Not Started' } }], typecast: true }).catch(() => {});
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- AEO Recommendations ----
+
+app.get('/api/aeo/recommendations', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    await ensureAeoRecommendationsTable();
+    const records = await airtableFetchAllRecords(AEO_RECOMMENDATIONS_TABLE);
+    const recommendations = records
+      .map(parseAeoRecommendationRecord)
+      .sort((a, b) => String(b.dateAdded).localeCompare(String(a.dateAdded)));
+    res.json({ recommendations });
+  } catch (err) {
+    console.error('List AEO recommendations error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/aeo/recommendations', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const recommendation = ((req.body && req.body.recommendation) || '').toString().trim();
+  const source = ((req.body && req.body.source) || '').toString().trim();
+  if (!recommendation) return res.status(400).json({ error: 'recommendation is required' });
+  try {
+    await ensureAeoRecommendationsTable();
+    const today = new Date().toISOString().slice(0, 10);
+    const data = await airtableRequest('POST', AEO_RECOMMENDATIONS_TABLE, {
+      records: [{ fields: { 'Recommendation': recommendation, 'Date Added': today, 'Source': source } }],
+      typecast: true
+    });
+    res.json({ success: true, recommendation: parseAeoRecommendationRecord(data.records[0]) });
+  } catch (err) {
+    console.error('Create AEO recommendation error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/aeo/recommendations/:id', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const url = `${AIRTABLE_URL}/${encodeURIComponent(AEO_RECOMMENDATIONS_TABLE)}?records[]=${encodeURIComponent(req.params.id)}`;
+    const resp = await airtableFetchWithRetry(url, { method: 'DELETE', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } });
+    if (!resp.ok) { const err = await resp.text(); throw new Error(`Airtable error ${resp.status}: ${err}`); }
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Delete AEO recommendation error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- AEO Campaigns ----
+// A campaign is a product/service plus the prompts being tracked for it in
+// HubSpot's AEO tool. Each GET resolves the campaign's prompt tokens against
+// the AEO Prompts table so the cards can show tracked-prompt and
+// content-produced counts and the expansion can list the generated pieces.
+
+function resolveAeoCampaignPrompts(tokens, promptRecords) {
+  const byText = {};
+  promptRecords.forEach(r => { byText[(r.fields['Prompt'] || '').toLowerCase().trim()] = r; });
+  const seen = new Set();
+  const out = [];
+  tokens.forEach(tok => {
+    const key = tok.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    const rec = byText[key];
+    out.push(rec ? { ...parseAeoPromptRecord(rec), matched: true } : {
+      id: null, prompt: tok, matched: false, contentStatus: '', generatedContentType: '',
+      generatedTitle: '', generatedContent: '', generatedUrl: '', generatedDate: ''
+    });
+  });
+  return out;
+}
+
+function enrichAeoCampaign(campaign, promptRecords) {
+  const tokens = splitAeoPromptTokens(campaign.prompts);
+  const linkedPrompts = resolveAeoCampaignPrompts(tokens, promptRecords);
+  const start = campaign.startDate ? Date.parse(campaign.startDate) : NaN;
+  const daysRunning = isNaN(start) ? null : Math.max(0, Math.floor((Date.now() - start) / 86400000));
+  return {
+    ...campaign,
+    daysRunning,
+    trackedPromptCount: linkedPrompts.length,
+    contentPieceCount: linkedPrompts.filter(p => p.generatedDate || p.generatedContentType).length,
+    linkedPrompts
+  };
+}
+
+app.get('/api/aeo/campaigns', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    await ensureAeoCampaignsTable();
+    await ensureAeoPromptsTable();
+    const [campaignRecords, promptRecords] = await Promise.all([
+      airtableFetchAllRecords(AEO_CAMPAIGNS_TABLE),
+      airtableFetchAllRecords(AEO_PROMPTS_TABLE)
+    ]);
+    const campaigns = campaignRecords
+      .map(parseAeoCampaignRecord)
+      .map(c => enrichAeoCampaign(c, promptRecords))
+      .sort((a, b) => String(b.startDate).localeCompare(String(a.startDate)));
+    res.json({ campaigns });
+  } catch (err) {
+    console.error('List AEO campaigns error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/aeo/campaigns', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { name, productOrService, startDate, goal, status, prompts, notes } = req.body || {};
+  if (!name || !String(name).trim()) return res.status(400).json({ error: 'name is required' });
+  try {
+    await ensureAeoCampaignsTable();
+    const fields = {
+      'Campaign Name': String(name).trim(),
+      'Product or Service': (productOrService || '').trim(),
+      'Start Date': startDate || new Date().toISOString().slice(0, 10),
+      'Goal': goal || '',
+      'Status': status || 'Active',
+      'Prompts': Array.isArray(prompts) ? prompts.join('\n') : (prompts || ''),
+      'Notes': notes || ''
+    };
+    const data = await airtableRequest('POST', AEO_CAMPAIGNS_TABLE, { records: [{ fields }], typecast: true });
+    res.json({ success: true, campaign: parseAeoCampaignRecord(data.records[0]) });
+  } catch (err) {
+    console.error('Create AEO campaign error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/aeo/campaigns/:id', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { name, productOrService, startDate, goal, status, prompts, notes } = req.body || {};
+  try {
+    const fields = {};
+    if (name !== undefined) fields['Campaign Name'] = name;
+    if (productOrService !== undefined) fields['Product or Service'] = productOrService;
+    if (startDate !== undefined) fields['Start Date'] = startDate;
+    if (goal !== undefined) fields['Goal'] = goal;
+    if (status !== undefined) fields['Status'] = status;
+    if (prompts !== undefined) fields['Prompts'] = Array.isArray(prompts) ? prompts.join('\n') : prompts;
+    if (notes !== undefined) fields['Notes'] = notes;
+    if (!Object.keys(fields).length) return res.status(400).json({ error: 'Nothing to update' });
+    const data = await airtableRequest('PATCH', AEO_CAMPAIGNS_TABLE, { records: [{ id: req.params.id, fields }], typecast: true });
+    res.json({ success: true, campaign: parseAeoCampaignRecord(data.records[0]) });
+  } catch (err) {
+    console.error('Update AEO campaign error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/aeo/campaigns/:id', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const url = `${AIRTABLE_URL}/${encodeURIComponent(AEO_CAMPAIGNS_TABLE)}?records[]=${encodeURIComponent(req.params.id)}`;
+    const resp = await airtableFetchWithRetry(url, { method: 'DELETE', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } });
+    if (!resp.ok) { const err = await resp.text(); throw new Error(`Airtable error ${resp.status}: ${err}`); }
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Delete AEO campaign error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Engine Suggestions ----
+// Mines T2C's services (the Services table if it exists, else the Services
+// JSON / Products JSON on Settings), the Keywords table, recent Touch
+// Points, and Campaign Contacts pipeline volume, and asks Claude which
+// products/services have the highest Answer Engine Optimisation opportunity
+// - returning, per pick, a prompt worth tracking in HubSpot and why.
+app.post('/api/aeo/suggest-products', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  try {
+    const [servicesRecords, keywordRecords, tpRecords, ccRecords, campaignRecords, settingsRecord] = await Promise.all([
+      airtableFetchAllRecords('Services').catch(() => []),
+      airtableFetchAllRecords(KEYWORDS_TABLE).catch(() => []),
+      airtableFetchAllRecords('Touch Points').catch(() => []),
+      airtableFetchAllRecords(CAMPAIGN_CONTACTS_TABLE).catch(() => []),
+      airtableFetchAllRecords('Campaigns').catch(() => []),
+      getSettingsRecord().catch(() => null)
+    ]);
+
+    // Services: real table first, then the JSON blobs on Settings.
+    let services = servicesRecords.map(r => {
+      const f = r.fields || {};
+      return f['Name'] || f['Service'] || f['Title'] || Object.values(f)[0] || '';
+    }).filter(Boolean);
+    if (!services.length && settingsRecord) {
+      for (const key of ['Services JSON', 'Products JSON']) {
+        try {
+          const arr = JSON.parse(settingsRecord.fields[key] || '[]');
+          (Array.isArray(arr) ? arr : []).forEach(s => {
+            const name = typeof s === 'string' ? s : (s && (s.name || s.title || s.service));
+            if (name) services.push(String(name));
+          });
+        } catch (err) { /* not set / not JSON - skip */ }
+      }
+    }
+    services = Array.from(new Set(services));
+
+    const keywords = keywordRecords
+      .map(r => ({ keyword: r.fields['Keyword'] || '', volume: r.fields['Volume'] || 0, intent: r.fields['Intent'] || '', status: r.fields['Status'] || '' }))
+      .filter(k => k.keyword)
+      .sort((a, b) => (b.volume || 0) - (a.volume || 0))
+      .slice(0, 80);
+
+    const recentTouchPoints = tpRecords
+      .filter(r => r.fields['Summary'])
+      .sort((a, b) => new Date(b.fields['Date'] || 0) - new Date(a.fields['Date'] || 0))
+      .slice(0, 60)
+      .map(r => r.fields['Summary']);
+
+    const campaignById = {};
+    campaignRecords.forEach(r => { campaignById[r.id] = r.fields['Campaign Name'] || r.fields['Name'] || ''; });
+    const pipelineByCampaign = {};
+    ccRecords.forEach(r => {
+      const cid = (r.fields['Campaign'] || [])[0];
+      const label = (cid && campaignById[cid]) || 'Unassigned';
+      pipelineByCampaign[label] = (pipelineByCampaign[label] || 0) + 1;
+    });
+    const pipelineSummary = Object.entries(pipelineByCampaign)
+      .sort((a, b) => b[1] - a[1])
+      .map(([label, count]) => `${label}: ${count} contacts`);
+
+    const prompt = `You are the Answer Engine Optimisation (AEO) strategist for T2C Outreach, Twenty2 Collective, a Perth-based Agile and change consultancy. AEO means getting T2C named as the recommended answer when a buyer asks an AI assistant (ChatGPT, Perplexity, Google AI overviews) a question in our space.
+
+Work out which T2C products and services have the highest AEO opportunity right now, using:
+
+T2C SERVICES / PRODUCTS (core revenue lines):
+${services.length ? JSON.stringify(services) : 'Not documented - infer from the activity below.'}
+
+KEYWORD LIBRARY (search intent signals, highest volume first):
+${JSON.stringify(keywords)}
+
+RECENT TOUCH POINT NOTES (what buyers are actually talking about):
+${JSON.stringify(recentTouchPoints)}
+
+PIPELINE VOLUME BY CAMPAIGN (where the sales effort and demand already is):
+${JSON.stringify(pipelineSummary)}
+
+Rank the products/services by AEO opportunity, judged on: strength of search intent in the keywords, how often the topic comes up in touch points and CVC responses, and whether it is a core revenue service. Return the top 5-8. For each, give a single specific natural-language prompt worth tracking in HubSpot's AEO tool (the kind of question a buyer would type into ChatGPT), and a one-to-two sentence reason it is a high opportunity, citing what in the data above supports it.
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{ "suggestions": [ { "product": string, "trackingPrompt": string, "reason": string } ] }`;
+
+    const parsed = await callClaudeJson(prompt, 2500);
+    res.json({ suggestions: parsed.suggestions || [] });
+  } catch (err) {
+    console.error('AEO suggest products error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ===================== SCHEDULED SYNC JOBS =====================
 // Both run silently in the background and never block the UI - failures
 // are logged, not thrown, same as every other cron-eligible job in this
