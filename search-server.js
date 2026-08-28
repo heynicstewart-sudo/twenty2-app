@@ -4946,6 +4946,90 @@ app.patch('/api/content/signals/:id', async (req, res) => {
   }
 });
 
+// The Content table carries a mix of field names for "what kind of content
+// this is": the newer Format field (LinkedIn Post / Blog / Newsletter / ...)
+// and the legacy Content Type field. Collapse whichever is set to one of the
+// four buckets the app's calendar/list UI knows how to render.
+function normaliseContentType(raw) {
+  const s = String(raw || '').toLowerCase().trim();
+  if (!s) return '';
+  if (s.includes('linkedin')) return 'LinkedIn Post';
+  if (s.includes('email') || s.includes('newsletter')) return 'Email';
+  if (s.includes('blog')) return 'Blog Post';
+  if (s.includes('youtube') || s.includes('video') || s.includes('script')) return 'YouTube Script';
+  return String(raw).trim();
+}
+
+// GET /api/content/all - every row in the Content table, flattened for the
+// content list view.
+app.get('/api/content/all', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const records = await airtableFetchAllRecords(CONTENT_TABLE);
+    const items = records.map(r => {
+      const f = r.fields || {};
+      return {
+        id: r.id,
+        title: f['Title'] || '',
+        type: normaliseContentType(f['Content Type'] || f['Format']),
+        status: f['Status'] || '',
+        scheduledDate: f['Scheduled Date'] || '',
+        dateAdded: f['Date Added'] || f['Created'] || ''
+      };
+    });
+    res.json(items);
+  } catch (err) {
+    console.error('Content all error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/content/calendar - only rows with a Scheduled Date, trimmed to
+// what a calendar chip needs.
+app.get('/api/content/calendar', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const records = await airtableFetchAllRecords(CONTENT_TABLE);
+    const items = records
+      .filter(r => r.fields && r.fields['Scheduled Date'])
+      .map(r => {
+        const f = r.fields;
+        return {
+          id: r.id,
+          title: f['Title'] || '',
+          type: normaliseContentType(f['Content Type'] || f['Format']),
+          status: f['Status'] || '',
+          scheduledDate: f['Scheduled Date'] || ''
+        };
+      });
+    res.json(items);
+  } catch (err) {
+    console.error('Content calendar error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/content/item - { title, type, scheduledDate } -> a new Content
+// row, Status = Queued.
+app.post('/api/content/item', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const b = req.body || {};
+  const title = (b.title || '').toString().trim();
+  const type = (b.type || '').toString().trim();
+  const scheduledDate = (b.scheduledDate || '').toString().trim();
+  if (!title) return res.status(400).json({ error: 'title is required' });
+  try {
+    const fields = { 'Title': title, 'Status': 'Queued' };
+    if (type) fields['Content Type'] = type;
+    if (scheduledDate) fields['Scheduled Date'] = scheduledDate;
+    const data = await airtableRequest('POST', CONTENT_TABLE, { records: [{ fields }], typecast: true });
+    res.json({ success: true, id: data.records[0].id });
+  } catch (err) {
+    console.error('Content item create error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/content/drafts', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   const { campaignName, format, status } = req.query;
@@ -12632,6 +12716,868 @@ ${JSON.stringify(Array.isArray(campaignContext) ? campaignContext.slice(0, 50) :
   } catch (err) {
     console.error('Google Ads draft-campaign error:', err.message);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ===================== OMNISEND EMAIL MARKETING =====================
+// Omnisend REST API v3 (https://api.omnisend.com/v3), authenticated with the
+// OMNISEND_API_KEY env var via the X-API-KEY header. These routes back the
+// Marketing tab's Email work: campaign reporting, contact sync from the
+// Airtable Contacts table, a low-engagement export, campaign creation, and an
+// AI email-copy generator that reuses the same voice-profile + Learning Data
+// + 3-pass humanizer chain the SEO and message-gen features already use.
+//
+// Omnisend's public API is thin on per-campaign analytics and has shifted
+// contact shape over time (top-level email/status -> identifiers[]). The
+// helpers below read every field name Omnisend has used so a schema change
+// degrades to blank stats rather than a crash.
+
+const OMNISEND_API_BASE = 'https://api.omnisend.com/v3';
+const OMNISEND_CACHE_MS = 60 * 60 * 1000; // 1 hour, same as the Google Ads sheet cache
+const OMNISEND_LOW_ENGAGEMENT_DAYS = 90;
+let omnisendCampaignStatsCache = null; // { at: epochMs, data }
+
+function omnisendConfigured() {
+  return !!process.env.OMNISEND_API_KEY;
+}
+
+// `pathOrUrl` is either a "/campaigns?..." path or a full URL (Omnisend's
+// pagination hands back an absolute paging.next URL).
+async function omnisendFetch(method, pathOrUrl, body) {
+  const url = /^https?:\/\//i.test(pathOrUrl)
+    ? pathOrUrl
+    : `${OMNISEND_API_BASE}${pathOrUrl.startsWith('/') ? '' : '/'}${pathOrUrl}`;
+  const res = await fetch(url, {
+    method,
+    headers: {
+      'X-API-KEY': process.env.OMNISEND_API_KEY,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  const text = await res.text();
+  let json = null;
+  if (text) { try { json = JSON.parse(text); } catch (e) { json = null; } }
+  if (!res.ok) {
+    const detail = (json && (json.error || json.message || json.detail || json.errorMessage)) || text || res.statusText;
+    throw new Error(`Omnisend API error ${res.status}: ${detail}`);
+  }
+  return json || {};
+}
+
+// Pull a numeric stat from whichever key name Omnisend used for it.
+function omnisendStat(obj, names) {
+  if (!obj || typeof obj !== 'object') return 0;
+  for (const n of names) {
+    if (obj[n] != null && !isNaN(Number(obj[n]))) return Number(obj[n]);
+  }
+  return 0;
+}
+
+function omnisendCampaignStatsBlock(c) {
+  const s = c.stats || c.analytics || c.reports || c.statistics || c.byChannels || {};
+  const email = s.email || s; // byChannels nests the numbers under .email
+  return {
+    sent: omnisendStat(email, ['sent', 'sends', 'delivered', 'recipients']),
+    opens: omnisendStat(email, ['opened', 'opens', 'open', 'uniqueOpens', 'opensCount']),
+    clicks: omnisendStat(email, ['clicked', 'clicks', 'click', 'uniqueClicks', 'clicksCount']),
+    unsubscribes: omnisendStat(email, ['unsubscribed', 'unsubscribes', 'unsubscribe', 'unsubscribesCount']),
+    bounces: omnisendStat(email, ['bounced', 'bounces', 'hardBounces']),
+    revenue: omnisendStat(email, ['revenue', 'totalSales', 'sales'])
+  };
+}
+
+function omnisendCampaignId(c) {
+  return c.campaignID || c.campaignId || c.id || '';
+}
+
+function omnisendNormalizeCampaign(c) {
+  const s = omnisendCampaignStatsBlock(c);
+  return {
+    id: omnisendCampaignId(c),
+    name: c.name || c.title || '',
+    status: c.status || c.state || '',
+    type: c.type || c.campaignType || '',
+    subject: c.subject || '',
+    sentAt: c.sentAt || c.startDate || c.sendAt || c.sendDate || null,
+    stats: { opens: s.opens, clicks: s.clicks, unsubscribes: s.unsubscribes }
+  };
+}
+
+async function omnisendFetchAllCampaigns() {
+  const out = [];
+  let next = '/campaigns?limit=250';
+  let guard = 0;
+  while (next && guard++ < 50) {
+    const page = await omnisendFetch('GET', next);
+    const list = page.campaigns || page.data || (Array.isArray(page) ? page : []);
+    out.push(...list);
+    next = (page.paging && page.paging.next) || null;
+  }
+  return out;
+}
+
+function omnisendContactEmail(c) {
+  if (c.email) return c.email;
+  const ids = Array.isArray(c.identifiers) ? c.identifiers : [];
+  const em = ids.find(i => (i.type || '').toLowerCase() === 'email');
+  return (em && (em.id || em.email)) || '';
+}
+
+function omnisendContactStatus(c) {
+  if (c.status) return c.status;
+  const ids = Array.isArray(c.identifiers) ? c.identifiers : [];
+  const em = ids.find(i => (i.type || '').toLowerCase() === 'email');
+  const ch = em && em.channels && em.channels.email;
+  return (ch && ch.status) || '';
+}
+
+function omnisendContactLastEngaged(c) {
+  return c.lastEngaged || c.lastActivity || c.lastActivityAt || c.lastOpenedAt ||
+    c.lastOpened || c.lastClickedAt || c.lastClicked || null;
+}
+
+function omnisendNormalizeContact(c) {
+  return {
+    id: c.contactID || c.contactId || c.id || '',
+    email: omnisendContactEmail(c),
+    firstName: c.firstName || '',
+    lastName: c.lastName || '',
+    status: omnisendContactStatus(c),
+    tags: Array.isArray(c.tags) ? c.tags : [],
+    lastEngaged: omnisendContactLastEngaged(c)
+  };
+}
+
+async function omnisendFetchAllContacts(maxContacts = 20000) {
+  const out = [];
+  let next = '/contacts?limit=250';
+  let guard = 0;
+  while (next && guard++ < 400 && out.length < maxContacts) {
+    const page = await omnisendFetch('GET', next);
+    const list = page.contacts || page.data || (Array.isArray(page) ? page : []);
+    out.push(...list);
+    next = (page.paging && page.paging.next) || null;
+  }
+  return out;
+}
+
+function toCsvRow(values) {
+  return values.map(v => {
+    const s = v == null ? '' : String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  }).join(',');
+}
+
+// GET /api/omnisend/campaigns - every campaign with id, name, status and the
+// opens/clicks/unsubscribes counts Omnisend returns on the campaign object.
+app.get('/api/omnisend/campaigns', async (req, res) => {
+  if (!omnisendConfigured()) return res.status(500).json({ error: 'OMNISEND_API_KEY not configured' });
+  try {
+    const raw = await omnisendFetchAllCampaigns();
+    res.json({ campaigns: raw.map(omnisendNormalizeCampaign), count: raw.length });
+  } catch (err) {
+    console.error('Omnisend campaigns error:', err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// GET /api/omnisend/campaign-stats - open/click/unsubscribe rates and revenue
+// per campaign, plus account rollups. Cached 1 hour; ?refresh=1 bypasses it.
+app.get('/api/omnisend/campaign-stats', async (req, res) => {
+  if (!omnisendConfigured()) return res.status(500).json({ error: 'OMNISEND_API_KEY not configured' });
+  const force = req.query.refresh === '1' || req.query.refresh === 'true';
+  if (!force && omnisendCampaignStatsCache && (Date.now() - omnisendCampaignStatsCache.at) < OMNISEND_CACHE_MS) {
+    return res.json({ ...omnisendCampaignStatsCache.data, cached: true });
+  }
+  try {
+    const raw = await omnisendFetchAllCampaigns();
+    const campaigns = raw.map(c => {
+      const s = omnisendCampaignStatsBlock(c);
+      const rate = n => (s.sent > 0 ? Math.round((n / s.sent) * 1000) / 10 : 0);
+      return {
+        id: omnisendCampaignId(c),
+        name: c.name || '',
+        status: c.status || '',
+        sent: s.sent,
+        openRate: rate(s.opens),
+        clickRate: rate(s.clicks),
+        unsubscribeRate: rate(s.unsubscribes),
+        revenue: Math.round(s.revenue * 100) / 100
+      };
+    });
+    const avg = key => (campaigns.length
+      ? Math.round((campaigns.reduce((sum, c) => sum + c[key], 0) / campaigns.length) * 10) / 10
+      : 0);
+    const data = {
+      campaigns,
+      totals: {
+        campaigns: campaigns.length,
+        sent: campaigns.reduce((n, c) => n + c.sent, 0),
+        revenue: Math.round(campaigns.reduce((n, c) => n + c.revenue, 0) * 100) / 100,
+        avgOpenRate: avg('openRate'),
+        avgClickRate: avg('clickRate'),
+        avgUnsubscribeRate: avg('unsubscribeRate')
+      },
+      fetchedAt: new Date().toISOString(),
+      cached: false
+    };
+    omnisendCampaignStatsCache = { at: Date.now(), data };
+    res.json(data);
+  } catch (err) {
+    console.error('Omnisend campaign-stats error:', err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// GET /api/omnisend/contacts - all contacts, paginated through, normalised to
+// email, firstName, lastName, status, tags, lastEngaged.
+app.get('/api/omnisend/contacts', async (req, res) => {
+  if (!omnisendConfigured()) return res.status(500).json({ error: 'OMNISEND_API_KEY not configured' });
+  try {
+    const raw = await omnisendFetchAllContacts();
+    res.json({ contacts: raw.map(omnisendNormalizeContact), count: raw.length });
+  } catch (err) {
+    console.error('Omnisend contacts error:', err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// GET /api/omnisend/low-engagement - contacts whose last engagement is older
+// than 90 days or unknown, as a CSV string plus structured rows.
+app.get('/api/omnisend/low-engagement', async (req, res) => {
+  if (!omnisendConfigured()) return res.status(500).json({ error: 'OMNISEND_API_KEY not configured' });
+  try {
+    const raw = await omnisendFetchAllContacts();
+    const now = Date.now();
+    const cutoff = now - OMNISEND_LOW_ENGAGEMENT_DAYS * 86400000;
+    const rows = raw.map(omnisendNormalizeContact)
+      .filter(c => {
+        if (!c.email) return false;
+        if (!c.lastEngaged) return true;
+        const t = new Date(c.lastEngaged).getTime();
+        return isNaN(t) || t < cutoff;
+      })
+      .map(c => {
+        const t = c.lastEngaged ? new Date(c.lastEngaged).getTime() : NaN;
+        return {
+          email: c.email,
+          firstName: c.firstName,
+          lastName: c.lastName,
+          status: c.status,
+          tags: c.tags.join('; '),
+          lastEngaged: c.lastEngaged || '',
+          daysSinceEngaged: isNaN(t) ? '' : Math.floor((now - t) / 86400000)
+        };
+      });
+    const header = ['email', 'firstName', 'lastName', 'status', 'tags', 'lastEngaged', 'daysSinceEngaged'];
+    const csv = [toCsvRow(header), ...rows.map(r => toCsvRow(header.map(h => r[h])))].join('\n');
+    res.json({
+      count: rows.length,
+      thresholdDays: OMNISEND_LOW_ENGAGEMENT_DAYS,
+      filename: `omnisend-low-engagement-${new Date().toISOString().slice(0, 10)}.csv`,
+      csv,
+      contacts: rows
+    });
+  } catch (err) {
+    console.error('Omnisend low-engagement error:', err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// POST /api/omnisend/push-contact - { contactId } from the Airtable Contacts
+// table. Reads firstName/lastName (split from Full Name), email and company,
+// and creates or updates the matching Omnisend contact with the
+// linkedin-connected tag. No-ops with 422 if the Airtable record has no email.
+app.post('/api/omnisend/push-contact', async (req, res) => {
+  if (!omnisendConfigured()) return res.status(500).json({ error: 'OMNISEND_API_KEY not configured' });
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const contactId = ((req.body && req.body.contactId) || '').toString().trim();
+  if (!contactId) return res.status(400).json({ error: 'contactId is required' });
+  try {
+    const record = await airtableGetRecord('Contacts', contactId);
+    if (!record) return res.status(404).json({ error: `Contact ${contactId} not found in Airtable` });
+    const f = record.fields || {};
+    const email = (f['Email'] || '').toString().trim();
+    if (!email) return res.status(422).json({ error: 'Contact has no Email in Airtable - not pushed to Omnisend', skipped: true });
+
+    const full = (f['Full Name'] || '').toString().trim();
+    const firstName = (f['First Name'] || full.split(/\s+/)[0] || '').toString().trim();
+    const lastName = (f['Last Name'] || full.split(/\s+/).slice(1).join(' ') || '').toString().trim();
+
+    // Contacts.Company is a linked-record field - resolve it to the name.
+    let company = '';
+    const companyField = f['Company'];
+    if (Array.isArray(companyField) && companyField[0]) {
+      const co = await airtableGetRecord('Companies', companyField[0]);
+      company = (co && co.fields && (co.fields['Company Name'] || '')) || '';
+    } else if (typeof companyField === 'string') {
+      company = companyField;
+    }
+
+    const payload = {
+      identifiers: [{ type: 'email', id: email, channels: { email: { status: 'subscribed' } } }],
+      firstName,
+      lastName,
+      tags: ['linkedin-connected']
+    };
+    if (company) payload.customProperties = { company };
+
+    const result = await omnisendFetch('POST', '/contacts', payload);
+    res.json({
+      success: true,
+      email,
+      omnisendContactId: result.contactID || result.contactId || result.id || null
+    });
+  } catch (err) {
+    console.error('Omnisend push-contact error:', err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// POST /api/omnisend/create-campaign - { name, subject, preheader,
+// htmlContent, segmentId, scheduledFor } -> an email campaign in Omnisend.
+// With scheduledFor (ISO date string) the campaign is scheduled to send at
+// that time; without it, it's left as a plain draft.
+app.post('/api/omnisend/create-campaign', async (req, res) => {
+  if (!omnisendConfigured()) return res.status(500).json({ error: 'OMNISEND_API_KEY not configured' });
+  const b = req.body || {};
+  const name = (b.name || '').toString().trim();
+  const subject = (b.subject || '').toString().trim();
+  const htmlContent = (b.htmlContent || b.html || '').toString();
+  if (!name) return res.status(400).json({ error: 'name is required' });
+  if (!subject) return res.status(400).json({ error: 'subject is required' });
+  if (!htmlContent) return res.status(400).json({ error: 'htmlContent is required' });
+
+  const payload = {
+    name,
+    type: 'regular',
+    status: 'draft',
+    subject,
+    content: { html: htmlContent }
+  };
+  const preheader = (b.preheader || '').toString().trim();
+  if (preheader) payload.preheader = preheader;
+  if (b.segmentId) payload.segments = [b.segmentId.toString()];
+  if (b.fromName) payload.fromName = b.fromName.toString();
+  if (b.fromEmail) payload.senderEmail = b.fromEmail.toString();
+
+  // scheduledFor -> hand Omnisend a scheduled send. The exact key Omnisend
+  // wants here isn't nailed down in the public docs, so send the ISO time
+  // under the field names it has used (sendAt / startDate / scheduledDate)
+  // and flip the status to "scheduled" so a draft isn't silently left unsent.
+  const scheduledForRaw = (b.scheduledFor || '').toString().trim();
+  let scheduledForIso = null;
+  if (scheduledForRaw) {
+    const when = new Date(scheduledForRaw);
+    if (isNaN(when.getTime())) return res.status(400).json({ error: 'scheduledFor must be a valid ISO date string' });
+    scheduledForIso = when.toISOString();
+    payload.status = 'scheduled';
+    payload.sendAt = scheduledForIso;
+    payload.startDate = scheduledForIso;
+    payload.scheduledDate = scheduledForIso;
+  }
+
+  try {
+    const result = await omnisendFetch('POST', '/campaigns', payload);
+    res.json({
+      success: true,
+      campaignId: result.campaignID || result.campaignId || result.id || null,
+      scheduledFor: scheduledForIso,
+      campaign: result
+    });
+  } catch (err) {
+    console.error('Omnisend create-campaign error:', err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// POST /api/omnisend/upload-template - { name, html } -> saves the template
+// in Omnisend itself (email templates API), not Airtable. Omnisend's public
+// docs are light on this resource, so the request carries the HTML under the
+// key names it has used (content.html / html / body) and the id is read back
+// from whichever key the response returns.
+app.post('/api/omnisend/upload-template', async (req, res) => {
+  if (!omnisendConfigured()) return res.status(500).json({ error: 'OMNISEND_API_KEY not configured' });
+  const b = req.body || {};
+  const name = (b.name || '').toString().trim();
+  const html = (b.html || b.htmlContent || '').toString();
+  if (!name) return res.status(400).json({ error: 'name is required' });
+  if (!html) return res.status(400).json({ error: 'html is required' });
+  try {
+    const result = await omnisendFetch('POST', '/email-templates', {
+      name,
+      content: { html },
+      html,
+      body: html
+    });
+    res.json({
+      success: true,
+      id: result.templateID || result.templateId || result.id || null,
+      template: result
+    });
+  } catch (err) {
+    console.error('Omnisend upload-template error:', err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// GET /api/omnisend/templates - all email templates saved in Omnisend,
+// trimmed to { id, name, createdAt }.
+app.get('/api/omnisend/templates', async (req, res) => {
+  if (!omnisendConfigured()) return res.status(500).json({ error: 'OMNISEND_API_KEY not configured' });
+  try {
+    const out = [];
+    let next = '/email-templates?limit=250';
+    let guard = 0;
+    while (next && guard++ < 50) {
+      const page = await omnisendFetch('GET', next);
+      const list = page.emailTemplates || page.templates || page.data || (Array.isArray(page) ? page : []);
+      out.push(...list);
+      next = (page.paging && page.paging.next) || null;
+    }
+    const templates = out.map(t => ({
+      id: t.templateID || t.templateId || t.id || '',
+      name: t.name || t.title || '',
+      createdAt: t.createdAt || t.created || t.dateCreated || t.createDate || null
+    }));
+    res.json({ templates, count: templates.length });
+  } catch (err) {
+    console.error('Omnisend templates error:', err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// GET/POST /api/omnisend/email-settings - read or write the Settings record's
+// Email Voice Profile field (Settings is a singleton, same as elsewhere).
+app.get('/api/omnisend/email-settings', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const record = await getSettingsRecord();
+    res.json({ emailVoiceProfile: (record && record.fields['Email Voice Profile']) || '' });
+  } catch (err) {
+    console.error('Omnisend email-settings read error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/omnisend/email-settings', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const emailVoiceProfile = ((req.body && req.body.emailVoiceProfile) || '').toString();
+  try {
+    const settingsRecord = await getOrCreateSettingsRecord();
+    await airtableRequest('PATCH', SETTINGS_TABLE, {
+      records: [{ id: settingsRecord.id, fields: { 'Email Voice Profile': emailVoiceProfile } }],
+      typecast: true
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Omnisend email-settings write error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/omnisend/find-linkedin - { email, firstName, lastName, company }
+// -> the first linkedin.com/in/ URL Serper returns for that person, same
+// Serper pattern as the other LinkedIn lookups in this file.
+app.post('/api/omnisend/find-linkedin', async (req, res) => {
+  if (!process.env.SERPER_API_KEY) return res.status(500).json({ found: false, error: 'SERPER_API_KEY is not configured' });
+  const b = req.body || {};
+  const firstName = (b.firstName || '').toString().trim();
+  const lastName = (b.lastName || '').toString().trim();
+  const company = (b.company || '').toString().trim();
+  const name = `${firstName} ${lastName}`.trim();
+  if (!name && !company) return res.status(400).json({ found: false, error: 'firstName/lastName or company is required' });
+
+  const query = `${name} ${company} linkedin Australia`.trim().replace(/\s+/g, ' ');
+  try {
+    const serperRes = await fetch(SERPER_URL, {
+      method: 'POST',
+      headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ q: query, gl: 'au', location: 'Australia' })
+    });
+    if (!serperRes.ok) throw new Error(`Serper API error: ${serperRes.status}`);
+    const data = await serperRes.json();
+    const results = data.organic || [];
+    const match = results.find(r => r.link && /linkedin\.com\/in\/[A-Za-z0-9\-_%]+/i.test(r.link));
+    if (!match) return res.json({ found: false });
+    const url = match.link.split('?')[0];
+    return res.json({ found: true, url, name: extractName(match.title) || name });
+  } catch (err) {
+    console.error('Omnisend find-linkedin error for', query, '-', err.message);
+    return res.status(500).json({ found: false, error: 'search_failed' });
+  }
+});
+
+// POST /api/omnisend/import-contact - { firstName, lastName, email, company }
+// from an Omnisend contact -> a new Airtable Contacts record, Lead Source =
+// Omnisend. Skips if a contact with the same Full Name already exists.
+app.post('/api/omnisend/import-contact', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const b = req.body || {};
+  const firstName = (b.firstName || '').toString().trim();
+  const lastName = (b.lastName || '').toString().trim();
+  const email = (b.email || '').toString().trim();
+  const company = (b.company || '').toString().trim();
+  const fullName = `${firstName} ${lastName}`.trim();
+  if (!fullName) return res.status(400).json({ error: 'firstName or lastName is required' });
+
+  try {
+    const existing = await findRecordByFieldName('Contacts', 'Full Name', fullName);
+    if (existing) return res.json({ success: true, skipped: true, recordId: existing.id });
+
+    const fields = {
+      'Full Name': fullName,
+      'Journey Stage': 'Found',
+      'Lead Source': 'Omnisend'
+    };
+    if (email) fields['Email'] = email;
+    if (company) {
+      const companyRecord = await findOrCreateCompanyRecord(company);
+      if (companyRecord && companyRecord.id) fields['Company'] = [companyRecord.id];
+    }
+
+    const data = await airtableRequest('POST', 'Contacts', { records: [{ fields }], typecast: true });
+    res.json({ success: true, recordId: data.records[0].id });
+  } catch (err) {
+    console.error('Omnisend import-contact error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/omnisend/add-to-campaign - { contactId, campaignId } -> a
+// Campaign Contacts junction row linking the two (create-only-if-missing,
+// default first stage), reusing the shared getOrCreateCampaignContactRow.
+app.post('/api/omnisend/add-to-campaign', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const b = req.body || {};
+  const contactId = (b.contactId || '').toString().trim();
+  const campaignId = (b.campaignId || '').toString().trim();
+  if (!contactId || !campaignId) return res.status(400).json({ error: 'contactId and campaignId are required' });
+
+  try {
+    const [contactRecord, campaignRecord, rows] = await Promise.all([
+      airtableGetRecord('Contacts', contactId),
+      airtableGetRecord('Campaigns', campaignId),
+      fetchCampaignContactsRows()
+    ]);
+    if (!contactRecord) return res.status(404).json({ error: `Contact ${contactId} not found in Airtable` });
+    if (!campaignRecord) return res.status(404).json({ error: `Campaign ${campaignId} not found in Airtable` });
+
+    const existing = findCampaignContactRow(rows, contactId, campaignId);
+    const row = await getOrCreateCampaignContactRow(
+      contactId,
+      contactRecord.fields['Full Name'] || '',
+      campaignId,
+      campaignRecord.fields['Name'] || '',
+      rows
+    );
+    res.json({ success: true, recordId: row.id, skipped: !!existing });
+  } catch (err) {
+    console.error('Omnisend add-to-campaign error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Email copy generator context readers (all best-effort) ----
+
+// Last N Email Copy rows from Learning Data that carry an approved output or
+// feedback. Reads both the dedicated columns and the JSON-in-Analysis
+// fallback that save-feedback writes when those columns don't exist yet.
+async function fetchApprovedEmailCopyLearning(limit = 5) {
+  try {
+    const records = await airtableFetchAllRecords('Learning Data');
+    return records
+      .filter(r => (r.fields['Type'] || '') === 'Email Copy')
+      .map(r => {
+        const f = r.fields || {};
+        let blob = null;
+        if (!f['Final Approved Output'] && f['Analysis']) {
+          try { blob = JSON.parse(f['Analysis']); } catch (e) { blob = null; }
+        }
+        return {
+          date: f['Created Date'] || '',
+          campaignName: f['Campaign Name'] || (blob && blob.campaignName) || '',
+          finalApprovedOutput: f['Final Approved Output'] || (blob && blob.finalApprovedOutput) || '',
+          userFeedback: f['User Feedback'] || (blob && blob.userFeedback) || ''
+        };
+      })
+      .filter(r => r.finalApprovedOutput || r.userFeedback)
+      .sort((a, b) => String(b.date).localeCompare(String(a.date)))
+      .slice(0, limit);
+  } catch (err) {
+    console.warn('Could not read Email Copy Learning Data:', err.message);
+    return [];
+  }
+}
+
+// Active Email Templates - used only as a layout/structure reference, so we
+// pull whatever structural description fields exist, never body copy.
+async function fetchActiveEmailTemplates() {
+  try {
+    const records = await airtableFetchAllRecords('Email Templates');
+    return records
+      .filter(r => r.fields['Active'] === true || r.fields['Active'] === 'true' || r.fields['Active'] === 1)
+      .map(r => ({
+        name: r.fields['Name'] || r.fields['Template Name'] || '',
+        structure: r.fields['Structure'] || r.fields['Layout'] || r.fields['Sections'] || r.fields['Description'] || ''
+      }));
+  } catch (err) {
+    console.warn('Could not read Email Templates (table may not exist yet):', err.message);
+    return [];
+  }
+}
+
+// Recent Trigify-sourced signals. The app has no table literally named
+// "Signals"; the Content Signals table is where network post themes land, so
+// that is what this reads, filtered to the last `days` days by Detected Date.
+async function fetchRecentSignals(days = 30) {
+  try {
+    const records = await airtableFetchAllRecords(CONTENT_SIGNALS_TABLE);
+    const cutoff = Date.now() - days * 86400000;
+    return records
+      .filter(r => {
+        const d = r.fields['Detected Date'] || r.fields['Date'];
+        const t = d ? new Date(d).getTime() : NaN;
+        return isNaN(t) ? true : t >= cutoff;
+      })
+      .map(r => ({
+        theme: r.fields['Theme'] || '',
+        frequency: r.fields['Frequency'] || 0,
+        suggestedFormat: r.fields['Suggested Format'] || '',
+        icpTargets: r.fields['Suggested ICP Targets'] || '',
+        detectedDate: r.fields['Detected Date'] || ''
+      }))
+      .filter(s => s.theme);
+  } catch (err) {
+    console.warn('Could not read the Signals (Content Signals) table:', err.message);
+    return [];
+  }
+}
+
+async function fetchRecentTouchPointsBrief(limit = 40) {
+  try {
+    const records = await airtableFetchAllRecords('Touch Points');
+    return records
+      .map(r => ({
+        date: r.fields['Date'] || '',
+        type: r.fields['Type'] || r.fields['Channel'] || '',
+        message: (r.fields['Message'] || r.fields['Notes'] || '').toString().slice(0, 400),
+        outcome: r.fields['Outcome'] || r.fields['Response'] || ''
+      }))
+      .filter(t => t.message || t.outcome)
+      .sort((a, b) => String(b.date).localeCompare(String(a.date)))
+      .slice(0, limit);
+  } catch (err) {
+    console.warn('Could not read Touch Points:', err.message);
+    return [];
+  }
+}
+
+const OMNISEND_EMAIL_COPY_SYSTEM_PROMPT = `You write email marketing copy for Twenty2 Collective, a Perth-based Agile and change management consultancy. UK/Australian English. No em dashes or en dashes. Peer to peer, specific, lightly opinionated, never salesy.
+
+You are given a voice profile, past approved email copy with the feedback that shaped it, email template structures, recent content signals from the team's network, and recent outreach touch points.
+
+Write in the voice profile's tone. Use the template structures only as a layout guide for how many sections and in what order, never lift their wording. Ground the angle in the recent signals and touch points where you can.
+
+Return ONLY valid JSON, no markdown, in exactly this shape:
+{
+  "subject": string,
+  "preheader": string,
+  "heroImageSearchTerm": string,
+  "intro": string,
+  "bodySections": [ { "heading": string, "body": string } ],
+  "ctaText": string,
+  "ctaUrl": "{{CTA_URL}}"
+}
+Rules: subject under 60 characters. preheader under 100 characters. 2 to 3 body sections. heroImageSearchTerm is 2 to 4 plain words for a stock photo search. ctaUrl is always the literal placeholder {{CTA_URL}}. No commentary.`;
+
+// POST /api/omnisend/generate-email-copy - { brief, campaignName } -> voice
+// profile + approved Learning Data + template structure + last 30 days of
+// signals + recent touch points -> claude-opus-4-6 -> structured email copy,
+// then the full 3-pass plain-text humanizer chain on every copy field.
+app.post('/api/omnisend/generate-email-copy', async (req, res) => {
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const brief = ((req.body && (req.body.brief || req.body.prompt || req.body.topic)) || '').toString().trim();
+  const campaignName = ((req.body && req.body.campaignName) || '').toString().trim();
+
+  try {
+    const [settingsRecord, approvedCopy, templates, signals, touchPoints] = await Promise.all([
+      getSettingsRecord().catch(() => null),
+      fetchApprovedEmailCopyLearning(5),
+      fetchActiveEmailTemplates(),
+      fetchRecentSignals(30),
+      fetchRecentTouchPointsBrief(40)
+    ]);
+
+    const sf = (settingsRecord && settingsRecord.fields) || {};
+    const voiceProfile = (sf['Email Voice Profile'] || sf['SEO Voice Profile'] || '').toString().trim()
+      || 'No voice profile on file. Write plainly, peer to peer, with no marketing speak.';
+
+    const userContent = `EMAIL VOICE PROFILE:
+${voiceProfile}
+
+CAMPAIGN BRIEF: ${brief || '(none provided - infer a useful topic from the signals and touch points below)'}
+CAMPAIGN NAME: ${campaignName || '(untitled)'}
+
+LAST 5 APPROVED EMAIL COPY RECORDS (final approved copy and the feedback that shaped it):
+${JSON.stringify(approvedCopy, null, 2)}
+
+EMAIL TEMPLATE STRUCTURES (layout guide only, do not reuse wording):
+${JSON.stringify(templates, null, 2)}
+
+RECENT CONTENT SIGNALS (last 30 days):
+${JSON.stringify(signals, null, 2)}
+
+RECENT TOUCH POINTS:
+${JSON.stringify(touchPoints, null, 2)}`;
+
+    let raw;
+    try {
+      raw = await callClaudeMessages(userContent, 3000, OMNISEND_EMAIL_COPY_SYSTEM_PROMPT);
+    } catch (claudeErr) {
+      console.error('Omnisend generate-email-copy - Claude call failed:', claudeErr.message);
+      return res.status(502).json({ error: `Email copy generation failed: ${claudeErr.message}` });
+    }
+
+    const cleaned = stripCodeFences(raw);
+    let draft;
+    try {
+      draft = JSON.parse(cleaned);
+    } catch (e) {
+      const m = cleaned.match(/\{[\s\S]*\}/);
+      if (!m) return res.status(502).json({ error: 'Could not parse the generated email copy as JSON' });
+      draft = JSON.parse(m[0]);
+    }
+
+    // Full 3-pass plain-text humanizer chain on every copy field (not the
+    // image search term or the CTA URL placeholder). Sequential to stay under
+    // the Anthropic rate limit - each field is itself 3 calls.
+    const humanize = async (v) => {
+      const s = (v == null ? '' : String(v)).trim();
+      return s ? await humanizePlainText(s) : s;
+    };
+
+    const subject = await humanize(draft.subject);
+    const preheader = await humanize(draft.preheader);
+    const intro = await humanize(draft.intro);
+    const ctaText = await humanize(draft.ctaText);
+    const bodySections = [];
+    for (const sec of (Array.isArray(draft.bodySections) ? draft.bodySections : [])) {
+      bodySections.push({
+        heading: await humanize(sec && sec.heading),
+        body: await humanize(sec && sec.body)
+      });
+    }
+
+    res.json({
+      campaignName: campaignName || null,
+      subject,
+      preheader,
+      heroImageSearchTerm: (draft.heroImageSearchTerm || '').toString().trim(),
+      intro,
+      bodySections,
+      ctaText,
+      ctaUrl: (draft.ctaUrl || '{{CTA_URL}}').toString(),
+      context: {
+        voiceProfileUsed: !!(sf['Email Voice Profile'] || sf['SEO Voice Profile']),
+        approvedCopyCount: approvedCopy.length,
+        templateCount: templates.length,
+        signalCount: signals.length,
+        touchPointCount: touchPoints.length
+      }
+    });
+  } catch (err) {
+    console.error('Omnisend generate-email-copy error:', err.stack || err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Writes an Email Copy feedback row to Learning Data. That table today only
+// has Type / Analysis / Record Count / Created Date (see storeLearningData),
+// so the richer per-field columns may not exist. Try the dedicated columns
+// first; on UNKNOWN_FIELD_NAME pack the whole payload as JSON into Analysis
+// (which always exists) so the feedback is never lost.
+async function writeEmailCopyLearningRecord(payload) {
+  const today = new Date().toISOString().slice(0, 10);
+  const str = v => (v == null ? '' : (typeof v === 'string' ? v : JSON.stringify(v)));
+  const richFields = {
+    'Type': 'Email Copy',
+    'Applied': false,
+    'Campaign Name': str(payload.campaignName),
+    'Generated Output': str(payload.generatedOutput),
+    'User Edits': str(payload.userEdits),
+    'User Feedback': str(payload.userFeedback),
+    'Final Approved Output': str(payload.finalApprovedOutput),
+    'Created Date': today
+  };
+  try {
+    const data = await airtableRequest('POST', 'Learning Data', { records: [{ fields: richFields }], typecast: true });
+    return data.records[0];
+  } catch (err) {
+    if (!/UNKNOWN_FIELD_NAME/.test(err.message || '')) throw err;
+    console.warn('Learning Data is missing the Email Copy feedback columns - storing the payload as JSON in Analysis. Add Generated Output, User Edits, User Feedback, Final Approved Output, Campaign Name (text) and Applied (checkbox) to Learning Data to split it into columns.');
+    const fallback = {
+      'Type': 'Email Copy',
+      'Analysis': JSON.stringify({ ...payload, applied: false }),
+      'Created Date': today
+    };
+    const data = await airtableRequest('POST', 'Learning Data', { records: [{ fields: fallback }], typecast: true });
+    return data.records[0];
+  }
+}
+
+// POST /api/omnisend/save-feedback - { generatedOutput, userEdits,
+// userFeedback, finalApprovedOutput, campaignName } -> a new Learning Data
+// row, Type = Email Copy, Applied = false.
+app.post('/api/omnisend/save-feedback', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const b = req.body || {};
+  try {
+    const record = await writeEmailCopyLearningRecord({
+      generatedOutput: b.generatedOutput,
+      userEdits: b.userEdits,
+      userFeedback: b.userFeedback,
+      finalApprovedOutput: b.finalApprovedOutput,
+      campaignName: b.campaignName
+    });
+    res.json({ success: true, id: record.id });
+  } catch (err) {
+    console.error('Omnisend save-feedback error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/omnisend/fetch-pexels-image - { searchTerm } -> top 3 Pexels
+// photos with URL and photographer credit, using PEXELS_API_KEY.
+app.post('/api/omnisend/fetch-pexels-image', async (req, res) => {
+  if (!process.env.PEXELS_API_KEY) return res.status(500).json({ error: 'PEXELS_API_KEY not configured' });
+  const term = ((req.body && (req.body.searchTerm || req.body.term || req.body.query)) || '').toString().trim();
+  if (!term) return res.status(400).json({ error: 'searchTerm is required' });
+  try {
+    const r = await fetch(`https://api.pexels.com/v1/search?per_page=3&query=${encodeURIComponent(term)}`, {
+      headers: { Authorization: process.env.PEXELS_API_KEY }
+    });
+    if (!r.ok) {
+      const t = await r.text();
+      throw new Error(`Pexels API error ${r.status}: ${t}`);
+    }
+    const data = await r.json();
+    const images = (data.photos || []).slice(0, 3).map(p => ({
+      id: p.id,
+      url: (p.src && (p.src.large2x || p.src.large || p.src.original)) || '',
+      thumbnail: (p.src && (p.src.medium || p.src.small)) || '',
+      photographer: p.photographer || '',
+      photographerUrl: p.photographer_url || '',
+      pexelsUrl: p.url || '',
+      alt: p.alt || term
+    }));
+    res.json({ searchTerm: term, images });
+  } catch (err) {
+    console.error('Omnisend fetch-pexels-image error:', err.message);
+    res.status(502).json({ error: err.message });
   }
 });
 

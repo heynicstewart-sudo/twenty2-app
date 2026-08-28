@@ -137,6 +137,7 @@ a{color:inherit;text-decoration:none;}
 .nav-item i{font-size:18px;}
 .nav-item:hover{color:var(--sidebar-active-text);background:var(--accent-dim);}
 .nav-item.active{background:var(--sidebar-active-bg);color:var(--sidebar-active-text);border-left-color:var(--sidebar-active-border);}
+.nav-divider{font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--sidebar-muted);padding:16px 12px 6px;margin-top:6px;border-top:1px solid var(--border-light);}
 .sidebar-footer{margin-top:auto;padding:12px 8px;color:var(--sidebar-muted);font-size:11.5px;border-top:1px solid var(--border-light);padding-top:16px;}
 
 /* Main */
@@ -441,7 +442,9 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .event-chip.grey{background:#eee9e2;color:#6b6355;}
 .event-chip.purple{background:#efe4f7;color:#6b3fa0;}
 .event-chip.yellow{background:#fef3d6;color:#8a6a1f;}
+.event-chip.teal{background:#d8f3f0;color:#1d7268;}
 .event-chip.reminder-chip{background:#f1f1ee;color:#6b6558;cursor:pointer;}
+.cal-popover{position:fixed;z-index:320;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card);box-shadow:var(--shadow-lg);padding:12px 14px;min-width:200px;max-width:280px;}
 
 /* Profile drawer (contacts + companies) */
 .drawer-overlay{position:fixed;inset:0;background:rgba(26,26,46,0.25);z-index:410;}
@@ -600,6 +603,7 @@ table.spreadsheet-table{border-collapse:collapse;width:100%;min-width:960px;font
 @media (max-width:1024px){
   .sidebar{width:76px;min-width:76px;padding:16px 8px;}
   .sidebar .logo-text,.sidebar .nav-item span,.sidebar-footer{display:none;}
+  .sidebar .nav-divider{font-size:0;padding:8px 0 0;margin-top:6px;}
   .nav-item{justify-content:center;}
   .stat-grid{grid-template-columns:repeat(2,1fr);}
   .two-col{grid-template-columns:1fr;}
@@ -659,6 +663,7 @@ const TODAY = new Date();
 
 let rawState = {
   currentPage: 'home',
+  activeNavKey: 'home',
   currentGridId: 'grid_wa_market_map',
   grids: [
     {
@@ -1302,28 +1307,55 @@ function goToRunIntelligence(){
 
 /* ===================== NAV / RENDER DISPATCH ===================== */
 
+// Primary nav is the content-marketing workspace. Seven of these entries
+// target the existing `content` page with a specific sub-tab preselected -
+// the Marketing page's own seq-tab bar stays as secondary nav, all wiring
+// untouched. The CRM pages (Home/Logger/Campaigns/Sales/Engine/Research)
+// are kept reachable below a divider (group:'crm'). `navKey` is the sidebar
+// identity used for active highlighting, since several rows share id 'content'.
 const NAV = [
-  { id:'home', label:'Home', icon:'ti-home' },
-  { id:'logger', label:'Logger', icon:'ti-clipboard-text' },
-  { id:'campaigns', label:'Campaigns', icon:'ti-rocket' },
-  { id:'calendar', label:'Sales', icon:'ti-calendar' },
-  { id:'intelligence', label:'Engine', icon:'ti-brain' },
-  { id:'content', label:'Marketing', icon:'ti-news' },
-  { id:'research', label:'Research', icon:'ti-microscope' },
-  { id:'settings', label:'Settings', icon:'ti-settings' },
-  { id:'grid', label:'Grid', icon:'ti-grid-dots', hidden:true }
+  { id:'content', navKey:'signals', label:'Signals', icon:'ti-antenna-bars-5', subtab:'signals' },
+  { id:'content', navKey:'drafts', label:'Draft Centre', icon:'ti-notes', subtab:'drafts' },
+  { id:'content', navKey:'seo', label:'SEO', icon:'ti-world-search', subtab:'seo' },
+  { id:'content', navKey:'aeo', label:'AEO', icon:'ti-robot', subtab:'aeo' },
+  { id:'content', navKey:'googleads', label:'Google Ads', icon:'ti-brand-google', subtab:'googleads' },
+  { id:'content', navKey:'email', label:'Email Marketing', icon:'ti-mail', subtab:'email' },
+  { id:'contentcalendar', navKey:'contentcalendar', label:'Calendar', icon:'ti-calendar-month' },
+  { id:'content', navKey:'performance', label:'LinkedIn Performance', icon:'ti-chart-line', subtab:'performance' },
+  { id:'settings', navKey:'settings', label:'Settings', icon:'ti-settings' },
+  { id:'home', navKey:'home', label:'Home', icon:'ti-home', group:'crm' },
+  { id:'logger', navKey:'logger', label:'Logger', icon:'ti-clipboard-text', group:'crm' },
+  { id:'campaigns', navKey:'campaigns', label:'Campaigns', icon:'ti-rocket', group:'crm' },
+  { id:'calendar', navKey:'calendar', label:'Sales', icon:'ti-calendar', group:'crm' },
+  { id:'intelligence', navKey:'intelligence', label:'Engine', icon:'ti-brain', group:'crm' },
+  { id:'research', navKey:'research', label:'Research', icon:'ti-microscope', group:'crm' },
+  { id:'grid', navKey:'grid', label:'Grid', icon:'ti-grid-dots', hidden:true }
 ];
 
 function renderSidebar(){
   const nav = document.getElementById('sidebarNav');
-  nav.innerHTML = NAV.filter(n => !n.hidden).map(n => (
-    '<button class="nav-item '+(state.currentPage===n.id?'active':'')+'" onclick="navigate(\''+n.id+'\')"><i class="ti '+n.icon+'"></i><span>'+n.label+'</span></button>'
-  )).join('');
+  const active = state.activeNavKey || state.currentPage;
+  const btn = n => '<button class="nav-item '+(active===n.navKey?'active':'')+'" onclick="navSelect(\''+n.navKey+'\')"><i class="ti '+n.icon+'"></i><span>'+n.label+'</span></button>';
+  const primary = NAV.filter(n => !n.hidden && n.group !== 'crm');
+  const crm = NAV.filter(n => !n.hidden && n.group === 'crm');
+  nav.innerHTML = primary.map(btn).join('')
+    + '<div class="nav-divider">CRM</div>'
+    + crm.map(btn).join('');
 }
 
-function navigate(page){
+// Sidebar click. Looks the entry up by navKey so the several id:'content'
+// rows each select their own sub-tab and highlight correctly.
+function navSelect(navKey){
+  const n = NAV.find(x => x.navKey === navKey);
+  if(!n) return;
+  if(n.subtab) window.__contentSubTab = n.subtab;
+  navigate(n.id, navKey);
+}
+
+function navigate(page, navKey){
   state.currentPage = page;
-  const navEntry = NAV.find(n=>n.id===page);
+  const navEntry = navKey ? NAV.find(n => n.navKey === navKey) : NAV.find(n => n.id === page);
+  state.activeNavKey = navEntry ? navEntry.navKey : page;
   const grid = page === 'grid' ? currentGrid() : null;
   document.getElementById('topbarTitle').textContent = grid ? grid.name : (navEntry ? navEntry.label : '');
   renderSidebar();
@@ -1332,7 +1364,7 @@ function navigate(page){
 
 function renderPage(){
   const el = document.getElementById('pageContent');
-  const renderers = { home: renderHome, logger: renderLoggerPage, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, research: renderResearch, settings: renderSettings };
+  const renderers = { home: renderHome, logger: renderLoggerPage, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, contentcalendar: renderContentCalendarPage, research: renderResearch, settings: renderSettings };
   el.innerHTML = renderers[state.currentPage]();
   afterRender(state.currentPage);
 }
@@ -1395,6 +1427,7 @@ function afterRender(page){
     const tab = window.__contentSubTab || 'signals';
     if(tab === 'signals' && window.__contentSignals === undefined) loadContentSignals();
     if((tab === 'drafts' || tab === 'calendar') && window.__contentDrafts === undefined) loadContentDrafts();
+    if(tab === 'drafts' && window.__contentAll === undefined) loadContentAll();
     if(tab === 'performance' && window.__contentPerformance === undefined) loadContentPerformance();
     if(tab === 'performance' && window.__marcusJobStatus === undefined) checkMarcusJobStatus();
     if(tab === 'seo' && window.__seoKeywords === undefined) loadSeoKeywords();
@@ -1407,11 +1440,20 @@ function afterRender(page){
     if(tab === 'seo') initSeoGscCharts();
     if(tab === 'seo') initSeoCampaignCharts();
     if(tab === 'googleads' && window.__googleAdsData === undefined) loadGoogleAdsData();
+    if(tab === 'email'){
+      const it = window.__emailInnerTab || 'copy';
+      if(it === 'copy' && window.__emailSettings === undefined) loadEmailSettings();
+      if(it === 'copy' && window.__emailTemplates === undefined) loadEmailTemplates();
+      if(it === 'campaigns' && window.__omnisendCampaigns === undefined) loadOmnisendCampaigns();
+      if(it === 'contacts' && window.__omnisendContacts === undefined) loadOmnisendContacts();
+      if(it === 'health' && window.__omnisendLowEngagement === undefined) loadOmnisendLowEngagement();
+    }
     if(tab === 'aeo' && window.__aeoCampaigns === undefined) loadAeoCampaigns();
     if(tab === 'aeo' && window.__aeoPrompts === undefined) loadAeoPrompts();
     if(tab === 'aeo' && window.__aeoRecommendations === undefined) loadAeoRecommendations();
     if(tab === 'settings' && window.__contentSettings === undefined) loadContentSettings();
   }
+  if(page === 'contentcalendar' && window.__contentCalendarItems === undefined) loadContentCalendarItems();
   if(page === 'home' && window.__homeContactSignals === undefined) loadHomeContactSignals();
   if(page === 'research'){
     const tab = window.__researchSubTab || 'market';
@@ -7430,6 +7472,27 @@ async function syncJourneyStageForColumn(contactId, colKey){
   }
 }
 
+// When a Campaign Contact reaches "Connection Made" (Airtable Sequence /
+// Journey Stage "Connected"), mirror them into Omnisend so the email
+// programme can pick them up. Fire-and-forget: the stage change itself has
+// already been written by syncJourneyStageForColumn above, so a failure
+// here only shows a small toast and never blocks the move.
+async function pushConnectedContactToOmnisend(contactId){
+  if(!isAirtableRecordId(contactId)) return;
+  try {
+    const res = await fetch('/api/omnisend/push-contact', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contactId })
+    });
+    if(!res.ok){ const d = await res.json().catch(()=>({})); throw new Error(d.error || 'Request failed'); }
+    toast('Contact synced to Omnisend', 'success');
+  } catch(err){
+    console.warn('Omnisend push-contact failed:', err.message);
+    toast('Could not sync contact to Omnisend', 'warn');
+  }
+}
+
 async function onColDrop(e, colKey){
   e.preventDefault();
   if(!dragCardId) return;
@@ -7450,6 +7513,7 @@ async function onColDrop(e, colKey){
     state.activity.unshift(activityEntry);
     syncActivityToAirtable(activityEntry);
     notifyWebhook(c);
+    pushConnectedContactToOmnisend(c.id);
     renderPage();
   } else if(colKey === 'messaging'){
     if(forward) openGenerateModal(c.id, c.thread.m1 ? 'm2' : 'm1', ()=>renderPage());
@@ -12377,7 +12441,7 @@ function renderLearningResult(kind, data, recordCount){
 // campaign-name-not-id scoping convention (the backend resolves a campaign
 // name to its Airtable record id itself, same as sales-overview/deals).
 
-const CONTENT_SUBTABS = [['signals','Signals'],['drafts','Draft Centre'],['calendar','Calendar'],['performance','My Performance'],['seo','SEO'],['aeo','AEO'],['googleads','Google Ads'],['settings','Settings']];
+const CONTENT_SUBTABS = [['signals','Signals'],['drafts','Draft Centre'],['calendar','Calendar'],['performance','LinkedIn Performance'],['seo','SEO'],['aeo','AEO'],['googleads','Google Ads'],['email','Email Marketing'],['settings','Settings']];
 const CONTENT_FORMATS = ['LinkedIn Post','Blog','Newsletter'];
 const CONTENT_FORMAT_META = {
   'LinkedIn Post': { dotClass:'format-linkedin', label:'LinkedIn' },
@@ -12389,6 +12453,12 @@ const CONTENT_STATUS_TAG_CLASS = { Draft:'tag-pending', Ready:'tag-started', Sch
 function setContentSubTab(tab){
   window.__contentEditorId = null;
   window.__contentSubTab = tab;
+  // Keep the sidebar highlight in step when the marketing seq-tab bar is
+  // used as secondary nav (its keys line up with the content NAV navKeys).
+  if(state.currentPage === 'content'){
+    if(NAV.some(n => n.navKey === tab && n.id === 'content')) state.activeNavKey = tab;
+    renderSidebar();
+  }
   renderPage();
 }
 
@@ -12405,6 +12475,7 @@ function renderContent(){
   ${tab==='seo' ? renderContentSeoTab() : ''}
   ${tab==='aeo' ? renderContentAeoTab() : ''}
   ${tab==='googleads' ? renderContentGoogleAdsTab() : ''}
+  ${tab==='email' ? renderContentEmailTab() : ''}
   ${tab==='settings' ? renderContentSettingsTab() : ''}
   `;
 }
@@ -12575,6 +12646,7 @@ function draftFromSignal(signalId, campaignName){
   // untouched, so the modal opens right where the user already is.
   if(state.currentPage !== 'campaigns'){
     state.currentPage = 'content';
+    state.activeNavKey = 'drafts';
     window.__contentSubTab = 'drafts';
   }
   openNewContentDraftModal({ signalId, signalTheme: signal ? signal.theme : '', suggestedFormat: signal ? signal.suggestedFormat : '', campaignName: campaignName || null });
@@ -12617,9 +12689,10 @@ function renderContentDraftsTab(){
   const filterStatus = window.__contentDraftFilterStatus || '';
   const filtered = Array.isArray(drafts) ? drafts.filter(d => (!filterFormat || d.format===filterFormat) && (!filterStatus || d.status===filterStatus)) : drafts;
   return `
+  ${renderContentAllTypesPanel(filterStatus)}
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
-      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-notes"></i> Draft Centre</div>
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-notes"></i> Editable drafts</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <select onchange="window.__contentDraftFilterFormat=this.value;renderPage();" style="width:auto;">
           <option value="">All formats</option>
@@ -12635,6 +12708,104 @@ function renderContentDraftsTab(){
     ${renderContentDraftsList(filtered)}
   </div>
   `;
+}
+
+/* ---- Draft Centre: all content types from the Airtable Content table ---- */
+// GET /api/content/all -> { items:[{ id, title, type, status, dateAdded, body }] }
+//   type      = Content Type (falls back to Format); normalised client-side
+//   dateAdded = the Airtable record createdTime
+// Grouped by Type under fixed section headers. Editable drafts (rows that
+// also appear in /api/content/drafts) get a pencil that opens the existing
+// content editor; everything else is display-only. Every card has a Copy
+// button that copies the body.
+
+const CONTENT_TYPE_GROUPS = ['LinkedIn Post','Email','Blog Post','YouTube Script'];
+
+// Raw Airtable Content Type / Format values -> the four display groups.
+function normalizeContentType(t){
+  const s = String(t || '').trim().toLowerCase();
+  if(s === 'linkedin post' || s === 'linkedin') return 'LinkedIn Post';
+  if(s === 'email' || s === 'newsletter') return 'Email';
+  if(s === 'blog' || s === 'blog post') return 'Blog Post';
+  if(s === 'youtube script' || s === 'youtube' || s === 'video script') return 'YouTube Script';
+  return t ? String(t) : 'Other';
+}
+
+async function loadContentAll(){
+  try {
+    const res = await fetch('/api/content/all');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__contentAll = Array.isArray(data.items) ? data.items : (Array.isArray(data) ? data : []);
+  } catch(err){
+    window.__contentAll = { error: err.message };
+  }
+  if(state.currentPage === 'content' && (window.__contentSubTab || 'signals') === 'drafts') renderPage();
+}
+
+function renderContentAllTypesPanel(filterStatus){
+  const all = window.__contentAll;
+  let body;
+  if(all === undefined){
+    body = '<div class="muted"><i class="ti ti-loader-2"></i> Loading content...</div>';
+  } else if(all && all.error){
+    body = `<div class="muted">Could not load content: ${esc(all.error)}</div>`;
+  } else {
+    const draftIds = new Set((Array.isArray(window.__contentDrafts) ? window.__contentDrafts : []).map(d => d.id));
+    let items = (all || []).slice();
+    if(filterStatus) items = items.filter(it => (it.status || '') === filterStatus);
+    const groups = {};
+    items.forEach(it => {
+      const g = normalizeContentType(it.type);
+      (groups[g] = groups[g] || []).push(it);
+    });
+    const order = CONTENT_TYPE_GROUPS.concat(Object.keys(groups).filter(g => !CONTENT_TYPE_GROUPS.includes(g)));
+    const sections = order.filter(g => groups[g] && groups[g].length).map(g => {
+      const cards = groups[g].sort((a, b) => new Date(b.dateAdded || 0) - new Date(a.dateAdded || 0)).map(it => {
+        const editable = draftIds.has(it.id);
+        return `
+        <div class="card" style="text-align:left;padding:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+            <div style="font-weight:700;font-size:13px;flex:1;">${esc(it.title || 'Untitled')}</div>
+            ${contentStatusTag(it.status)}
+          </div>
+          <div class="muted" style="font-size:11px;margin-top:6px;">Added ${it.dateAdded ? esc(fmtDate(it.dateAdded)) : '—'}</div>
+          <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;">
+            <button class="btn btn-secondary btn-sm" onclick="copyContentItemBody('${esc(it.id)}', this)"><i class="ti ti-copy"></i> Copy</button>
+            ${editable ? `<button class="btn btn-ghost btn-sm" onclick="openContentEditor('${esc(it.id)}')"><i class="ti ti-pencil"></i> Edit</button>` : ''}
+          </div>
+        </div>`;
+      }).join('');
+      return `
+      <div style="margin-bottom:16px;">
+        <div class="section-title" style="margin-bottom:8px;font-size:12px;">${esc(g)} <span class="muted" style="font-weight:600;">(${groups[g].length})</span></div>
+        <div class="mini-cards" style="grid-template-columns:repeat(auto-fill,minmax(240px,1fr));margin-bottom:0;">${cards}</div>
+      </div>`;
+    }).join('');
+    body = sections || '<div class="empty-state">No content in the Content table yet.</div>';
+  }
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-stack-2"></i> All content</div>
+      <button class="btn btn-secondary btn-sm" onclick="window.__contentAll=undefined;loadContentAll();renderPage();"><i class="ti ti-refresh"></i> Refresh</button>
+    </div>
+    ${body}
+  </div>`;
+}
+
+async function copyContentItemBody(id, btn){
+  const all = Array.isArray(window.__contentAll) ? window.__contentAll : [];
+  const it = all.find(x => x.id === id);
+  const text = (it && (it.body || it.title)) || '';
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch(err){
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); document.body.removeChild(ta);
+  }
+  if(btn){ const o = btn.innerHTML; btn.innerHTML = '<i class="ti ti-check"></i> Copied'; setTimeout(() => { btn.innerHTML = o; }, 1400); }
 }
 
 function openNewContentDraftModal(prefill){
@@ -12964,6 +13135,164 @@ async function refreshContentCadence(){
   } catch(err){
     toast('Could not refresh cadence: ' + err.message, 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-refresh"></i> Refresh recommendation'; }
+  }
+}
+
+/* ===================== CONTENT CALENDAR (top-level nav) ===================== */
+// Monthly grid over the Airtable Content table's Scheduled Date field.
+//   GET  /api/content/calendar -> { items:[{ id, title, type, status, scheduledDate }] }
+//   POST /api/content/item { type, title, scheduledDate } -> a new Content row
+// Chips are colour-coded by type: Email = blue, Blog Post = green,
+// YouTube Script = purple, LinkedIn Post = teal. Clicking a chip opens a
+// small popover (title / type / status). "Add Content" opens a modal.
+// Separate from the Marketing > Calendar sub-tab, which is unchanged.
+
+const CONTENT_CAL_TYPES = ['LinkedIn Post','Email','Blog Post','YouTube Script'];
+const CONTENT_CAL_CHIP_CLASS = { 'Email':'blue', 'Blog Post':'', 'YouTube Script':'purple', 'LinkedIn Post':'teal' };
+
+async function loadContentCalendarItems(){
+  try {
+    const res = await fetch('/api/content/calendar');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__contentCalendarItems = Array.isArray(data.items) ? data.items : (Array.isArray(data) ? data : []);
+  } catch(err){
+    window.__contentCalendarItems = { error: err.message };
+  }
+  if(state.currentPage === 'contentcalendar') renderPage();
+}
+
+function ccalNav(dir){
+  let m = (window.__ccalMonth == null ? TODAY.getMonth() : window.__ccalMonth) + dir;
+  let y = (window.__ccalYear == null ? TODAY.getFullYear() : window.__ccalYear);
+  if(m < 0){ m = 11; y--; }
+  if(m > 11){ m = 0; y++; }
+  window.__ccalMonth = m; window.__ccalYear = y;
+  renderPage();
+}
+function ccalToday(){ window.__ccalMonth = TODAY.getMonth(); window.__ccalYear = TODAY.getFullYear(); renderPage(); }
+
+function renderContentCalendarPage(){
+  if(window.__ccalYear == null){ window.__ccalYear = TODAY.getFullYear(); window.__ccalMonth = TODAY.getMonth(); }
+  const y = window.__ccalYear, m = window.__ccalMonth;
+  const first = new Date(y, m, 1);
+  const startDow = first.getDay();
+  const daysInMonth = new Date(y, m + 1, 0).getDate();
+  const monthLabel = first.toLocaleDateString('en-AU', { month: 'long', year: 'numeric' });
+
+  const data = window.__contentCalendarItems;
+  let gridBody;
+  if(data === undefined){
+    gridBody = '<div class="muted"><i class="ti ti-loader-2"></i> Loading calendar...</div>';
+  } else if(data && data.error){
+    gridBody = `<div class="muted">Could not load the calendar: ${esc(data.error)}</div>`;
+  } else {
+    const items = Array.isArray(data) ? data : [];
+    window.__contentCalendarById = {};
+    items.forEach(it => { window.__contentCalendarById[it.id] = it; });
+    const cells = [];
+    for(let i = 0; i < startDow; i++) cells.push(null);
+    for(let d = 1; d <= daysInMonth; d++) cells.push(d);
+    gridBody = `
+    <div class="cal-grid">
+      ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d => `<div class="cal-dow">${d}</div>`).join('')}
+      ${cells.map(d => {
+        if(d === null) return '<div class="cal-cell empty"></div>';
+        const dateStr = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+        const isToday = dateStr === isoDate(TODAY);
+        const dayItems = items.filter(it => String(it.scheduledDate || '').slice(0, 10) === dateStr);
+        return `<div class="cal-cell ${isToday ? 'today' : ''}">
+          <div class="cal-date">${d}</div>
+          ${dayItems.map(it => {
+            const g = normalizeContentType(it.type);
+            const cls = CONTENT_CAL_CHIP_CLASS[g] == null ? 'grey' : CONTENT_CAL_CHIP_CLASS[g];
+            return `<div class="event-chip ${cls}" style="cursor:pointer;" onclick="showContentCalPopover(event,'${esc(it.id)}')">${esc(it.title || 'Untitled')}</div>`;
+          }).join('')}
+        </div>`;
+      }).join('')}
+    </div>`;
+  }
+
+  return `
+  <div class="card">
+    <div class="cal-header">
+      <div style="font-size:16px;font-weight:800;">${esc(monthLabel)}</div>
+      <div class="cal-nav">
+        <button class="btn btn-secondary btn-sm" onclick="ccalNav(-1)"><i class="ti ti-chevron-left"></i></button>
+        <button class="btn btn-secondary btn-sm" onclick="ccalToday()">Today</button>
+        <button class="btn btn-secondary btn-sm" onclick="ccalNav(1)"><i class="ti ti-chevron-right"></i></button>
+        <button class="btn btn-primary btn-sm" onclick="openAddContentModal()"><i class="ti ti-plus"></i> Add Content</button>
+      </div>
+    </div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px;">
+      ${CONTENT_CAL_TYPES.map(t => `<span class="event-chip ${CONTENT_CAL_CHIP_CLASS[t] == null ? 'grey' : CONTENT_CAL_CHIP_CLASS[t]}" style="margin:0;">${esc(t)}</span>`).join('')}
+    </div>
+    ${gridBody}
+  </div>`;
+}
+
+function showContentCalPopover(evt, id){
+  evt.stopPropagation();
+  closeContentCalPopover();
+  const it = (window.__contentCalendarById || {})[id];
+  if(!it) return;
+  const pop = document.createElement('div');
+  pop.className = 'cal-popover';
+  pop.id = 'calPopover';
+  pop.innerHTML = `
+    <div style="font-weight:800;font-size:13px;margin-bottom:6px;">${esc(it.title || 'Untitled')}</div>
+    <div class="muted" style="font-size:11.5px;">Type: ${esc(normalizeContentType(it.type))}</div>
+    <div class="muted" style="font-size:11.5px;">Status: ${esc(it.status || '—')}</div>
+    ${it.scheduledDate ? `<div class="muted" style="font-size:11.5px;">Scheduled: ${esc(fmtDate(it.scheduledDate))}</div>` : ''}`;
+  document.body.appendChild(pop);
+  const r = pop.getBoundingClientRect();
+  let left = evt.clientX;
+  let top = evt.clientY + 12;
+  if(left + r.width > window.innerWidth - 12) left = window.innerWidth - r.width - 12;
+  if(top + r.height > window.innerHeight - 12) top = evt.clientY - r.height - 12;
+  pop.style.left = Math.max(12, left) + 'px';
+  pop.style.top = Math.max(12, top) + 'px';
+  setTimeout(() => document.addEventListener('click', closeContentCalPopover, { once: true }), 0);
+}
+function closeContentCalPopover(){ const p = document.getElementById('calPopover'); if(p) p.remove(); }
+
+function openAddContentModal(){
+  const body = `
+    <div class="field"><label>Type</label>
+      <select id="addContentType">${CONTENT_CAL_TYPES.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('')}</select>
+    </div>
+    <div class="field"><label>Title</label><input id="addContentTitle" placeholder="Working title"></div>
+    <div class="field"><label>Scheduled date</label><input type="date" id="addContentDate" value="${isoDate(TODAY)}"></div>
+  `;
+  const footer = `
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" id="addContentSaveBtn" onclick="saveNewContentItem()"><i class="ti ti-check"></i> Save</button>
+  `;
+  openModal('Add content', body, footer);
+}
+
+async function saveNewContentItem(){
+  const type = (document.getElementById('addContentType') || {}).value || '';
+  const title = ((document.getElementById('addContentTitle') || {}).value || '').trim();
+  const scheduledDate = (document.getElementById('addContentDate') || {}).value || '';
+  if(!title){ toast('Enter a title', 'warn'); return; }
+  const btn = document.getElementById('addContentSaveBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Saving...'; }
+  try {
+    const res = await fetch('/api/content/item', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type, title, scheduledDate })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
+    closeModal();
+    toast('Content added', 'success');
+    window.__contentCalendarItems = undefined;
+    window.__contentAll = undefined;
+    loadContentCalendarItems();
+  } catch(err){
+    toast('Could not add content: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-check"></i> Save'; }
   }
 }
 
@@ -15917,6 +16246,952 @@ function renderGoogleAdsDraftPreview(draft){
     <div style="font-weight:700;font-size:12.5px;margin:10px 0 6px;">Ad sets</div>
     ${adSetBlock || '<div class="muted" style="font-size:12px;">No ad sets returned.</div>'}
   </div>`;
+}
+
+/* ---- Email sub-tab (Marketing > Email, Omnisend-backed) ---- */
+// Four inner tabs:
+//  - Copy Generator: an account-level Email Voice Profile (read/saved
+//    through the same Settings pattern as the content voice profile),
+//    a "Upload Past Campaign" button that stores an HTML file in the
+//    Email Templates table purely as a structure reference (its copy is
+//    never reused), Engine copy generation into an editable per-section
+//    preview, a Pexels hero-image picker, a feedback panel, "Approve and
+//    Save", and "Create Campaign in Omnisend".
+//  - Campaigns: Omnisend campaigns rendered as stat cards (open / click /
+//    unsubscribe rate).
+//  - Contacts: the Omnisend contact list with an inline LinkedIn lookup
+//    per row and an "Add to Campaign" action that writes the person into
+//    the Contacts table with Lead Source = Omnisend.
+//  - List Health: low-engagement contacts, a table preview and a
+//    client-side CSV export of the full flagged list.
+// Every AI reference in this UI says "Engine", never "AI" / "Claude".
+
+const EMAIL_INNER_TABS = [['copy','Copy Generator'],['campaigns','Campaigns'],['contacts','Contacts'],['health','List Health']];
+
+function setEmailInnerTab(tab){
+  window.__emailInnerTab = tab;
+  renderPage();
+}
+
+function renderContentEmailTab(){
+  const tab = window.__emailInnerTab || 'copy';
+  return `
+  <div class="seq-tabs" style="margin-top:-4px;">
+    ${EMAIL_INNER_TABS.map(([key,label]) => `<div class="seq-tab ${tab===key?'active':''}" onclick="setEmailInnerTab('${key}')">${esc(label)}</div>`).join('')}
+  </div>
+  ${tab==='copy' ? renderEmailCopyTab() : ''}
+  ${tab==='campaigns' ? renderEmailCampaignsTab() : ''}
+  ${tab==='contacts' ? renderEmailContactsTab() : ''}
+  ${tab==='health' ? renderEmailListHealthTab() : ''}
+  `;
+}
+
+function emailRerender(inner){
+  if(state.currentPage === 'content' && window.__contentSubTab === 'email' && (window.__emailInnerTab||'copy') === inner) renderPage();
+}
+
+function fmtPctFrac(f){
+  if(f == null || isNaN(f)) return '—';
+  return (f * 100).toFixed(1) + '%';
+}
+
+// An Omnisend rate cell might arrive as a 0-1 fraction, a 0-100 percent, or
+// be missing entirely with only raw counts alongside it. Normalise to a
+// 0-1 fraction, or null when nothing usable is present.
+function omnisendRate(obj, rateKeys, numeratorKeys, denominatorKeys){
+  obj = obj || {};
+  for(const k of rateKeys){
+    if(obj[k] != null && obj[k] !== ''){
+      const n = parseFloat(obj[k]);
+      if(!isNaN(n)) return n > 1 ? n / 100 : n;
+    }
+  }
+  if(numeratorKeys && denominatorKeys){
+    let num, den;
+    for(const k of numeratorKeys){ if(obj[k] != null){ num = parseFloat(obj[k]); break; } }
+    for(const k of denominatorKeys){ if(obj[k] != null){ den = parseFloat(obj[k]); break; } }
+    if(!isNaN(num) && !isNaN(den) && den > 0) return num / den;
+  }
+  return null;
+}
+
+function omnisendStatusClass(status){
+  const s = String(status || '').toLowerCase();
+  if(s.includes('sent') || s.includes('sending')) return 'tag-won';
+  if(s.includes('draft')) return 'tag-pending';
+  if(s.includes('schedul')) return 'tag-messaging';
+  if(s.includes('paus') || s.includes('cancel')) return 'tag-lost';
+  return 'tag-started';
+}
+
+/* ===== Copy Generator ===== */
+
+async function loadEmailSettings(){
+  try {
+    const res = await fetch('/api/omnisend/email-settings');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    // Server returns { emailVoiceProfile }; keep a `voiceProfile` alias for the rest of this tab.
+    window.__emailSettings = { voiceProfile: data.emailVoiceProfile || data.voiceProfile || '', templates: data.templates || [] };
+  } catch(err){
+    window.__emailSettings = { error: err.message };
+  }
+  emailRerender('copy');
+}
+
+// Saved structure references, read straight from GET /api/omnisend/templates
+// (was previously pulled from the Airtable-backed email-settings payload).
+async function loadEmailTemplates(){
+  try {
+    const res = await fetch('/api/omnisend/templates');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    const list = Array.isArray(data) ? data : (Array.isArray(data.templates) ? data.templates : []);
+    window.__emailTemplates = list.map(t => ({
+      name: t.name || t.templateName || t['Template Name'] || 'Untitled template',
+      createdDate: t.createdDate || t.dateAdded || t.created || t.createdAt || t['Date Added'] || ''
+    }));
+  } catch(err){
+    window.__emailTemplates = { error: err.message };
+  }
+  emailRerender('copy');
+}
+
+function renderEmailTemplatesList(){
+  const t = window.__emailTemplates;
+  if(t === undefined) return '<div class="muted" style="font-size:11.5px;margin-top:8px;"><i class="ti ti-loader-2"></i> Loading templates...</div>';
+  if(t && t.error) return `<div class="muted" style="font-size:11.5px;margin-top:8px;">Could not load templates: ${esc(t.error)}</div>`;
+  if(!t.length) return '';
+  return `
+    <div style="margin-top:10px;">
+      <div class="muted" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;">Structure references on file</div>
+      <ul style="margin:0;padding-left:16px;font-size:11.5px;">
+        ${t.map(x => `<li>${esc(x.name)}${x.createdDate ? ` <span class="muted">— ${esc(fmtDate(x.createdDate))}</span>` : ''}</li>`).join('')}
+      </ul>
+    </div>`;
+}
+
+function saveEmailVoiceProfile(){
+  const el = document.getElementById('emailVoiceProfile');
+  if(!el) return;
+  const voiceProfile = el.value.trim();
+  fetch('/api/omnisend/email-settings', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ emailVoiceProfile: voiceProfile })
+  })
+    .then(res => res.json())
+    .then(data => {
+      if(!data.success){ toast('Could not save voice profile', 'warn'); return; }
+      window.__emailSettings = Object.assign({}, window.__emailSettings, { voiceProfile });
+      toast('Email voice profile saved', 'success');
+    })
+    .catch(err => toast('Could not save voice profile: ' + err.message, 'warn'));
+}
+
+function triggerPastCampaignUpload(){
+  const input = document.getElementById('emailPastCampaignInput');
+  if(input) input.click();
+}
+
+function handlePastCampaignFile(event){
+  const file = event.target.files && event.target.files[0];
+  event.target.value = '';
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onerror = () => toast('Could not read that file', 'warn');
+  reader.onload = () => {
+    const html = String(reader.result || '');
+    if(!html.trim()){ toast('That file looks empty', 'warn'); return; }
+    const btn = document.getElementById('emailPastCampaignBtn');
+    const original = btn ? btn.innerHTML : '';
+    if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Saving...'; }
+    fetch('/api/omnisend/upload-template', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: file.name, html })
+    })
+      .then(res => res.json().then(data => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => {
+        if(!ok || !data.success) throw new Error((data && data.error) || 'Request failed');
+        toast('Saved as a structure reference — its copy is not reused', 'success');
+        window.__emailTemplates = undefined;
+        loadEmailTemplates();
+      })
+      .catch(err => toast('Could not save template: ' + err.message, 'warn'))
+      .finally(() => { if(btn){ btn.disabled = false; btn.innerHTML = original; } });
+  };
+  reader.readAsText(file);
+}
+
+function renderEmailCopyTab(){
+  const s = window.__emailSettings;
+  let voiceCard;
+  if(!s){
+    voiceCard = '<div class="muted"><i class="ti ti-loader-2"></i> Loading...</div>';
+  } else if(s.error){
+    voiceCard = `<div class="muted">Could not load voice profile: ${esc(s.error)}</div>`;
+  } else {
+    voiceCard = `
+      <div class="field"><label>Email voice profile</label>
+        <textarea id="emailVoiceProfile" rows="5" placeholder="How these emails should sound — tone, sentence length, sign-off, the relationship with the reader, words to avoid.">${esc(s.voiceProfile || '')}</textarea>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <button class="btn btn-primary btn-sm" onclick="saveEmailVoiceProfile()"><i class="ti ti-device-floppy"></i> Save voice profile</button>
+        <button class="btn btn-secondary btn-sm" id="emailPastCampaignBtn" onclick="triggerPastCampaignUpload()"><i class="ti ti-upload"></i> Upload past campaign</button>
+        <input type="file" id="emailPastCampaignInput" accept=".html,.htm,text/html" style="display:none;" onchange="handlePastCampaignFile(event)">
+      </div>
+      <p class="muted" style="font-size:11.5px;margin-top:8px;">Uploaded HTML is stored in Email Templates as a <strong>structure reference only</strong> — layout and section order. The copy itself is never reused.</p>
+      ${renderEmailTemplatesList()}
+    `;
+  }
+
+  return `
+  <div class="card" style="margin-bottom:18px;">
+    <div class="section-title"><i class="ti ti-microphone-2"></i> Email Voice Profile</div>
+    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Set once at account level. Passed to the Engine on every email draft.</p>
+    ${voiceCard}
+  </div>
+  ${renderEmailGenerateCard()}
+  ${renderEmailCopyPreview()}
+  ${renderEmailFeedbackPanel()}
+  `;
+}
+
+function renderEmailGenerateCard(){
+  const f = window.__emailCopyForm || {};
+  return `
+  <div class="card" style="margin-bottom:18px;">
+    <div class="section-title"><i class="ti ti-sparkles"></i> Generate Copy</div>
+    <p class="muted" style="font-size:12px;margin-bottom:12px;">Describe what this email needs to do. The Engine drafts subject, preheader, hero image search term, intro, body sections and CTA.</p>
+    <div class="field"><label>Campaign brief</label><textarea id="emailBrief" rows="4" placeholder="e.g. Community Connect — invite Perth members to the September in-person session, highlight the guest speaker, keep it warm and short.">${esc(f.brief || '')}</textarea></div>
+    <button class="btn btn-primary btn-sm" ${window.__emailCopyLoading ? 'disabled' : ''} onclick="runGenerateEmailCopy()"><i class="ti ${window.__emailCopyLoading ? 'ti-loader-2' : 'ti-wand'}"></i> ${window.__emailCopyLoading ? 'Generating...' : 'Generate Copy'}</button>
+  </div>`;
+}
+
+async function runGenerateEmailCopy(){
+  const brief = (document.getElementById('emailBrief') || {}).value || '';
+  window.__emailCopyForm = { brief };
+  window.__emailCopyLoading = true;
+  window.__emailCopy = undefined;
+  window.__emailHeroOptions = undefined;
+  window.__emailCampaignResult = undefined;
+  emailRerender('copy');
+  try {
+    const s = window.__emailSettings || {};
+    const res = await fetch('/api/omnisend/generate-email-copy', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ brief: brief.trim(), voiceProfile: s.voiceProfile || '' })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__emailCopy = normalizeEmailCopy(data.copy || data);
+  } catch(err){
+    window.__emailCopy = { error: err.message };
+  }
+  window.__emailCopyLoading = false;
+  emailRerender('copy');
+}
+
+function normalizeEmailCopy(c){
+  c = c || {};
+  const hero = c.heroImage || c.hero || {};
+  let sections = c.bodySections || c.sections || c.body || [];
+  if(typeof sections === 'string') sections = [{ heading: '', body: sections }];
+  if(!Array.isArray(sections)) sections = [];
+  sections = sections.map(sec => (typeof sec === 'string')
+    ? { heading: '', body: sec }
+    : { heading: sec.heading || sec.title || '', body: sec.body || sec.text || sec.copy || '' });
+  const cta = c.cta || {};
+  return {
+    subject: c.subject || c.subjectLine || '',
+    preheader: c.preheader || c.previewText || '',
+    heroImage: {
+      searchTerm: hero.searchTerm || hero.query || hero.term || c.heroImageSearchTerm || '',
+      url: hero.url || ''
+    },
+    intro: c.intro || c.introduction || '',
+    bodySections: sections.length ? sections : [{ heading: '', body: '' }],
+    cta: {
+      label: cta.label || cta.text || c.ctaLabel || c.ctaText || '',
+      url: cta.url || cta.link || c.ctaUrl || ''
+    }
+  };
+}
+
+// Keep whatever is typed in the feedback panel across a re-render of the
+// Copy Generator tab (adding a section, picking an image, etc.).
+function stashEmailFeedback(){
+  const f = document.getElementById('emailFeedback');
+  const v = document.getElementById('emailFinalVersion');
+  const s = document.getElementById('emailScheduledFor');
+  if(f || v || s){
+    const prev = window.__emailFeedbackState || {};
+    window.__emailFeedbackState = {
+      feedback: f ? f.value : (prev.feedback || ''),
+      finalVersion: v ? v.value : (prev.finalVersion || ''),
+      scheduledFor: s ? s.value : (prev.scheduledFor || '')
+    };
+  }
+}
+
+// Pull the current values out of the editable preview inputs into
+// window.__emailCopy before any action that re-renders the tab, so live
+// edits aren't lost when the image picker or the feedback panel refreshes.
+function collectEmailCopy(){
+  stashEmailFeedback();
+  const c = window.__emailCopy;
+  if(!c || c.error) return;
+  const val = id => { const el = document.getElementById(id); return el ? el.value : undefined; };
+  const set = (k, v) => { if(v !== undefined) c[k] = v; };
+  set('subject', val('emailCopy_subject'));
+  set('preheader', val('emailCopy_preheader'));
+  set('intro', val('emailCopy_intro'));
+  const term = val('emailCopy_heroTerm');
+  if(term !== undefined) c.heroImage.searchTerm = term;
+  const ctaLabel = val('emailCopy_ctaLabel');
+  if(ctaLabel !== undefined) c.cta.label = ctaLabel;
+  const ctaUrl = val('emailCopy_ctaUrl');
+  if(ctaUrl !== undefined) c.cta.url = ctaUrl;
+  c.bodySections.forEach((sec, i) => {
+    const h = val('emailCopy_secHeading_' + i);
+    const b = val('emailCopy_secBody_' + i);
+    if(h !== undefined) sec.heading = h;
+    if(b !== undefined) sec.body = b;
+  });
+}
+
+function emailAddBodySection(){
+  collectEmailCopy();
+  if(!window.__emailCopy || window.__emailCopy.error) return;
+  window.__emailCopy.bodySections.push({ heading: '', body: '' });
+  emailRerender('copy');
+}
+
+function emailRemoveBodySection(i){
+  collectEmailCopy();
+  if(!window.__emailCopy || window.__emailCopy.error) return;
+  window.__emailCopy.bodySections.splice(i, 1);
+  if(!window.__emailCopy.bodySections.length) window.__emailCopy.bodySections.push({ heading: '', body: '' });
+  emailRerender('copy');
+}
+
+async function copyEmailField(key, btn){
+  collectEmailCopy();
+  const c = window.__emailCopy;
+  if(!c || c.error) return;
+  let text = '';
+  if(key === 'subject') text = c.subject;
+  else if(key === 'preheader') text = c.preheader;
+  else if(key === 'intro') text = c.intro;
+  else if(key === 'hero') text = c.heroImage.url || c.heroImage.searchTerm;
+  else if(key === 'cta') text = [c.cta.label, c.cta.url].filter(Boolean).join(' — ');
+  else if(key.indexOf('section:') === 0){
+    const sec = c.bodySections[Number(key.split(':')[1])] || {};
+    text = [sec.heading, sec.body].filter(Boolean).join('\n');
+  }
+  text = text || '';
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch(err){
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); document.body.removeChild(ta);
+  }
+  if(btn){ const o = btn.innerHTML; btn.innerHTML = '<i class="ti ti-check"></i> Copied'; setTimeout(() => { btn.innerHTML = o; }, 1400); }
+}
+
+function emailCopyBtn(key){
+  return `<button class="btn btn-secondary btn-sm" onclick="copyEmailField('${key}', this)"><i class="ti ti-copy"></i> Copy</button>`;
+}
+
+async function fetchEmailHeroImages(){
+  collectEmailCopy();
+  const c = window.__emailCopy;
+  if(!c || c.error) return;
+  const query = (c.heroImage.searchTerm || '').trim();
+  if(!query){ toast('Add a hero image search term first', 'warn'); return; }
+  window.__emailHeroLoading = true;
+  emailRerender('copy');
+  try {
+    const res = await fetch('/api/omnisend/fetch-pexels-image', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ searchTerm: query })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    let opts = data.images || data.photos || data.results || data;
+    if(!Array.isArray(opts)) opts = [];
+    window.__emailHeroOptions = opts.map(o => (typeof o === 'string')
+      ? { url: o, thumb: o }
+      : { url: o.url || o.src || o.original || (o.src && o.src.large) || '', thumb: o.thumbnail || o.thumb || o.preview || (o.src && (o.src.medium || o.src.tiny)) || o.url || '', photographer: o.photographer || '' })
+      .filter(o => o.url)
+      .slice(0, 3);
+  } catch(err){
+    window.__emailHeroOptions = { error: err.message };
+  }
+  window.__emailHeroLoading = false;
+  emailRerender('copy');
+}
+
+function pickEmailHeroImage(url){
+  collectEmailCopy();
+  if(!window.__emailCopy || window.__emailCopy.error) return;
+  window.__emailCopy.heroImage.url = url;
+  emailRerender('copy');
+}
+
+function renderEmailHeroPicker(c){
+  const opts = window.__emailHeroOptions;
+  let picker = '';
+  if(window.__emailHeroLoading){
+    picker = '<div class="muted" style="font-size:12px;margin-top:8px;"><i class="ti ti-loader-2"></i> Finding images...</div>';
+  } else if(opts && opts.error){
+    picker = `<div class="muted" style="font-size:12px;margin-top:8px;">Could not fetch images: ${esc(opts.error)}</div>`;
+  } else if(Array.isArray(opts) && !opts.length){
+    picker = '<div class="muted" style="font-size:12px;margin-top:8px;">No images found for that term.</div>';
+  } else if(Array.isArray(opts)){
+    picker = `<div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap;">
+      ${opts.map(o => `
+        <div onclick="pickEmailHeroImage('${esc(o.url)}')" style="cursor:pointer;border:2px solid ${c.heroImage.url === o.url ? 'var(--primary)' : 'var(--border)'};border-radius:var(--radius-card);overflow:hidden;width:150px;">
+          <img src="${esc(o.thumb || o.url)}" alt="" style="width:100%;height:100px;object-fit:cover;display:block;">
+          ${o.photographer ? `<div class="muted" style="font-size:10px;padding:3px 5px;">${esc(o.photographer)}</div>` : ''}
+        </div>`).join('')}
+    </div>`;
+  }
+  return `
+  <div style="border:1px solid var(--border);border-radius:var(--radius-card);padding:12px;margin-bottom:12px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:6px;">
+      <div style="font-weight:700;font-size:12.5px;">Hero image</div>
+      ${emailCopyBtn('hero')}
+    </div>
+    <div class="field" style="margin-bottom:8px;"><label>Search term</label><input id="emailCopy_heroTerm" value="${esc(c.heroImage.searchTerm)}"></div>
+    <button class="btn btn-secondary btn-sm" ${window.__emailHeroLoading ? 'disabled' : ''} onclick="fetchEmailHeroImages()"><i class="ti ti-photo-search"></i> Find images</button>
+    ${c.heroImage.url ? `<div style="margin-top:10px;"><img src="${esc(c.heroImage.url)}" alt="" style="max-width:100%;border-radius:var(--radius-card);"></div>` : ''}
+    ${picker}
+  </div>`;
+}
+
+function renderEmailCopyPreview(){
+  const c = window.__emailCopy;
+  if(window.__emailCopyLoading){
+    return '<div class="card" style="margin-bottom:18px;"><div class="muted"><i class="ti ti-loader-2"></i> Generating copy...</div></div>';
+  }
+  if(!c) return '';
+  if(c.error){
+    return `<div class="card" style="margin-bottom:18px;"><div class="muted">Could not generate copy: ${esc(c.error)}</div></div>`;
+  }
+  const fieldBlock = (label, id, value, key, rows) => `
+    <div style="border:1px solid var(--border);border-radius:var(--radius-card);padding:12px;margin-bottom:12px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:6px;">
+        <div style="font-weight:700;font-size:12.5px;">${esc(label)}</div>
+        ${emailCopyBtn(key)}
+      </div>
+      ${rows
+        ? `<textarea id="${id}" rows="${rows}">${esc(value)}</textarea>`
+        : `<input id="${id}" value="${esc(value)}">`}
+    </div>`;
+
+  const sections = c.bodySections.map((sec, i) => `
+    <div style="border:1px solid var(--border);border-radius:var(--radius-card);padding:12px;margin-bottom:12px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:6px;">
+        <div style="font-weight:700;font-size:12.5px;">Body section ${i + 1}</div>
+        <div style="display:flex;gap:6px;">
+          ${emailCopyBtn('section:' + i)}
+          <button class="btn btn-ghost btn-sm" onclick="emailRemoveBodySection(${i})" title="Remove section"><i class="ti ti-trash"></i></button>
+        </div>
+      </div>
+      <div class="field" style="margin-bottom:8px;"><label>Heading</label><input id="emailCopy_secHeading_${i}" value="${esc(sec.heading)}"></div>
+      <div class="field" style="margin-bottom:0;"><label>Body</label><textarea id="emailCopy_secBody_${i}" rows="4">${esc(sec.body)}</textarea></div>
+    </div>`).join('');
+
+  return `
+  <div class="card" style="margin-bottom:18px;">
+    <div class="section-title"><i class="ti ti-mail-opened"></i> Editable preview</div>
+    <p class="muted" style="font-size:12px;margin-bottom:12px;">Edit any field. Every section has its own Copy button.</p>
+    ${fieldBlock('Subject line', 'emailCopy_subject', c.subject, 'subject')}
+    ${fieldBlock('Preheader', 'emailCopy_preheader', c.preheader, 'preheader')}
+    ${renderEmailHeroPicker(c)}
+    ${fieldBlock('Intro', 'emailCopy_intro', c.intro, 'intro', 3)}
+    ${sections}
+    <button class="btn btn-secondary btn-sm" onclick="emailAddBodySection()"><i class="ti ti-plus"></i> Add body section</button>
+    <div style="border:1px solid var(--border);border-radius:var(--radius-card);padding:12px;margin-top:12px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:6px;">
+        <div style="font-weight:700;font-size:12.5px;">Call to action</div>
+        ${emailCopyBtn('cta')}
+      </div>
+      <div class="row">
+        <div class="field" style="margin-bottom:0;"><label>Button label</label><input id="emailCopy_ctaLabel" value="${esc(c.cta.label)}"></div>
+        <div class="field" style="margin-bottom:0;"><label>Button URL</label><input id="emailCopy_ctaUrl" value="${esc(c.cta.url)}"></div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function buildEmailCopyText(c){
+  const lines = [];
+  if(c.subject) lines.push('SUBJECT: ' + c.subject);
+  if(c.preheader) lines.push('PREHEADER: ' + c.preheader);
+  lines.push('');
+  if(c.intro) lines.push(c.intro, '');
+  c.bodySections.forEach(sec => {
+    if(sec.heading) lines.push(sec.heading);
+    if(sec.body) lines.push(sec.body);
+    lines.push('');
+  });
+  if(c.cta.label) lines.push('[ ' + c.cta.label + ' ]' + (c.cta.url ? ' ' + c.cta.url : ''));
+  return lines.join('\n').trim();
+}
+
+function buildEmailHtml(c){
+  const sections = c.bodySections.map(sec => `
+    ${sec.heading ? `<h2 style="font-size:18px;margin:24px 0 8px;">${esc(sec.heading)}</h2>` : ''}
+    ${sec.body ? `<p style="font-size:15px;line-height:1.6;margin:0 0 12px;">${esc(sec.body).replace(/\n/g, '<br>')}</p>` : ''}
+  `).join('');
+  return `<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>${esc(c.subject)}</title></head>
+<body style="margin:0;padding:0;background:#f4f4f4;">
+  <span style="display:none;visibility:hidden;opacity:0;height:0;width:0;overflow:hidden;">${esc(c.preheader)}</span>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f4;padding:24px 0;">
+    <tr><td align="center">
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;overflow:hidden;max-width:600px;width:100%;">
+        ${c.heroImage.url ? `<tr><td><img src="${esc(c.heroImage.url)}" alt="" width="600" style="width:100%;display:block;"></td></tr>` : ''}
+        <tr><td style="padding:28px 32px;font-family:Arial,Helvetica,sans-serif;color:#1a1a1a;">
+          ${c.intro ? `<p style="font-size:15px;line-height:1.6;margin:0 0 12px;">${esc(c.intro).replace(/\n/g, '<br>')}</p>` : ''}
+          ${sections}
+          ${c.cta.label ? `<p style="margin:24px 0 0;"><a href="${esc(c.cta.url || '#')}" style="background:#1a1a1a;color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:6px;display:inline-block;font-family:Arial,Helvetica,sans-serif;font-size:14px;font-weight:bold;">${esc(c.cta.label)}</a></p>` : ''}
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+}
+
+/* ===== Feedback panel + approve + create ===== */
+
+function renderEmailFeedbackPanel(){
+  const c = window.__emailCopy;
+  if(!c || c.error || window.__emailCopyLoading) return '';
+  const fb = window.__emailFeedbackState || {};
+  const result = window.__emailCampaignResult;
+  let resultBlock = '';
+  if(window.__emailCampaignCreating){
+    resultBlock = '<div class="muted" style="margin-top:10px;"><i class="ti ti-loader-2"></i> Creating campaign in Omnisend...</div>';
+  } else if(result && result.error){
+    resultBlock = `<div class="muted" style="margin-top:10px;">Could not create the campaign: ${esc(result.error)}</div>`;
+  } else if(result){
+    resultBlock = `<div class="tag tag-won" style="margin-top:12px;"><i class="ti ti-circle-check"></i>&nbsp; Campaign ${result.scheduledFor ? 'scheduled' : 'created'} in Omnisend</div>
+      ${result.scheduledFor ? `<div class="muted" style="font-size:11.5px;margin-top:6px;">Sends ${esc(fmtDate(result.scheduledFor))}</div>` : ''}
+      ${result.url ? `<div style="margin-top:8px;"><a class="btn btn-secondary btn-sm" href="${esc(result.url)}" target="_blank" rel="noopener"><i class="ti ti-external-link"></i> Open in Omnisend</a></div>` : ''}`;
+  }
+  return `
+  <div class="card" style="margin-bottom:18px;">
+    <div class="section-title"><i class="ti ti-message-2"></i> Feedback</div>
+    <div class="field"><label>Written feedback</label><textarea id="emailFeedback" rows="3" placeholder="What to change, what landed, tone notes...">${esc(fb.feedback || '')}</textarea></div>
+    <div class="field"><label>Final version</label><textarea id="emailFinalVersion" rows="10">${esc(fb.finalVersion != null ? fb.finalVersion : buildEmailCopyText(c))}</textarea></div>
+    <div class="field" style="max-width:240px;"><label>Scheduled date <span class="muted" style="text-transform:none;font-weight:400;">(optional)</span></label><input type="date" id="emailScheduledFor" value="${esc(fb.scheduledFor || '')}"></div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+      <button class="btn btn-primary btn-sm" ${window.__emailApproving ? 'disabled' : ''} onclick="approveAndSaveEmailCopy()"><i class="ti ${window.__emailApproving ? 'ti-loader-2' : 'ti-check'}"></i> ${window.__emailApproving ? 'Saving...' : 'Approve and Save'}</button>
+      <button class="btn btn-accent btn-sm" ${window.__emailCampaignCreating ? 'disabled' : ''} onclick="createOmnisendCampaign()"><i class="ti ti-send"></i> Create Campaign in Omnisend</button>
+    </div>
+    ${resultBlock}
+  </div>`;
+}
+
+function readEmailFeedbackState(){
+  collectEmailCopy();
+  window.__emailFeedbackState = {
+    feedback: (document.getElementById('emailFeedback') || {}).value || '',
+    finalVersion: (document.getElementById('emailFinalVersion') || {}).value || '',
+    scheduledFor: (document.getElementById('emailScheduledFor') || {}).value || ''
+  };
+  return window.__emailFeedbackState;
+}
+
+async function approveAndSaveEmailCopy(){
+  const fb = readEmailFeedbackState();
+  window.__emailApproving = true;
+  emailRerender('copy');
+  try {
+    const res = await fetch('/api/omnisend/save-feedback', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        campaignName: ((window.__emailCopy || {}).subject || '').trim() || ((window.__emailCopyForm || {}).brief || '').slice(0, 80),
+        generatedOutput: window.__emailCopy && !window.__emailCopy.error ? buildEmailCopyText(window.__emailCopy) : '',
+        userFeedback: fb.feedback,
+        finalApprovedOutput: fb.finalVersion
+      })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
+    toast('Feedback saved', 'success');
+  } catch(err){
+    toast('Could not save feedback: ' + err.message, 'warn');
+  }
+  window.__emailApproving = false;
+  emailRerender('copy');
+}
+
+async function createOmnisendCampaign(){
+  const fb = readEmailFeedbackState();
+  const c = window.__emailCopy;
+  if(!c || c.error){ toast('Generate copy first', 'warn'); return; }
+  window.__emailCampaignCreating = true;
+  window.__emailCampaignResult = undefined;
+  emailRerender('copy');
+  try {
+    const payload = {
+      name: (c.subject || '').trim() || 'Untitled campaign',
+      subject: c.subject,
+      preheader: c.preheader,
+      htmlContent: buildEmailHtml(c),
+      finalVersion: fb.finalVersion
+    };
+    if(fb.scheduledFor) payload.scheduledFor = fb.scheduledFor;
+    const res = await fetch('/api/omnisend/create-campaign', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    const camp = data.campaign || {};
+    window.__emailCampaignResult = {
+      url: data.url || camp.url || camp.editUrl || '',
+      scheduledFor: data.scheduledFor || ''
+    };
+    toast(data.scheduledFor ? 'Campaign scheduled in Omnisend' : 'Campaign created in Omnisend', 'success');
+  } catch(err){
+    window.__emailCampaignResult = { error: err.message };
+  }
+  window.__emailCampaignCreating = false;
+  emailRerender('copy');
+}
+
+/* ===== Campaigns ===== */
+
+async function loadOmnisendCampaigns(){
+  window.__omnisendCampaigns = null;
+  try {
+    const [cRes, sRes] = await Promise.all([
+      fetch('/api/omnisend/campaigns'),
+      fetch('/api/omnisend/campaign-stats').catch(() => null)
+    ]);
+    const cData = await cRes.json();
+    if(!cRes.ok) throw new Error(cData.error || 'Request failed');
+    const campaigns = Array.isArray(cData.campaigns) ? cData.campaigns : (Array.isArray(cData) ? cData : []);
+    const statsById = {};
+    if(sRes && sRes.ok){
+      const sData = await sRes.json().catch(() => ({}));
+      const statList = Array.isArray(sData.stats) ? sData.stats : (Array.isArray(sData) ? sData : []);
+      statList.forEach(st => {
+        const id = st && (st.campaignId || st.id);
+        if(id != null) statsById[id] = st;
+      });
+      if(sData && sData.byId && typeof sData.byId === 'object') Object.assign(statsById, sData.byId);
+    }
+    window.__omnisendCampaigns = campaigns.map(c => {
+      const id = c.campaignId || c.id;
+      return Object.assign({}, c, { stats: c.stats || statsById[id] || null });
+    });
+  } catch(err){
+    window.__omnisendCampaigns = { error: err.message };
+  }
+  emailRerender('campaigns');
+}
+
+function renderEmailCampaignsTab(){
+  const list = window.__omnisendCampaigns;
+  if(list === null || list === undefined){
+    return '<div class="card"><div class="muted"><i class="ti ti-loader-2"></i> Loading campaigns...</div></div>';
+  }
+  if(list.error){
+    return `<div class="card"><div class="muted">Could not load campaigns: ${esc(list.error)}</div></div>`;
+  }
+  if(!list.length){
+    return '<div class="card"><div class="empty-state">No Omnisend campaigns yet.</div></div>';
+  }
+  return `
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
+    <div class="section-title" style="margin-bottom:0;"><i class="ti ti-mail"></i> Omnisend campaigns</div>
+    <button class="btn btn-secondary btn-sm" onclick="loadOmnisendCampaigns()"><i class="ti ti-refresh"></i> Refresh</button>
+  </div>
+  ${list.map(renderOmnisendCampaignCard).join('')}`;
+}
+
+function renderOmnisendCampaignCard(c){
+  const st = c.stats || {};
+  const open = omnisendRate(st, ['openRate','opensRate','uniqueOpenRate','opened_rate'], ['opened','opens','uniqueOpens'], ['sent','delivered','recipients']);
+  const click = omnisendRate(st, ['clickRate','clicksRate','uniqueClickRate','clicked_rate'], ['clicked','clicks','uniqueClicks'], ['sent','delivered','recipients']);
+  const unsub = omnisendRate(st, ['unsubscribeRate','unsubscribedRate','unsubRate','unsubscribed_rate'], ['unsubscribed','unsubscribes'], ['sent','delivered','recipients']);
+  const sentAt = c.sentAt || c.sendAt || c.sentDate || c.createdAt;
+  const status = c.status || '';
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+      <div>
+        <div style="font-weight:800;font-size:14px;">${esc(c.name || c.subject || 'Untitled campaign')}</div>
+        <div class="muted" style="font-size:12px;margin-top:2px;">${esc(c.subject || '')}${sentAt ? ' &middot; ' + esc(fmtDate(sentAt)) : ''}</div>
+      </div>
+      ${status ? `<span class="tag ${omnisendStatusClass(status)}">${esc(status)}</span>` : ''}
+    </div>
+    <div class="mini-cards">
+      <div class="mini-card"><div class="num">${fmtPctFrac(open)}</div><div class="label">Open rate</div></div>
+      <div class="mini-card"><div class="num">${fmtPctFrac(click)}</div><div class="label">Click rate</div></div>
+      <div class="mini-card"><div class="num">${fmtPctFrac(unsub)}</div><div class="label">Unsubscribe rate</div></div>
+    </div>
+  </div>`;
+}
+
+/* ===== Contacts ===== */
+
+async function loadOmnisendContacts(){
+  window.__omnisendContacts = null;
+  try {
+    const res = await fetch('/api/omnisend/contacts');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__omnisendContacts = Array.isArray(data.contacts) ? data.contacts : (Array.isArray(data) ? data : []);
+  } catch(err){
+    window.__omnisendContacts = { error: err.message };
+  }
+  emailRerender('contacts');
+}
+
+function omnisendContactName(c){
+  return c.name || [c.firstName, c.lastName].filter(Boolean).join(' ') || '';
+}
+
+function omnisendContactTags(c){
+  const t = c.tags || c.segments || [];
+  if(Array.isArray(t)) return t.join(', ');
+  return String(t || '');
+}
+
+function omnisendContactLastEngaged(c){
+  return c.lastEngaged || c.lastEngagedAt || c.lastOpenedAt || c.lastActivityAt || c.updatedAt || '';
+}
+
+function renderEmailContactsTab(){
+  const list = window.__omnisendContacts;
+  if(list === null || list === undefined){
+    return '<div class="card"><div class="muted"><i class="ti ti-loader-2"></i> Loading contacts...</div></div>';
+  }
+  if(list.error){
+    return `<div class="card"><div class="muted">Could not load contacts: ${esc(list.error)}</div></div>`;
+  }
+  if(!list.length){
+    return '<div class="card"><div class="empty-state">No Omnisend contacts found.</div></div>';
+  }
+  const lk = window.__omnisendLinkedIn || {};
+  const rows = list.map((c, i) => {
+    const email = c.email || '';
+    const res = lk[email];
+    let lkCell = `<button class="btn btn-secondary btn-sm" onclick="findOmnisendContactLinkedIn(${i}, this)"><i class="ti ti-brand-linkedin"></i> Find LinkedIn</button>`;
+    if(res && res.loading){
+      lkCell = '<span class="muted" style="font-size:11.5px;"><i class="ti ti-loader-2"></i> Searching...</span>';
+    } else if(res && res.url){
+      lkCell = `<a href="${esc(res.url)}" target="_blank" rel="noopener" style="font-size:11.5px;">${esc(res.title || res.url)}</a>`;
+    } else if(res && res.none){
+      lkCell = '<span class="muted" style="font-size:11.5px;">No confident match</span>';
+    } else if(res && res.error){
+      lkCell = `<span class="muted" style="font-size:11.5px;">Lookup failed: ${esc(res.error)}</span>`;
+    }
+    return `<tr>
+      <td>${esc(email)}</td>
+      <td>${esc(omnisendContactName(c))}</td>
+      <td>${c.status ? `<span class="tag ${omnisendStatusClass(c.status)}">${esc(c.status)}</span>` : '—'}</td>
+      <td style="white-space:normal;">${esc(omnisendContactTags(c)) || '—'}</td>
+      <td>${omnisendContactLastEngaged(c) ? esc(fmtDate(omnisendContactLastEngaged(c))) : '—'}</td>
+      <td>${lkCell}</td>
+      <td><button class="btn btn-secondary btn-sm" onclick="addOmnisendContactToCampaign(${i}, this)"><i class="ti ti-user-plus"></i> Add to Campaign</button></td>
+    </tr>`;
+  }).join('');
+  return `
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
+    <div class="section-title" style="margin-bottom:0;"><i class="ti ti-users"></i> Omnisend contacts (${list.length})</div>
+    <button class="btn btn-secondary btn-sm" onclick="loadOmnisendContacts()"><i class="ti ti-refresh"></i> Refresh</button>
+  </div>
+  <div class="card">
+    <div class="perf-table-wrap">
+    <table class="perf-table">
+      <thead><tr><th>Email</th><th>Name</th><th>Status</th><th>Tags</th><th>Last engaged</th><th>LinkedIn</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    </div>
+  </div>`;
+}
+
+async function findOmnisendContactLinkedIn(i, btn){
+  const c = (window.__omnisendContacts || [])[i];
+  if(!c) return;
+  const email = c.email || '';
+  window.__omnisendLinkedIn = window.__omnisendLinkedIn || {};
+  window.__omnisendLinkedIn[email] = { loading: true };
+  emailRerender('contacts');
+  try {
+    const res = await fetch('/api/omnisend/find-linkedin', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email,
+        firstName: c.firstName || omnisendContactName(c).split(' ')[0] || '',
+        lastName: c.lastName || omnisendContactName(c).split(' ').slice(1).join(' ') || '',
+        company: c.company || c.companyName || ''
+      })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    const url = data.linkedinUrl || data.url || '';
+    window.__omnisendLinkedIn[email] = (data.found || url)
+      ? { url, title: data.name || data.title || data.jobTitle || '' }
+      : { none: true };
+  } catch(err){
+    window.__omnisendLinkedIn[email] = { error: err.message };
+  }
+  emailRerender('contacts');
+}
+
+async function addOmnisendContactToCampaign(i, btn){
+  const c = (window.__omnisendContacts || [])[i];
+  if(!c) return;
+  const email = c.email || '';
+  const name = omnisendContactName(c);
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Adding...'; }
+  let contactId;
+  try {
+    const res = await fetch('/api/omnisend/import-contact', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email,
+        firstName: c.firstName || name.split(' ')[0] || '',
+        lastName: c.lastName || name.split(' ').slice(1).join(' ') || '',
+        company: c.company || c.companyName || ''
+      })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
+    contactId = data.recordId;
+    toast(data.skipped ? 'Contact already in Contacts — Lead Source unchanged' : 'Added to Contacts with Lead Source = Omnisend', 'success');
+  } catch(err){
+    toast('Could not add contact: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-user-plus"></i> Add to Campaign'; }
+    return;
+  }
+  if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-user-plus"></i> Add to Campaign'; }
+  openEmailAddToCampaignModal(contactId, name || email);
+}
+
+function openEmailAddToCampaignModal(contactId, label){
+  const campaigns = (state.campaigns || []).slice().sort((a, b) => {
+    const rank = x => x.status === 'Live' ? 0 : x.status === 'Planning' ? 1 : 2;
+    return rank(a) - rank(b);
+  });
+  const options = campaigns
+    .filter(camp => isAirtableRecordId(camp.id))
+    .map(camp => `<option value="${esc(camp.id)}">${esc(camp.name)}${camp.status ? ' (' + esc(camp.status) + ')' : ''}</option>`).join('');
+  const body = `
+    <p style="font-size:13px;margin-bottom:12px;">Add <strong>${esc(label)}</strong> to a campaign?</p>
+    <div class="field"><label>Campaign</label><select id="emailAddCampaignSelect">${options || '<option value="">No synced campaigns available</option>'}</select></div>
+  `;
+  const footer = `
+    <button class="btn btn-secondary" onclick="closeModal()">Skip</button>
+    <button class="btn btn-primary" onclick="confirmEmailAddToCampaign('${esc(contactId || '')}')"><i class="ti ti-check"></i> Add to campaign</button>
+  `;
+  openModal('Add to campaign', body, footer);
+}
+
+async function confirmEmailAddToCampaign(contactId){
+  const sel = document.getElementById('emailAddCampaignSelect');
+  const campaignId = sel ? sel.value : '';
+  if(!contactId || !campaignId){ closeModal(); return; }
+  const campaign = (state.campaigns || []).find(c => c.id === campaignId);
+  try {
+    const res = await fetch('/api/omnisend/add-to-campaign', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contactId, campaignId })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
+    toast(data.skipped ? 'Already in ' + (campaign ? campaign.name : 'that campaign') : 'Added to ' + (campaign ? campaign.name : 'campaign'), 'success');
+  } catch(err){
+    toast('Could not add to campaign: ' + err.message, 'warn');
+  }
+  closeModal();
+}
+
+/* ===== List Health ===== */
+
+async function loadOmnisendLowEngagement(){
+  window.__omnisendLowEngagement = null;
+  try {
+    const res = await fetch('/api/omnisend/low-engagement');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    const contacts = Array.isArray(data.contacts) ? data.contacts : (Array.isArray(data) ? data : []);
+    window.__omnisendLowEngagement = {
+      count: typeof data.count === 'number' ? data.count : contacts.length,
+      contacts
+    };
+  } catch(err){
+    window.__omnisendLowEngagement = { error: err.message };
+  }
+  emailRerender('health');
+}
+
+function renderEmailListHealthTab(){
+  const d = window.__omnisendLowEngagement;
+  if(d === null || d === undefined){
+    return '<div class="card"><div class="muted"><i class="ti ti-loader-2"></i> Checking list health...</div></div>';
+  }
+  if(d.error){
+    return `<div class="card"><div class="muted">Could not load list health: ${esc(d.error)}</div></div>`;
+  }
+  const contacts = d.contacts || [];
+  const preview = contacts.slice(0, 25);
+  const rows = preview.map(c => `<tr>
+    <td>${esc(c.email || '')}</td>
+    <td>${esc(omnisendContactName(c))}</td>
+    <td>${omnisendContactLastEngaged(c) ? esc(fmtDate(omnisendContactLastEngaged(c))) : '—'}</td>
+  </tr>`).join('');
+  return `
+  <div class="card" style="margin-bottom:18px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-heart-rate-monitor"></i> List health</div>
+      <button class="btn btn-primary btn-sm" ${contacts.length ? '' : 'disabled'} onclick="downloadOmnisendLowEngagementCsv()"><i class="ti ti-download"></i> Download CSV</button>
+    </div>
+    <div class="mini-cards" style="grid-template-columns:repeat(2,1fr);">
+      <div class="mini-card"><div class="num">${d.count}</div><div class="label">Flagged contacts</div></div>
+      <div class="mini-card"><div class="num">${contacts.length}</div><div class="label">In this export</div></div>
+    </div>
+    ${contacts.length ? `
+    <div class="perf-table-wrap">
+    <table class="perf-table">
+      <thead><tr><th>Email</th><th>Name</th><th>Last engaged</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    </div>
+    ${contacts.length > preview.length ? `<p class="muted" style="font-size:11.5px;margin-top:8px;">Showing first ${preview.length} of ${contacts.length}. Download the CSV for the full list.</p>` : ''}
+    ` : '<div class="empty-state">No low-engagement contacts flagged.</div>'}
+  </div>`;
+}
+
+function downloadOmnisendLowEngagementCsv(){
+  const d = window.__omnisendLowEngagement;
+  if(!d || d.error || !d.contacts || !d.contacts.length){ toast('Nothing to export yet', 'warn'); return; }
+  const header = ['Email', 'Name', 'Last engaged'];
+  const lines = [header].concat(d.contacts.map(c => [c.email || '', omnisendContactName(c), omnisendContactLastEngaged(c) || '']));
+  const csv = lines.map(row => row.map(cell => {
+    const s = String(cell == null ? '' : cell);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }).join(',')).join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'omnisend-low-engagement-' + isoDate(TODAY) + '.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 /* ---- Home page signal strip ---- */
