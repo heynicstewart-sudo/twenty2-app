@@ -1406,6 +1406,7 @@ function afterRender(page){
     if(tab === 'seo' && window.__seoCampaigns === undefined) loadSeoCampaigns();
     if(tab === 'seo') initSeoGscCharts();
     if(tab === 'seo') initSeoCampaignCharts();
+    if(tab === 'googleads' && window.__googleAdsData === undefined) loadGoogleAdsData();
     if(tab === 'aeo' && window.__aeoCampaigns === undefined) loadAeoCampaigns();
     if(tab === 'aeo' && window.__aeoPrompts === undefined) loadAeoPrompts();
     if(tab === 'aeo' && window.__aeoRecommendations === undefined) loadAeoRecommendations();
@@ -12376,7 +12377,7 @@ function renderLearningResult(kind, data, recordCount){
 // campaign-name-not-id scoping convention (the backend resolves a campaign
 // name to its Airtable record id itself, same as sales-overview/deals).
 
-const CONTENT_SUBTABS = [['signals','Signals'],['drafts','Draft Centre'],['calendar','Calendar'],['performance','My Performance'],['seo','SEO'],['aeo','AEO'],['settings','Settings']];
+const CONTENT_SUBTABS = [['signals','Signals'],['drafts','Draft Centre'],['calendar','Calendar'],['performance','My Performance'],['seo','SEO'],['aeo','AEO'],['googleads','Google Ads'],['settings','Settings']];
 const CONTENT_FORMATS = ['LinkedIn Post','Blog','Newsletter'];
 const CONTENT_FORMAT_META = {
   'LinkedIn Post': { dotClass:'format-linkedin', label:'LinkedIn' },
@@ -12403,6 +12404,7 @@ function renderContent(){
   ${tab==='performance' ? renderContentPerformanceTab() : ''}
   ${tab==='seo' ? renderContentSeoTab() : ''}
   ${tab==='aeo' ? renderContentAeoTab() : ''}
+  ${tab==='googleads' ? renderContentGoogleAdsTab() : ''}
   ${tab==='settings' ? renderContentSettingsTab() : ''}
   `;
 }
@@ -15366,6 +15368,488 @@ function saveContentSettings(){
       renderPage();
     })
     .catch(err=>toast('Could not save voice profile: '+err.message,'warn'));
+}
+
+/* ---- Google Ads sub-tab ---- */
+// Reads a 5-tab Google Sheet mirror of the Google Ads account via
+// GET /api/google-ads/data (server caches it for an hour). Dashboard +
+// campaign / keyword / search-term tables are computed client-side with
+// forgiving column matching (gaField / gaNum / gaPct) because the exact
+// sheet headers vary by export. "Analyse with Engine" -> typed insight
+// cards (same style as the SEO Engine Insights). "Draft Campaign" ->
+// a ready-to-build structure with per-section copy buttons.
+
+const GA_SEARCH_TERM_MIN_IMPRESSIONS = 50; // 0-click terms at or above this = negative keyword candidates (red)
+
+function gaFieldRaw(rec, names){
+  if(!rec || typeof rec !== 'object') return undefined;
+  const norm = s => String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9]/g,'');
+  const keys = Object.keys(rec);
+  for(const want of names){
+    const w = norm(want);
+    const hit = keys.find(k => norm(k) === w);
+    if(hit !== undefined) return rec[hit];
+  }
+  for(const want of names){
+    const w = norm(want);
+    const hit = keys.find(k => norm(k).includes(w));
+    if(hit !== undefined) return rec[hit];
+  }
+  return undefined;
+}
+
+function gaField(rec, names){
+  const v = gaFieldRaw(rec, names);
+  return (v == null) ? '' : String(v).trim();
+}
+
+// Number out of a Google Ads cell - strips currency symbols, thousands
+// separators, "AUD", and "--" placeholders. A trailing % yields a fraction.
+function gaNum(v){
+  if(v == null || v === '') return 0;
+  if(typeof v === 'number') return isFinite(v) ? v : 0;
+  let s = String(v).trim();
+  if(!s || s === '--' || s === '—' || /^n\/?a$/i.test(s)) return 0;
+  const isPct = s.includes('%');
+  s = s.replace(/[^0-9.\-]/g,'');
+  const n = parseFloat(s);
+  if(isNaN(n)) return 0;
+  return isPct ? n/100 : n;
+}
+
+// Rate cell (CTR, impression share) normalised to a 0-1 fraction whether
+// the sheet stored "12.3%", 0.123, or 12.3.
+function gaPct(v){
+  if(v == null || v === '') return 0;
+  const hadPct = String(v).includes('%');
+  let n = gaNum(v);
+  if(hadPct) return n;
+  return n > 1 ? n/100 : n;
+}
+
+function gaFmtInt(n){ return Math.round(n || 0).toLocaleString(); }
+function gaFmtMoney(n){ return '$' + (n || 0).toLocaleString(undefined, { minimumFractionDigits:2, maximumFractionDigits:2 }); }
+function gaFmtPct(frac){ return (frac == null ? 0 : frac*100).toFixed(2) + '%'; }
+
+function gaRecords(tab){
+  const d = window.__googleAdsData;
+  if(!d || d.error || !d.sheets || !d.sheets[tab]) return [];
+  return Array.isArray(d.sheets[tab].records) ? d.sheets[tab].records : [];
+}
+
+function gaCampaignName(rec){ return gaField(rec, ['Campaign','Campaign name']) || '—'; }
+
+function gaIsActive(rec){
+  const st = gaField(rec, ['Campaign state','Campaign status','Status','State']).toLowerCase();
+  if(!st) return true; // no state column - count everything
+  return st.includes('enabl') || st.includes('active') || st.includes('eligible');
+}
+
+async function loadGoogleAdsData(force){
+  if(window.__googleAdsData !== undefined && !force) return;
+  if(window.__googleAdsDataLoading) return;
+  window.__googleAdsDataLoading = true;
+  if(force){ window.__googleAdsData = undefined; window.__googleAdsInsights = undefined; }
+  if(state.currentPage === 'content' && window.__contentSubTab === 'googleads') renderPage();
+  try {
+    const res = await fetch('/api/google-ads/data' + (force ? '?refresh=1' : ''));
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__googleAdsData = data;
+  } catch(err){
+    window.__googleAdsData = { error: err.message };
+  }
+  window.__googleAdsDataLoading = false;
+  if(state.currentPage === 'content' && window.__contentSubTab === 'googleads') renderPage();
+}
+
+function renderContentGoogleAdsTab(){
+  return `
+  ${renderGoogleAdsDashboard()}
+  ${renderGoogleAdsCampaignsTable()}
+  ${renderGoogleAdsKeywordsTable()}
+  ${renderGoogleAdsSearchTermsTable()}
+  ${renderGoogleAdsInsightsSection()}
+  ${renderGoogleAdsDraftSection()}
+  `;
+}
+
+function renderGoogleAdsDashboard(){
+  const d = window.__googleAdsData;
+  const refreshBtn = `<button class="btn btn-secondary btn-sm" onclick="loadGoogleAdsData(true)"><i class="ti ti-refresh"></i> Refresh</button>`;
+  let body;
+  if(window.__googleAdsDataLoading || d === undefined){
+    body = '<div class="muted"><i class="ti ti-loader-2"></i> Loading Google Ads data...</div>';
+  } else if(d && d.error){
+    body = `<div class="muted">Could not load Google Ads data: ${esc(d.error)}</div>`;
+  } else {
+    const campaigns = gaRecords('Campaigns').filter(gaIsActive);
+    let spend = 0, clicks = 0, impressions = 0;
+    campaigns.forEach(c => {
+      spend += gaNum(gaFieldRaw(c, ['Cost','Spend','Amount spent']));
+      clicks += gaNum(gaFieldRaw(c, ['Clicks']));
+      impressions += gaNum(gaFieldRaw(c, ['Impr.','Impressions','Impr']));
+    });
+    const ctr = impressions ? clicks/impressions : 0;
+    const cpc = clicks ? spend/clicks : 0;
+    body = `
+      <p class="muted" style="font-size:12px;margin:-4px 0 12px;">Last 30 days, active campaigns${d.fetchedAt ? ` &middot; data pulled ${esc(new Date(d.fetchedAt).toLocaleString())}` : ''}</p>
+      <div class="mini-cards">
+        <div class="mini-card"><div class="num">${gaFmtMoney(spend)}</div><div class="label">Total spend</div></div>
+        <div class="mini-card"><div class="num">${gaFmtInt(clicks)}</div><div class="label">Clicks</div></div>
+        <div class="mini-card"><div class="num">${gaFmtInt(impressions)}</div><div class="label">Impressions</div></div>
+        <div class="mini-card"><div class="num">${gaFmtPct(ctr)}</div><div class="label">Avg CTR</div></div>
+        <div class="mini-card"><div class="num">${gaFmtMoney(cpc)}</div><div class="label">Avg CPC</div></div>
+      </div>`;
+  }
+  return `
+  <div class="card" style="margin-bottom:18px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-brand-google"></i> Google Ads Dashboard</div>
+      ${refreshBtn}
+    </div>
+    ${body}
+  </div>`;
+}
+
+function renderGoogleAdsCampaignsTable(){
+  const d = window.__googleAdsData;
+  if(!d || d.error || window.__googleAdsDataLoading) return '';
+  const rows = gaRecords('Campaigns').map(c => {
+    const spend = gaNum(gaFieldRaw(c, ['Cost','Spend','Amount spent']));
+    const clicks = gaNum(gaFieldRaw(c, ['Clicks']));
+    const impressions = gaNum(gaFieldRaw(c, ['Impr.','Impressions','Impr']));
+    const ctrRaw = gaFieldRaw(c, ['CTR']);
+    return {
+      name: gaCampaignName(c),
+      state: gaField(c, ['Campaign state','Campaign status','Status','State']),
+      spend, clicks,
+      ctr: ctrRaw != null && ctrRaw !== '' ? gaPct(ctrRaw) : (impressions ? clicks/impressions : 0),
+      cpc: (() => { const raw = gaFieldRaw(c, ['Avg. CPC','Avg CPC','CPC']); return (raw != null && raw !== '') ? gaNum(raw) : (clicks ? spend/clicks : 0); })()
+    };
+  }).sort((a,b) => b.spend - a.spend);
+  let inner;
+  if(!rows.length){
+    inner = '<div class="empty-state">No campaigns in the sheet.</div>';
+  } else {
+    inner = `
+    <div class="perf-table-wrap">
+    <table class="perf-table">
+      <thead><tr><th>Campaign</th><th>Spend</th><th>Clicks</th><th>CTR</th><th>CPC</th></tr></thead>
+      <tbody>
+      ${rows.map(r => `<tr>
+        <td>${esc(r.name)}${r.state && !/enabl|active/i.test(r.state) ? ` <span class="tag tag-pending">${esc(r.state)}</span>` : ''}</td>
+        <td>${gaFmtMoney(r.spend)}</td>
+        <td>${gaFmtInt(r.clicks)}</td>
+        <td>${gaFmtPct(r.ctr)}</td>
+        <td>${gaFmtMoney(r.cpc)}</td>
+      </tr>`).join('')}
+      </tbody>
+    </table>
+    </div>`;
+  }
+  return `
+  <div class="card" style="margin-bottom:18px;">
+    <div class="section-title"><i class="ti ti-speakerphone"></i> Campaigns</div>
+    <p class="muted" style="font-size:12px;margin-bottom:10px;">All campaigns, highest spend first.</p>
+    ${inner}
+  </div>`;
+}
+
+function renderGoogleAdsKeywordsTable(){
+  const d = window.__googleAdsData;
+  if(!d || d.error || window.__googleAdsDataLoading) return '';
+  const rows = gaRecords('Keywords').map(k => {
+    const spend = gaNum(gaFieldRaw(k, ['Cost','Spend']));
+    const clicks = gaNum(gaFieldRaw(k, ['Clicks']));
+    const impressions = gaNum(gaFieldRaw(k, ['Impr.','Impressions','Impr']));
+    const ctrRaw = gaFieldRaw(k, ['CTR']);
+    const cpcRaw = gaFieldRaw(k, ['Avg. CPC','Avg CPC','CPC']);
+    return {
+      keyword: gaField(k, ['Keyword','Search keyword','Keyword text']) || '—',
+      campaign: gaCampaignName(k),
+      impressions, clicks, spend,
+      ctr: (ctrRaw != null && ctrRaw !== '') ? gaPct(ctrRaw) : (impressions ? clicks/impressions : 0),
+      cpc: (cpcRaw != null && cpcRaw !== '') ? gaNum(cpcRaw) : (clicks ? spend/clicks : 0),
+      qs: gaField(k, ['Quality score','Qual. score','Quality Score']) || '—',
+      is: (() => { const raw = gaFieldRaw(k, ['Search impr. share','Search impression share','Impr. share','Search Impr Share']); return (raw != null && raw !== '') ? gaFmtPct(gaPct(raw)) : '—'; })()
+    };
+  }).sort((a,b) => b.spend - a.spend).slice(0, 20);
+  let inner;
+  if(!rows.length){
+    inner = '<div class="empty-state">No keywords in the sheet.</div>';
+  } else {
+    inner = `
+    <div class="perf-table-wrap">
+    <table class="perf-table">
+      <thead><tr><th>Keyword</th><th>Campaign</th><th>Impr.</th><th>Clicks</th><th>CTR</th><th>CPC</th><th>QS</th><th>Impr. share</th></tr></thead>
+      <tbody>
+      ${rows.map(r => `<tr>
+        <td>${esc(r.keyword)}</td>
+        <td>${esc(r.campaign)}</td>
+        <td>${gaFmtInt(r.impressions)}</td>
+        <td>${gaFmtInt(r.clicks)}</td>
+        <td>${gaFmtPct(r.ctr)}</td>
+        <td>${gaFmtMoney(r.cpc)}</td>
+        <td>${esc(r.qs)}</td>
+        <td>${esc(r.is)}</td>
+      </tr>`).join('')}
+      </tbody>
+    </table>
+    </div>`;
+  }
+  return `
+  <div class="card" style="margin-bottom:18px;">
+    <div class="section-title"><i class="ti ti-key"></i> Keywords</div>
+    <p class="muted" style="font-size:12px;margin-bottom:10px;">Top 20 keywords by spend.</p>
+    ${inner}
+  </div>`;
+}
+
+function renderGoogleAdsSearchTermsTable(){
+  const d = window.__googleAdsData;
+  if(!d || d.error || window.__googleAdsDataLoading) return '';
+  const rows = gaRecords('Search Terms').map(t => {
+    const clicks = gaNum(gaFieldRaw(t, ['Clicks']));
+    const impressions = gaNum(gaFieldRaw(t, ['Impr.','Impressions','Impr']));
+    const ctrRaw = gaFieldRaw(t, ['CTR']);
+    return {
+      term: gaField(t, ['Search term','Search Term','Query']) || '—',
+      campaign: gaCampaignName(t),
+      impressions, clicks,
+      ctr: (ctrRaw != null && ctrRaw !== '') ? gaPct(ctrRaw) : (impressions ? clicks/impressions : 0),
+      cost: gaNum(gaFieldRaw(t, ['Cost','Spend'])),
+      candidate: clicks === 0 && impressions >= GA_SEARCH_TERM_MIN_IMPRESSIONS
+    };
+  }).sort((a,b) => b.impressions - a.impressions).slice(0, 20);
+  let inner;
+  if(!rows.length){
+    inner = '<div class="empty-state">No search terms in the sheet.</div>';
+  } else {
+    inner = `
+    <div class="perf-table-wrap">
+    <table class="perf-table">
+      <thead><tr><th>Search term</th><th>Campaign</th><th>Impr.</th><th>Clicks</th><th>CTR</th><th>Cost</th></tr></thead>
+      <tbody>
+      ${rows.map(r => `<tr${r.candidate ? ' style="background:rgba(224,49,49,0.08);"' : ''}>
+        <td>${esc(r.term)}${r.candidate ? ' <span class="tag tag-lost">negative kw?</span>' : ''}</td>
+        <td>${esc(r.campaign)}</td>
+        <td>${gaFmtInt(r.impressions)}</td>
+        <td>${gaFmtInt(r.clicks)}</td>
+        <td>${gaFmtPct(r.ctr)}</td>
+        <td>${gaFmtMoney(r.cost)}</td>
+      </tr>`).join('')}
+      </tbody>
+    </table>
+    </div>`;
+  }
+  return `
+  <div class="card" style="margin-bottom:18px;">
+    <div class="section-title"><i class="ti ti-search"></i> Search Terms</div>
+    <p class="muted" style="font-size:12px;margin-bottom:10px;">Top 20 search terms by impressions. Rows in red have impressions but zero clicks - negative keyword candidates.</p>
+    ${inner}
+  </div>`;
+}
+
+// ---- Engine Insights ----
+
+const GA_INSIGHT_META = {
+  budget:        { label:'Budget',        cls:'tag-messaging' },
+  keyword:       { label:'Keyword',       cls:'tag-started' },
+  search_term:   { label:'Search term',   cls:'tag-lost' },
+  quality_score: { label:'Quality score', cls:'tag-pending' },
+  ad_copy:       { label:'Ad copy',       cls:'tag-messaging' },
+  seo_overlap:   { label:'SEO overlap',   cls:'tag-won' }
+};
+
+async function loadGoogleAdsInsights(){
+  const d = window.__googleAdsData;
+  if(!d || d.error){ toast('Load the Google Ads data first', 'warn'); return; }
+  if(window.__googleAdsInsightsLoading) return;
+  window.__googleAdsInsightsLoading = true;
+  renderPage();
+  try {
+    const res = await fetch('/api/google-ads/insights', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({})
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__googleAdsInsights = Array.isArray(data.insights) ? data.insights : [];
+  } catch(err){
+    window.__googleAdsInsights = { error: err.message };
+  }
+  window.__googleAdsInsightsLoading = false;
+  renderPage();
+}
+
+function renderGoogleAdsInsightsSection(){
+  const list = window.__googleAdsInsights;
+  const d = window.__googleAdsData;
+  const canAnalyse = d && !d.error && !window.__googleAdsDataLoading;
+  const btn = `<button class="btn btn-primary btn-sm" ${(!canAnalyse || window.__googleAdsInsightsLoading) ? 'disabled' : ''} onclick="loadGoogleAdsInsights()"><i class="ti ${window.__googleAdsInsightsLoading ? 'ti-loader-2' : 'ti-bulb-filled'}"></i> ${window.__googleAdsInsightsLoading ? 'Analysing...' : 'Analyse with Engine'}</button>`;
+  let body = '';
+  if(window.__googleAdsInsightsLoading){
+    body = '<div class="muted"><i class="ti ti-loader-2"></i> Analysing campaigns...</div>';
+  } else if(list && list.error){
+    body = `<div class="muted">Could not load insights: ${esc(list.error)}</div>`;
+  } else if(Array.isArray(list) && !list.length){
+    body = '<div class="empty-state">No insights surfaced from the current data.</div>';
+  } else if(Array.isArray(list)){
+    body = `<div style="display:flex;flex-direction:column;gap:10px;">${list.map(renderGoogleAdsInsightCard).join('')}</div>`;
+  }
+  return `
+  <div class="card" style="margin-bottom:18px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-bulb-filled"></i> Engine Insights</div>
+      ${btn}
+    </div>
+    ${body}
+  </div>`;
+}
+
+function renderGoogleAdsInsightCard(ins){
+  const meta = GA_INSIGHT_META[ins.type] || { label: ins.type || 'Insight', cls:'tag-pending' };
+  return `
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card);padding:14px;">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
+      <div style="font-weight:700;font-size:13px;">${esc(ins.title || 'Insight')}</div>
+      <span class="tag ${meta.cls}">${esc(meta.label)}</span>
+    </div>
+    ${ins.detail ? `<div class="muted" style="font-size:12px;margin-top:6px;">${esc(ins.detail)}</div>` : ''}
+    ${ins.action ? `<div style="font-size:12px;margin-top:4px;"><strong>Action:</strong> ${esc(ins.action)}</div>` : ''}
+  </div>`;
+}
+
+// ---- Draft Campaign ----
+
+async function googleAdsCopy(key, btn){
+  const text = (window.__googleAdsDraftSections || {})[key] || '';
+  if(!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch(err){
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+  }
+  if(btn){ const o = btn.innerHTML; btn.innerHTML = '<i class="ti ti-check"></i> Copied'; setTimeout(() => { btn.innerHTML = o; }, 1500); }
+}
+
+async function runGoogleAdsDraftCampaign(){
+  const goal = (document.getElementById('gaDraftGoal') || {}).value || '';
+  const targetKeywords = (document.getElementById('gaDraftKeywords') || {}).value || '';
+  const budget = (document.getElementById('gaDraftBudget') || {}).value || '';
+  window.__googleAdsDraftForm = { goal, targetKeywords, budget };
+  if(!goal.trim()){ toast('Add a goal for the campaign', 'warn'); return; }
+  window.__googleAdsDraftLoading = true;
+  window.__googleAdsDraft = undefined;
+  renderPage();
+  try {
+    const res = await fetch('/api/google-ads/draft-campaign', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ goal: goal.trim(), targetKeywords: targetKeywords.trim(), budget: budget.trim() })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__googleAdsDraft = data.draft || {};
+  } catch(err){
+    window.__googleAdsDraft = { error: err.message };
+  }
+  window.__googleAdsDraftLoading = false;
+  renderPage();
+}
+
+function renderGoogleAdsDraftSection(){
+  const draft = window.__googleAdsDraft;
+  const g = window.__googleAdsDraftForm || {};
+  let preview = '';
+  if(window.__googleAdsDraftLoading){
+    preview = '<div class="muted" style="margin-top:14px;"><i class="ti ti-loader-2"></i> Drafting campaign...</div>';
+  } else if(draft && draft.error){
+    preview = `<div class="muted" style="margin-top:14px;">Could not draft the campaign: ${esc(draft.error)}</div>`;
+  } else if(draft){
+    preview = renderGoogleAdsDraftPreview(draft);
+  }
+  return `
+  <div class="card" style="margin-bottom:18px;">
+    <div class="section-title"><i class="ti ti-file-plus"></i> Draft Campaign</div>
+    <p class="muted" style="font-size:12px;margin-bottom:12px;">Describe the goal and seed keywords. The Engine drafts a ready-to-build Search campaign using your existing campaigns for context.</p>
+    <div class="field"><label>Goal</label><input id="gaDraftGoal" placeholder="e.g. Generate enquiries for change management consulting from Perth enterprises" value="${esc(g.goal || '')}"></div>
+    <div class="field"><label>Target keywords (comma separated)</label><textarea id="gaDraftKeywords" rows="3" placeholder="change management consulting perth, agile coaching perth, organisational change consultant">${esc(g.targetKeywords || '')}</textarea></div>
+    <div class="field" style="max-width:220px;"><label>Daily budget (AUD)</label><input id="gaDraftBudget" type="number" min="0" step="1" placeholder="50" value="${esc(g.budget || '')}"></div>
+    <button class="btn btn-primary btn-sm" ${window.__googleAdsDraftLoading ? 'disabled' : ''} onclick="runGoogleAdsDraftCampaign()"><i class="ti ti-sparkles"></i> Draft Campaign</button>
+    ${preview}
+  </div>`;
+}
+
+function gaCopyBtn(key){
+  return `<button class="btn btn-secondary btn-sm" onclick="googleAdsCopy('${key}', this)"><i class="ti ti-copy"></i> Copy</button>`;
+}
+
+function renderGoogleAdsDraftPreview(draft){
+  const sections = {};
+  const adGroups = Array.isArray(draft.adGroups) ? draft.adGroups : [];
+  const adSets = Array.isArray(draft.adSets) ? draft.adSets : [];
+
+  sections.name = draft.campaignName || '';
+  sections.keywords = adGroups.map(ag => {
+    const kws = (Array.isArray(ag.keywords) ? ag.keywords : []).map(k => {
+      const kw = (k && k.keyword) || '';
+      const mt = (k && k.matchType) || 'phrase';
+      if(mt === 'exact') return `[${kw}]`;
+      if(mt === 'broad') return kw;
+      return `"${kw}"`;
+    });
+    const negs = (Array.isArray(ag.negativeKeywords) ? ag.negativeKeywords : []).map(n => `-${n}`);
+    return `${ag.name || 'Ad group'}\n${kws.join('\n')}${negs.length ? `\nNegatives:\n${negs.join('\n')}` : ''}`;
+  }).join('\n\n');
+  adSets.forEach((set, i) => {
+    const h = (Array.isArray(set.headlines) ? set.headlines : []).join('\n');
+    const desc = (Array.isArray(set.descriptions) ? set.descriptions : []).join('\n');
+    sections['adset' + i] = `HEADLINES\n${h}\n\nDESCRIPTIONS\n${desc}`;
+  });
+  window.__googleAdsDraftSections = sections;
+
+  const agBlock = adGroups.map(ag => `
+    <div style="border:1px solid var(--border);border-radius:var(--radius-card);padding:12px;margin-bottom:10px;">
+      <div style="font-weight:700;font-size:12.5px;margin-bottom:6px;">${esc(ag.name || 'Ad group')}</div>
+      <div style="font-size:12px;line-height:1.7;">
+        ${(Array.isArray(ag.keywords) ? ag.keywords : []).map(k => `<div>${esc((k && k.keyword) || '')} <span class="muted">${esc((k && k.matchType) || 'phrase')}</span></div>`).join('')}
+        ${(Array.isArray(ag.negativeKeywords) && ag.negativeKeywords.length) ? `<div class="muted" style="margin-top:6px;">Negatives: ${ag.negativeKeywords.map(esc).join(', ')}</div>` : ''}
+      </div>
+    </div>`).join('');
+
+  const adSetBlock = adSets.map((set, i) => `
+    <div style="border:1px solid var(--border);border-radius:var(--radius-card);padding:12px;margin-bottom:10px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:6px;">
+        <div style="font-weight:700;font-size:12.5px;">Ad set ${i + 1}</div>
+        ${gaCopyBtn('adset' + i)}
+      </div>
+      <div style="font-size:12px;"><strong>Headlines</strong><div style="line-height:1.7;">${(Array.isArray(set.headlines) ? set.headlines : []).map(h => `<div>${esc(h)}</div>`).join('')}</div></div>
+      <div style="font-size:12px;margin-top:6px;"><strong>Descriptions</strong><div style="line-height:1.7;">${(Array.isArray(set.descriptions) ? set.descriptions : []).map(dsc => `<div>${esc(dsc)}</div>`).join('')}</div></div>
+    </div>`).join('');
+
+  return `
+  <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:14px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px;">
+      <div class="section-title" style="font-size:13px;margin-bottom:0;">${esc(draft.campaignName || 'Drafted campaign')}</div>
+      ${gaCopyBtn('name')}
+    </div>
+    ${draft.dailyBudget ? `<div class="muted" style="font-size:12px;margin-bottom:12px;">Suggested daily budget: ${esc(draft.dailyBudget)}</div>` : ''}
+
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin:6px 0;">
+      <div style="font-weight:700;font-size:12.5px;">Ad groups &amp; keywords</div>
+      ${gaCopyBtn('keywords')}
+    </div>
+    ${agBlock || '<div class="muted" style="font-size:12px;">No ad groups returned.</div>'}
+
+    <div style="font-weight:700;font-size:12.5px;margin:10px 0 6px;">Ad sets</div>
+    ${adSetBlock || '<div class="muted" style="font-size:12px;">No ad sets returned.</div>'}
+  </div>`;
 }
 
 /* ---- Home page signal strip ---- */

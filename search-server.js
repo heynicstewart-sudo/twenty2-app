@@ -12333,6 +12333,255 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
   }
 });
 
+// ===================== GOOGLE ADS (Marketing tab) =====================
+// Reads a 5-tab Google Sheet (Campaigns, Keywords, Ads, Search Terms, Ad
+// Groups) that mirrors a Google Ads account export, via the Google Sheets
+// API. Auth is the same GSC_SERVICE_ACCOUNT_JSON service account used for
+// the Search Console code above - the sheet is shared with that account's
+// client_email as a viewer. /data batch-reads all 5 tabs and caches the
+// result in memory for an hour; /insights and /draft-campaign layer
+// claude-opus-4-6 on top of the same data.
+const GOOGLE_ADS_SHEET_ID = process.env.GOOGLE_ADS_SHEET_ID || '1_2nSes09zHgNHxcwGGS3dMuEIE1BlogouqwSSgH4e2w';
+const GOOGLE_ADS_SHEET_TABS = ['Campaigns', 'Keywords', 'Ads', 'Search Terms', 'Ad Groups'];
+const GOOGLE_ADS_SHEETS_SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly'];
+const GOOGLE_ADS_CACHE_MS = 60 * 60 * 1000;
+let googleAdsDataCache = null; // { at: epochMs, data }
+
+async function getGoogleSheetsClient() {
+  const raw = process.env.GSC_SERVICE_ACCOUNT_JSON;
+  if (!raw) throw new Error('GSC_SERVICE_ACCOUNT_JSON not configured');
+  let creds;
+  try {
+    creds = JSON.parse(raw);
+  } catch (err) {
+    throw new Error('GSC_SERVICE_ACCOUNT_JSON is not valid JSON');
+  }
+  const { google } = require('googleapis');
+  const auth = new google.auth.JWT({
+    email: creds.client_email,
+    key: creds.private_key,
+    scopes: GOOGLE_ADS_SHEETS_SCOPES
+  });
+  return google.sheets({ version: 'v4', auth });
+}
+
+// One sheet tab's raw cell grid -> { headers, records }. Google Ads
+// exports often put a report title on row 1 and the real column header on
+// row 2, so the header is taken as whichever of the first two rows has
+// more non-empty cells. Trailing "Total" summary rows are dropped.
+function googleAdsRowsToRecords(values) {
+  const rows = Array.isArray(values) ? values : [];
+  if (!rows.length) return { headers: [], records: [] };
+  let headerIdx = 0;
+  if (rows.length > 1) {
+    const c0 = (rows[0] || []).filter(c => String(c == null ? '' : c).trim()).length;
+    const c1 = (rows[1] || []).filter(c => String(c == null ? '' : c).trim()).length;
+    if (c1 > c0) headerIdx = 1;
+  }
+  const headers = (rows[headerIdx] || []).map(h => String(h == null ? '' : h).trim());
+  const records = [];
+  for (let i = headerIdx + 1; i < rows.length; i++) {
+    const row = rows[i] || [];
+    if (!row.filter(c => String(c == null ? '' : c).trim()).length) continue;
+    const first = String(row[0] == null ? '' : row[0]).trim().toLowerCase();
+    if (first === 'total' || first.startsWith('total:') || first.startsWith('total ')) continue;
+    const rec = {};
+    headers.forEach((h, idx) => { if (h) rec[h] = row[idx] == null ? '' : row[idx]; });
+    records.push(rec);
+  }
+  return { headers, records };
+}
+
+async function fetchGoogleAdsData(force) {
+  if (!force && googleAdsDataCache && (Date.now() - googleAdsDataCache.at) < GOOGLE_ADS_CACHE_MS) {
+    return { ...googleAdsDataCache.data, cached: true };
+  }
+  const sheets = await getGoogleSheetsClient();
+  const resp = await sheets.spreadsheets.values.batchGet({
+    spreadsheetId: GOOGLE_ADS_SHEET_ID,
+    ranges: GOOGLE_ADS_SHEET_TABS.map(t => `'${t}'!A1:BZ5000`)
+  });
+  const valueRanges = (resp.data && resp.data.valueRanges) || [];
+  const out = {};
+  GOOGLE_ADS_SHEET_TABS.forEach((tab, idx) => {
+    const vr = valueRanges[idx] || {};
+    out[tab] = googleAdsRowsToRecords(vr.values);
+  });
+  const data = {
+    sheetId: GOOGLE_ADS_SHEET_ID,
+    fetchedAt: new Date().toISOString(),
+    cached: false,
+    sheets: out
+  };
+  googleAdsDataCache = { at: Date.now(), data };
+  return data;
+}
+
+// GET /api/google-ads/data - all 5 sheets as { sheets: { <tab>: { headers,
+// records } } }. ?refresh=1 bypasses the 1-hour cache.
+app.get('/api/google-ads/data', async (req, res) => {
+  if (!process.env.GSC_SERVICE_ACCOUNT_JSON) return res.status(500).json({ error: 'GSC_SERVICE_ACCOUNT_JSON not configured' });
+  try {
+    const data = await fetchGoogleAdsData(req.query.refresh === '1' || req.query.refresh === 'true');
+    res.json(data);
+  } catch (err) {
+    console.error('Google Ads data error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/google-ads/insights - sheet data + the Airtable Keywords table
+// (SEO targets) -> claude-opus-4-6 -> typed insight cards. Card types:
+// budget, keyword, search_term, quality_score, ad_copy, seo_overlap.
+const GOOGLE_ADS_INSIGHTS_SYSTEM_PROMPT = `You are a Google Ads strategist analysing a Google Ads account for Twenty2 Collective, a Perth-based Agile and change management consultancy (UK/AU English, no em dashes). You are given exported Google Ads data (campaigns, keywords, ads, search terms, ad groups) and the list of keywords Twenty2 targets organically in SEO.
+
+Return a JSON array of insight cards. Each card has exactly these fields: type, title, detail, action.
+type must be one of:
+- budget: shift budget between campaigns based on cost versus conversions, CTR and CPC efficiency.
+- keyword: specific keywords to pause, add, or change match type / bid.
+- search_term: search terms from the Search Terms data that are wasting spend and should be added as negative keywords (flag terms with clicks or cost but no conversions, or clearly off-topic terms).
+- quality_score: keywords with a low Quality Score (6 or below) that are inflating CPC, naming what to fix (ad relevance, landing page experience, expected CTR).
+- ad_copy: ad copy improvements for ad groups whose CTR is below the account average.
+- seo_overlap: keywords Twenty2 pays for on Google Ads that also appear in its SEO target list. For each, decide "reinforce" (keep paying while the organic ranking is weak) or "pull back" (already ranking organically, stop paying) and state which in the action.
+
+title: short and specific. detail: one or two sentences citing the specific numbers from the data. action: the exact step to take.
+Return only valid JSON: an array of card objects. No commentary, no markdown.`;
+
+app.post('/api/google-ads/insights', async (req, res) => {
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  try {
+    const data = await fetchGoogleAdsData(false);
+
+    let seoKeywords = [];
+    try {
+      await ensureKeywordsTable();
+      const recs = await airtableFetchAllRecords(KEYWORDS_TABLE);
+      seoKeywords = recs
+        .map(r => ({
+          keyword: r.fields['Keyword'] || '',
+          status: r.fields['Status'] || '',
+          publishedUrl: r.fields['Published URL'] || ''
+        }))
+        .filter(k => k.keyword);
+    } catch (err) {
+      console.warn('Google Ads insights - could not read SEO keywords:', err.message);
+    }
+
+    const s = data.sheets || {};
+    const recs = (tab, n) => {
+      const list = (s[tab] && s[tab].records) || [];
+      return Array.isArray(list) ? list.slice(0, n) : [];
+    };
+    const userContent = `GOOGLE ADS ACCOUNT DATA
+
+CAMPAIGNS:
+${JSON.stringify(recs('Campaigns', 100), null, 2)}
+
+AD GROUPS:
+${JSON.stringify(recs('Ad Groups', 200), null, 2)}
+
+KEYWORDS:
+${JSON.stringify(recs('Keywords', 300), null, 2)}
+
+SEARCH TERMS:
+${JSON.stringify(recs('Search Terms', 300), null, 2)}
+
+ADS:
+${JSON.stringify(recs('Ads', 150), null, 2)}
+
+TWENTY2 SEO TARGET KEYWORDS (organic content plan):
+${JSON.stringify(seoKeywords, null, 2)}`;
+
+    const raw = await callClaudeMessages(userContent, 4000, GOOGLE_ADS_INSIGHTS_SYSTEM_PROMPT);
+    const cleaned = stripCodeFences(raw);
+    let insights = [];
+    try {
+      const parsed = JSON.parse(cleaned);
+      insights = Array.isArray(parsed) ? parsed : (Array.isArray(parsed && parsed.insights) ? parsed.insights : []);
+    } catch (parseErr) {
+      const m = cleaned.match(/\[[\s\S]*\]/);
+      if (m) { try { insights = JSON.parse(m[0]); } catch (e) { insights = []; } }
+    }
+
+    const ALLOWED = new Set(['budget', 'keyword', 'search_term', 'quality_score', 'ad_copy', 'seo_overlap']);
+    insights = (Array.isArray(insights) ? insights : [])
+      .filter(i => i && i.type && ALLOWED.has(i.type))
+      .map(i => ({
+        type: i.type,
+        title: (i.title || '').toString(),
+        detail: (i.detail || '').toString(),
+        action: (i.action || '').toString()
+      }));
+
+    res.json({ insights });
+  } catch (err) {
+    console.error('Google Ads insights error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/google-ads/draft-campaign - { goal, targetKeywords, budget } +
+// existing campaign data for naming/structure context -> claude-opus-4-6
+// -> a ready-to-build Search campaign structure.
+app.post('/api/google-ads/draft-campaign', async (req, res) => {
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  const goal = ((req.body && req.body.goal) || '').toString().trim();
+  const targetKeywords = ((req.body && req.body.targetKeywords) || '').toString().trim();
+  const budget = req.body && req.body.budget;
+  if (!goal) return res.status(400).json({ error: 'goal is required' });
+
+  try {
+    let campaignContext = [];
+    try {
+      const data = await fetchGoogleAdsData(false);
+      campaignContext = (data.sheets && data.sheets['Campaigns'] && data.sheets['Campaigns'].records) || [];
+    } catch (err) {
+      console.warn('Google Ads draft-campaign - no existing campaign context:', err.message);
+    }
+
+    const system = `You are a Google Ads specialist creating a new Search campaign for Twenty2 Collective, a Perth-based Agile and change management consultancy (UK/AU English, no em dashes). Draft a complete, ready-to-build campaign.
+
+Return ONLY valid JSON in exactly this shape:
+{
+  "campaignName": string,
+  "dailyBudget": string,
+  "adGroups": [
+    {
+      "name": string,
+      "keywords": [ { "keyword": string, "matchType": "exact" | "phrase" | "broad" } ],
+      "negativeKeywords": [ string ]
+    }
+  ],
+  "adSets": [
+    { "headlines": [ string ], "descriptions": [ string ] }
+  ]
+}
+Rules: 2 to 4 ad groups themed by search intent. Exactly 3 adSets. Each adSet has up to 15 headlines (each 30 characters or fewer) and up to 4 descriptions (each 90 characters or fewer). No commentary, no markdown.`;
+
+    const userContent = `GOAL: ${goal}
+TARGET KEYWORDS (seed list, comma separated): ${targetKeywords || '(none provided - infer from the goal)'}
+DAILY BUDGET (AUD): ${budget != null && budget !== '' ? budget : '(not specified)'}
+
+EXISTING CAMPAIGNS FOR CONTEXT (naming style, structure, budgets):
+${JSON.stringify(Array.isArray(campaignContext) ? campaignContext.slice(0, 50) : [], null, 2)}`;
+
+    const raw = await callClaudeMessages(userContent, 4000, system);
+    const cleaned = stripCodeFences(raw);
+    let draft;
+    try {
+      draft = JSON.parse(cleaned);
+    } catch (parseErr) {
+      const m = cleaned.match(/\{[\s\S]*\}/);
+      if (!m) throw new Error('Could not parse the campaign draft');
+      draft = JSON.parse(m[0]);
+    }
+    res.json({ draft });
+  } catch (err) {
+    console.error('Google Ads draft-campaign error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ===================== SCHEDULED SYNC JOBS =====================
 // Both run silently in the background and never block the UI - failures
 // are logged, not thrown, same as every other cron-eligible job in this
