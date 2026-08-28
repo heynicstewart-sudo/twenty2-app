@@ -15678,19 +15678,17 @@ function renderGoogleAdsKeywordsTable(){
 function renderGoogleAdsSearchTermsTable(){
   const d = window.__googleAdsData;
   if(!d || d.error || window.__googleAdsDataLoading) return '';
-  const rows = gaRecords('Search Terms').map(t => {
-    const clicks = gaNum(gaFieldRaw(t, ['Clicks']));
-    const impressions = gaNum(gaFieldRaw(t, ['Impr.','Impressions','Impr']));
-    const ctrRaw = gaFieldRaw(t, ['CTR']);
-    return {
-      term: gaField(t, ['Search term','Search Term','Query']) || '—',
-      campaign: gaCampaignName(t),
-      impressions, clicks,
-      ctr: (ctrRaw != null && ctrRaw !== '') ? gaPct(ctrRaw) : (impressions ? clicks/impressions : 0),
-      cost: gaNum(gaFieldRaw(t, ['Cost','Spend'])),
-      candidate: clicks === 0 && impressions >= GA_SEARCH_TERM_MIN_IMPRESSIONS
-    };
-  }).sort((a,b) => b.impressions - a.impressions).slice(0, 20);
+  const termText = t => gaField(t, ['Search term','Search Term','Query']) || '—';
+  const rows = gaAggregateRows(gaRecords('Search Terms'), t => gaCampaignName(t) + ' ␟ ' + termText(t))
+    .map(g => ({
+      term: termText(g.sample),
+      campaign: gaCampaignName(g.sample),
+      impressions: g.impressions, clicks: g.clicks,
+      ctr: g.ctr,
+      cost: g.spend,
+      candidate: g.clicks === 0 && g.impressions >= GA_SEARCH_TERM_MIN_IMPRESSIONS
+    }))
+    .sort((a,b) => b.impressions - a.impressions).slice(0, 20);
   let inner;
   if(!rows.length){
     inner = '<div class="empty-state">No search terms in the sheet.</div>';
@@ -15715,7 +15713,7 @@ function renderGoogleAdsSearchTermsTable(){
   return `
   <div class="card" style="margin-bottom:18px;">
     <div class="section-title"><i class="ti ti-search"></i> Search Terms</div>
-    <p class="muted" style="font-size:12px;margin-bottom:10px;">Top 20 search terms by impressions. Rows in red have impressions but zero clicks - negative keyword candidates.</p>
+    <p class="muted" style="font-size:12px;margin-bottom:10px;">Top 20 search terms by impressions, daily rows aggregated per term and campaign. Rows in red have impressions but zero clicks - negative keyword candidates.</p>
     ${inner}
   </div>`;
 }
