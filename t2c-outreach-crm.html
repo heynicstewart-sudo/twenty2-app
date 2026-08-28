@@ -259,6 +259,8 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .grid-table th{background:var(--surface-2);padding:12px 14px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:var(--label-tracking);color:var(--muted);border-bottom:1px solid var(--border);white-space:nowrap;}
 .grid-table td{padding:10px 14px;border-bottom:1px solid var(--border);vertical-align:top;min-width:190px;}
 .grid-table tr:last-child td{border-bottom:none;}
+.grid-col-remove{margin-left:6px;border:none;background:transparent;color:var(--muted);cursor:pointer;font-size:13px;line-height:1;padding:2px 4px;border-radius:4px;vertical-align:middle;}
+.grid-col-remove:hover{background:var(--danger,#c0392b);color:#fff;}
 .company-cell{font-weight:700;white-space:nowrap;}
 .grid-cell{border-radius:var(--radius-badge);padding:10px;min-height:64px;}
 .cell-found{background:#e2f2fa;}
@@ -964,11 +966,40 @@ function getPendingDays(c){
 // Sequences, Campaigns, Calendar, Analytics and Intelligence all keep
 // working across every contact regardless of which grid it came from.
 
+// A synthetic, read-only grid that never lives in state.grids and is never
+// synced to Airtable - built fresh on every read from whichever contacts
+// currently aren't attached to any campaign. Opened from the pinned row on
+// Home ("Your Grids"). Lets Marcus scan every not-yet-campaigned contact in
+// the usual company x job-title matrix (or the Table view, sorted by title)
+// to pull extra people into campaigns. A contact drops off it the moment
+// its grid gets linked to a campaign or it's added to a campaign's contact
+// list - nothing here moves a contact or changes its real grid.
+const NO_CAMPAIGN_GRID_ID = 'grid_no_campaign';
+
+function contactInAnyCampaign(c){
+  return state.campaigns.some(camp =>
+    (camp.contactIds || []).includes(c.id) ||
+    (camp.gridIds || []).includes(c.gridId));
+}
+
+function noCampaignContacts(){
+  return state.contacts.filter(c => !contactInAnyCampaign(c));
+}
+
+function buildNoCampaignGrid(){
+  const cs = noCampaignContacts();
+  const companies = [...new Set(cs.map(c => (c.company || '').trim()).filter(Boolean))].sort();
+  const columns = [...new Set(cs.map(c => (c.role || '').trim()).filter(Boolean))].sort();
+  return { id: NO_CAMPAIGN_GRID_ID, name: 'No campaign', companies, columns, companyLinkedIn: {}, searchedCells: [], virtual: true };
+}
+
 function currentGrid(){
+  if(state.currentGridId === NO_CAMPAIGN_GRID_ID) return buildNoCampaignGrid();
   return state.grids.find(g => g.id === state.currentGridId) || state.grids[0];
 }
 
 function gridContacts(gridId){
+  if(gridId === NO_CAMPAIGN_GRID_ID) return noCampaignContacts();
   return state.contacts.filter(c => c.gridId === gridId);
 }
 
@@ -1103,7 +1134,9 @@ function openGrid(gridId){
   window.__gridReturnTo = null;
   state.currentGridId = gridId;
   navigate('grid');
-  hydrateGridCompaniesFromAirtable(gridId);
+  // The virtual "No campaign" grid derives its companies from contacts, not
+  // from Companies.Grid Name - hydrating would fetch nothing and blank it.
+  if(gridId !== NO_CAMPAIGN_GRID_ID) hydrateGridCompaniesFromAirtable(gridId);
 }
 
 // Same as openGrid, but remembers which campaign's Grid tab to return to
@@ -1433,6 +1466,20 @@ function renderHome(){
       <table class="perf-table">
         <thead><tr><th>Name</th><th>Companies</th><th>Contacts</th><th>Last updated</th><th>Status</th><th></th></tr></thead>
         <tbody>
+          ${(() => {
+            const noCampCount = noCampaignContacts().length;
+            if(!noCampCount) return '';
+            const noCampCompanies = new Set(noCampaignContacts().map(c => (c.company||'').trim()).filter(Boolean)).size;
+            return `
+            <tr class="home-grid-row" onclick="openGrid('${NO_CAMPAIGN_GRID_ID}')">
+              <td class="perf-name">No campaign <span class="pill" style="background:var(--surface-2);color:var(--muted);margin-left:4px;">Virtual</span></td>
+              <td>${noCampCompanies}</td>
+              <td>${noCampCount}</td>
+              <td>—</td>
+              <td><span class="tag tag-found">Browse</span></td>
+              <td></td>
+            </tr>`;
+          })()}
           ${state.grids.map(g => `
             <tr class="home-grid-row" onclick="openGrid('${g.id}')">
               <td class="perf-name">${esc(g.name)} ${campaignsForGrid(g.id).map(c=>`<span class="pill" style="background:#e2f2fa;color:#0d6a96;margin-left:4px;">${esc(c.name)}</span>`).join('')}</td>
@@ -4589,6 +4636,23 @@ function renderGrid(){
   const grid = currentGrid();
   const cols = grid.columns;
   window.__connectionsShots = [];
+
+  // The virtual "No campaign" grid (see buildNoCampaignGrid) is a read-only
+  // lens over contacts that aren't in any campaign yet - none of the
+  // build/search/sync toolbar applies, so it gets a slimmed page: title,
+  // one-line explainer, the Grid/Table view toggle, and the matrix itself.
+  if(grid.virtual){
+    return `
+    <button class="btn btn-ghost btn-sm" style="margin-bottom:10px;" onclick="navigate('home')"><i class="ti ti-arrow-left"></i> Home</button>
+    <div class="section-title" style="margin-bottom:6px;"><i class="ti ti-grid-dots"></i> ${esc(grid.name)}</div>
+    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Every contact not attached to a campaign, by company and job title. Read-only — they drop off here once their grid is linked to a campaign or they're added to one.</p>
+    <div id="gridNotification"></div>
+    ${renderGridViewToolbar(grid.id)}
+    <div id="gridViewArea">${renderGridViewArea(grid, cols)}</div>
+    <div class="status-bar"><span class="live-dot"></span> ${gridContactTally(grid.id)} contacts not in any campaign, across ${grid.companies.length} companies</div>
+    `;
+  }
+
   return `
   <button class="btn btn-ghost btn-sm" style="margin-bottom:10px;" onclick="gridBackAction()"><i class="ti ti-arrow-left"></i> ${window.__gridReturnTo && window.__gridReturnTo.campaignId ? 'Back to campaign' : 'Home'}</button>
   <div class="section-title" style="margin-bottom:14px;"><i class="ti ti-grid-dots"></i> ${esc(grid.name)}</div>
@@ -4773,7 +4837,7 @@ function renderGridViewArea(grid, cols){
   return `
   <div class="grid-wrap">
     <table class="grid-table">
-      <thead><tr><th>Company</th>${cols.map(c=>'<th>'+esc(c)+'</th>').join('')}</tr></thead>
+      <thead><tr><th>Company</th>${cols.map((c,i)=>'<th>'+esc(c)+(grid.virtual ? '' : ' <button type="button" class="grid-col-remove" title="Remove this column" onclick="removeGridColumn('+i+')">&times;</button>')+'</th>').join('')}</tr></thead>
       <tbody id="gridBody">
         ${renderUnassignedGridRow(grid, cols)}
         ${grid.companies.map(company => renderCompanyRows(company, cols)).join('')}
@@ -4969,7 +5033,8 @@ function renderContactSpreadsheet(grid){
 // silently hiding all but one.
 function contactsForCell(company, role){
   const gridId = currentGrid().id;
-  return state.contacts.filter(c => c.gridId === gridId && c.company === company && c.role === role && !isContactExcludedFromGrid(c));
+  const pool = gridId === NO_CAMPAIGN_GRID_ID ? noCampaignContacts() : state.contacts.filter(c => c.gridId === gridId);
+  return pool.filter(c => c.company === company && c.role === role && !isContactExcludedFromGrid(c));
 }
 
 function findContact(company, role){
@@ -5052,13 +5117,14 @@ function renderGridCell(company, role, index){
   const cellClass = 'cell-'+effectiveState;
   const stateTagClass = 'tag-'+effectiveState;
   const stateLabel = effectiveState;
+  const isVirtual = currentGrid().virtual;
   return `<td>
     <div class="grid-cell ${cellClass}">
       <div class="cell-name" style="cursor:pointer;" onclick="openContactDrawer('${esc(c.name)}', ${currentGridCampaignName() ? `'${esc(currentGridCampaignName())}'` : 'null'})">${esc(c.name)}${c.url ? ` <a href="${esc(c.url)}" target="_blank" rel="noopener" onclick="handleContactLinkedInOpened('${c.id}', event)" title="Open on LinkedIn" style="margin-left:2px;color:var(--blue);"><i class="ti ti-brand-linkedin"></i></a>` : ''}</div>
       <div class="cell-meta">
         <span class="day-badge ${dayBadgeClass(days)}">${days}d</span>
         <span class="tag ${stateTagClass}">${stateLabel}</span>
-        <button class="btn btn-ghost btn-sm" style="padding:2px 6px;" onclick="handleSkipContact('${c.id}', event)" title="Skip - exclude from this campaign"><i class="ti ti-player-skip-forward"></i></button>
+        ${isVirtual ? '' : `<button class="btn btn-ghost btn-sm" style="padding:2px 6px;" onclick="handleSkipContact('${c.id}', event)" title="Skip - exclude from this campaign"><i class="ti ti-player-skip-forward"></i></button>`}
       </div>
     </div>
   </td>`;
@@ -5074,6 +5140,46 @@ function addGridColumn(){
   touchGrid(grid.id);
   renderPage();
   toast('Column "'+val+'" added','success');
+}
+
+// Removes a job-title column from the grid - the counterpart to
+// addGridColumn (and to the columns CSV import / drawer job-title edit add
+// automatically), for when the wrong title lands as a column. Only edits
+// the grid definition: no contact's Job Title or any Airtable Contacts
+// record is touched, so a contact whose role matched the removed column
+// just stops showing on the matrix until the column is added back (their
+// row reappears with them in it). searchedCells entries for the column are
+// dropped too, so re-adding it re-runs "Run daily search" for those cells
+// instead of treating them as already checked.
+function removeGridColumn(index){
+  const grid = currentGrid();
+  if(grid.virtual) return;
+  const role = grid.columns[index];
+  if(!role) return;
+  const occupied = gridContacts(grid.id).filter(c => c.role === role && !isContactExcludedFromGrid(c)).length;
+  if(occupied){
+    const body = `<p style="font-size:13px;">${occupied} contact${occupied===1?' is':'s are'} in the "${esc(role)}" column. Removing it hides ${occupied===1?'it':'them'} from this grid — they stay in Airtable and keep their job title, and they'll show again if you add the column back.</p>`;
+    const footer = `
+      <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" style="background:var(--danger);border-color:var(--danger);" onclick="doRemoveGridColumn(${index})"><i class="ti ti-trash"></i> Remove column</button>
+    `;
+    openModal(`Remove "${esc(role)}" column`, body, footer);
+    return;
+  }
+  doRemoveGridColumn(index);
+}
+
+function doRemoveGridColumn(index){
+  const grid = currentGrid();
+  if(grid.virtual) return;
+  const role = grid.columns[index];
+  if(!role) return;
+  grid.columns = grid.columns.filter((c,i) => i !== index);
+  grid.searchedCells = (grid.searchedCells || []).filter(k => !k.endsWith('|||' + role));
+  touchGrid(grid.id);
+  closeModal();
+  renderPage();
+  toast('Column "'+role+'" removed','success');
 }
 
 function addGridCompany(){
@@ -5673,7 +5779,7 @@ async function runDailySearch(){
       // exactly one campaign (same convention as gridCellDays/
       // gridSequenceStageMap above) - lets the server link newly-found
       // contacts into that campaign's Campaign Contacts table too.
-      body: JSON.stringify({ gridId: grid.id, cells, campaignName: currentGridCampaignName() })
+      body: JSON.stringify({ gridId: grid.id, cells, campaignName: currentGridCampaignName(), gridName: grid.name })
     });
     const startData = await startRes.json();
     // A 409 here means the server's own per-grid lock rejected it (already
@@ -5866,7 +5972,7 @@ async function retryGridCell(company, role){
     const startRes = await fetch('/api/grid/run-search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ gridId: grid.id, cells: [cell], campaignName: currentGridCampaignName() })
+      body: JSON.stringify({ gridId: grid.id, cells: [cell], campaignName: currentGridCampaignName(), gridName: grid.name })
     });
     const startData = await startRes.json();
     if(!startRes.ok || !startData.jobId) throw new Error(startData.error || 'Could not start search');
@@ -5965,7 +6071,7 @@ function renderGridCellHTML(c){
       <div class="cell-meta">
         <span class="day-badge ${dayBadgeClass(days)}">${days}d</span>
         <span class="tag tag-${effectiveState}">${effectiveState}</span>
-        <button class="btn btn-ghost btn-sm" style="padding:2px 6px;" onclick="handleSkipContact('${c.id}', event)" title="Skip - exclude from this campaign"><i class="ti ti-player-skip-forward"></i></button>
+        ${currentGrid().virtual ? '' : `<button class="btn btn-ghost btn-sm" style="padding:2px 6px;" onclick="handleSkipContact('${c.id}', event)" title="Skip - exclude from this campaign"><i class="ti ti-player-skip-forward"></i></button>`}
       </div>
   </div></td>`.replace('<td><div','<div').replace('</div></td>','</div>');
 }
@@ -7687,6 +7793,11 @@ async function saveContactJobTitle(){
         touchGrid(grid.id);
         toast(`Added "${data.jobTitle}" as a new column on ${grid.name} so they still show up on the matrix`, 'success');
       }
+      // PATCH /api/contacts/:id/job-title only writes Job Title - re-sync the
+      // whole contact so its ICP Role Category and (for a contact that was
+      // still relying on its company's Grid Name) its own Grid Name land in
+      // Airtable too, matching the new column/role.
+      syncContactToAirtable(localContact);
       renderPage();
     }
   } catch(err){
@@ -9433,6 +9544,7 @@ function openCampaignDetail(campaignId, tab){
   window.__campaignDetailId = campaignId;
   window.__campaignDetailTab = tab || 'intelligence';
   window.__campaignAnalytics = null;
+  window.__campaignMessagePerf = null;
   window.__campaignInsights = null;
   window.__campaignInsightsError = null;
   window.__campaignContactsFilter = { search:'', status:'all' };
@@ -9472,6 +9584,7 @@ function setCampaignDetailTab(tab){
   window.__contentEditorId = null;
   renderPage();
   if(tab === 'analytics' && !window.__campaignAnalytics) runCampaignAnalytics();
+  if(tab === 'analytics' && !window.__campaignMessagePerf) runCampaignMessagePerformance();
   if(tab === 'analytics' && window.__campaignInsights === null && !window.__campaignInsightsError) runCampaignInsights();
   if(tab === 'roadmap') initRoadmapDrag();
 }
@@ -10069,6 +10182,47 @@ async function runCampaignAnalytics(){
   if(window.__campaignDetailTab === 'analytics') renderPage();
 }
 
+// "Message-level reply rate & response time" card, GET
+// /api/campaign/:id/message-performance - kept as its own fetch/render pair
+// rather than folded into window.__campaignAnalytics, since it's ground-
+// truthed off Touch Points' reply markers (see computeMessagePerformance,
+// search-server.js) rather than the blended campaign-wide replyRate that
+// endpoint already returns.
+async function runCampaignMessagePerformance(){
+  const campaign = state.campaigns.find(c => c.id === window.__campaignDetailId);
+  if(!campaign) return;
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaignRouteKey(campaign))}/message-performance`);
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+    window.__campaignMessagePerf = data;
+  } catch(err){
+    window.__campaignMessagePerf = { error: err.message };
+  }
+  if(window.__campaignDetailTab === 'analytics') renderPage();
+}
+
+function renderCampaignMessagePerformance(){
+  const data = window.__campaignMessagePerf;
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title" style="margin-bottom:10px;"><i class="ti ti-arrow-back-up"></i> Message-level reply rate &amp; response time</div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:12px;">How each message in the sequence performs on its own, ground-truthed off logged replies (not just "moved to the next stage" - sends can go out on schedule with no reply confirmed) - this is where a real drop-off shows.</div>
+    ${!data ? '<div class="muted"><i class="ti ti-loader-2"></i> Loading...</div>' :
+      data.error ? `<div class="muted">Could not load: ${esc(data.error)}</div>` :
+      !data.messages.some(m=>m.sent) ? '<div class="empty-state">No messages sent in this campaign yet.</div>' : `
+      <div class="mini-cards" style="grid-template-columns:repeat(3,1fr);margin-bottom:0;">
+        ${data.messages.map(m => `
+        <div class="mini-card">
+          <div class="num">${m.sent ? m.replyRate+'%' : '—'}</div>
+          <div class="label">${esc(m.label)} reply rate</div>
+          <div class="muted" style="font-size:11px;margin-top:6px;">${m.sent ? `${m.replied} / ${m.sent} replied${m.avgResponseDays!==null ? ` · avg ${m.avgResponseDays}d to reply` : ''}` : 'not sent yet'}</div>
+        </div>`).join('')}
+      </div>
+    `}
+  </div>`;
+}
+
 async function runCampaignInsights(){
   const campaign = state.campaigns.find(c => c.id === window.__campaignDetailId);
   if(!campaign) return;
@@ -10133,6 +10287,8 @@ function renderCampaignAnalyticsTab(campaign){
       <p style="font-size:12.5px;margin-top:14px;">Vs. T2C historical average: conversion rate ${data.conversionRate}% vs ${data.historicalComparison.avgConversionRate ?? '—'}% average, ${data.avgTouchPointsToConvert ?? '—'} vs ${data.historicalComparison.avgTouchPointsToConvert ?? '—'} touch points to convert.</p>
     `}
   </div>
+
+  ${renderCampaignMessagePerformance()}
 
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">

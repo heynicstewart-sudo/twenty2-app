@@ -698,7 +698,7 @@ Set "found" to false and "value" to "" if the search results don't give a confid
   return { found: true, value: String(parsed.value).trim() };
 }
 
-async function runGridSearchJob(job, cells, campaignName) {
+async function runGridSearchJob(job, cells, campaignName, gridName) {
   // findCampaignRecordByName, not findRecordByFieldName - a campaign name
   // containing a double quote would break the latter's filterByFormula
   // string interpolation and silently resolve to "not found" (see that
@@ -768,7 +768,14 @@ async function runGridSearchJob(job, cells, campaignName) {
               role,
               linkedinUrl: m.url,
               state: 'found',
-              icpRoleCategory: role
+              icpRoleCategory: role,
+              // Tags the contact's own Contacts.Grid Name so a person found
+              // for a freshly-added column doesn't need it filled in by hand
+              // in Airtable afterwards - createOrUpdateAirtableContact
+              // appends-if-missing for an existing record, sets it for a new
+              // one. gridName comes from the run-search request body (see
+              // runDailySearch, t2c-outreach-crm.html).
+              gridName: gridName || cell.gridName || ''
             });
             if (campaignRecord) {
               await linkGridContactToCampaign(contactResult.recordId, m.name, campaignRecord, campaignContactRows);
@@ -803,7 +810,7 @@ app.post('/api/grid/run-search', (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   if (!process.env.SERPER_API_KEY) return res.status(500).json({ error: 'SERPER_API_KEY is not configured' });
 
-  const { gridId, cells, campaignName } = req.body;
+  const { gridId, cells, campaignName, gridName } = req.body;
   if (!gridId) return res.status(400).json({ error: 'gridId is required' });
   if (!Array.isArray(cells) || !cells.length) return res.status(400).json({ error: 'cells (array of {company, role}) is required' });
   // fillMissing cells (see runDailySearch/searchMissingContactField) need
@@ -834,7 +841,7 @@ app.post('/api/grid/run-search', (req, res) => {
   gridSearchJobs.set(jobId, job);
   runningGridSearchJobs.add(gridId);
 
-  runGridSearchJob(job, cells, campaignName)
+  runGridSearchJob(job, cells, campaignName, gridName)
     .catch(err => {
       console.error('Grid search job failed:', err.message);
       job.status = 'error';
@@ -3377,6 +3384,80 @@ function computeHistoricalCampaignAverage(campaigns, contacts, touchPoints, conv
 
   return { avgConversionRate, avgTouchPointsToConvert };
 }
+
+// Message-level reply rate + average time-to-reply for the Analytics tab's
+// "Message-level reply rate & response time" card. Deliberately not derived
+// from the Sales tab's pipeline funnel (computeFunnelCounts on the client) -
+// that funnel's "% moved from prior" is a stage-progress number, not a reply
+// rate: the Today's Actions "Copy & mark sent" flow has no reply-gating (see
+// SEQUENCE_STAGE_NEXT), so a contact can reach "Message 3 Sent" having never
+// had a reply logged for anything, and the funnel would count that as a full
+// pass-through. The only place a reply is ever actually confirmed is a
+// Touch Point named "{campaign}_Reply to Message N" - POST
+// /api/campaign/:id/contacts/:contactId/reply logs one on an actual "yes",
+// paired with the "{campaign}_Message N" outbound row logged at send time.
+// Same ground-truth pair campaignMessagePerformanceNote (above, used for
+// fast-action drafting) reads, just aggregated into rates/timing instead of
+// pulled as example text.
+function computeMessagePerformance(touchPoints, campaignName, messageNumber) {
+  const sentName = `${campaignName}_Message ${messageNumber}`;
+  const repliedName = `${campaignName}_Reply to Message ${messageNumber}`;
+
+  const sent = touchPoints
+    .filter(r => (r.fields['Name'] || '') === sentName)
+    .map(r => ({ contactId: (r.fields['Contact'] || [])[0], date: r.fields['Date'] || '' }))
+    .filter(r => r.contactId);
+
+  // Earliest logged reply per contact, in case a reply somehow gets logged
+  // more than once for the same message.
+  const earliestReplyByContact = {};
+  touchPoints.forEach(r => {
+    if ((r.fields['Name'] || '') !== repliedName) return;
+    const contactId = (r.fields['Contact'] || [])[0];
+    const date = r.fields['Date'] || '';
+    if (!contactId || !date) return;
+    if (!earliestReplyByContact[contactId] || date < earliestReplyByContact[contactId]) earliestReplyByContact[contactId] = date;
+  });
+
+  let repliedCount = 0;
+  const responseDays = [];
+  sent.forEach(s => {
+    const replyDate = earliestReplyByContact[s.contactId];
+    if (!replyDate) return;
+    repliedCount++;
+    if (s.date) {
+      const days = (new Date(replyDate) - new Date(s.date)) / 86400000;
+      if (days >= 0) responseDays.push(days);
+    }
+  });
+
+  const replyRate = sent.length ? Math.round((repliedCount / sent.length) * 100) : 0;
+  const avgResponseDays = responseDays.length
+    ? Math.round((responseDays.reduce((a, b) => a + b, 0) / responseDays.length) * 10) / 10
+    : null;
+
+  return { messageNumber, label: `Message ${messageNumber}`, sent: sent.length, replied: repliedCount, replyRate, avgResponseDays };
+}
+
+app.get('/api/campaign/:id/message-performance', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const campaignIdOrName = decodeURIComponent(req.params.id);
+
+  try {
+    const campaignRecord = await resolveCampaignRecord(campaignIdOrName);
+    if (!campaignRecord) return res.status(404).json({ error: 'Campaign not found in Airtable' });
+    const campaignName = campaignRecord.fields['Name'] || campaignIdOrName;
+
+    const touchPoints = await airtableFetchAllRecords('Touch Points');
+    const messages = [1, 2, 3].map(n => computeMessagePerformance(touchPoints, campaignName, n));
+
+    res.json({ messages, generatedAt: new Date().toISOString() });
+  } catch (err) {
+    console.error('Campaign message-performance error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 app.get('/api/campaign/:id/analytics', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
@@ -7460,6 +7541,103 @@ function voiceRulesPromptText(voice) {
   return `Voice rules: UK English, no em dashes, ${(v.tone || 'peer to peer').toLowerCase()} tone, one observation and one question per message, 3 to 4 sentences, signed off "Twenty2 Collective", conditional CTA framing (never pushy). Connection requests should be ${(v.connLength || 'short').toLowerCase()}. Follow-up cadence is ${(v.cadence || 'steady').toLowerCase()}. ${v.voiceInstructions || ''}`;
 }
 
+// Same defaults as the client's state.settings.strategy (t2c-outreach-crm.html,
+// around line 747) - used whenever the shared Settings row has no Strategy
+// JSON saved yet.
+const DEFAULT_STRATEGY_VOICE = {
+  messagesBeforeCta: '2',
+  tone: 'Peer to peer',
+  connLength: 'Short',
+  cadence: 'Steady',
+  voiceInstructions: 'UK English. No em dashes. Peer to peer, not salesy. One observation, one question per message. 3 to 4 sentences. Sign off as Twenty2 Collective. Frame CTAs conditionally, never pushy.'
+};
+
+// Today's Actions fast-action drafting (POST /api/campaign/:id/contacts/:contactId/
+// generate-message below) never had a `voice` object handed to it by the
+// client the way openGenerateModal's POST /api/messages/generate does - it
+// just hardcoded a stripped-down version of the voice rules inline, so a
+// Marcus-tuned tone/cadence/CTA-timing set on the Settings page had no effect
+// on fast-action drafts at all. Reads the same shared Strategy JSON those
+// settings are persisted to (see /api/settings/app-config) so both drafting
+// paths use identical voice rules without the client needing to pass them.
+async function getStrategyVoiceSettings() {
+  try {
+    const record = await getSettingsRecord();
+    const raw = record && record.fields && record.fields['Strategy JSON'];
+    if (!raw) return DEFAULT_STRATEGY_VOICE;
+    return Object.assign({}, DEFAULT_STRATEGY_VOICE, JSON.parse(raw));
+  } catch (err) {
+    console.warn('Could not load strategy voice settings, using defaults:', err.message);
+    return DEFAULT_STRATEGY_VOICE;
+  }
+}
+
+// Pulls one stage's template text back out of Campaigns.Sequence Templates -
+// the single blob the client's formatSequenceForAirtable writes as "Message 1
+// (type, timing):\ncontent\n\nFollow up 1 (...):\ncontent\n\n...". Lets
+// server-side drafting routes match the actual template text a rep wrote for
+// this stage, same as stage.template in POST /api/messages/generate.
+const SEQUENCE_TEMPLATE_STAGE_LABEL = { 1: 'Message 1', 2: 'Follow up 1', 3: 'Follow up 2' };
+function extractStageTemplate(sequenceTemplatesBlob, messageNumber) {
+  const label = SEQUENCE_TEMPLATE_STAGE_LABEL[messageNumber];
+  if (!label || !sequenceTemplatesBlob) return '';
+  const block = sequenceTemplatesBlob.split('\n\n').find(b => b.startsWith(label + ' ('));
+  if (!block) return '';
+  const nl = block.indexOf('\n');
+  return nl === -1 ? '' : block.slice(nl + 1).trim();
+}
+
+// Which campaignStageMap key (t2c-outreach-crm.html, openGenerateModal) each
+// fast-action message number corresponds to - needed to reuse
+// ctaStrategyNoteText, which branches on the 'cta' key rather than a message
+// number.
+const STAGE_KEY_FOR_MESSAGE_NUMBER = { 1: 'm1', 2: 'm2', 3: 'cta' };
+
+// "Winning feedback loop" for fast-action drafting: before writing message N
+// for this contact, shows Claude how message N has actually landed with
+// everyone else in this campaign so far, so the draft can lean into whatever
+// is actually getting replies instead of guessing blind every time. Ground
+// truth comes from Touch Points - specifically the "{campaign}_Reply to
+// Message N" row POST /api/campaign/:id/contacts/:contactId/reply logs on an
+// actual "yes" - not from Sequence Stage alone, since the fast-action
+// "Copy & mark sent" flow has no reply-gating and a contact can reach
+// "Message 3 Sent" having never had a reply logged for anything.
+function campaignMessagePerformanceNote(touchPoints, campaignName, messageNumber, excludeContactId) {
+  const sentName = `${campaignName}_Message ${messageNumber}`;
+  const repliedName = `${campaignName}_Reply to Message ${messageNumber}`;
+  const repliedContactIds = new Set();
+  touchPoints.forEach(r => {
+    if ((r.fields['Name'] || '') === repliedName) {
+      (r.fields['Contact'] || []).forEach(id => repliedContactIds.add(id));
+    }
+  });
+
+  const sent = touchPoints
+    .filter(r => (r.fields['Name'] || '') === sentName && r.fields['Summary'])
+    .map(r => ({ contactId: (r.fields['Contact'] || [])[0], date: r.fields['Date'] || '', text: r.fields['Summary'] }))
+    .filter(r => r.contactId && r.contactId !== excludeContactId);
+
+  // A "no reply" example only counts once the message has had a few days to
+  // land - one sent yesterday just hasn't had time yet, that's not a signal
+  // either way.
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 3);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+
+  const replied = sent.filter(r => repliedContactIds.has(r.contactId))
+    .sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 3);
+  const noReply = sent.filter(r => !repliedContactIds.has(r.contactId) && r.date && r.date < cutoffStr)
+    .sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 3);
+
+  if (!replied.length && !noReply.length) return '';
+
+  const section = (label, list) => list.length
+    ? `${label}:\n${list.map((r, i) => `${i + 1}. ${r.text}`).join('\n')}`
+    : `${label}: none yet`;
+
+  return `\n\nHere's how message ${messageNumber} has actually landed with other contacts in this campaign so far - use this as a live feedback loop, leaning into whatever's getting replies and away from whatever isn't (learn the pattern, don't copy either verbatim):\n${section('Got a reply', replied)}\n${section('No reply after a few days', noReply)}`;
+}
+
 // Generates a message for the "Write & copy message" modal (openGenerateModal
 // in t2c-outreach-crm.html) - previously done client-side by calling
 // api.anthropic.com directly from the browser with no API key, which always
@@ -7596,7 +7774,11 @@ app.post('/api/campaign/:id/contacts/:contactId/generate-message', async (req, r
     // Only weave the offer in once the contact is past the first connection
     // message (messageNumber 1) - pitching the offer on first touch reads
     // as a cold sales blast rather than a peer-to-peer opener.
-    const offer = messageNumber >= 2 ? await getActiveOfferForCampaign(campaignRecord.id) : null;
+    const [offer, voice, touchPoints] = await Promise.all([
+      messageNumber >= 2 ? getActiveOfferForCampaign(campaignRecord.id) : Promise.resolve(null),
+      getStrategyVoiceSettings(),
+      airtableFetchAllRecords('Touch Points')
+    ]);
 
     // Marcus's own edits are the best signal for what "good" looks like for
     // *this* campaign - pull his 5 most recently sent messages in this same
@@ -7613,17 +7795,31 @@ app.post('/api/campaign/:id/contacts/:contactId/generate-message', async (req, r
       ? `\n\nHere are up to 5 examples of messages Marcus personally edited before sending in this campaign (most recent first) - each pairs the AI draft with what he actually sent, so you can learn the tone and style he prefers for this campaign:\n${recentEditedExamples.map((ex, i) => `${i + 1}. AI draft: ${ex.original}\n   Marcus sent: ${ex.edited}`).join('\n\n')}`
       : '';
 
-    const prompt = `You are drafting LinkedIn outreach message ${messageNumber} of 3 for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM.
+    // Same reply-rate feedback loop as the Roadmap's Sequences view, scoped
+    // to this campaign and this message number.
+    const performanceNote = campaignMessagePerformanceNote(touchPoints, campaignName, messageNumber, contactId);
+
+    const stageKey = STAGE_KEY_FOR_MESSAGE_NUMBER[messageNumber];
+    const template = extractStageTemplate(camp['Sequence Templates'], messageNumber);
+    let ctaOptions = [];
+    if (stageKey === 'cta') ctaOptions = parseCtaList(camp['CTAs']);
+
+    const promptText = `You are drafting LinkedIn outreach message ${messageNumber} of 3 for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM.
 
 Campaign: "${campaignName}". Goal: ${camp['Goal'] || 'not recorded'}. Product: ${camp['Product'] || 'not recorded'}. Target ICP: ${camp['Target ICP'] || 'not recorded'}. Strategy notes: ${camp['Strategy Notes'] || 'none recorded'}.
-
-Contact: ${cf['Full Name'] || 'Unknown'}, ${cf['Job Title'] || ''}. AI summary: ${cf['AI Summary'] || 'none yet'}. Conversation so far: ${cf['Conversation Context'] || 'none yet - this is the first message'}.
+${template ? `\nTemplate for this stage:\n${template}\n` : ''}
+Contact: ${cf['Full Name'] || 'Unknown'}, ${cf['Job Title'] || ''}. Profile notes: ${cf['Notes'] || 'none'}. AI summary: ${cf['AI Summary'] || 'none yet'}. Conversation so far: ${cf['Conversation Context'] || 'none yet - this is the first message'}.
 Recent posts (last 30 days only): ${recentPosts}
 ${offer && offer.summary ? `\nThis campaign's offer: ${offer.summary}\nWeave the offer above into this message naturally, in your own words - do not paste it verbatim.` : ''}
 
-Write only message ${messageNumber} in this contact's sequence for this specific campaign, following on naturally from the conversation so far (if any). UK English, no em dashes, peer to peer tone, 3-4 sentences, signed off "Twenty2 Collective".${RESPECT_SUMMARY_INSTRUCTIONS_NOTE} Return only the message text, no preamble.${examplesNote}`;
+${ctaStrategyNoteText(stageKey, messageNumber, voice.messagesBeforeCta)}${ctaOptionsPromptText(ctaOptions)}
 
-    const message = await callClaudeText(prompt, 400);
+${voiceRulesPromptText(voice)}
+
+Write only message ${messageNumber} in this contact's sequence for this specific campaign, following on naturally from the conversation so far (if any) - if the conversation shows they've already replied, respond to what they actually said rather than reintroducing yourself.${RESPECT_SUMMARY_INSTRUCTIONS_NOTE} Return only the message text, no preamble.${examplesNote}${performanceNote}`;
+
+    const rawMessage = await callClaudeText(promptText, 400);
+    const message = await humanizePlainText(rawMessage);
     await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, { records: [{ id: row.id, fields: { 'Next Message Draft': message } }] });
 
     res.json({ success: true, message, messageNumber, stage });
