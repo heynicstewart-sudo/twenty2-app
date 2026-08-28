@@ -13983,6 +13983,7 @@ function renderContentSeoTab(){
       </div>
       <div class="field"><label>Location</label><input id="seoServiceLocation" placeholder="e.g. Perth, Fremantle, Joondalup"></div>
     </div>
+    <div class="field"><label>Reference Content (optional)</label><textarea id="seoServiceReferenceContent" rows="6" placeholder="Paste existing page content, notes, or context for this service. The Engine uses this as the primary source of truth."></textarea></div>
     <button class="btn btn-primary btn-sm" id="seoServiceGenerateBtn" onclick="generateSeoServicePage()"><i class="ti ti-sparkles"></i> Generate Service Page</button>
   </div>
 
@@ -14057,13 +14058,14 @@ function fallbackCopy(text, done){
 async function generateSeoServicePage(){
   const service = document.getElementById('seoServiceSelect').value;
   const location = (document.getElementById('seoServiceLocation').value || '').trim();
+  const referenceContent = (document.getElementById('seoServiceReferenceContent')?.value || '').trim();
   if(!location){ toast('Add a location first', 'warn'); return; }
   const btn = document.getElementById('seoServiceGenerateBtn');
   if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Generating and sending to Framer...'; }
   try {
     const res = await fetch('/api/seo/generate-service-page', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ service, location })
+      body: JSON.stringify({ service, location, referenceContent })
     });
     const data = await res.json();
     if(!res.ok || !data.success) throw new Error(data.error || 'Generation failed');

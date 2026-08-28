@@ -11097,8 +11097,20 @@ const SERVICE_PAGE_SECTIONS = `The page MUST contain, in this order:
 6. An FAQ section with exactly 5 questions, each as its own open accordion item: <details open><summary>Question</summary><p>Answer</p></details>
 7. A closing call to action pointing to a specific T2C service and inviting {location} organisations to get in touch`;
 
-async function generateServicePage(service, location) {
+async function generateServicePage(service, location, referenceContent = '') {
   const keyword = `${service} ${location}`.replace(/\s+/g, ' ').trim();
+
+  // Reference Content, when the writer has pasted some, becomes the
+  // primary source of truth for opinions/examples/data over the scraped
+  // competitor pages (which are only there for structure).
+  const trimmedReferenceContent = (referenceContent || '').trim();
+  const referenceContentBlock = trimmedReferenceContent
+    ? `\nThe following is reference content provided by Twenty2 Collective. Use it as the primary source of truth for opinions, specific examples, real experiences, data points, and insights. Do not invent facts. Where the reference content provides a specific view or experience, incorporate it directly into the page rather than writing generically.
+---
+${trimmedReferenceContent}
+---
+`
+    : '';
 
   const organic = (await serperSearchTop(keyword, 10)).filter(r => r.link && !isBlockedScrapeDomain(r.link));
   const editorialResults = organic.filter(r => !isUgcOrSocialDomain(r.link));
@@ -11134,7 +11146,7 @@ ${voiceProfile}
 SERVICE: "${service}"
 LOCATION: "${location}"
 PRIMARY KEYWORD: "${keyword}"
-
+${referenceContentBlock}
 TOP-RANKING PAGES FOR THIS KEYWORD (match their depth and topic coverage, not their wording):
 ${scrapedSummaries.map((s, i) => `${i + 1}. ${s.url}${s.title ? ' - "' + s.title + '"' : ''}
    Approx word count: ${s.wordCount || 'unknown'}
@@ -11183,13 +11195,14 @@ app.post('/api/seo/generate-service-page', async (req, res) => {
 
   const service = (req.body.service || '').trim();
   const location = (req.body.location || '').trim();
+  const referenceContent = (req.body.referenceContent || '').trim();
   if (!service || !location) return res.status(400).json({ error: 'service and location are both required' });
 
   try {
     await ensureSitemapTable();
     await ensureSitemapTypeField();
 
-    const page = await generateServicePage(service, location);
+    const page = await generateServicePage(service, location, referenceContent);
     const published = await publishToFramer(page, { collectionKind: 'service' });
     const today = new Date().toISOString().slice(0, 10);
 
