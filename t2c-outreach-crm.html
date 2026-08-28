@@ -14318,8 +14318,32 @@ function renderSeoVoiceProfileEditor(){
       <textarea id="seoVoiceProfileInput" rows="6" placeholder="Describe T2C's tone, writing style, opinions, stats, and stories...">${esc(v.voiceProfile)}</textarea>
     </div>
     ${!v.voiceProfile ? `<p class="muted" style="font-size:11.5px;margin-bottom:10px;">Currently blank - generated posts use T2C's default profile until you save one here.</p>` : ''}
-    <button class="btn btn-primary btn-sm" onclick="saveSeoVoiceProfile()"><i class="ti ti-device-floppy"></i> Save voice profile</button>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      <button class="btn btn-primary btn-sm" onclick="saveSeoVoiceProfile()"><i class="ti ti-device-floppy"></i> Save voice profile</button>
+      <button class="btn btn-secondary btn-sm" id="refreshCompanyProfileBtn" onclick="refreshCompanyProfile(this)"><i class="ti ti-refresh"></i> Refresh Company Profile</button>
+      <span id="companyProfileStatus" class="muted" style="font-size:11.5px;"></span>
+    </div>
+    <p class="muted" style="font-size:11.5px;margin-top:8px;">Refresh Company Profile scrapes twenty2collective.com (Home, Services, Workshops, Training) into Settings and feeds it to the AEO Engine's product suggestions.</p>
   `;
+}
+
+async function refreshCompanyProfile(btn){
+  const status = document.getElementById('companyProfileStatus');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Scraping site...'; }
+  if(status) status.textContent = '';
+  try {
+    const res = await fetch('/api/settings/scrape-company-profile', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Scrape failed');
+    const errs = (data.errors || []);
+    toast(errs.length ? `Company profile refreshed (${data.pagesScraped}/4 pages; ${errs.length} failed)` : 'Company profile refreshed from twenty2collective.com', errs.length ? 'warn' : 'success');
+    if(status) status.textContent = errs.length ? `${data.pagesScraped}/4 pages scraped - ${errs.join('; ')}` : `All 4 pages scraped just now`;
+  } catch(err){
+    toast('Could not refresh company profile: ' + err.message, 'warn');
+    if(status) status.textContent = 'Failed: ' + err.message;
+  } finally {
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-refresh"></i> Refresh Company Profile'; }
+  }
 }
 
 async function saveSeoVoiceProfile(){

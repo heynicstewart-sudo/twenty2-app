@@ -5269,6 +5269,107 @@ app.post('/api/settings/linkedin-url', async (req, res) => {
   }
 });
 
+// ---- Company profile scrape ----
+// Fetches the four public twenty2collective.com pages, strips them down to
+// readable body text, and stores the concatenated result on Settings.Company
+// Profile. Feeds the AEO suggest-products prompt (below) so the Engine knows
+// what T2C actually sells and how it talks about it. Best-effort per page -
+// a page that 404s or fails to fetch is noted inline rather than failing the
+// whole refresh. Uses the global fetch (Node 22) the rest of this file
+// already relies on rather than adding an axios/node-fetch dependency.
+const COMPANY_PROFILE_PAGES = [
+  { label: 'Home', url: 'https://www.twenty2collective.com' },
+  { label: 'Services', url: 'https://www.twenty2collective.com/services' },
+  { label: 'Workshops', url: 'https://www.twenty2collective.com/workshops' },
+  { label: 'Training', url: 'https://www.twenty2collective.com/training' }
+];
+
+async function ensureCompanyProfileField() {
+  try {
+    return await ensureAirtableField(SETTINGS_TABLE, 'Company Profile', { type: 'multilineText' });
+  } catch (err) {
+    warnOnce('provision:company-profile-field', 'Could not auto-provision the Settings Company Profile field (add it by hand if it does not exist yet):', err.message);
+  }
+}
+
+// Reduce a page's HTML to meaningful body text: drop non-content elements,
+// turn block-level closes into line breaks, strip the remaining tags, decode
+// the common entities, and collapse whitespace. Deliberately simple - this
+// feeds a Claude prompt, not a renderer.
+function htmlToBodyText(html) {
+  if (!html) return '';
+  let text = String(html);
+  text = text.replace(/<!--[\s\S]*?-->/g, ' ');
+  text = text.replace(/<(script|style|noscript|svg|head|template|iframe)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ');
+  text = text.replace(/<(nav|footer|header|form)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ');
+  text = text.replace(/<\/(p|div|section|article|li|ul|ol|h[1-6]|tr|table|blockquote)>/gi, '\n');
+  text = text.replace(/<br\s*\/?>/gi, '\n');
+  text = text.replace(/<[^>]+>/g, ' ');
+  text = text
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&#39;|&rsquo;|&lsquo;|&apos;/gi, "'")
+    .replace(/&quot;|&ldquo;|&rdquo;/gi, '"')
+    .replace(/&mdash;|&ndash;/gi, '-')
+    .replace(/&hellip;/gi, '...')
+    .replace(/&[a-z0-9#]+;/gi, ' ');
+  // Normalise every non-newline whitespace char (incl. nbsp / unicode spaces) to a plain space.
+  text = text.replace(/[^\S\n]+/g, ' ');
+  // Framer animates headings one glyph per element, which detags to
+  // "o r g a n i s a t i o n s". Collapse long single-letter runs (7+) -
+  // real prose never has that many one-letter tokens in a row.
+  text = text.replace(/(?:\b[A-Za-z]\b ){7,}\b[A-Za-z]\b/g, function (m) { return m.replace(/ /g, ''); });
+  text = text.split('\n').map(function (l) { return l.trim(); }).filter(Boolean).join('\n');
+  return text.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+async function fetchCompanyProfilePage(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; T2C-OutreachBot/1.0; +https://www.twenty2collective.com)' },
+      redirect: 'follow',
+      signal: controller.signal
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return htmlToBodyText(await res.text());
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+app.post('/api/settings/scrape-company-profile', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    await ensureCompanyProfileField();
+
+    const errors = [];
+    const sections = await Promise.all(COMPANY_PROFILE_PAGES.map(async (page) => {
+      try {
+        const text = await fetchCompanyProfilePage(page.url);
+        return `## ${page.label}\n${page.url}\n\n${(text || '(no readable text found on this page)').slice(0, 8000)}`;
+      } catch (err) {
+        errors.push(`${page.label}: ${err.message}`);
+        return `## ${page.label}\n${page.url}\n\n(could not fetch this page: ${err.message})`;
+      }
+    }));
+
+    const companyProfile = `Twenty2 Collective company profile - scraped from the website on ${new Date().toISOString().slice(0, 10)}.\n\n${sections.join('\n\n---\n\n')}`.slice(0, 95000);
+
+    const settingsRecord = await getOrCreateSettingsRecord();
+    await airtableRequest('PATCH', SETTINGS_TABLE, {
+      records: [{ id: settingsRecord.id, fields: { 'Company Profile': companyProfile } }],
+      typecast: true
+    });
+
+    res.json({ success: true, companyProfile, pagesScraped: COMPANY_PROFILE_PAGES.length - errors.length, errors });
+  } catch (err) {
+    console.error('Scrape company profile error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ===================== APP CONFIG (shared Settings page state) =====================
 // The Settings page's timeout/services/accounts/strategy/leadMagnets/
 // products config used to live only in each browser's localStorage - see
@@ -11774,7 +11875,9 @@ app.post('/api/aeo/suggest-products', async (req, res) => {
     // Services: real table first, then the JSON blobs on Settings.
     let services = servicesRecords.map(r => {
       const f = r.fields || {};
-      return f['Name'] || f['Service'] || f['Title'] || Object.values(f)[0] || '';
+      const name = f['Service Name'] || f['Name'] || f['Service'] || f['Title'] || Object.values(f)[0] || '';
+      const desc = f['Description'] || f['Key Outcomes'] || '';
+      return name ? (desc ? `${name}: ${String(desc).slice(0, 300)}` : String(name)) : '';
     }).filter(Boolean);
     if (!services.length && settingsRecord) {
       for (const key of ['Services JSON', 'Products JSON']) {
@@ -11788,6 +11891,11 @@ app.post('/api/aeo/suggest-products', async (req, res) => {
       }
     }
     services = Array.from(new Set(services));
+
+    // The scraped website profile (Settings.Company Profile, refreshed by
+    // POST /api/settings/scrape-company-profile) - the Engine's ground truth
+    // on what T2C sells and how it positions it.
+    const companyProfile = ((settingsRecord && settingsRecord.fields['Company Profile']) || '').trim();
 
     const keywords = keywordRecords
       .map(r => ({ keyword: r.fields['Keyword'] || '', volume: r.fields['Volume'] || 0, intent: r.fields['Intent'] || '', status: r.fields['Status'] || '' }))
@@ -11817,8 +11925,11 @@ app.post('/api/aeo/suggest-products', async (req, res) => {
 
 Work out which T2C products and services have the highest AEO opportunity right now, using:
 
+T2C COMPANY PROFILE (scraped from twenty2collective.com - what T2C sells and how it talks about it):
+${companyProfile ? companyProfile.slice(0, 12000) : 'Not scraped yet - hit "Refresh Company Profile" in Settings. Infer from the services and activity below.'}
+
 T2C SERVICES / PRODUCTS (core revenue lines):
-${services.length ? JSON.stringify(services) : 'Not documented - infer from the activity below.'}
+${services.length ? JSON.stringify(services) : 'Not documented - infer from the company profile and activity below.'}
 
 KEYWORD LIBRARY (search intent signals, highest volume first):
 ${JSON.stringify(keywords)}
