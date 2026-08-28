@@ -13093,11 +13093,34 @@ app.post('/api/omnisend/create-campaign', async (req, res) => {
   }
 });
 
-// POST /api/omnisend/upload-template - { name, html } -> saves the template
-// in Omnisend itself (email templates API), not Airtable. Omnisend's public
-// docs are light on this resource, so the request carries the HTML under the
-// key names it has used (content.html / html / body) and the id is read back
-// from whichever key the response returns.
+// The Omnisend email-templates API lives under /api/ (not /v3/) and needs its
+// own dated version header, so it can't go through omnisendFetch.
+const OMNISEND_TEMPLATES_URL = 'https://api.omnisend.com/api/email-templates';
+const OMNISEND_API_VERSION = '2026-03-15';
+
+async function omnisendTemplatesFetch(method, url, body) {
+  const res = await fetch(url, {
+    method,
+    headers: {
+      'X-API-KEY': process.env.OMNISEND_API_KEY,
+      'Omnisend-Version': OMNISEND_API_VERSION,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  const text = await res.text();
+  let json = null;
+  if (text) { try { json = JSON.parse(text); } catch (e) { json = null; } }
+  if (!res.ok) {
+    const detail = (json && (json.error || json.message || json.detail || json.errorMessage)) || text || res.statusText;
+    throw new Error(`Omnisend API error ${res.status}: ${detail}`);
+  }
+  return json || {};
+}
+
+// POST /api/omnisend/upload-template - { name, html } -> imports the HTML as a
+// new Omnisend email template via POST .../email-templates/import.
 app.post('/api/omnisend/upload-template', async (req, res) => {
   if (!omnisendConfigured()) return res.status(500).json({ error: 'OMNISEND_API_KEY not configured' });
   const b = req.body || {};
@@ -13106,41 +13129,26 @@ app.post('/api/omnisend/upload-template', async (req, res) => {
   if (!name) return res.status(400).json({ error: 'name is required' });
   if (!html) return res.status(400).json({ error: 'html is required' });
   try {
-    const result = await omnisendFetch('POST', '/email-templates', {
-      name,
-      content: { html },
-      html,
-      body: html
-    });
-    res.json({
-      success: true,
-      id: result.templateID || result.templateId || result.id || null,
-      template: result
-    });
+    const data = await omnisendTemplatesFetch('POST', `${OMNISEND_TEMPLATES_URL}/import`, { name, html });
+    const tpl = (data && (data.template || data)) || {};
+    res.json({ success: true, id: tpl.id || tpl.templateID || tpl.templateId || null, name: tpl.name || name });
   } catch (err) {
     console.error('Omnisend upload-template error:', err.message);
     res.status(502).json({ error: err.message });
   }
 });
 
-// GET /api/omnisend/templates - all email templates saved in Omnisend,
-// trimmed to { id, name, createdAt }.
+// GET /api/omnisend/templates - the Omnisend email templates, each trimmed to
+// { id, name, createdAt } for the Email Marketing > Copy Generator tab.
 app.get('/api/omnisend/templates', async (req, res) => {
   if (!omnisendConfigured()) return res.status(500).json({ error: 'OMNISEND_API_KEY not configured' });
   try {
-    const out = [];
-    let next = '/email-templates?limit=250';
-    let guard = 0;
-    while (next && guard++ < 50) {
-      const page = await omnisendFetch('GET', next);
-      const list = page.emailTemplates || page.templates || page.data || (Array.isArray(page) ? page : []);
-      out.push(...list);
-      next = (page.paging && page.paging.next) || null;
-    }
-    const templates = out.map(t => ({
-      id: t.templateID || t.templateId || t.id || '',
-      name: t.name || t.title || '',
-      createdAt: t.createdAt || t.created || t.dateCreated || t.createDate || null
+    const data = await omnisendTemplatesFetch('GET', OMNISEND_TEMPLATES_URL);
+    const list = Array.isArray(data && data.templates) ? data.templates : [];
+    const templates = list.map(t => ({
+      id: t.id || t.templateID || t.templateId || null,
+      name: t.name || t.templateName || 'Untitled template',
+      createdAt: t.createdAt || t.createdDate || t.created || null
     }));
     res.json({ templates, count: templates.length });
   } catch (err) {

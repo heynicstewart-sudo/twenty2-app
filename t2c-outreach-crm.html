@@ -645,7 +645,7 @@ table.spreadsheet-table{border-collapse:collapse;width:100%;min-width:960px;font
       <div class="topbar-title" id="topbarTitle">Home</div>
       <div class="topbar-user">
         <button type="button" class="theme-toggle-btn" id="themeToggleBtn" onclick="toggleThemeMode()" title="Toggle light/dark mode"><i class="ti ti-sun" id="themeToggleIcon"></i></button>
-        <div class="avatar">MW</div>
+        <div class="avatar" onclick="navigate('settings')" style="cursor:pointer;" title="Settings">MW</div>
       </div>
     </header>
     <div class="page" id="pageContent"></div>
@@ -1307,55 +1307,36 @@ function goToRunIntelligence(){
 
 /* ===================== NAV / RENDER DISPATCH ===================== */
 
-// Primary nav is the content-marketing workspace. Seven of these entries
-// target the existing `content` page with a specific sub-tab preselected -
-// the Marketing page's own seq-tab bar stays as secondary nav, all wiring
-// untouched. The CRM pages (Home/Logger/Campaigns/Sales/Engine/Research)
-// are kept reachable below a divider (group:'crm'). `navKey` is the sidebar
-// identity used for active highlighting, since several rows share id 'content'.
+// Sidebar is the top-level workspace switch: the CRM pages plus one
+// "Marketing" entry. Everything content/marketing related (Signals, Draft
+// Centre, Calendar, LinkedIn Performance, SEO, AEO, Google Ads, Email
+// Marketing, Settings) lives inside the Marketing page's own seq-tab bar
+// (CONTENT_SUBTABS), not the sidebar. `settings`, `contentcalendar` and
+// `grid` stay in NAV as hidden entries so page dispatch still resolves them.
 const NAV = [
-  { id:'content', navKey:'signals', label:'Signals', icon:'ti-antenna-bars-5', subtab:'signals' },
-  { id:'content', navKey:'drafts', label:'Draft Centre', icon:'ti-notes', subtab:'drafts' },
-  { id:'content', navKey:'seo', label:'SEO', icon:'ti-world-search', subtab:'seo' },
-  { id:'content', navKey:'aeo', label:'AEO', icon:'ti-robot', subtab:'aeo' },
-  { id:'content', navKey:'googleads', label:'Google Ads', icon:'ti-brand-google', subtab:'googleads' },
-  { id:'content', navKey:'email', label:'Email Marketing', icon:'ti-mail', subtab:'email' },
-  { id:'contentcalendar', navKey:'contentcalendar', label:'Calendar', icon:'ti-calendar-month' },
-  { id:'content', navKey:'performance', label:'LinkedIn Performance', icon:'ti-chart-line', subtab:'performance' },
-  { id:'settings', navKey:'settings', label:'Settings', icon:'ti-settings' },
-  { id:'home', navKey:'home', label:'Home', icon:'ti-home', group:'crm' },
-  { id:'logger', navKey:'logger', label:'Logger', icon:'ti-clipboard-text', group:'crm' },
-  { id:'campaigns', navKey:'campaigns', label:'Campaigns', icon:'ti-rocket', group:'crm' },
-  { id:'calendar', navKey:'calendar', label:'Sales', icon:'ti-calendar', group:'crm' },
-  { id:'intelligence', navKey:'intelligence', label:'Engine', icon:'ti-brain', group:'crm' },
-  { id:'research', navKey:'research', label:'Research', icon:'ti-microscope', group:'crm' },
-  { id:'grid', navKey:'grid', label:'Grid', icon:'ti-grid-dots', hidden:true }
+  { id:'home', label:'Home', icon:'ti-home' },
+  { id:'logger', label:'Logger', icon:'ti-clipboard-text' },
+  { id:'campaigns', label:'Campaigns', icon:'ti-rocket' },
+  { id:'calendar', label:'Sales', icon:'ti-calendar' },
+  { id:'content', label:'Marketing', icon:'ti-news' },
+  { id:'intelligence', label:'Engine', icon:'ti-brain' },
+  { id:'research', label:'Research', icon:'ti-microscope' },
+  { id:'settings', label:'Settings', icon:'ti-settings', hidden:true },
+  { id:'contentcalendar', label:'Calendar', icon:'ti-calendar-month', hidden:true },
+  { id:'grid', label:'Grid', icon:'ti-grid-dots', hidden:true }
 ];
 
 function renderSidebar(){
   const nav = document.getElementById('sidebarNav');
-  const active = state.activeNavKey || state.currentPage;
-  const btn = n => '<button class="nav-item '+(active===n.navKey?'active':'')+'" onclick="navSelect(\''+n.navKey+'\')"><i class="ti '+n.icon+'"></i><span>'+n.label+'</span></button>';
-  const primary = NAV.filter(n => !n.hidden && n.group !== 'crm');
-  const crm = NAV.filter(n => !n.hidden && n.group === 'crm');
-  nav.innerHTML = primary.map(btn).join('')
-    + '<div class="nav-divider">CRM</div>'
-    + crm.map(btn).join('');
+  nav.innerHTML = NAV.filter(n => !n.hidden).map(n => (
+    '<button class="nav-item '+(state.currentPage===n.id?'active':'')+'" onclick="navigate(\''+n.id+'\')"><i class="ti '+n.icon+'"></i><span>'+n.label+'</span></button>'
+  )).join('');
 }
 
-// Sidebar click. Looks the entry up by navKey so the several id:'content'
-// rows each select their own sub-tab and highlight correctly.
-function navSelect(navKey){
-  const n = NAV.find(x => x.navKey === navKey);
-  if(!n) return;
-  if(n.subtab) window.__contentSubTab = n.subtab;
-  navigate(n.id, navKey);
-}
-
-function navigate(page, navKey){
+function navigate(page){
   state.currentPage = page;
-  const navEntry = navKey ? NAV.find(n => n.navKey === navKey) : NAV.find(n => n.id === page);
-  state.activeNavKey = navEntry ? navEntry.navKey : page;
+  const navEntry = NAV.find(n => n.id === page);
+  state.activeNavKey = navEntry ? navEntry.id : page;
   const grid = page === 'grid' ? currentGrid() : null;
   document.getElementById('topbarTitle').textContent = grid ? grid.name : (navEntry ? navEntry.label : '');
   renderSidebar();
@@ -1443,7 +1424,7 @@ function afterRender(page){
     if(tab === 'email'){
       const it = window.__emailInnerTab || 'copy';
       if(it === 'copy' && window.__emailSettings === undefined) loadEmailSettings();
-      if(it === 'copy' && window.__emailTemplates === undefined) loadEmailTemplates();
+      if((it === 'copy' || it === 'templates') && window.__emailTemplates === undefined) loadEmailTemplates();
       if(it === 'campaigns' && window.__omnisendCampaigns === undefined) loadOmnisendCampaigns();
       if(it === 'contacts' && window.__omnisendContacts === undefined) loadOmnisendContacts();
       if(it === 'health' && window.__omnisendLowEngagement === undefined) loadOmnisendLowEngagement();
@@ -16266,7 +16247,7 @@ function renderGoogleAdsDraftPreview(draft){
 //    client-side CSV export of the full flagged list.
 // Every AI reference in this UI says "Engine", never "AI" / "Claude".
 
-const EMAIL_INNER_TABS = [['copy','Copy Generator'],['campaigns','Campaigns'],['contacts','Contacts'],['health','List Health']];
+const EMAIL_INNER_TABS = [['copy','Copy Generator'],['campaigns','Campaigns'],['templates','Templates'],['contacts','Contacts'],['health','List Health']];
 
 function setEmailInnerTab(tab){
   window.__emailInnerTab = tab;
@@ -16281,9 +16262,62 @@ function renderContentEmailTab(){
   </div>
   ${tab==='copy' ? renderEmailCopyTab() : ''}
   ${tab==='campaigns' ? renderEmailCampaignsTab() : ''}
+  ${tab==='templates' ? renderEmailTemplatesTab() : ''}
   ${tab==='contacts' ? renderEmailContactsTab() : ''}
   ${tab==='health' ? renderEmailListHealthTab() : ''}
   `;
+}
+
+// Templates inner tab - the saved structure references (GET
+// /api/omnisend/templates). "Use as reference" marks one as the active
+// layout guide the Copy Generator passes to the Engine.
+function renderEmailTemplatesTab(){
+  const t = window.__emailTemplates;
+  const activeId = (window.__emailActiveTemplate || {}).id || null;
+  let body;
+  if(t === undefined){
+    body = '<div class="muted" style="font-size:12px;"><i class="ti ti-loader-2"></i> Loading templates...</div>';
+  } else if(t && t.error){
+    body = `<div class="muted" style="font-size:12px;">Could not load templates: ${esc(t.error)}</div>`;
+  } else if(!t.length){
+    body = '<div class="muted" style="font-size:12px;">No templates on file yet. Upload a past campaign from the Copy Generator tab to add one.</div>';
+  } else {
+    body = `
+      <div class="perf-table-wrap">
+      <table class="perf-table">
+        <thead><tr><th>Template</th><th>Created</th><th></th></tr></thead>
+        <tbody>
+          ${t.map(x => {
+            const isActive = x.id && x.id === activeId;
+            return `<tr>
+              <td>${esc(x.name)}</td>
+              <td>${x.createdDate ? esc(fmtDate(x.createdDate)) : '—'}</td>
+              <td style="text-align:right;">
+                <button class="btn btn-sm ${isActive ? 'btn-primary' : 'btn-secondary'}" onclick="setEmailTemplateReference('${esc(x.id||'')}', '${esc((x.name||'').replace(/'/g,"\\'"))}')">
+                  <i class="ti ${isActive ? 'ti-check' : 'ti-layout-board'}"></i> ${isActive ? 'Active reference' : 'Use as reference'}
+                </button>
+              </td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+      </div>`;
+  }
+  return `
+  <div class="card" style="margin-bottom:18px;">
+    <div class="section-title"><i class="ti ti-layout-board"></i> Email Templates</div>
+    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Structure references only, layout and section order. The Copy Generator uses the active one as a layout guide; the copy itself is never reused.</p>
+    ${body}
+  </div>`;
+}
+
+// Sets the active structure reference used by the Copy Generator.
+function setEmailTemplateReference(id, name){
+  if(!id) return;
+  window.__emailActiveTemplate = { id, name: name || '' };
+  toast(`"${name || 'Template'}" set as the Copy Generator structure reference`, 'success');
+  emailRerender('templates');
+  emailRerender('copy');
 }
 
 function emailRerender(inner){
@@ -16348,6 +16382,7 @@ async function loadEmailTemplates(){
     if(!res.ok) throw new Error(data.error || 'Request failed');
     const list = Array.isArray(data) ? data : (Array.isArray(data.templates) ? data.templates : []);
     window.__emailTemplates = list.map(t => ({
+      id: t.id || t.templateId || t.templateID || t.recordId || '',
       name: t.name || t.templateName || t['Template Name'] || 'Untitled template',
       createdDate: t.createdDate || t.dateAdded || t.created || t.createdAt || t['Date Added'] || ''
     }));
@@ -16463,6 +16498,7 @@ function renderEmailGenerateCard(){
     <div class="section-title"><i class="ti ti-sparkles"></i> Generate Copy</div>
     <p class="muted" style="font-size:12px;margin-bottom:12px;">Describe what this email needs to do. The Engine drafts subject, preheader, hero image search term, intro, body sections and CTA.</p>
     <div class="field"><label>Campaign brief</label><textarea id="emailBrief" rows="4" placeholder="e.g. Community Connect — invite Perth members to the September in-person session, highlight the guest speaker, keep it warm and short.">${esc(f.brief || '')}</textarea></div>
+    ${window.__emailActiveTemplate && window.__emailActiveTemplate.name ? `<p class="muted" style="font-size:11.5px;margin-bottom:10px;"><i class="ti ti-layout-board"></i> Structure reference: <strong>${esc(window.__emailActiveTemplate.name)}</strong></p>` : ''}
     <button class="btn btn-primary btn-sm" ${window.__emailCopyLoading ? 'disabled' : ''} onclick="runGenerateEmailCopy()"><i class="ti ${window.__emailCopyLoading ? 'ti-loader-2' : 'ti-wand'}"></i> ${window.__emailCopyLoading ? 'Generating...' : 'Generate Copy'}</button>
   </div>`;
 }
@@ -16477,9 +16513,10 @@ async function runGenerateEmailCopy(){
   emailRerender('copy');
   try {
     const s = window.__emailSettings || {};
+    const ref = window.__emailActiveTemplate || {};
     const res = await fetch('/api/omnisend/generate-email-copy', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ brief: brief.trim(), voiceProfile: s.voiceProfile || '' })
+      body: JSON.stringify({ brief: brief.trim(), voiceProfile: s.voiceProfile || '', templateId: ref.id || '', templateName: ref.name || '' })
     });
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
