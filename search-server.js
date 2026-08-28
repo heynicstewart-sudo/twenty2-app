@@ -12392,25 +12392,49 @@ function googleAdsRowsToRecords(values) {
   return { headers, records };
 }
 
+function googleAdsTotalRecordCount(sheets) {
+  return GOOGLE_ADS_SHEET_TABS.reduce((n, tab) => {
+    const list = sheets && sheets[tab] && sheets[tab].records;
+    return n + (Array.isArray(list) ? list.length : 0);
+  }, 0);
+}
+
 async function fetchGoogleAdsData(force) {
   if (!force && googleAdsDataCache && (Date.now() - googleAdsDataCache.at) < GOOGLE_ADS_CACHE_MS) {
     return { ...googleAdsDataCache.data, cached: true };
   }
-  const sheets = await getGoogleSheetsClient();
-  const resp = await sheets.spreadsheets.values.batchGet({
-    spreadsheetId: GOOGLE_ADS_SHEET_ID,
-    ranges: GOOGLE_ADS_SHEET_TABS.map(t => `'${t}'!A1:BZ5000`)
-  });
+
+  let sheets;
+  try {
+    sheets = await getGoogleSheetsClient();
+  } catch (err) {
+    throw new Error(`Google Sheets auth failed (check GSC_SERVICE_ACCOUNT_JSON): ${err.message}`);
+  }
+
+  let resp;
+  try {
+    resp = await sheets.spreadsheets.values.batchGet({
+      spreadsheetId: GOOGLE_ADS_SHEET_ID,
+      ranges: GOOGLE_ADS_SHEET_TABS.map(t => `'${t}'!A1:BZ5000`)
+    });
+  } catch (err) {
+    // googleapis errors carry the useful detail on err.errors / err.response.data
+    const detail = (err.response && err.response.data && err.response.data.error && err.response.data.error.message) || err.message;
+    throw new Error(`Google Sheets API request failed for spreadsheet ${GOOGLE_ADS_SHEET_ID} (is it shared with the service account and are the tab names ${GOOGLE_ADS_SHEET_TABS.join(', ')} correct?): ${detail}`);
+  }
+
   const valueRanges = (resp.data && resp.data.valueRanges) || [];
   const out = {};
   GOOGLE_ADS_SHEET_TABS.forEach((tab, idx) => {
     const vr = valueRanges[idx] || {};
     out[tab] = googleAdsRowsToRecords(vr.values);
   });
+
   const data = {
     sheetId: GOOGLE_ADS_SHEET_ID,
     fetchedAt: new Date().toISOString(),
     cached: false,
+    recordCount: googleAdsTotalRecordCount(out),
     sheets: out
   };
   googleAdsDataCache = { at: Date.now(), data };
@@ -12449,8 +12473,29 @@ Return only valid JSON: an array of card objects. No commentary, no markdown.`;
 
 app.post('/api/google-ads/insights', async (req, res) => {
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  if (!process.env.GSC_SERVICE_ACCOUNT_JSON) return res.status(500).json({ error: 'GSC_SERVICE_ACCOUNT_JSON not configured - the Google Ads sheet cannot be read' });
+
   try {
-    const data = await fetchGoogleAdsData(false);
+    // Fetch the sheet data first and fail loudly here, before Claude, so a
+    // sheet/permission/tab-name problem surfaces as its real message rather
+    // than a downstream "no data" or generic upstream error.
+    let data;
+    try {
+      data = await fetchGoogleAdsData(false);
+    } catch (fetchErr) {
+      console.error('Google Ads insights - sheet fetch failed:', fetchErr.stack || fetchErr.message);
+      return res.status(502).json({ error: `Could not load Google Ads sheet data: ${fetchErr.message}` });
+    }
+
+    const recordCount = googleAdsTotalRecordCount(data.sheets);
+    if (!recordCount) {
+      console.error('Google Ads insights - sheet fetch returned 0 records across all tabs', {
+        sheetId: data.sheetId,
+        cached: data.cached,
+        tabs: GOOGLE_ADS_SHEET_TABS.map(t => ({ tab: t, rows: (data.sheets[t] && data.sheets[t].records || []).length, headers: (data.sheets[t] && data.sheets[t].headers) || [] }))
+      });
+      return res.status(502).json({ error: `The Google Ads sheet (${data.sheetId}) returned no rows in any of the tabs ${GOOGLE_ADS_SHEET_TABS.join(', ')}. Check the sheet is shared with the service account, the tab names match exactly, and the tabs are not empty.` });
+    }
 
     let seoKeywords = [];
     try {
@@ -12492,7 +12537,14 @@ ${JSON.stringify(recs('Ads', 150), null, 2)}
 TWENTY2 SEO TARGET KEYWORDS (organic content plan):
 ${JSON.stringify(seoKeywords, null, 2)}`;
 
-    const raw = await callClaudeMessages(userContent, 4000, GOOGLE_ADS_INSIGHTS_SYSTEM_PROMPT);
+    let raw;
+    try {
+      raw = await callClaudeMessages(userContent, 4000, GOOGLE_ADS_INSIGHTS_SYSTEM_PROMPT);
+    } catch (claudeErr) {
+      console.error('Google Ads insights - Claude call failed:', claudeErr.stack || claudeErr.message);
+      return res.status(502).json({ error: `Insight generation failed: ${claudeErr.message}` });
+    }
+
     const cleaned = stripCodeFences(raw);
     let insights = [];
     try {
@@ -12501,6 +12553,7 @@ ${JSON.stringify(seoKeywords, null, 2)}`;
     } catch (parseErr) {
       const m = cleaned.match(/\[[\s\S]*\]/);
       if (m) { try { insights = JSON.parse(m[0]); } catch (e) { insights = []; } }
+      if (!insights.length) console.warn('Google Ads insights - could not parse model output as JSON. First 500 chars:', cleaned.slice(0, 500));
     }
 
     const ALLOWED = new Set(['budget', 'keyword', 'search_term', 'quality_score', 'ad_copy', 'seo_overlap']);
@@ -12513,10 +12566,10 @@ ${JSON.stringify(seoKeywords, null, 2)}`;
         action: (i.action || '').toString()
       }));
 
-    res.json({ insights });
+    res.json({ insights, recordCount, dataCached: !!data.cached, dataFetchedAt: data.fetchedAt });
   } catch (err) {
-    console.error('Google Ads insights error:', err.message);
-    res.status(500).json({ error: err.message });
+    console.error('Google Ads insights error:', err.stack || err.message);
+    res.status(500).json({ error: err.message || String(err) });
   }
 });
 
