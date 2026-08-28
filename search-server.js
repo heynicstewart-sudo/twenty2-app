@@ -11597,10 +11597,24 @@ app.get('/api/seo/campaigns/:id/progress', async (req, res) => {
 
     const resolved = resolveSeoCampaignKeywords(splitSeoCampaignKeywordTokens(campaign.targetKeywords), keywordRecords);
 
+    // Keyword text -> Status, used to drop Sitemap rows whose backing
+    // Keywords record has since been deleted or reset. A row whose keyword
+    // matches no Keywords record at all (e.g. service pages) is kept.
+    const keywordStatusByText = {};
+    keywordRecords.forEach(r => {
+      const kw = (r.fields['Keyword'] || '').toLowerCase().trim();
+      if (kw) keywordStatusByText[kw] = r.fields['Status'] || '';
+    });
+
     const postsPublished = sitemapRecords
       .filter(r => {
         const d = r.fields['Published Date'] || '';
         return d && d >= startDate && d <= today;
+      })
+      .filter(r => {
+        const kw = (r.fields['Keyword'] || '').toLowerCase().trim();
+        if (!kw || !(kw in keywordStatusByText)) return true;
+        return keywordStatusByText[kw] === 'Published';
       })
       .map(r => ({
         url: r.fields['URL'] || '',
