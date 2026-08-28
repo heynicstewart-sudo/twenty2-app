@@ -13977,9 +13977,10 @@ function renderContentSeoTab(){
     <p class="muted" style="font-size:12px;margin-bottom:12px;">City zipper model - one page per service x location. Generates against the same on-page SEO checklist as blog posts, then sends it to Framer as a draft and logs it below.</p>
     <div class="row">
       <div class="field"><label>Service</label>
-        <select id="seoServiceSelect">
-          ${SEO_SERVICE_OPTIONS.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('')}
-        </select>
+        <input id="seoServiceSelect" list="seoServiceOptions" placeholder="Pick a service or type your own" autocomplete="off">
+        <datalist id="seoServiceOptions">
+          ${SEO_SERVICE_OPTIONS.map(s => `<option value="${esc(s)}"></option>`).join('')}
+        </datalist>
       </div>
       <div class="field"><label>Location</label><input id="seoServiceLocation" placeholder="e.g. Perth, Fremantle, Joondalup"></div>
     </div>
@@ -14056,9 +14057,10 @@ function fallbackCopy(text, done){
 }
 
 async function generateSeoServicePage(){
-  const service = document.getElementById('seoServiceSelect').value;
+  const service = (document.getElementById('seoServiceSelect').value || '').trim();
   const location = (document.getElementById('seoServiceLocation').value || '').trim();
   const referenceContent = (document.getElementById('seoServiceReferenceContent')?.value || '').trim();
+  if(!service){ toast('Add a service first', 'warn'); return; }
   if(!location){ toast('Add a location first', 'warn'); return; }
   const btn = document.getElementById('seoServiceGenerateBtn');
   if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Generating and sending to Framer...'; }
