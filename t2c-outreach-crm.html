@@ -15445,6 +15445,40 @@ function gaIsActive(rec){
   return st.includes('enabl') || st.includes('active') || st.includes('eligible');
 }
 
+// /api/google-ads/data returns one row per day per entity. Collapse to one
+// row per entity: sum spend / clicks / impressions, then recalculate CTR
+// (clicks / impressions) and CPC (spend / clicks) from those totals.
+// `keyFn` picks the grouping key. `extra` folds non-additive fields
+// (quality score, impression share) by keeping the last non-empty value.
+function gaAggregateRows(records, keyFn, extra){
+  const groups = new Map();
+  (records || []).forEach(rec => {
+    const key = keyFn(rec);
+    if(key == null) return;
+    let g = groups.get(key);
+    if(!g){ g = { sample: rec, spend:0, clicks:0, impressions:0, extra:{} }; groups.set(key, g); }
+    g.spend += gaNum(gaFieldRaw(rec, ['Cost','Spend','Amount spent']));
+    g.clicks += gaNum(gaFieldRaw(rec, ['Clicks']));
+    g.impressions += gaNum(gaFieldRaw(rec, ['Impr.','Impressions','Impr']));
+    (extra || []).forEach(([name, names]) => {
+      const v = gaFieldRaw(rec, names);
+      if(v != null && String(v).trim() !== '') g.extra[name] = v;
+    });
+  });
+  return [...groups.values()].map(g => ({
+    sample: g.sample,
+    spend: g.spend,
+    clicks: g.clicks,
+    impressions: g.impressions,
+    ctr: g.impressions ? g.clicks / g.impressions : 0,
+    cpc: g.clicks ? g.spend / g.clicks : 0,
+    extra: g.extra
+  }));
+}
+
+function gaAdGroupName(rec){ return gaField(rec, ['Ad group','Ad Group','Ad group name']) || '—'; }
+function gaKeywordText(rec){ return gaField(rec, ['Keyword','Search keyword','Keyword text']) || '—'; }
+
 async function loadGoogleAdsData(force){
   if(window.__googleAdsData !== undefined && !force) return;
   if(window.__googleAdsDataLoading) return;
@@ -15467,6 +15501,7 @@ function renderContentGoogleAdsTab(){
   return `
   ${renderGoogleAdsDashboard()}
   ${renderGoogleAdsCampaignsTable()}
+  ${renderGoogleAdsAdGroupsTable()}
   ${renderGoogleAdsKeywordsTable()}
   ${renderGoogleAdsSearchTermsTable()}
   ${renderGoogleAdsInsightsSection()}
@@ -15515,19 +15550,13 @@ function renderGoogleAdsDashboard(){
 function renderGoogleAdsCampaignsTable(){
   const d = window.__googleAdsData;
   if(!d || d.error || window.__googleAdsDataLoading) return '';
-  const rows = gaRecords('Campaigns').map(c => {
-    const spend = gaNum(gaFieldRaw(c, ['Cost','Spend','Amount spent']));
-    const clicks = gaNum(gaFieldRaw(c, ['Clicks']));
-    const impressions = gaNum(gaFieldRaw(c, ['Impr.','Impressions','Impr']));
-    const ctrRaw = gaFieldRaw(c, ['CTR']);
-    return {
-      name: gaCampaignName(c),
-      state: gaField(c, ['Campaign state','Campaign status','Status','State']),
-      spend, clicks,
-      ctr: ctrRaw != null && ctrRaw !== '' ? gaPct(ctrRaw) : (impressions ? clicks/impressions : 0),
-      cpc: (() => { const raw = gaFieldRaw(c, ['Avg. CPC','Avg CPC','CPC']); return (raw != null && raw !== '') ? gaNum(raw) : (clicks ? spend/clicks : 0); })()
-    };
-  }).sort((a,b) => b.spend - a.spend);
+  const rows = gaAggregateRows(gaRecords('Campaigns'), gaCampaignName)
+    .map(g => ({
+      name: gaCampaignName(g.sample),
+      state: gaField(g.sample, ['Campaign state','Campaign status','Status','State']),
+      spend: g.spend, clicks: g.clicks, ctr: g.ctr, cpc: g.cpc
+    }))
+    .sort((a,b) => b.spend - a.spend);
   let inner;
   if(!rows.length){
     inner = '<div class="empty-state">No campaigns in the sheet.</div>';
@@ -15551,7 +15580,47 @@ function renderGoogleAdsCampaignsTable(){
   return `
   <div class="card" style="margin-bottom:18px;">
     <div class="section-title"><i class="ti ti-speakerphone"></i> Campaigns</div>
-    <p class="muted" style="font-size:12px;margin-bottom:10px;">All campaigns, highest spend first.</p>
+    <p class="muted" style="font-size:12px;margin-bottom:10px;">One row per campaign, daily rows aggregated. Highest spend first.</p>
+    ${inner}
+  </div>`;
+}
+
+function renderGoogleAdsAdGroupsTable(){
+  const d = window.__googleAdsData;
+  if(!d || d.error || window.__googleAdsDataLoading) return '';
+  const rows = gaAggregateRows(gaRecords('Ad Groups'), a => gaCampaignName(a) + ' ␟ ' + gaAdGroupName(a))
+    .map(g => ({
+      adGroup: gaAdGroupName(g.sample),
+      campaign: gaCampaignName(g.sample),
+      spend: g.spend, clicks: g.clicks, impressions: g.impressions, ctr: g.ctr, cpc: g.cpc
+    }))
+    .sort((a,b) => b.spend - a.spend);
+  let inner;
+  if(!rows.length){
+    inner = '<div class="empty-state">No ad groups in the sheet.</div>';
+  } else {
+    inner = `
+    <div class="perf-table-wrap">
+    <table class="perf-table">
+      <thead><tr><th>Ad group</th><th>Campaign</th><th>Impr.</th><th>Clicks</th><th>CTR</th><th>CPC</th><th>Spend</th></tr></thead>
+      <tbody>
+      ${rows.map(r => `<tr>
+        <td>${esc(r.adGroup)}</td>
+        <td>${esc(r.campaign)}</td>
+        <td>${gaFmtInt(r.impressions)}</td>
+        <td>${gaFmtInt(r.clicks)}</td>
+        <td>${gaFmtPct(r.ctr)}</td>
+        <td>${gaFmtMoney(r.cpc)}</td>
+        <td>${gaFmtMoney(r.spend)}</td>
+      </tr>`).join('')}
+      </tbody>
+    </table>
+    </div>`;
+  }
+  return `
+  <div class="card" style="margin-bottom:18px;">
+    <div class="section-title"><i class="ti ti-layout-grid"></i> Ad Groups</div>
+    <p class="muted" style="font-size:12px;margin-bottom:10px;">One row per ad group, daily rows aggregated. Highest spend first.</p>
     ${inner}
   </div>`;
 }
@@ -15559,22 +15628,22 @@ function renderGoogleAdsCampaignsTable(){
 function renderGoogleAdsKeywordsTable(){
   const d = window.__googleAdsData;
   if(!d || d.error || window.__googleAdsDataLoading) return '';
-  const rows = gaRecords('Keywords').map(k => {
-    const spend = gaNum(gaFieldRaw(k, ['Cost','Spend']));
-    const clicks = gaNum(gaFieldRaw(k, ['Clicks']));
-    const impressions = gaNum(gaFieldRaw(k, ['Impr.','Impressions','Impr']));
-    const ctrRaw = gaFieldRaw(k, ['CTR']);
-    const cpcRaw = gaFieldRaw(k, ['Avg. CPC','Avg CPC','CPC']);
-    return {
-      keyword: gaField(k, ['Keyword','Search keyword','Keyword text']) || '—',
-      campaign: gaCampaignName(k),
-      impressions, clicks, spend,
-      ctr: (ctrRaw != null && ctrRaw !== '') ? gaPct(ctrRaw) : (impressions ? clicks/impressions : 0),
-      cpc: (cpcRaw != null && cpcRaw !== '') ? gaNum(cpcRaw) : (clicks ? spend/clicks : 0),
-      qs: gaField(k, ['Quality score','Qual. score','Quality Score']) || '—',
-      is: (() => { const raw = gaFieldRaw(k, ['Search impr. share','Search impression share','Impr. share','Search Impr Share']); return (raw != null && raw !== '') ? gaFmtPct(gaPct(raw)) : '—'; })()
-    };
-  }).sort((a,b) => b.spend - a.spend).slice(0, 20);
+  const rows = gaAggregateRows(
+      gaRecords('Keywords'),
+      k => gaCampaignName(k) + ' ␟ ' + gaKeywordText(k),
+      [
+        ['qs', ['Quality score','Qual. score','Quality Score']],
+        ['is', ['Search impr. share','Search impression share','Impr. share','Search Impr Share']]
+      ]
+    )
+    .map(g => ({
+      keyword: gaKeywordText(g.sample),
+      campaign: gaCampaignName(g.sample),
+      impressions: g.impressions, clicks: g.clicks, spend: g.spend, ctr: g.ctr, cpc: g.cpc,
+      qs: (g.extra.qs != null && String(g.extra.qs).trim() !== '') ? String(g.extra.qs).trim() : '—',
+      is: (g.extra.is != null && String(g.extra.is).trim() !== '') ? gaFmtPct(gaPct(g.extra.is)) : '—'
+    }))
+    .sort((a,b) => b.spend - a.spend).slice(0, 20);
   let inner;
   if(!rows.length){
     inner = '<div class="empty-state">No keywords in the sheet.</div>';
@@ -15601,7 +15670,7 @@ function renderGoogleAdsKeywordsTable(){
   return `
   <div class="card" style="margin-bottom:18px;">
     <div class="section-title"><i class="ti ti-key"></i> Keywords</div>
-    <p class="muted" style="font-size:12px;margin-bottom:10px;">Top 20 keywords by spend.</p>
+    <p class="muted" style="font-size:12px;margin-bottom:10px;">Top 20 keywords by spend, daily rows aggregated per keyword.</p>
     ${inner}
   </div>`;
 }
