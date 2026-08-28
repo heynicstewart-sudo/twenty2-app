@@ -1401,6 +1401,7 @@ function afterRender(page){
     if(tab === 'seo' && window.__seoSuggestions === undefined) loadSeoSuggestions();
     if(tab === 'seo' && window.__seoVoiceProfile === undefined) loadSeoVoiceProfile();
     if(tab === 'seo' && window.__seoSitemap === undefined) loadSeoSitemap();
+    if(tab === 'seo' && window.__seoServiceQueue === undefined) loadServicePageQueue();
     if(tab === 'seo' && window.__seoGscDashboard === undefined) loadSeoGscDashboard();
     if(tab === 'seo' && window.__seoCampaigns === undefined) loadSeoCampaigns();
     if(tab === 'seo') initSeoGscCharts();
@@ -13974,18 +13975,21 @@ function renderContentSeoTab(){
 
   <div class="card" style="margin-bottom:18px;">
     <div class="section-title"><i class="ti ti-map-pin"></i> Service Pages</div>
-    <p class="muted" style="font-size:12px;margin-bottom:12px;">City zipper model - one page per service x location. Generates against the same on-page SEO checklist as blog posts, then sends it to Framer as a draft and logs it below.</p>
+    <p class="muted" style="font-size:12px;margin-bottom:12px;">City zipper model - one page per service x location. Queue up combinations below, then generate each against the same on-page SEO checklist as blog posts. Generated pages are sent to Framer as a draft and logged under Published Content.</p>
     <div class="row">
       <div class="field"><label>Service</label>
-        <input id="seoServiceSelect" list="seoServiceOptions" placeholder="Pick a service or type your own" autocomplete="off">
+        <input id="spqService" list="seoServiceOptions" placeholder="Pick a service or type your own" autocomplete="off">
         <datalist id="seoServiceOptions">
           ${SEO_SERVICE_OPTIONS.map(s => `<option value="${esc(s)}"></option>`).join('')}
         </datalist>
       </div>
-      <div class="field"><label>Location</label><input id="seoServiceLocation" placeholder="e.g. Perth, Fremantle, Joondalup"></div>
+      <div class="field"><label>Location</label><input id="spqLocation" placeholder="e.g. Perth, Fremantle, Joondalup"></div>
     </div>
-    <div class="field"><label>Reference Content (optional)</label><textarea id="seoServiceReferenceContent" rows="6" placeholder="Paste existing page content, notes, or context for this service. The Engine uses this as the primary source of truth."></textarea></div>
-    <button class="btn btn-primary btn-sm" id="seoServiceGenerateBtn" onclick="generateSeoServicePage()"><i class="ti ti-sparkles"></i> Generate Service Page</button>
+    <div class="field"><label>Reference Content (optional)</label><textarea id="spqReferenceContent" rows="6" placeholder="Paste existing page content, notes, or context for this service. The Engine uses this as the primary source of truth."></textarea></div>
+    <button class="btn btn-secondary btn-sm" id="spqAddBtn" onclick="addServicePageToQueue()"><i class="ti ti-plus"></i> Add to Queue</button>
+    <div style="margin-top:16px;">
+      ${renderServicePageQueueTable()}
+    </div>
   </div>
 
   <div class="card" style="margin-bottom:18px;">
@@ -14056,23 +14060,117 @@ function fallbackCopy(text, done){
   document.body.removeChild(ta);
 }
 
-async function generateSeoServicePage(){
-  const service = (document.getElementById('seoServiceSelect').value || '').trim();
-  const location = (document.getElementById('seoServiceLocation').value || '').trim();
-  const referenceContent = (document.getElementById('seoServiceReferenceContent')?.value || '').trim();
+// ---- Service Page Queue ----
+// window.__seoServiceQueue holds the planning list of service x location
+// rows (GET /api/seo/service-queue). Generate runs the same one-shot
+// generate-service-page endpoint as before, then PATCHes the result back
+// onto the queue record with Status = Generated. View reopens the stored
+// result in the shared service page preview panel.
+
+async function loadServicePageQueue(force){
+  if(window.__seoServiceQueue !== undefined && !force) return;
+  try {
+    const res = await fetch('/api/seo/service-queue');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__seoServiceQueue = data.queue || [];
+  } catch(err){
+    window.__seoServiceQueue = { error: err.message };
+  }
+  if(state.currentPage === 'content' && window.__contentSubTab === 'seo') renderPage();
+}
+
+function renderServicePageQueueTable(){
+  const list = window.__seoServiceQueue;
+  if(list === undefined) return '<div class="muted"><i class="ti ti-loader-2"></i> Loading queue...</div>';
+  if(list && list.error) return `<div class="muted">Could not load the service page queue: ${esc(list.error)}</div>`;
+  if(!list.length) return '<div class="empty-state">Queue is empty. Add a service and location above to get started.</div>';
+  return `
+  <div class="perf-table-wrap">
+  <table class="perf-table">
+    <thead><tr><th>Service</th><th>Location</th><th>Status</th><th></th></tr></thead>
+    <tbody>
+    ${list.map(q => `
+      <tr>
+        <td>${esc(q.service)}</td>
+        <td>${esc(q.location)}</td>
+        <td>${seoStatusTag(q.status)}</td>
+        <td style="white-space:nowrap;">
+          <button class="btn btn-primary btn-sm" ${q.status==='Generating'?'disabled':''} onclick="generateServicePageQueueItem('${q.id}')"><i class="ti ${q.status==='Generating'?'ti-loader-2':'ti-sparkles'}"></i> ${q.status==='Generating'?'Generating...':(q.status==='Queued'?'Generate':'Regenerate')}</button>
+          ${(q.status === 'Generated' || q.status === 'Published')
+            ? `<button class="btn btn-ghost btn-sm" onclick="viewServicePageQueueItem('${q.id}')"><i class="ti ti-eye"></i> View</button>`
+            : ''}
+          <button class="btn btn-ghost btn-sm" title="Delete from queue" onclick="deleteServicePageQueueItem('${q.id}','${esc(q.service).replace(/'/g,"\\'")}')"><i class="ti ti-trash"></i></button>
+        </td>
+      </tr>
+    `).join('')}
+    </tbody>
+  </table>
+  </div>`;
+}
+
+async function addServicePageToQueue(){
+  const service = (document.getElementById('spqService').value || '').trim();
+  const location = (document.getElementById('spqLocation').value || '').trim();
+  const referenceContent = (document.getElementById('spqReferenceContent')?.value || '').trim();
   if(!service){ toast('Add a service first', 'warn'); return; }
   if(!location){ toast('Add a location first', 'warn'); return; }
-  const btn = document.getElementById('seoServiceGenerateBtn');
-  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Generating and sending to Framer...'; }
+  const btn = document.getElementById('spqAddBtn');
+  if(btn){ btn.disabled = true; }
   try {
-    const res = await fetch('/api/seo/generate-service-page', {
+    const res = await fetch('/api/seo/service-queue', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ service, location, referenceContent })
     });
     const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Add failed');
+    document.getElementById('spqService').value = '';
+    document.getElementById('spqLocation').value = '';
+    if(document.getElementById('spqReferenceContent')) document.getElementById('spqReferenceContent').value = '';
+    toast(`Added "${service} — ${location}" to the queue`, 'success');
+    window.__seoServiceQueue = undefined;
+    loadServicePageQueue(true);
+  } catch(err){
+    toast('Could not add to queue: ' + err.message, 'warn');
+  }
+  if(btn){ btn.disabled = false; }
+}
+
+async function generateServicePageQueueItem(id){
+  const list = window.__seoServiceQueue;
+  const q = Array.isArray(list) ? list.find(x=>x.id===id) : null;
+  if(!q) return;
+  const prevStatus = q.status;
+  q.status = 'Generating';
+  renderPage();
+  try {
+    const res = await fetch('/api/seo/generate-service-page', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ service: q.service, location: q.location, referenceContent: q.referenceContent || '' })
+    });
+    const data = await res.json();
     if(!res.ok || !data.success) throw new Error(data.error || 'Generation failed');
+    const patch = await fetch('/api/seo/service-queue/' + encodeURIComponent(id), {
+      method:'PATCH', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        status: 'Generated',
+        generatedContent: data.html || '',
+        metaTitle: data.metaTitle || '',
+        metaDescription: data.metaDescription || '',
+        excerpt: data.excerpt || ''
+      })
+    });
+    const patchData = await patch.json();
+    if(!patch.ok || !patchData.success) throw new Error(patchData.error || 'Could not save generated content back to the queue');
+    Object.assign(q, {
+      status: 'Generated',
+      generatedContent: data.html || '',
+      metaTitle: data.metaTitle || '',
+      metaDescription: data.metaDescription || '',
+      excerpt: data.excerpt || ''
+    });
     window.__seoServicePreview = {
-      keyword: data.keyword || (service + ' ' + location),
+      keyword: data.keyword || (q.service + ' ' + q.location),
       title: data.title, html: data.html, metaTitle: data.metaTitle, metaDescription: data.metaDescription,
       publishedUrl: data.url, linkedInDraft: data.linkedInDraft || '',
       gscSubmitted: data.gscSubmitted, usedCustomVoiceProfile: data.usedCustomVoiceProfile
@@ -14082,8 +14180,37 @@ async function generateSeoServicePage(){
     toast('Service page generated and sent to Framer as a draft', 'success');
     renderPage();
   } catch(err){
+    q.status = prevStatus;
     toast('Could not generate service page: ' + err.message, 'warn');
-    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-sparkles"></i> Generate Service Page'; }
+    renderPage();
+  }
+}
+
+function viewServicePageQueueItem(id){
+  const list = window.__seoServiceQueue;
+  const q = Array.isArray(list) ? list.find(x=>x.id===id) : null;
+  if(!q) return;
+  window.__seoServicePreview = {
+    keyword: (q.service + ' ' + q.location).trim(),
+    title: q.metaTitle || (q.service + ' ' + q.location).trim(),
+    html: q.generatedContent || '',
+    metaTitle: q.metaTitle || '',
+    metaDescription: q.metaDescription || ''
+  };
+  renderPage();
+}
+
+async function deleteServicePageQueueItem(id, service){
+  if(!confirm(`Remove "${service}" from the service page queue? If a draft was already sent to Framer, it is NOT affected.`)) return;
+  try {
+    const res = await fetch('/api/seo/service-queue/' + encodeURIComponent(id), { method:'DELETE' });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Delete failed');
+    if(Array.isArray(window.__seoServiceQueue)) window.__seoServiceQueue = window.__seoServiceQueue.filter(x=>x.id!==id);
+    toast(`Removed "${service}" from the queue`, 'success');
+    renderPage();
+  } catch(err){
+    toast('Could not delete: ' + err.message, 'warn');
   }
 }
 

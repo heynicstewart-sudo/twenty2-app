@@ -9326,6 +9326,7 @@ app.delete('/api/grids/:gridId/contacts', async (req, res) => {
 
 const KEYWORDS_TABLE = 'Keywords';
 const SITEMAP_TABLE = 'Sitemap';
+const SERVICE_PAGE_QUEUE_TABLE = 'Service Page Queue';
 
 const DEFAULT_SEO_VOICE_PROFILE = `Twenty2 Collective (T2C) is a Perth, WA-based Agile and change consultancy. Write with authority and practical insight for corporate professionals - programme leads, transformation execs, PMO heads - who are tired of theory and want what actually works on the ground. Tone: direct, no jargon for its own sake, occasional dry humour, always backed by a concrete example, stat, or story from real client work. T2C has opinions: Agile theatre without genuine behaviour change wastes a budget; most transformation failures are change management failures, not process failures; frameworks are a starting point, not a religion. UK/AU English, no em dashes.`;
 
@@ -9456,6 +9457,74 @@ async function ensureSitemapTable() {
     ]);
   } catch (err) {
     warnOnce('provision:sitemap-table', 'Could not auto-provision the Sitemap table (create it by hand if it does not exist yet):', err.message);
+  }
+}
+
+// The Service Page Queue backs the Service Pages card in the SEO sub-tab -
+// a planning list of service x location combinations, each with optional
+// reference content, that get generated into full pages one at a time.
+// Best-effort provisioning, same swallow-and-warn contract as the other
+// ensure* helpers: needs schema.bases:write on the connected token, or the
+// table can be created once by hand with these exact names/types.
+async function ensureServicePageQueueTable() {
+  try {
+    return await ensureAirtableTable(SERVICE_PAGE_QUEUE_TABLE, [
+      { name: 'Service', type: 'singleLineText' },
+      { name: 'Location', type: 'singleLineText' },
+      { name: 'Status', type: 'singleSelect', options: { choices: [{ name: 'Queued' }, { name: 'Generated' }, { name: 'Published' }] } },
+      { name: 'Reference Content', type: 'multilineText' },
+      { name: 'Generated Content', type: 'multilineText' },
+      { name: 'Meta Title', type: 'singleLineText' },
+      { name: 'Meta Description', type: 'singleLineText' },
+      { name: 'Excerpt', type: 'singleLineText' }
+    ]);
+  } catch (err) {
+    warnOnce('provision:service-page-queue-table', 'Could not auto-provision the Service Page Queue table (create it by hand if it does not exist yet):', err.message);
+  }
+}
+
+function parseServicePageQueueRecord(r) {
+  return {
+    id: r.id,
+    service: r.fields['Service'] || '',
+    location: r.fields['Location'] || '',
+    status: r.fields['Status'] || 'Queued',
+    referenceContent: r.fields['Reference Content'] || '',
+    generatedContent: r.fields['Generated Content'] || '',
+    metaTitle: r.fields['Meta Title'] || '',
+    metaDescription: r.fields['Meta Description'] || '',
+    excerpt: r.fields['Excerpt'] || ''
+  };
+}
+
+// GET sorts by Status in this order (Queued work first, Published last).
+const SERVICE_PAGE_QUEUE_STATUS_ORDER = { Queued: 0, Generated: 1, Published: 2 };
+
+// First-load seed so the Service Pages card isn't empty on a fresh deploy.
+// Runs at most once per process, and only writes when the table has zero
+// rows - so deleting rows in the UI sticks for the life of the process.
+const SERVICE_PAGE_QUEUE_SEED = [
+  'Change Management Consulting', 'Business Transformation', 'Business Strategy',
+  'Agile Coaching', 'Agile Training', 'Agile Consulting', 'Design Thinking',
+  'Scrum Master Certification', 'Leadership Development', 'Organisational Design',
+  'Change Management Training', 'Operating Model Design'
+];
+let servicePageQueueSeedChecked = false;
+async function maybeSeedServicePageQueue() {
+  if (servicePageQueueSeedChecked) return;
+  servicePageQueueSeedChecked = true;
+  try {
+    const existing = await airtableFetchAllRecords(SERVICE_PAGE_QUEUE_TABLE);
+    if (existing.length) return;
+    const toCreate = SERVICE_PAGE_QUEUE_SEED.map(service => ({
+      fields: { 'Service': service, 'Location': 'Perth', 'Status': 'Queued' }
+    }));
+    for (let i = 0; i < toCreate.length; i += 10) {
+      await airtableRequest('POST', SERVICE_PAGE_QUEUE_TABLE, { records: toCreate.slice(i, i + 10), typecast: true });
+    }
+    console.log('Seeded Service Page Queue with', toCreate.length, 'services');
+  } catch (err) {
+    warnOnce('seed:service-page-queue', 'Could not seed the Service Page Queue:', err.message);
   }
 }
 
@@ -11229,6 +11298,7 @@ app.post('/api/seo/generate-service-page', async (req, res) => {
       html: page.html,
       metaTitle: page.metaTitle,
       metaDescription: page.metaDescription,
+      excerpt: page.excerpt,
       keyword: page.keyword,
       service: page.service,
       location: page.location,
@@ -11238,6 +11308,89 @@ app.post('/api/seo/generate-service-page', async (req, res) => {
     });
   } catch (err) {
     console.error('Generate service page error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===================== SERVICE PAGE QUEUE =====================
+// Planning list for the Service Pages card: service x location rows, each
+// optionally carrying reference content, generated one at a time via the
+// Generate button (which calls /api/seo/generate-service-page and PATCHes
+// the result back here with Status = Generated).
+
+app.get('/api/seo/service-queue', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    await ensureServicePageQueueTable();
+    await maybeSeedServicePageQueue();
+    const records = await airtableFetchAllRecords(SERVICE_PAGE_QUEUE_TABLE);
+    const queue = records
+      .map(parseServicePageQueueRecord)
+      .sort((a, b) =>
+        ((SERVICE_PAGE_QUEUE_STATUS_ORDER[a.status] ?? 9) - (SERVICE_PAGE_QUEUE_STATUS_ORDER[b.status] ?? 9))
+        || a.service.localeCompare(b.service)
+        || a.location.localeCompare(b.location));
+    res.json({ queue });
+  } catch (err) {
+    console.error('List service page queue error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/seo/service-queue', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const service = (req.body.service || '').trim();
+  const location = (req.body.location || '').trim();
+  const referenceContent = (req.body.referenceContent || '').trim();
+  if (!service || !location) return res.status(400).json({ error: 'service and location are both required' });
+  try {
+    await ensureServicePageQueueTable();
+    const data = await airtableRequest('POST', SERVICE_PAGE_QUEUE_TABLE, {
+      records: [{ fields: { 'Service': service, 'Location': location, 'Status': 'Queued', 'Reference Content': referenceContent } }],
+      typecast: true
+    });
+    res.json({ success: true, record: parseServicePageQueueRecord(data.records[0]) });
+  } catch (err) {
+    console.error('Add service page queue error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/seo/service-queue/:id', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const b = req.body || {};
+  try {
+    const fields = {};
+    if (b.service !== undefined) fields['Service'] = b.service;
+    if (b.location !== undefined) fields['Location'] = b.location;
+    if (b.status !== undefined) fields['Status'] = b.status;
+    if (b.referenceContent !== undefined) fields['Reference Content'] = b.referenceContent;
+    if (b.generatedContent !== undefined) fields['Generated Content'] = b.generatedContent;
+    if (b.metaTitle !== undefined) fields['Meta Title'] = b.metaTitle;
+    if (b.metaDescription !== undefined) fields['Meta Description'] = b.metaDescription;
+    if (b.excerpt !== undefined) fields['Excerpt'] = b.excerpt;
+    if (!Object.keys(fields).length) return res.status(400).json({ error: 'Nothing to update' });
+    await ensureServicePageQueueTable();
+    const data = await airtableRequest('PATCH', SERVICE_PAGE_QUEUE_TABLE, {
+      records: [{ id: req.params.id, fields }],
+      typecast: true
+    });
+    res.json({ success: true, record: parseServicePageQueueRecord(data.records[0]) });
+  } catch (err) {
+    console.error('Update service page queue error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/seo/service-queue/:id', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const url = `${AIRTABLE_URL}/${encodeURIComponent(SERVICE_PAGE_QUEUE_TABLE)}?records[]=${encodeURIComponent(req.params.id)}`;
+    const resp = await airtableFetchWithRetry(url, { method: 'DELETE', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } });
+    if (!resp.ok) { const err = await resp.text(); throw new Error(`Airtable error ${resp.status}: ${err}`); }
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Delete service page queue error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
