@@ -185,6 +185,41 @@ async function airtableRequest(method, table, body) {
   return res.json();
 }
 
+// The CTA-judgement fields ("CTA Brought Forward" checkbox, "CTA Judgement
+// Note" long text, on both Campaign Contacts and Touch Points) are added by
+// hand in Airtable after this ships. Until they exist, a write that includes
+// them 422s with UNKNOWN_FIELD_NAME and would take the whole core write
+// (stage advance, touch-point log) down with it. This wrapper strips those
+// fields and retries once on that error, then latches so subsequent writes
+// in the same process skip them without a failed round-trip.
+const CTA_JUDGEMENT_FIELDS = ['CTA Brought Forward', 'CTA Judgement Note'];
+let ctaJudgementFieldsMissing = false;
+function stripCtaJudgementFields(body) {
+  if (!body || !Array.isArray(body.records)) return body;
+  return {
+    ...body,
+    records: body.records.map(r => {
+      if (!r || !r.fields) return r;
+      const fields = { ...r.fields };
+      CTA_JUDGEMENT_FIELDS.forEach(k => delete fields[k]);
+      return { ...r, fields };
+    })
+  };
+}
+async function airtableWriteAllowingMissingCtaFields(method, table, body) {
+  if (ctaJudgementFieldsMissing) return airtableRequest(method, table, stripCtaJudgementFields(body));
+  try {
+    return await airtableRequest(method, table, body);
+  } catch (err) {
+    if (/UNKNOWN_FIELD_NAME/.test(err.message || '')) {
+      console.warn('CTA judgement fields not found in Airtable - writing without them. Add "CTA Brought Forward" (checkbox) and "CTA Judgement Note" (long text) to both Campaign Contacts and Touch Points to enable the early-CTA learning loop.');
+      ctaJudgementFieldsMissing = true;
+      return airtableRequest(method, table, stripCtaJudgementFields(body));
+    }
+    throw err;
+  }
+}
+
 // Fetch a single Airtable record by its record id (not a search-by-field lookup)
 async function airtableGetRecord(table, recordId) {
   const res = await airtableFetchWithRetry(`${AIRTABLE_URL}/${encodeURIComponent(table)}/${recordId}`, {
@@ -3531,7 +3566,9 @@ app.get('/api/campaign/:id/insights', async (req, res) => {
       contact: (r.fields['Contact'] || [])[0] || null,
       date: r.fields['Date'] || '',
       type: r.fields['Type'] || '',
-      outcome: r.fields['Outcome'] || ''
+      outcome: r.fields['Outcome'] || '',
+      ctaBroughtForward: !!r.fields['CTA Brought Forward'],
+      ctaJudgement: r.fields['CTA Judgement Note'] || ''
     }));
 
     const nameToId = {};
@@ -3561,6 +3598,8 @@ LEARNING DATA on file (${learningData.length} analyses):
 ${learningDataContext(learningData)}
 
 Surface 3-5 specific, numbers-backed insights about THIS campaign only, in the style of: "8 contacts in this campaign haven't been touched in 14 days", "Your reply rate is 2x higher when messaging on Tuesday", "3 contacts have reached 5 touch points and are campaign-ready for a direct pitch." Every number must be counted from the actual data above, never invented or estimated. Compare against the T2C-wide historical data where it sharpens the insight.
+
+Some touch points carry "ctaBroughtForward": true and a "ctaJudgement" note - these are messages where the drafter chose, based on what the contact had said, to make a meeting/offer ask earlier than the campaign's normal cadence. Where the numbers support it, include an insight on whether those early asks are converting to replies and bookings or stalling - that feedback decides whether the early-CTA judgement is working for this campaign.
 
 Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 { "insights": string[] }
@@ -7626,14 +7665,75 @@ function ctaOptionsPromptText(ctaOptions) {
 function ctaStrategyNoteText(stageKey, messageNumber, messagesBeforeCta) {
   const n = parseInt(messagesBeforeCta, 10) || 2;
   const num = messageNumber || 0;
+  // Shared judgment rule - every stage now reads the conversation before
+  // deciding how hard to push, rather than cadence alone dictating it. A
+  // "signal" means the contact has asked what you do, asked for detail, or
+  // described a specific, concrete problem the offer speaks to - or has
+  // replied at real length with a lot of common ground, the way a warm
+  // peer-to-peer thread opens up. General politeness or mild curiosity is
+  // not a signal. When a signal is there but a hard scripted pitch would
+  // undersell what they raised, offer a lighter next step instead - a
+  // coffee, a quick call, an informal chat - framed with no pressure.
+  const judgment = `Read what the contact has actually said so far before deciding whether to make any kind of ask. Treat a direct pitch as earned only once they've shown a real signal: asked what you do, asked for detail, described a specific concrete problem the offer speaks to, or replied at length with clear common ground. General warmth or mild interest is a reason to keep building the relationship, not to pitch. Where a signal is there but the full scripted pitch would undersell what they raised, offer a lighter next step instead - a coffee, a quick call, an informal chat - with no pressure.`;
   if (stageKey === 'cta') {
-    return `Strategy: the outreach cadence calls for the CTA ask around message ${num} in the sequence${num > n ? ` (already past the usual message ${n} target - don't let it drift further without some kind of forward step)` : ''}. Treat that as a target, not a script: read what they've actually said in the conversation so far first. If their replies describe a genuine, specific problem or complexity - not just general interest or small talk - matching that with a direct pitch for the course/workshop can read as tone-deaf, since it undersells what they've actually raised. In that case, respond to the substance of what they said, and offer a lighter-touch next step instead (e.g. a quick call or informal chat to talk it through) rather than the standard scripted ask - still move things forward, just not with the same pitch. If nothing in the conversation suggests that kind of complexity, go ahead and make the direct ask as normal.`;
+    return `Strategy: this is the CTA step - the cadence expects the ask around message ${num}${num > n ? ` (already past the usual message ${n} target, so don't let it drift further without a forward step)` : ''}. ${judgment} If nothing in the conversation shows that kind of signal yet, still make a forward step, but keep it soft rather than the full scripted ask.`;
   }
   if (!num) return '';
-  if (num >= n) {
-    return `Strategy: the outreach strategy says the CTA should be introduced by message ${n}. This is message ${num}, so it's fine to start gently pointing toward the CTA if the moment fits, without being pushy about it.`;
+  if (num < n) {
+    return `Strategy: the cadence puts the CTA around message ${n}, and this is only message ${num}, so the default is relationship-building with no CTA. ${judgment} If - and only if - the contact has given a clear signal like that, you may bring a soft, conditionally-framed CTA forward now rather than waiting for message ${n}. Don't force it: most message ${num}s should still be purely relationship-building.`;
   }
-  return `Strategy: the outreach strategy says the CTA shouldn't appear until message ${n}. This is message ${num}, so keep this purely relationship-building, no CTA mention yet.`;
+  return `Strategy: the cadence puts the CTA around message ${n}, and this is message ${num}, so it's reasonable to move toward the ask. ${judgment}`;
+}
+
+// Both message-drafting routes ask the model for a small JSON envelope
+// ({message, ctaIncluded, ctaReasoning}) rather than bare text, so we can
+// record when a draft chose - based on the conversation - to make an ask
+// earlier than the configured cadence, and feed that back into campaign
+// learning (campaignMessagePerformanceNote / campaign insights). Falls back
+// to treating the whole response as the message if the model didn't return
+// parseable JSON, so a bad parse can never blank out a draft.
+function parseDraftEnvelope(raw) {
+  const text = (raw || '').trim();
+  try {
+    const m = text.match(/\{[\s\S]*\}/);
+    if (m) {
+      const j = JSON.parse(m[0]);
+      if (j && typeof j.message === 'string' && j.message.trim()) {
+        return {
+          message: j.message.trim(),
+          ctaIncluded: typeof j.ctaIncluded === 'boolean' ? j.ctaIncluded : null,
+          ctaReasoning: (j.ctaReasoning || '').trim(),
+          parsed: true
+        };
+      }
+    }
+  } catch (e) { /* fall through */ }
+  // Salvage: the model tried JSON but it wouldn't parse (an unescaped quote,
+  // a trailing comma). Pull the message string out directly rather than
+  // handing the raw JSON blob back as the message body.
+  const salvage = text.match(/"message"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+  if (salvage) {
+    const msg = salvage[1].replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\\\/g, '\\').trim();
+    if (msg) {
+      const ctaFlag = /"ctaIncluded"\s*:\s*true/.test(text) ? true : (/"ctaIncluded"\s*:\s*false/.test(text) ? false : null);
+      const rsn = (text.match(/"ctaReasoning"\s*:\s*"((?:[^"\\]|\\.)*)"/) || [, ''])[1].replace(/\\"/g, '"').trim();
+      return { message: msg, ctaIncluded: ctaFlag, ctaReasoning: rsn, parsed: true };
+    }
+  }
+  // Genuinely not JSON - treat the whole response as the message (old behaviour).
+  return { message: text, ctaIncluded: null, ctaReasoning: '', parsed: false };
+}
+
+// Output-contract instruction appended to the end of both drafting prompts.
+const DRAFT_JSON_CONTRACT = `\n\nReturn ONLY valid JSON, no markdown fences, no commentary, in exactly this shape:\n{"message": "the message text with placeholders replaced", "ctaIncluded": true or false, "ctaReasoning": "one sentence"}\nSet "ctaIncluded" to true if the message asks for a meeting, call, coffee, demo or reply-to-book, or promotes/offers the lead magnet, course or workshop; false if it is purely relationship-building. In "ctaReasoning", say in one sentence - grounded in what the contact has actually said - why you did or didn't make that ask.`;
+
+// True when a draft made an ask earlier than the campaign's configured
+// cadence (Settings > Outreach strategy > "Messages before CTA"). This is
+// the deviation worth logging - an on-cadence or overdue CTA is expected.
+function ctaBroughtForwardEarly(messageNumber, messagesBeforeCta, ctaIncluded) {
+  const n = parseInt(messagesBeforeCta, 10) || 2;
+  const num = messageNumber || 0;
+  return ctaIncluded === true && num > 0 && num < n;
 }
 
 // Mirrors the client's voiceRulesText() - ported here for the same reason.
@@ -7715,7 +7815,7 @@ function campaignMessagePerformanceNote(touchPoints, campaignName, messageNumber
 
   const sent = touchPoints
     .filter(r => (r.fields['Name'] || '') === sentName && r.fields['Summary'])
-    .map(r => ({ contactId: (r.fields['Contact'] || [])[0], date: r.fields['Date'] || '', text: r.fields['Summary'] }))
+    .map(r => ({ contactId: (r.fields['Contact'] || [])[0], date: r.fields['Date'] || '', text: r.fields['Summary'], broughtForward: !!r.fields['CTA Brought Forward'], judgement: r.fields['CTA Judgement Note'] || '' }))
     .filter(r => r.contactId && r.contactId !== excludeContactId);
 
   // A "no reply" example only counts once the message has had a few days to
@@ -7730,13 +7830,24 @@ function campaignMessagePerformanceNote(touchPoints, campaignName, messageNumber
   const noReply = sent.filter(r => !repliedContactIds.has(r.contactId) && r.date && r.date < cutoffStr)
     .sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 3);
 
-  if (!replied.length && !noReply.length) return '';
+  // How early, conversation-led CTAs on this message number have actually
+  // landed in this campaign - the feedback that lets the drafter judge
+  // whether bringing the ask forward is worth it here, rather than the
+  // decision being made blind every time. Only counts sends old enough to
+  // have had a few days to draw a reply.
+  const forwardLanded = sent.filter(r => r.broughtForward && r.date && r.date < cutoffStr);
+  const forwardReplied = forwardLanded.filter(r => repliedContactIds.has(r.contactId)).length;
+  const forwardNote = forwardLanded.length
+    ? `\n\nOn ${forwardLanded.length} occasion(s) so far, a message ${messageNumber} draft in this campaign brought the CTA forward earlier than the usual cadence because of what the contact had said. Of those, ${forwardReplied} got a reply and ${forwardLanded.length - forwardReplied} did not. Reasoning given on recent ones: ${forwardLanded.slice(-3).map(r => `"${r.judgement}"`).join('; ') || 'none recorded'}. Weigh this when deciding whether an early, conversation-led ask is worth it here.`
+    : '';
+
+  if (!replied.length && !noReply.length && !forwardNote) return '';
 
   const section = (label, list) => list.length
     ? `${label}:\n${list.map((r, i) => `${i + 1}. ${r.text}`).join('\n')}`
     : `${label}: none yet`;
 
-  return `\n\nHere's how message ${messageNumber} has actually landed with other contacts in this campaign so far - use this as a live feedback loop, leaning into whatever's getting replies and away from whatever isn't (learn the pattern, don't copy either verbatim):\n${section('Got a reply', replied)}\n${section('No reply after a few days', noReply)}`;
+  return `\n\nHere's how message ${messageNumber} has actually landed with other contacts in this campaign so far - use this as a live feedback loop, leaning into whatever's getting replies and away from whatever isn't (learn the pattern, don't copy either verbatim):\n${section('Got a reply', replied)}\n${section('No reply after a few days', noReply)}${forwardNote}`;
 }
 
 // Generates a message for the "Write & copy message" modal (openGenerateModal
@@ -7805,14 +7916,19 @@ app.post('/api/messages/generate', async (req, res) => {
       }
     }
 
-    const promptText = `Template for this stage:\n${stage.template || ''}\n\nContact: ${contact.name}, ${contact.role || ''} at ${contact.company || ''}. Sequence stage: ${stage.label || stage.key} (message ${stage.messageNumber || 'n/a'} in the sequence). Profile notes: ${contact.notes || 'none'}.${conversationNote}\n\n${ctaStrategyNoteText(stage.key, stage.messageNumber, voice && voice.messagesBeforeCta)}${ctaOptionsPromptText(ctaOptions)}\n\n${voiceRulesPromptText(voice)}${imageNote}${campaignNote}${enrichmentNote}\n\nWrite the actual message for this specific contact, replacing placeholders naturally - if the conversation so far shows they've already replied, respond to what they actually said rather than reintroducing yourself.${RESPECT_SUMMARY_INSTRUCTIONS_NOTE} Return only the message text.`;
+    const promptText = `Template for this stage:\n${stage.template || ''}\n\nContact: ${contact.name}, ${contact.role || ''} at ${contact.company || ''}. Sequence stage: ${stage.label || stage.key} (message ${stage.messageNumber || 'n/a'} in the sequence). Profile notes: ${contact.notes || 'none'}.${conversationNote}\n\n${ctaStrategyNoteText(stage.key, stage.messageNumber, voice && voice.messagesBeforeCta)}${ctaOptionsPromptText(ctaOptions)}\n\n${voiceRulesPromptText(voice)}${imageNote}${campaignNote}${enrichmentNote}\n\nWrite the actual message for this specific contact, replacing placeholders naturally - if the conversation so far shows they've already replied, respond to what they actually said rather than reintroducing yourself.${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${DRAFT_JSON_CONTRACT}`;
 
     const content = imgs.map(img => ({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.base64 } }));
     content.push({ type: 'text', text: promptText });
 
-    const rawMessage = await callClaudeText(content, 400);
-    const message = await humanizePlainText(rawMessage);
-    res.json({ success: true, message });
+    const rawMessage = await callClaudeText(content, 800);
+    const envelope = parseDraftEnvelope(rawMessage);
+    const message = await humanizePlainText(envelope.message);
+    const ctaBroughtForward = ctaBroughtForwardEarly(stage.messageNumber, voice && voice.messagesBeforeCta, envelope.ctaIncluded);
+    // Only surface/store the reasoning when the draft actually brought the
+    // CTA forward - an on-cadence "I didn't pitch because..." line is noise.
+    const ctaReasoning = ctaBroughtForward ? envelope.ctaReasoning : '';
+    res.json({ success: true, message, ctaBroughtForward, ctaReasoning });
   } catch (err) {
     console.error('Message generate error:', err.message);
     res.status(500).json({ error: err.message });
@@ -7905,25 +8021,49 @@ app.post('/api/campaign/:id/contacts/:contactId/generate-message', async (req, r
     let ctaOptions = [];
     if (stageKey === 'cta') ctaOptions = parseCtaList(camp['CTAs']);
 
+    // The offer used to be handed over with an unconditional "weave this in
+    // naturally" for every message >= 2, which pushed the pitch into message
+    // 2 regardless of the campaign's "Messages before CTA" cadence. Now, if
+    // this message is earlier than the cadence, the offer is context only -
+    // the model still needs to know what's on the table so it can bring it
+    // forward if the conversation clearly calls for it (see ctaStrategyNoteText),
+    // but it isn't told to pitch.
+    const cadenceN = parseInt(voice.messagesBeforeCta, 10) || 2;
+    const offerNote = offer && offer.summary
+      ? (messageNumber < cadenceN
+          ? `\nThis campaign's offer, for context only (do not pitch it unless the contact has clearly signalled they want something like it): ${offer.summary}`
+          : `\nThis campaign's offer: ${offer.summary}\nWeave the offer above into this message naturally, in your own words - do not paste it verbatim.`)
+      : '';
+
     const promptText = `You are drafting LinkedIn outreach message ${messageNumber} of 3 for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM.
 
 Campaign: "${campaignName}". Goal: ${camp['Goal'] || 'not recorded'}. Product: ${camp['Product'] || 'not recorded'}. Target ICP: ${camp['Target ICP'] || 'not recorded'}. Strategy notes: ${camp['Strategy Notes'] || 'none recorded'}.
 ${template ? `\nTemplate for this stage:\n${template}\n` : ''}
 Contact: ${cf['Full Name'] || 'Unknown'}, ${cf['Job Title'] || ''}. Profile notes: ${cf['Notes'] || 'none'}. AI summary: ${cf['AI Summary'] || 'none yet'}. Conversation so far: ${cf['Conversation Context'] || 'none yet - this is the first message'}.
 Recent posts (last 30 days only): ${recentPosts}
-${offer && offer.summary ? `\nThis campaign's offer: ${offer.summary}\nWeave the offer above into this message naturally, in your own words - do not paste it verbatim.` : ''}
+${offerNote}
 
 ${ctaStrategyNoteText(stageKey, messageNumber, voice.messagesBeforeCta)}${ctaOptionsPromptText(ctaOptions)}
 
 ${voiceRulesPromptText(voice)}
 
-Write only message ${messageNumber} in this contact's sequence for this specific campaign, following on naturally from the conversation so far (if any) - if the conversation shows they've already replied, respond to what they actually said rather than reintroducing yourself.${RESPECT_SUMMARY_INSTRUCTIONS_NOTE} Return only the message text, no preamble.${examplesNote}${performanceNote}`;
+Write only message ${messageNumber} in this contact's sequence for this specific campaign, following on naturally from the conversation so far (if any) - if the conversation shows they've already replied, respond to what they actually said rather than reintroducing yourself.${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${examplesNote}${performanceNote}${DRAFT_JSON_CONTRACT}`;
 
-    const rawMessage = await callClaudeText(promptText, 400);
-    const message = await humanizePlainText(rawMessage);
-    await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, { records: [{ id: row.id, fields: { 'Next Message Draft': message } }] });
+    const rawMessage = await callClaudeText(promptText, 800);
+    const envelope = parseDraftEnvelope(rawMessage);
+    const message = await humanizePlainText(envelope.message);
+    const ctaBroughtForward = ctaBroughtForwardEarly(messageNumber, voice.messagesBeforeCta, envelope.ctaIncluded);
+    const ctaReasoning = ctaBroughtForward ? envelope.ctaReasoning : '';
+    await airtableWriteAllowingMissingCtaFields('PATCH', CAMPAIGN_CONTACTS_TABLE, {
+      records: [{ id: row.id, fields: {
+        'Next Message Draft': message,
+        'CTA Brought Forward': ctaBroughtForward,
+        'CTA Judgement Note': ctaReasoning
+      } }],
+      typecast: true
+    });
 
-    res.json({ success: true, message, messageNumber, stage });
+    res.json({ success: true, message, messageNumber, stage, ctaBroughtForward, ctaReasoning });
   } catch (err) {
     console.error('Generate message error:', err.message);
     res.status(500).json({ error: err.message });
@@ -7941,7 +8081,7 @@ app.post('/api/campaign/:id/contacts/:contactId/mark-sent', async (req, res) => 
 
   const campaignName = decodeURIComponent(req.params.id);
   const contactId = req.params.contactId;
-  const { message, draftOutcome } = req.body;
+  const { message, draftOutcome, ctaBroughtForward, ctaReasoning } = req.body;
   if (!message) return res.status(400).json({ error: 'message is required' });
 
   try {
@@ -7982,7 +8122,15 @@ app.post('/api/campaign/:id/contacts/:contactId/mark-sent', async (req, res) => 
     stageFields['Final Message Sent'] = message;
     stageFields['Original Message Draft'] = originalDraft;
     if (draftOutcome) stageFields['Draft Outcome'] = draftOutcome;
-    await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, {
+    // CTA judgement: prefer what the client passed straight from the generate
+    // call; fall back to whatever generate-message already stamped on this
+    // row at draft time (so a message drafted there and sent via the manual
+    // "Mark as sent" button, which carries no body, still keeps its note).
+    const ctaFwd = typeof ctaBroughtForward === 'boolean' ? ctaBroughtForward : !!row.fields['CTA Brought Forward'];
+    const ctaNote = (ctaReasoning || row.fields['CTA Judgement Note'] || '');
+    stageFields['CTA Brought Forward'] = ctaFwd;
+    stageFields['CTA Judgement Note'] = ctaNote;
+    await airtableWriteAllowingMissingCtaFields('PATCH', CAMPAIGN_CONTACTS_TABLE, {
       records: [{
         id: row.id,
         fields: stageFields
@@ -7998,7 +8146,7 @@ app.post('/api/campaign/:id/contacts/:contactId/mark-sent', async (req, res) => 
     // grid - messageNumber here is the one just sent (MESSAGE_NUMBER_FOR_STAGE
     // keyed off `stage`, the row's stage *before* the advance above).
     const messageNumber = MESSAGE_NUMBER_FOR_STAGE[stage];
-    await airtableRequest('POST', 'Touch Points', {
+    await airtableWriteAllowingMissingCtaFields('POST', 'Touch Points', {
       records: [{
         fields: {
           'Name': `${campaignName}_Message ${messageNumber}`,
@@ -8007,7 +8155,9 @@ app.post('/api/campaign/:id/contacts/:contactId/mark-sent', async (req, res) => 
           'Direction': 'Outbound',
           'Summary': message,
           'Contact': [contactId],
-          'Campaign': [campaignRecord.id]
+          'Campaign': [campaignRecord.id],
+          'CTA Brought Forward': ctaFwd,
+          'CTA Judgement Note': ctaNote
         }
       }],
       typecast: true
@@ -9284,6 +9434,7 @@ async function ensureKeywordsTable() {
       { name: 'Content', type: 'multilineText' },
       { name: 'Meta Title', type: 'singleLineText' },
       { name: 'Meta Description', type: 'multilineText' },
+      { name: 'Excerpt', type: 'multilineText' },
       { name: 'Published URL', type: 'url' },
       { name: 'Notes', type: 'multilineText' },
       { name: 'Created Date', type: 'date', options: { dateFormat: { name: 'iso' } } }
@@ -9602,6 +9753,7 @@ app.get('/api/seo/keywords', async (req, res) => {
         status: r.fields['Status'] || 'Queued',
         postTitle: r.fields['Post Title'] || '',
         postHtml: r.fields['Content'] || '',
+        excerpt: r.fields['Excerpt'] || '',
         metaTitle: r.fields['Meta Title'] || '',
         metaDescription: r.fields['Meta Description'] || '',
         publishedUrl: r.fields['Published URL'] || '',
@@ -9629,6 +9781,18 @@ async function ensureKeywordsReferenceContentField() {
   }
 }
 
+// The Excerpt field holds a short plain-text, click-enticing summary of the
+// generated post, produced by the generation prompt and sent on to Framer's
+// CMS at publish time. Added to an existing Keywords table best-effort, same
+// swallow-and-warn contract as the other ensure* helpers.
+async function ensureKeywordsExcerptField() {
+  try {
+    return await ensureAirtableField(KEYWORDS_TABLE, 'Excerpt', { type: 'multilineText' });
+  } catch (err) {
+    warnOnce('provision:keywords-excerpt-field', 'Could not auto-provision the Keywords Excerpt field (add it by hand if it does not exist yet):', err.message);
+  }
+}
+
 app.post('/api/seo/keywords/:id/reference-content', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   const referenceContent = ((req.body && (req.body.referenceContent ?? req.body.text)) || '').toString();
@@ -9647,14 +9811,16 @@ app.post('/api/seo/keywords/:id/reference-content', async (req, res) => {
 
 app.post('/api/seo/keywords/:id/save', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
-  const { title, html, metaTitle, metaDescription } = req.body;
+  const { title, html, excerpt, metaTitle, metaDescription } = req.body;
   try {
     const fields = {};
     if (title !== undefined) fields['Post Title'] = title;
     if (html !== undefined) fields['Content'] = html;
+    if (excerpt !== undefined) fields['Excerpt'] = excerpt;
     if (metaTitle !== undefined) fields['Meta Title'] = metaTitle;
     if (metaDescription !== undefined) fields['Meta Description'] = metaDescription;
     if (!Object.keys(fields).length) return res.status(400).json({ error: 'Nothing to save' });
+    if (excerpt !== undefined) await ensureKeywordsExcerptField();
     await airtableRequest('PATCH', KEYWORDS_TABLE, { records: [{ id: req.params.id, fields }], typecast: true });
     res.json({ success: true });
   } catch (err) {
@@ -9859,6 +10025,23 @@ function summarizeScrapedPage(url, scraped) {
     }
   }
   return { url, title: scraped.title || '', wordCount, headings: headings.slice(0, 40) };
+}
+
+// Belt-and-braces for the Excerpt field - the generation prompt asks for
+// plain text, but models sometimes wrap it in <p> tags or slip in an
+// entity. Strips any tags, unescapes the common entities, collapses
+// whitespace.
+function stripHtmlToText(s) {
+  return String(s == null ? '' : s)
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 const SEO_CHECKLIST = `Apply this on-page SEO checklist:
@@ -10181,8 +10364,10 @@ ${SEO_CHECKLIST}
 
 Write a full SEO blog post as clean HTML - a single string of HTML using h1/h2/h3/p/ul/li/a tags, no <html>/<head>/<body> wrapper and no <img> tags (images are added manually after generation). Internal links: <a href="/blog/relevant-slug">. External links: <a href="..." target="_blank" rel="noopener"> to real, well-known, relevant domains. The FAQ section must use <details open><summary>Question text</summary><p>Answer text</p></details> for every question - this renders as a native, no-JavaScript-needed accordion that's expanded by default, not a plain list of bolded questions. UK/AU English, no em dashes, in T2C's voice as described above.
 
+Also write an "excerpt": a 2-3 sentence plain text summary of the post, written to entice clicks. Plain text only, no HTML tags, no markdown.
+
 Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
-{ "title": string, "html": string, "metaTitle": string (under 60 characters), "metaDescription": string (under 160 characters) }`;
+{ "title": string, "html": string, "excerpt": string (2-3 plain-text sentences, no HTML tags), "metaTitle": string (under 60 characters), "metaDescription": string (under 160 characters) }`;
 
   const drafted = await callClaudeJson(prompt, 8000);
   let html = await ensureValidSeoStructure(drafted.html || '', keyword);
@@ -10191,6 +10376,7 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
   return {
     title: drafted.title || keyword,
     html,
+    excerpt: stripHtmlToText(drafted.excerpt || '').trim(),
     metaTitle: (drafted.metaTitle || '').slice(0, 60),
     metaDescription: (drafted.metaDescription || '').slice(0, 160),
     usedCustomVoiceProfile
@@ -10329,6 +10515,7 @@ app.post('/api/seo/generate-post', async (req, res) => {
 
   try {
     await ensureKeywordsTable();
+    await ensureKeywordsExcerptField();
     await ensureSitemapTable();
     const keywordRecord = await airtableGetRecord(KEYWORDS_TABLE, keywordId);
     if (!keywordRecord) return res.status(404).json({ error: 'Keyword not found' });
@@ -10355,13 +10542,14 @@ app.post('/api/seo/generate-post', async (req, res) => {
           'Content': post.html,
           'Meta Title': post.metaTitle,
           'Meta Description': post.metaDescription,
+          'Excerpt': post.excerpt,
           'Status': 'Generated'
         }
       }],
       typecast: true
     });
 
-    res.json({ success: true, keywordId, title: post.title, html: post.html, metaTitle: post.metaTitle, metaDescription: post.metaDescription, status: 'Generated', usedCustomVoiceProfile: post.usedCustomVoiceProfile });
+    res.json({ success: true, keywordId, title: post.title, html: post.html, excerpt: post.excerpt, metaTitle: post.metaTitle, metaDescription: post.metaDescription, status: 'Generated', usedCustomVoiceProfile: post.usedCustomVoiceProfile });
   } catch (err) {
     console.error('Generate SEO post error:', err.message);
     airtableRequest('PATCH', KEYWORDS_TABLE, { records: [{ id: keywordId, fields: { 'Status': 'Queued' } }], typecast: true })
@@ -10405,6 +10593,7 @@ const FRAMER_FIELD_ALIASES = {
   content: ['content', 'body', 'post', 'article'],
   metaTitle: ['meta title', 'seo title'],
   metaDescription: ['meta description', 'seo description', 'excerpt', 'summary'],
+  excerpt: ['excerpt', 'summary'],
   status: ['status']
 };
 
@@ -10497,15 +10686,22 @@ async function publishToFramer(post, options = {}) {
     const contentField = findFramerField(fields, 'content');
     const metaTitleField = findFramerField(fields, 'metaTitle');
     const metaDescField = findFramerField(fields, 'metaDescription');
+    const excerptField = findFramerField(fields, 'excerpt');
     const statusField = findFramerField(fields, 'status');
 
     const fieldData = {};
+    // Order matters: the first entry to claim a field id wins. On a
+    // collection with both an "Excerpt" and a "Meta Description" field they
+    // resolve separately; on one with only "Excerpt", metaDescription
+    // claims it first (unchanged from before this field was added).
     [
       [titleField, post.title],
       [contentField, post.html],
       [metaTitleField, post.metaTitle],
-      [metaDescField, post.metaDescription]
+      [metaDescField, post.metaDescription],
+      [excerptField, post.excerpt]
     ].forEach(([field, value]) => {
+      if (!field || fieldData[field.id]) return;
       const entry = buildFramerTextFieldEntry(field, value);
       if (entry) fieldData[field.id] = entry;
     });
@@ -10631,6 +10827,7 @@ app.post('/api/seo/publish', async (req, res) => {
     const post = {
       title: kf['Post Title'] || kf['Keyword'],
       html: kf['Content'],
+      excerpt: kf['Excerpt'] || '',
       metaTitle: kf['Meta Title'] || '',
       metaDescription: kf['Meta Description'] || ''
     };
@@ -10951,8 +11148,10 @@ ${SEO_CHECKLIST}
 
 Write the page as clean HTML - a single string using h1/h2/h3/p/ul/li/a/details/summary tags, no <html>/<head>/<body> wrapper and no <img> tags (images are added manually after generation). Internal links: <a href="/blog/relevant-slug"> or <a href="/services/relevant-slug">. External links: <a href="..." target="_blank" rel="noopener"> to real, well-known, relevant domains. Every FAQ question must be its own <details open><summary>Question</summary><p>Answer</p></details> block - a native no-JavaScript accordion, expanded by default. Reference ${location} naturally throughout - this page targets people searching for this service in that specific place. UK/AU English, no em dashes, in T2C's voice as described above.
 
+Also write an "excerpt": a 2-3 sentence plain text summary of the page, written to entice clicks. Plain text only, no HTML tags, no markdown.
+
 Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
-{ "title": string, "html": string, "metaTitle": string (under 60 characters), "metaDescription": string (under 160 characters) }`;
+{ "title": string, "html": string, "excerpt": string (2-3 plain-text sentences, no HTML tags), "metaTitle": string (under 60 characters), "metaDescription": string (under 160 characters) }`;
 
   const drafted = await callClaudeJson(prompt, 8000);
   let html = await ensureValidSeoStructure(drafted.html || '', keyword);
@@ -10961,6 +11160,7 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
   return {
     title: drafted.title || keyword,
     html,
+    excerpt: stripHtmlToText(drafted.excerpt || '').trim(),
     metaTitle: (drafted.metaTitle || '').slice(0, 60),
     metaDescription: (drafted.metaDescription || '').slice(0, 160),
     keyword,
@@ -11649,7 +11849,7 @@ app.post('/api/aeo/prompts/:id/generate', async (req, res) => {
       title = post.title;
       content = post.html;
       await airtableRequest('PATCH', KEYWORDS_TABLE, {
-        records: [{ id: keywordRecord.id, fields: { 'Post Title': post.title, 'Content': post.html, 'Meta Title': post.metaTitle, 'Meta Description': post.metaDescription, 'Status': 'Generated' } }],
+        records: [{ id: keywordRecord.id, fields: { 'Post Title': post.title, 'Content': post.html, 'Meta Title': post.metaTitle, 'Meta Description': post.metaDescription, 'Excerpt': post.excerpt, 'Status': 'Generated' } }],
         typecast: true
       }).catch(err => console.warn('Could not save AEO blog post onto the Keywords row:', err.message));
     } else if (contentType === 'Service Page') {

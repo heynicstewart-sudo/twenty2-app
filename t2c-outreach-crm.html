@@ -4351,9 +4351,18 @@ async function handleGenerateFastMessage(cid){
     // textarea against it later to work out Draft Outcome.
     window.__fastActionOriginalDraft = window.__fastActionOriginalDraft || {};
     window.__fastActionOriginalDraft[cid] = data.message;
+    // Cache the CTA judgement alongside it, to carry into mark-sent for the
+    // campaign learning loop (generate-message already stamped it on the
+    // Campaign Contacts row too).
+    window.__fastActionCtaMeta = window.__fastActionCtaMeta || {};
+    window.__fastActionCtaMeta[cid] = { ctaBroughtForward: !!data.ctaBroughtForward, ctaReasoning: data.ctaReasoning || '' };
 
+    const ctaNoteHtml = data.ctaBroughtForward
+      ? `<div style="font-size:11.5px;color:var(--warning,#b45309);background:var(--warning-bg,#fef3c7);border-radius:6px;padding:6px 9px;margin-bottom:8px;">CTA brought forward early - ${esc(data.ctaReasoning || 'based on the conversation so far')}</div>`
+      : '';
     area.innerHTML = `
       <textarea id="fastActionDraft-${cid}" rows="4" style="width:100%;margin-bottom:8px;">${esc(data.message)}</textarea>
+      ${ctaNoteHtml}
       <button class="btn btn-primary btn-sm" onclick="handleCopyAndMarkSent('${cid}')"><i class="ti ti-check"></i> Copy &amp; mark sent</button>
     `;
   } catch(err){
@@ -4410,12 +4419,18 @@ async function handleCopyAndMarkSent(cid){
   // 'Sent verbatim' if untouched, 'Sent edited' if Marcus rewrote it. Real
   // feedback signal on how good the draft actually was.
   const draftOutcome = message === originalDraft ? 'Sent verbatim' : 'Sent edited';
+  // Pass the CTA judgement through only for a verbatim send - see the same
+  // guard in saveGeneratedMessage. When edited, mark-sent falls back to the
+  // note generate-message already wrote on the Campaign Contacts row.
+  const ctaMeta = draftOutcome === 'Sent verbatim'
+    ? ((window.__fastActionCtaMeta || {})[cid] || {})
+    : {};
 
   try {
     const res = await fetch(`/api/campaign/${encodeURIComponent(action.campaignName)}/contacts/${cid}/mark-sent`, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ message, draftOutcome })
+      body: JSON.stringify({ message, draftOutcome, ...ctaMeta })
     });
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
@@ -8772,6 +8787,7 @@ function openGenerateModal(cid, stageKey, onDone){
       ${screenshotBoxHtml('convo', "Got a reply already? Send a screenshot of your conversation history and I'll generate a reply.")}
     </div>
     <div class="field"><label>Generated message</label><textarea id="genOutput" rows="6">Generating...</textarea></div>
+    <div id="genCtaNote" style="display:none;font-size:12px;color:var(--warning,#b45309);background:var(--warning-bg,#fef3c7);border-radius:6px;padding:7px 10px;margin-top:-4px;"></div>
   `;
   const footer = `
     <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
@@ -8938,12 +8954,30 @@ async function generateMessageForModal(cid, stageKey){
     const data = await res.json();
     if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
     result = data.message;
+    // Whether the drafter chose to bring a CTA forward earlier than the
+    // configured cadence, and its one-line reasoning - carried into the
+    // mark-sent call so it lands on the Campaign Contacts row and Touch
+    // Point for the campaign learning loop.
+    if(window.__genCtx){
+      window.__genCtx.ctaBroughtForward = !!data.ctaBroughtForward;
+      window.__genCtx.ctaReasoning = data.ctaReasoning || '';
+    }
   } catch(err){
     console.warn('Message generation unavailable, using local fallback:', err.message);
     result = fillTemplate(template, c, stageKey);
+    if(window.__genCtx){ window.__genCtx.ctaBroughtForward = false; window.__genCtx.ctaReasoning = ''; }
   }
   const out = document.getElementById('genOutput');
   if(out) out.value = result;
+  const ctaNote = document.getElementById('genCtaNote');
+  if(ctaNote){
+    if(window.__genCtx && window.__genCtx.ctaBroughtForward){
+      ctaNote.textContent = 'CTA brought forward early - ' + (window.__genCtx.ctaReasoning || 'based on the conversation so far');
+      ctaNote.style.display = '';
+    } else {
+      ctaNote.style.display = 'none';
+    }
+  }
   // Baseline for diffing Marcus's edits against at Save & advance time (see
   // saveGeneratedMessage) - reset on every (re)generation so a Regenerate
   // click re-baselines against the new draft, not the one before it.
@@ -9011,11 +9045,18 @@ async function saveGeneratedMessage(cid, stageKey){
   // draft-only PATCH below.
   if(stageKey === 'm1' || stageKey === 'm2' || stageKey === 'cta'){
     const draftOutcome = output === originalDraft ? 'Sent verbatim' : 'Sent edited';
+    // Only pass the CTA judgement through if the draft was sent roughly as
+    // generated - if Marcus rewrote it, the model's reasoning no longer
+    // describes what actually went out, so let mark-sent fall back to
+    // whatever's on the row (or nothing).
+    const ctaMeta = (window.__genCtx && draftOutcome === 'Sent verbatim')
+      ? { ctaBroughtForward: !!window.__genCtx.ctaBroughtForward, ctaReasoning: window.__genCtx.ctaReasoning || '' }
+      : {};
     try {
       const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/contacts/${cid}/mark-sent`, {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ message: output, draftOutcome })
+        body: JSON.stringify({ message: output, draftOutcome, ...ctaMeta })
       });
       const data = await res.json();
       if(!res.ok) throw new Error(data.error || 'Request failed');
