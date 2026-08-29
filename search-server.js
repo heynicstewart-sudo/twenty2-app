@@ -13046,53 +13046,75 @@ app.post('/api/omnisend/push-contact', async (req, res) => {
 });
 
 // POST /api/omnisend/create-campaign - { name, subject, preheader,
-// htmlContent, segmentId, scheduledFor } -> an email campaign in Omnisend.
-// With scheduledFor (ISO date string) the campaign is scheduled to send at
-// that time; without it, it's left as a plain draft.
+// htmlContent, templateId, segmentId(s), scheduledFor, fromName, fromEmail }.
+// Omnisend campaigns reference an email template, not inline HTML (POST
+// /api/campaigns docs, v2026-03-15), so the generated HTML is imported as a
+// template first and the campaign points at it. A left-out scheduledFor
+// creates a plain draft.
 app.post('/api/omnisend/create-campaign', async (req, res) => {
   if (!omnisendConfigured()) return res.status(500).json({ error: 'OMNISEND_API_KEY not configured' });
   const b = req.body || {};
   const name = (b.name || '').toString().trim();
   const subject = (b.subject || '').toString().trim();
   const htmlContent = (b.htmlContent || b.html || '').toString();
+  const templateIdIn = (b.templateId || b.templateID || '').toString().trim();
   if (!name) return res.status(400).json({ error: 'name is required' });
   if (!subject) return res.status(400).json({ error: 'subject is required' });
-  if (!htmlContent) return res.status(400).json({ error: 'htmlContent is required' });
+  if (!templateIdIn && !htmlContent) return res.status(400).json({ error: 'htmlContent or templateId is required' });
 
-  const payload = {
-    name,
-    type: 'regular',
-    status: 'draft',
-    subject,
-    content: { html: htmlContent }
-  };
-  const preheader = (b.preheader || '').toString().trim();
-  if (preheader) payload.preheader = preheader;
-  if (b.segmentId) payload.segments = [b.segmentId.toString()];
-  if (b.fromName) payload.fromName = b.fromName.toString();
-  if (b.fromEmail) payload.senderEmail = b.fromEmail.toString();
-
-  // scheduledFor -> hand Omnisend a scheduled send. The exact key Omnisend
-  // wants here isn't nailed down in the public docs, so send the ISO time
-  // under the field names it has used (sendAt / startDate / scheduledDate)
-  // and flip the status to "scheduled" so a draft isn't silently left unsent.
   const scheduledForRaw = (b.scheduledFor || '').toString().trim();
   let scheduledForIso = null;
   if (scheduledForRaw) {
     const when = new Date(scheduledForRaw);
     if (isNaN(when.getTime())) return res.status(400).json({ error: 'scheduledFor must be a valid ISO date string' });
     scheduledForIso = when.toISOString();
-    payload.status = 'scheduled';
-    payload.sendAt = scheduledForIso;
-    payload.startDate = scheduledForIso;
-    payload.scheduledDate = scheduledForIso;
   }
 
   try {
+    // A campaign needs a templateID. Import the generated HTML as a fresh
+    // template unless the caller already has one.
+    let templateID = templateIdIn;
+    if (!templateID) {
+      const imported = await omnisendTemplatesFetch('POST', `${OMNISEND_TEMPLATES_URL}/import`, {
+        name: `${name} — ${new Date().toISOString().slice(0, 10)}`.slice(0, 250),
+        html: htmlContent
+      });
+      const tpl = (imported && (imported.emailTemplate || imported.template)) || imported || {};
+      templateID = tpl.id || tpl.templateID || tpl.templateId || '';
+      if (!templateID) throw new Error('Omnisend did not return a template id when importing the campaign HTML');
+    }
+
+    const email = { templateID, subject };
+    const preheader = (b.preheader || '').toString().trim();
+    if (preheader) email.preheader = preheader.slice(0, 250);
+    const senderName = (b.senderName || b.fromName || '').toString().trim();
+    if (senderName) email.senderName = senderName.slice(0, 250);
+    const senderEmail = (b.senderEmail || b.fromEmail || '').toString().trim();
+    if (senderEmail) email.senderEmail = senderEmail;
+
+    const payload = {
+      channel: 'email',
+      type: 'regular',
+      name: name.slice(0, 250),
+      content: { email }
+    };
+
+    const segmentIds = [].concat(b.segmentId || [], b.segmentIds || [])
+      .flat()
+      .map(s => (s == null ? '' : s.toString().trim()))
+      .filter(Boolean);
+    if (segmentIds.length) payload.audience = { includedSegmentIDs: segmentIds };
+
+    if (scheduledForIso) {
+      payload.sendingSettings = { strategy: 'scheduled', scheduledAt: scheduledForIso };
+    }
+
     const result = await omnisendFetch('POST', '/campaigns', payload);
+    const camp = (result && (result.campaign || result)) || {};
     res.json({
       success: true,
-      campaignId: result.campaignID || result.campaignId || result.id || null,
+      campaignId: camp.id || camp.campaignID || camp.campaignId || null,
+      templateId: templateID,
       scheduledFor: scheduledForIso,
       campaign: result
     });
@@ -13589,42 +13611,33 @@ ${JSON.stringify(touchPoints, null, 2)}${revisionBlock}`;
       draft = JSON.parse(m[0]);
     }
 
-    // The 3-pass humanizer is 3 Claude calls. Running it once per copy field
-    // (subject, preheader, intro, CTA, plus heading + body per section) meant
-    // ~25-30 sequential calls per request, which timed out. Instead join every
-    // copy field into one delimited block, humanize that in a single 3-pass
-    // chain, then split it back. The image search term and CTA URL are not
-    // copy, so they stay out of the block. If the delimiters don't survive
-    // the rewrite cleanly, fall back to the raw generated copy for every
-    // field rather than failing the request.
+    // Humanize only the long-form prose (intro + each section body) - the bits
+    // where AI tells actually show. Subject, preheader, headings and CTA text
+    // are short and the voice profile already shapes them; running them through
+    // a 3-pass rewrite mostly just risks mangling them. Fields run concurrently
+    // so total latency is one field's 3-pass chain, not the sum: the earlier
+    // per-field-sequential version timed out, and the combined-marker version
+    // lost its delimiters in the rewrite and silently fell back to raw copy.
     const clean = v => (v == null ? '' : String(v)).trim();
     const rawSections = (Array.isArray(draft.bodySections) ? draft.bodySections : [])
       .map(sec => ({ heading: clean(sec && sec.heading), body: clean(sec && sec.body) }));
 
-    const fieldTexts = [clean(draft.subject), clean(draft.preheader), clean(draft.intro), clean(draft.ctaText)];
-    rawSections.forEach(sec => { fieldTexts.push(sec.heading); fieldTexts.push(sec.body); });
+    const humanizeSafe = async (text) => {
+      const s = clean(text);
+      if (!s) return s;
+      try { return clean(await humanizePlainText(s)) || s; }
+      catch (e) { console.warn('generate-email-copy - humanize failed for a field, keeping raw:', e.message); return s; }
+    };
 
-    const combined = fieldTexts.map((t, i) => `[[[${i}]]]\n${t}`).join('\n\n');
-    let humanizedFields = null;
-    try {
-      const humanizedCombined = await humanizePlainText(combined);
-      const chunks = humanizedCombined.split(/\s*\[\[\[\s*\d+\s*\]\]\]\s*/).map(s => s.trim());
-      const body = chunks.length && chunks[0] === '' ? chunks.slice(1) : chunks;
-      if (body.length === fieldTexts.length) humanizedFields = body;
-      else console.warn(`Omnisend generate-email-copy - humanized block split into ${body.length} parts, expected ${fieldTexts.length}; using raw copy`);
-    } catch (humErr) {
-      console.warn('Omnisend generate-email-copy - combined humanize failed, using raw copy:', humErr.message);
-    }
+    const [intro, ...sectionBodies] = await Promise.all([
+      humanizeSafe(draft.intro),
+      ...rawSections.map(sec => humanizeSafe(sec.body))
+    ]);
 
-    const outText = i => (humanizedFields ? humanizedFields[i] : fieldTexts[i]);
-    const subject = outText(0);
-    const preheader = outText(1);
-    const intro = outText(2);
-    const ctaText = outText(3);
-    const bodySections = rawSections.map((sec, i) => ({
-      heading: outText(4 + i * 2),
-      body: outText(4 + i * 2 + 1)
-    }));
+    const subject = clean(draft.subject);
+    const preheader = clean(draft.preheader);
+    const ctaText = clean(draft.ctaText);
+    const bodySections = rawSections.map((sec, i) => ({ heading: sec.heading, body: sectionBodies[i] }));
 
     res.json({
       campaignName: campaignName || null,
