@@ -14,38 +14,62 @@
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script>
+/* Shared Chart.js theming - applied to every chart in the app */
+if(window.Chart){
+  window.T2_CHART_COLORS = ['#2A6B7C','#3f9c8f','#1f9d57','#bd7c0c','#7c5cd0','#1f80c4','#d4472f'];
+  Chart.defaults.font.family = "'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif";
+  Chart.defaults.font.size = 11;
+  Chart.defaults.color = '#71717a';
+  Chart.defaults.borderColor = 'rgba(24,24,27,0.07)';
+  Chart.defaults.plugins.legend.labels.boxWidth = 8;
+  Chart.defaults.plugins.legend.labels.usePointStyle = true;
+  Chart.defaults.plugins.legend.labels.pointStyle = 'circle';
+  Chart.defaults.plugins.legend.labels.padding = 14;
+  Chart.defaults.plugins.tooltip.padding = 10;
+  Chart.defaults.plugins.tooltip.cornerRadius = 8;
+  Chart.defaults.plugins.tooltip.backgroundColor = 'rgba(24,24,27,0.92)';
+  Chart.defaults.elements.bar.borderRadius = 6;
+  Chart.defaults.elements.line.tension = 0.35;
+  Chart.defaults.elements.line.borderWidth = 2;
+  Chart.defaults.elements.point.radius = 0;
+  Chart.defaults.elements.point.hoverRadius = 4;
+}
+</script>
 <style>
 :root{
-  --bg:#f6f6f4;
+  --bg:#f5f6f8;
   --surface:#ffffff;
-  --surface-2:#f1f1ee;
+  --surface-2:#eef0f3;
   --card-bg:#ffffff;
-  --border:#e9e9e5;
-  --border-light:#f0f0ec;
-  --sidebar-bg:#101010;
-  --sidebar-text:#ffffff;
-  --sidebar-muted:rgba(255,255,255,0.55);
-  --sidebar-hover-bg:rgba(255,255,255,0.08);
-  --sidebar-active-bg:var(--accent);
+  --border:#e4e6ea;
+  --border-light:#edeff2;
+  --sidebar-bg:#ffffff;
+  --sidebar-text:#52525b;
+  --sidebar-muted:#a1a1aa;
+  --sidebar-hover-bg:#f2f3f6;
+  --sidebar-active-bg:#111114;
   --sidebar-active-text:#ffffff;
   --sidebar-active-border:transparent;
   --topbar-bg:#ffffff;
-  --primary:#1a1a1a;
+  --primary:#18181b;
   --accent:#2A6B7C;
   --accent-strong:#235a68;
   --accent-ink:#ffffff;
   --accent-dim:rgba(42,107,124,0.12);
-  --success:#2f9e60;
-  --warning:#b5801f;
-  --danger:#c9503a;
-  --muted:#6f6f6b;
-  --text-dim:#b6b6b0;
+  --accent-2:#3f9c8f;
+  --accent-2-dim:rgba(63,156,143,0.14);
+  --success:#1f9d57;
+  --warning:#bd7c0c;
+  --danger:#d4472f;
+  --muted:#71717a;
+  --text-dim:#a1a1aa;
   --peach:#FF834C;
-  --blue:#0084C5;
-  --brown:#532822;
-  --yellow:#FFD05D;
-  --purple:#6b46b0;
-  --text:#1a1a1a;
+  --blue:#1f80c4;
+  --brown:#8a5a2b;
+  --yellow:#e0a010;
+  --purple:#7c5cd0;
+  --text:#18181b;
   --font-family:'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
   --font-size-base:14px;
   --label-size:11px;
@@ -55,8 +79,8 @@
   --radius-input:10px;
   --radius-badge:8px;
   --radius-pill:999px;
-  --shadow-sm:0 1px 2px rgba(20,20,20,.05), 0 4px 14px rgba(20,20,20,.07);
-  --shadow-lg:0 18px 50px rgba(20,20,20,.16);
+  --shadow-sm:0 1px 2px rgba(24,24,27,.06), 0 4px 16px rgba(24,24,27,.06);
+  --shadow-lg:0 20px 52px rgba(24,24,27,.16);
 }
 *{box-sizing:border-box;margin:0;padding:0;}
 body{
@@ -64,8 +88,10 @@ body{
   background:var(--bg);
   color:var(--text);
   font-size:var(--font-size-base);
-  line-height:1.4;
+  line-height:1.45;
+  letter-spacing:-0.006em;
   -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
 }
 a{color:inherit;text-decoration:none;}
 .app{display:flex;min-height:100vh;}
@@ -82,26 +108,29 @@ a{color:inherit;text-decoration:none;}
   position:sticky;
   top:0;
   height:100vh;
+  border-right:1px solid var(--border-light);
 }
 .sidebar-logo{display:flex;align-items:center;gap:10px;padding:8px 8px 4px;}
 .logo-mark{width:32px;height:32px;min-width:32px;background:var(--accent);border-radius:10px;display:flex;align-items:center;justify-content:center;color:var(--accent-ink);font-weight:800;font-size:13px;}
 .logo-text{display:flex;flex-direction:column;}
-.logo-name{font-size:14px;font-weight:700;color:var(--sidebar-text);line-height:1.2;}
+.logo-name{font-size:14px;font-weight:700;color:var(--text);line-height:1.2;}
 .logo-sub{font-size:11px;color:var(--sidebar-muted);margin-top:2px;}
 .sidebar-nav{display:flex;flex-direction:column;gap:3px;margin-top:24px;}
 .nav-item{
   display:flex;align-items:center;gap:11px;
   padding:10px 12px;border-radius:11px;
-  color:var(--sidebar-muted);
+  color:var(--sidebar-text);
   font-weight:600;font-size:13.5px;
   cursor:pointer;
   border:none;background:none;
   width:100%;text-align:left;
   transition:background .12s ease, color .12s ease;
 }
-.nav-item i{font-size:18px;}
-.nav-item:hover{color:var(--sidebar-text);background:var(--sidebar-hover-bg);}
-.nav-item.active{background:var(--sidebar-active-bg);color:var(--sidebar-active-text);font-weight:700;}
+.nav-item i{font-size:18px;color:var(--sidebar-muted);transition:color .12s ease;}
+.nav-item:hover{color:var(--text);background:var(--sidebar-hover-bg);}
+.nav-item:hover i{color:var(--text);}
+.nav-item.active{background:var(--sidebar-active-bg);color:var(--sidebar-active-text);font-weight:700;box-shadow:0 6px 16px rgba(17,17,20,.20);}
+.nav-item.active i{color:var(--sidebar-active-text);}
 .nav-divider{font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--sidebar-muted);padding:18px 12px 6px;margin-top:6px;}
 .sidebar-collapse-btn{margin-top:auto;display:flex;align-items:center;gap:11px;width:100%;padding:10px 12px;border-radius:11px;border:none;background:none;color:var(--sidebar-muted);font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;transition:background .12s ease,color .12s ease;}
 .sidebar-collapse-btn:hover{background:var(--sidebar-hover-bg);color:var(--sidebar-text);}
@@ -173,13 +202,19 @@ label{font-size:var(--label-size);font-weight:700;color:var(--muted);display:blo
 .stat-card .label{font-size:12px;font-weight:600;opacity:0.9;}
 .two-col{display:grid;grid-template-columns:1.3fr 1fr;gap:16px;margin-bottom:16px;}
 .section-title{font-size:15px;font-weight:var(--header-weight);letter-spacing:-0.01em;margin-bottom:12px;display:flex;align-items:center;gap:8px;}
+.section-title i{color:var(--accent);font-size:17px;}
+/* Accent-filled hero card (dashboard / stat highlights) */
+.card-hero{background:linear-gradient(135deg,var(--accent) 0%,var(--accent-2) 100%);color:#fff;border:none;}
+.card-hero .section-title,.card-hero .section-title i,.card-hero .muted,.card-hero .num,.card-hero .label{color:#fff;}
+.card-hero .muted{color:rgba(255,255,255,0.82);}
 /* Semantic pastel icon tiles - replaces scattered inline background/color hex pairs */
-.icon-tile{width:38px;height:38px;min-width:38px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:17px;}
-.icon-tile.mint{background:#e7f6ec;color:#2f9e60;}
-.icon-tile.sky{background:#e6f1fa;color:#1a7bb0;}
-.icon-tile.peach{background:#fdeee1;color:#b5701f;}
-.icon-tile.amber{background:#fbf0da;color:#9a7316;}
-.icon-tile.violet{background:#efe9f9;color:#6b46b0;}
+.icon-tile{width:40px;height:40px;min-width:40px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:18px;}
+.icon-tile.mint{background:#d6f0df;color:#12894a;}
+.icon-tile.sky{background:#d8ebf8;color:#166ba3;}
+.icon-tile.peach{background:#fbe4d3;color:#a85e18;}
+.icon-tile.amber{background:#f8e9c6;color:#8a6410;}
+.icon-tile.violet{background:#e7defa;color:#5b3caf;}
+.icon-tile.teal{background:var(--accent-dim);color:var(--accent);}
 .icon-tile.lime{background:var(--accent-dim);color:var(--accent);}
 .timeline{display:flex;flex-direction:column;gap:14px;}
 .timeline-item{display:flex;gap:10px;}
@@ -190,7 +225,7 @@ label{font-size:var(--label-size);font-weight:700;color:var(--muted);display:blo
 .delivery-item:last-child{border-bottom:none;}
 .mini-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:16px;}
 .mini-card{background:var(--surface);border:1px solid var(--border-light);border-radius:var(--radius-card);padding:18px;text-align:center;box-shadow:var(--shadow-sm);}
-.mini-card .num{font-size:24px;font-weight:800;color:var(--text);}
+.mini-card .num{font-size:24px;font-weight:800;color:var(--accent);letter-spacing:-0.02em;}
 .mini-card .label{font-size:12px;color:var(--muted);margin-top:4px;font-weight:600;}
 .health-stat-grid{grid-template-columns:repeat(4,1fr);}
 .health-cards-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;margin-bottom:16px;}
@@ -453,15 +488,15 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 
 /* Analytics */
 .an-stats{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:20px;}
-.an-stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card);padding:14px;}
-.an-stat .num{font-size:20px;font-weight:800;}
+.an-stat{background:var(--surface);border:1px solid var(--border-light);border-radius:var(--radius-card);padding:14px;box-shadow:var(--shadow-sm);}
+.an-stat .num{font-size:20px;font-weight:800;color:var(--accent);letter-spacing:-0.02em;}
 .an-stat .label{font-size:11px;color:var(--muted);font-weight:600;margin-top:2px;}
 .an-stat .sub{font-size:11px;color:var(--success);font-weight:700;margin-top:2px;}
 .bar-row{margin-bottom:12px;}
 .bar-row-head{display:flex;justify-content:space-between;font-size:12.5px;font-weight:700;margin-bottom:5px;}
 .bar-track{background:var(--border);border-radius:var(--radius-badge);height:10px;overflow:hidden;display:flex;}
-.bar-fill{background:var(--primary);height:100%;}
-.bar-fill.secondary{background:var(--accent);}
+.bar-fill{background:var(--accent);height:100%;}
+.bar-fill.secondary{background:var(--accent-2);}
 
 /* Sales tab: pipeline funnel + best-time heatmap (no Chart.js type fits either) */
 .funnel-row{display:flex;align-items:center;gap:12px;margin-bottom:10px;}
@@ -522,9 +557,11 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .checkbox-item{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;}
 .checkbox-item input{width:auto;}
 .logger-type-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;margin-bottom:16px;}
-.logger-type-btn{display:flex;align-items:center;gap:8px;padding:11px 13px;border-radius:var(--radius-card);border:1px solid var(--border);background:var(--surface-2);cursor:pointer;font-size:12.5px;font-weight:700;transition:border-color .15s,background .15s;}
-.logger-type-btn:hover{border-color:var(--accent);}
-.logger-type-btn.active{border-color:var(--accent-strong);background:var(--accent-dim);color:var(--text);}
+.logger-type-btn{display:flex;align-items:center;gap:8px;padding:11px 13px;border-radius:var(--radius-input);border:1px solid var(--border);background:var(--surface);cursor:pointer;font-size:12.5px;font-weight:700;transition:border-color .15s,background .15s,box-shadow .15s;box-shadow:var(--shadow-sm);}
+.logger-type-btn i{color:var(--accent);font-size:15px;}
+.logger-type-btn:hover{border-color:var(--accent);box-shadow:var(--shadow-lg);}
+.logger-type-btn.active{border-color:var(--accent);background:var(--accent-dim);color:var(--accent);}
+.logger-type-btn.active i{color:var(--accent);}
 .logger-result-row{padding:8px 10px;border-radius:var(--radius-badge);cursor:pointer;font-size:12.5px;border:1px solid transparent;}
 .logger-result-row:hover{background:var(--accent-dim);border-color:var(--border);}
 .magnet-row{display:flex;align-items:center;gap:12px;border:1px solid var(--border);border-radius:var(--radius-card);padding:12px 14px;margin-bottom:10px;}
@@ -10392,9 +10429,9 @@ function initCampaignAnalyticsCharts(campaign){
       data: {
         labels: series.labels,
         datasets: [
-          { label:'Leads', data: series.leads, borderColor:'#0084C5', backgroundColor:'#0084C5', tension:0.3 },
-          { label:'Meetings booked', data: series.meetings, borderColor:'#FF834C', backgroundColor:'#FF834C', tension:0.3 },
-          { label:'Sales won', data: series.won, borderColor:'#44A574', backgroundColor:'#44A574', tension:0.3 }
+          { label:'Leads', data: series.leads, borderColor:'#2A6B7C', backgroundColor:'#2A6B7C', tension:0.3 },
+          { label:'Meetings booked', data: series.meetings, borderColor:'#bd7c0c', backgroundColor:'#bd7c0c', tension:0.3 },
+          { label:'Sales won', data: series.won, borderColor:'#1f9d57', backgroundColor:'#1f9d57', tension:0.3 }
         ]
       },
       options: { responsive:true, maintainAspectRatio:false, scales:{ y:{ beginAtZero:true, ticks:{ precision:0 } } }, plugins:{ legend:{ position:'bottom', labels:{ boxWidth:10, font:{ size:11 } } } } }
@@ -10854,8 +10891,8 @@ function initSalesConversionCharts(intel){
     window.__salesCharts.step = new Chart(stepEl, {
       type: 'bar',
       data: { labels: intel.messageStepToBooking.map(s=>s.step), datasets: [
-        { label:'Total reached', data: intel.messageStepToBooking.map(s=>s.total), backgroundColor:'#0084C5' },
-        { label:'Booked', data: intel.messageStepToBooking.map(s=>s.booked), backgroundColor:'#44A574' }
+        { label:'Total reached', data: intel.messageStepToBooking.map(s=>s.total), backgroundColor:'#2A6B7C' },
+        { label:'Booked', data: intel.messageStepToBooking.map(s=>s.booked), backgroundColor:'#1f9d57' }
       ]},
       options: { responsive:true, maintainAspectRatio:false, scales:{ y:{ beginAtZero:true, ticks:{ precision:0 } } }, plugins:{ legend:{ position:'bottom', labels:{ boxWidth:10, font:{ size:11 } } } } }
     });
@@ -10865,8 +10902,8 @@ function initSalesConversionCharts(intel){
     window.__salesCharts.cta = new Chart(ctaEl, {
       type: 'bar',
       data: { labels: intel.ctaToBooking.map(c=>c.cta), datasets: [
-        { label:'Touches', data: intel.ctaToBooking.map(c=>c.touches), backgroundColor:'#FFD05D' },
-        { label:'Bookings', data: intel.ctaToBooking.map(c=>c.bookings), backgroundColor:'#44A574' }
+        { label:'Touches', data: intel.ctaToBooking.map(c=>c.touches), backgroundColor:'#bd7c0c' },
+        { label:'Bookings', data: intel.ctaToBooking.map(c=>c.bookings), backgroundColor:'#1f9d57' }
       ]},
       options: { responsive:true, maintainAspectRatio:false, indexAxis:'y', scales:{ x:{ beginAtZero:true, ticks:{ precision:0 } } }, plugins:{ legend:{ position:'bottom', labels:{ boxWidth:10, font:{ size:11 } } } } }
     });
@@ -10875,7 +10912,7 @@ function initSalesConversionCharts(intel){
   if(typeEl && intel.responseRateByType.length){
     window.__salesCharts.type = new Chart(typeEl, {
       type: 'bar',
-      data: { labels: intel.responseRateByType.map(t=>t.type), datasets: [{ label:'Response rate %', data: intel.responseRateByType.map(t=>t.rate), backgroundColor:'#FF834C' }] },
+      data: { labels: intel.responseRateByType.map(t=>t.type), datasets: [{ label:'Response rate %', data: intel.responseRateByType.map(t=>t.rate), backgroundColor:'#3f9c8f' }] },
       options: { responsive:true, maintainAspectRatio:false, scales:{ y:{ beginAtZero:true, max:100 } }, plugins:{ legend:{ display:false } } }
     });
   }
@@ -10883,7 +10920,7 @@ function initSalesConversionCharts(intel){
   if(genderEl){
     window.__salesCharts.gender = new Chart(genderEl, {
       type: 'bar',
-      data: { labels: intel.responseRateByGender.map(g=>g.gender), datasets: [{ label:'Response rate %', data: intel.responseRateByGender.map(g=>g.rate), backgroundColor:['#0084C5','#FF834C','#8a8a8a'] }] },
+      data: { labels: intel.responseRateByGender.map(g=>g.gender), datasets: [{ label:'Response rate %', data: intel.responseRateByGender.map(g=>g.rate), backgroundColor:['#2A6B7C','#bd7c0c','#a1a1aa'] }] },
       options: { responsive:true, maintainAspectRatio:false, scales:{ y:{ beginAtZero:true, max:100 } }, plugins:{ legend:{ display:false } } }
     });
   }
@@ -10891,7 +10928,7 @@ function initSalesConversionCharts(intel){
   if(sentimentEl){
     window.__salesCharts.sentiment = new Chart(sentimentEl, {
       type: 'pie',
-      data: { labels: intel.sentimentBreakdown.map(s=>s.sentiment), datasets: [{ data: intel.sentimentBreakdown.map(s=>s.count), backgroundColor:['#44A574','#8a8a8a','#0084C5','#c44a2a'] }] },
+      data: { labels: intel.sentimentBreakdown.map(s=>s.sentiment), datasets: [{ data: intel.sentimentBreakdown.map(s=>s.count), backgroundColor:['#1f9d57','#a1a1aa','#2A6B7C','#d4472f'] }] },
       options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:'bottom', labels:{ boxWidth:10, font:{ size:11 } } } } }
     });
   }
@@ -13814,8 +13851,8 @@ function initSeoGscCharts(){
       data: {
         labels,
         datasets: [
-          { label:'Clicks', data: d.daily.map(r => r.clicks), borderColor:'#2563eb', backgroundColor:'rgba(37,99,235,0.12)', fill:true, tension:0.3, pointRadius:0, borderWidth:2, yAxisID:'y' },
-          { label:'Impressions', data: d.daily.map(r => r.impressions), borderColor:'#FF834C', backgroundColor:'rgba(255,131,76,0.08)', fill:false, tension:0.3, pointRadius:0, borderWidth:2, yAxisID:'y1' }
+          { label:'Clicks', data: d.daily.map(r => r.clicks), borderColor:'#2A6B7C', backgroundColor:'rgba(42,107,124,0.12)', fill:true, tension:0.3, pointRadius:0, borderWidth:2, yAxisID:'y' },
+          { label:'Impressions', data: d.daily.map(r => r.impressions), borderColor:'#bd7c0c', backgroundColor:'rgba(189,124,12,0.08)', fill:false, tension:0.3, pointRadius:0, borderWidth:2, yAxisID:'y1' }
         ]
       },
       options: {
@@ -13838,7 +13875,7 @@ function initSeoGscCharts(){
       data: {
         labels,
         datasets: [
-          { label:'Avg position', data: d.daily.map(r => r.position ? Number(r.position.toFixed(1)) : null), borderColor:'#44A574', backgroundColor:'rgba(68,165,116,0.12)', fill:true, tension:0.3, pointRadius:0, borderWidth:2, spanGaps:true }
+          { label:'Avg position', data: d.daily.map(r => r.position ? Number(r.position.toFixed(1)) : null), borderColor:'#1f9d57', backgroundColor:'rgba(31,157,87,0.12)', fill:true, tension:0.3, pointRadius:0, borderWidth:2, spanGaps:true }
         ]
       },
       options: {
@@ -14101,8 +14138,8 @@ function initSeoCampaignCharts(){
     data: {
       labels: gsc.daily.map(r => r.date),
       datasets: [
-        { label:'Clicks', data: gsc.daily.map(r => r.clicks), borderColor:'#2563eb', backgroundColor:'rgba(37,99,235,0.12)', fill:true, tension:0.3, pointRadius:0, borderWidth:2, yAxisID:'y' },
-        { label:'Impressions', data: gsc.daily.map(r => r.impressions), borderColor:'#FF834C', backgroundColor:'rgba(255,131,76,0.08)', fill:false, tension:0.3, pointRadius:0, borderWidth:2, yAxisID:'y1' }
+        { label:'Clicks', data: gsc.daily.map(r => r.clicks), borderColor:'#2A6B7C', backgroundColor:'rgba(42,107,124,0.12)', fill:true, tension:0.3, pointRadius:0, borderWidth:2, yAxisID:'y' },
+        { label:'Impressions', data: gsc.daily.map(r => r.impressions), borderColor:'#bd7c0c', backgroundColor:'rgba(189,124,12,0.08)', fill:false, tension:0.3, pointRadius:0, borderWidth:2, yAxisID:'y1' }
       ]
     },
     options: {
