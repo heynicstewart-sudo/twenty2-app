@@ -12755,6 +12755,19 @@ function omnisendHeaders() {
   };
 }
 
+// Omnisend errors are RFC 9457 Problem Details. A 400 ValidationProblem
+// carries the useful part in an `errors` array of { field, code, message };
+// surface those, not just the generic `detail`.
+function omnisendErrorDetail(json, text, res) {
+  if (json && Array.isArray(json.errors) && json.errors.length) {
+    const fields = json.errors
+      .map(e => `${e.field || '?'}: ${e.message || e.code || 'invalid'}`)
+      .join('; ');
+    return `${json.detail || json.title || 'validation failed'} (${fields})`;
+  }
+  return (json && (json.detail || json.error || json.message || json.title || json.errorMessage)) || text || res.statusText;
+}
+
 // `pathOrUrl` is either a "/campaigns?..." path or a full URL (Omnisend's
 // pagination hands back an absolute paging.next URL).
 async function omnisendFetch(method, pathOrUrl, body) {
@@ -12770,8 +12783,7 @@ async function omnisendFetch(method, pathOrUrl, body) {
   let json = null;
   if (text) { try { json = JSON.parse(text); } catch (e) { json = null; } }
   if (!res.ok) {
-    const detail = (json && (json.error || json.message || json.detail || json.errorMessage)) || text || res.statusText;
-    throw new Error(`Omnisend API error ${res.status}: ${detail}`);
+    throw new Error(`Omnisend API error ${res.status}: ${omnisendErrorDetail(json, text, res)}`);
   }
   return json || {};
 }
@@ -13067,7 +13079,11 @@ app.post('/api/omnisend/create-campaign', async (req, res) => {
   if (scheduledForRaw) {
     const when = new Date(scheduledForRaw);
     if (isNaN(when.getTime())) return res.status(400).json({ error: 'scheduledFor must be a valid ISO date string' });
-    scheduledForIso = when.toISOString();
+    // RFC 3339, no fractional seconds (Omnisend's example form). Must be in
+    // the future - nudge a bare date (midnight) that lands today or earlier
+    // to 30 minutes out so "must be in the future" doesn't reject it.
+    if (when.getTime() <= Date.now() + 60000) when.setTime(Date.now() + 30 * 60000);
+    scheduledForIso = when.toISOString().replace(/\.\d{3}Z$/, 'Z');
   }
 
   try {
@@ -13075,16 +13091,21 @@ app.post('/api/omnisend/create-campaign', async (req, res) => {
     // template unless the caller already has one.
     let templateID = templateIdIn;
     if (!templateID) {
-      const imported = await omnisendTemplatesFetch('POST', `${OMNISEND_TEMPLATES_URL}/import`, {
-        name: `${name} — ${new Date().toISOString().slice(0, 10)}`.slice(0, 250),
-        html: htmlContent
-      });
+      let imported;
+      try {
+        imported = await omnisendTemplatesFetch('POST', `${OMNISEND_TEMPLATES_URL}/import`, {
+          name: `${name} — ${new Date().toISOString().slice(0, 10)}`.slice(0, 250),
+          html: htmlContent
+        });
+      } catch (impErr) {
+        throw new Error(`template import failed: ${impErr.message}`);
+      }
       const tpl = (imported && (imported.emailTemplate || imported.template)) || imported || {};
       templateID = tpl.id || tpl.templateID || tpl.templateId || '';
       if (!templateID) throw new Error('Omnisend did not return a template id when importing the campaign HTML');
     }
 
-    const email = { templateID, subject };
+    const email = { templateID, subject: subject.slice(0, 250) };
     const preheader = (b.preheader || '').toString().trim();
     if (preheader) email.preheader = preheader.slice(0, 250);
     const senderName = (b.senderName || b.fromName || '').toString().trim();
@@ -13109,7 +13130,12 @@ app.post('/api/omnisend/create-campaign', async (req, res) => {
       payload.sendingSettings = { strategy: 'scheduled', scheduledAt: scheduledForIso };
     }
 
-    const result = await omnisendFetch('POST', '/campaigns', payload);
+    let result;
+    try {
+      result = await omnisendFetch('POST', '/campaigns', payload);
+    } catch (campErr) {
+      throw new Error(`campaign create failed: ${campErr.message}`);
+    }
     const camp = (result && (result.campaign || result)) || {};
     res.json({
       success: true,
@@ -13138,8 +13164,7 @@ async function omnisendTemplatesFetch(method, url, body) {
   let json = null;
   if (text) { try { json = JSON.parse(text); } catch (e) { json = null; } }
   if (!res.ok) {
-    const detail = (json && (json.error || json.message || json.detail || json.errorMessage)) || text || res.statusText;
-    throw new Error(`Omnisend API error ${res.status}: ${detail}`);
+    throw new Error(`Omnisend API error ${res.status}: ${omnisendErrorDetail(json, text, res)}`);
   }
   return json || {};
 }
