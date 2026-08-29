@@ -200,6 +200,8 @@ input,select,textarea{
 }
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent-strong);box-shadow:0 0 0 3px var(--accent-dim);}
 textarea{resize:vertical;}
+input[type="checkbox"],input[type="radio"]{width:auto;accent-color:var(--accent);}
+select{cursor:pointer;}
 label{font-size:var(--label-size);font-weight:700;color:var(--muted);display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:var(--label-tracking);}
 .field{margin-bottom:14px;}
 .row{display:flex;gap:12px;}
@@ -632,6 +634,70 @@ table.spreadsheet-table{border-collapse:collapse;width:100%;min-width:960px;font
 .spreadsheet-table td.ss-name{font-weight:700;color:var(--text);}
 .spreadsheet-table td.ss-num{text-align:right;font-variant-numeric:tabular-nums;}
 .spreadsheet-table td.ss-draft{cursor:help;}
+
+/* ============ Consistency & polish pass ============ */
+
+/* Global niceties */
+::selection{background:var(--accent-dim);}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px;}
+*::-webkit-scrollbar{width:10px;height:10px;}
+*::-webkit-scrollbar-track{background:transparent;}
+*::-webkit-scrollbar-thumb{background:rgba(24,24,27,.18);border-radius:999px;border:2px solid transparent;background-clip:content-box;}
+*::-webkit-scrollbar-thumb:hover{background:rgba(24,24,27,.32);background-clip:content-box;}
+html{scrollbar-width:thin;scrollbar-color:rgba(24,24,27,.22) transparent;}
+
+/* Card-like containers - one consistent treatment everywhere */
+.flow-node,.todo-item,.howto-item,.signal-card,.account-row,.magnet-row,
+.settings-mode-row,.tp-painpoints,.grid-wrap,.spreadsheet-wrap,
+.campaign-preview-card{
+  border-color:var(--border-light);
+}
+.flow-node,.todo-item,.howto-item,.signal-card,.account-row,.magnet-row,
+.settings-mode-row{
+  box-shadow:var(--shadow-sm);
+}
+
+/* Internal dividers - softer than the interactive border */
+.modal-header,.modal-footer,.drawer-section,.note-item,.cta-row,
+.faq-item,.delivery-item,.thread,.flow-node-head,.flow-node-foot,
+.engine-group-heading,.seq-tabs,.perf-table th,.perf-table td,
+.grid-table th,.grid-table td,.spreadsheet-table th,.spreadsheet-table td{
+  border-color:var(--border-light);
+}
+
+/* Tables - shared header + row-hover treatment */
+.perf-table th,.grid-table th{background:transparent;font-weight:700;}
+.grid-table tbody tr:hover td,.perf-table tbody tr:hover td{background:var(--surface-2);}
+.grid-table td,.perf-table td{transition:background .1s ease;}
+
+/* Interactive-list rows */
+.kanban-col-header .count{background:var(--surface-2);}
+.reply-btn,.chip,.tag-item,.shot-file-chip{transition:border-color .12s ease,background .12s ease;}
+
+/* Calendar */
+.cal-cell{border-color:var(--border-light);transition:border-color .12s ease;}
+.cal-cell.today{border-color:var(--accent);}
+.cal-cell:hover{border-color:var(--border);}
+
+/* Sub-tab bar - one style (used by Sequences, Sales, Marketing, campaign detail) */
+.seq-tab{border-bottom-width:2px;margin-bottom:-1px;transition:color .12s ease,border-color .12s ease;}
+.seq-tab:hover{color:var(--text);}
+
+/* Format dots -> palette */
+.format-linkedin{background:var(--blue);}
+.format-blog{background:var(--success);}
+.format-newsletter{background:var(--purple);}
+
+/* Empty states */
+.empty-state{padding:36px 24px;color:var(--muted);font-size:13px;line-height:1.6;}
+.empty-state i{font-size:22px;display:block;margin:0 auto 8px;opacity:.5;}
+
+/* Section headings inside cards get consistent breathing room */
+.card>.section-title:first-child{margin-top:2px;}
+
+/* Modal header a touch more prominent */
+.modal-header h3{font-size:16px;letter-spacing:-0.01em;}
+.modal-header{padding:20px 22px;}
 
 @media (max-width:1024px){
   .sidebar{width:76px;min-width:76px;padding:16px 8px;}
@@ -6918,7 +6984,7 @@ function renderKCard(c, colKey){
         ${seqStage ? `<div style="margin-top:4px;"><span class="tp-badge" title="Sequence stage in this campaign"><i class="ti ti-route"></i> ${esc(seqStage)}</span></div>` : ''}
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
-        <span class="day-badge ${dayBadgeClass(days)}">${days}d</span>
+        <span class="day-badge ${dayBadgeClass(days)}">${days == null ? '—' : days + 'd'}</span>
         <span class="tp-badge" title="Touch points logged"><i class="ti ti-target-arrow"></i> ${(c.touchPoints||[]).length}</span>
         <button class="btn btn-ghost btn-sm" style="padding:2px 6px;" onclick="event.stopPropagation();handleSkipContact('${c.id}')" title="Skip - exclude from this campaign"><i class="ti ti-player-skip-forward"></i></button>
       </div>
