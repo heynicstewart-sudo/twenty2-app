@@ -12755,15 +12755,20 @@ function omnisendHeaders() {
   };
 }
 
-// Omnisend errors are RFC 9457 Problem Details. A 400 ValidationProblem
-// carries the useful part in an `errors` array of { field, code, message };
-// surface those, not just the generic `detail`.
+// Omnisend errors come in two shapes: the campaigns/templates APIs use RFC
+// 9457 Problem Details with an `errors` array of { field, code, message };
+// the analytics API uses { error, fields: { "path": "message" } }. Surface
+// the per-field detail from whichever is present, not just the generic text.
 function omnisendErrorDetail(json, text, res) {
   if (json && Array.isArray(json.errors) && json.errors.length) {
     const fields = json.errors
       .map(e => `${e.field || '?'}: ${e.message || e.code || 'invalid'}`)
       .join('; ');
     return `${json.detail || json.title || 'validation failed'} (${fields})`;
+  }
+  if (json && json.fields && typeof json.fields === 'object' && !Array.isArray(json.fields)) {
+    const fields = Object.entries(json.fields).map(([k, v]) => `${k}: ${v}`).join('; ');
+    return `${json.error || 'validation failed'} (${fields})`;
   }
   return (json && (json.detail || json.error || json.message || json.title || json.errorMessage)) || text || res.statusText;
 }

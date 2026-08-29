@@ -17076,12 +17076,21 @@ async function createOmnisendCampaign(){
   window.__emailCampaignResult = undefined;
   emailRerender('copy');
   try {
+    const ref = window.__emailActiveTemplate || {};
     const payload = {
       name: (c.subject || '').trim() || 'Untitled campaign',
       subject: c.subject,
       preheader: c.preheader,
       htmlContent: buildEmailHtml(c),
-      finalVersion: fb.finalVersion
+      finalVersion: fb.finalVersion,
+      // when a saved template is selected, the server swaps this copy into it
+      // in place rather than creating a throwaway template
+      templateId: ref.id || '',
+      copy: {
+        subject: c.subject, preheader: c.preheader, intro: c.intro,
+        bodySections: (c.bodySections || []).map(s => ({ heading: s.heading, body: s.body })),
+        cta: { label: c.cta.label, url: c.cta.url }
+      }
     };
     if(fb.scheduledFor) payload.scheduledFor = fb.scheduledFor;
     const res = await fetch('/api/omnisend/create-campaign', {
@@ -17095,7 +17104,10 @@ async function createOmnisendCampaign(){
       url: data.url || camp.url || camp.editUrl || '',
       scheduledFor: data.scheduledFor || ''
     };
-    toast(data.scheduledFor ? 'Campaign scheduled in Omnisend' : 'Campaign created in Omnisend', 'success');
+    toast(
+      data.templateUpdated ? `Updated "${ref.name || 'your template'}" and created the campaign draft`
+      : data.scheduledFor ? 'Campaign scheduled in Omnisend' : 'Campaign created in Omnisend',
+      'success');
   } catch(err){
     window.__emailCampaignResult = { error: err.message };
   }
@@ -17116,18 +17128,24 @@ async function loadOmnisendCampaigns(){
     if(!cRes.ok) throw new Error(cData.error || 'Request failed');
     const campaigns = Array.isArray(cData.campaigns) ? cData.campaigns : (Array.isArray(cData) ? cData : []);
     const statsById = {};
+    let statList = [];
     if(sRes && sRes.ok){
       const sData = await sRes.json().catch(() => ({}));
-      const statList = Array.isArray(sData.stats) ? sData.stats : (Array.isArray(sData) ? sData : []);
+      statList = Array.isArray(sData.stats) ? sData.stats : (Array.isArray(sData) ? sData : []);
       statList.forEach(st => {
         const id = st && (st.campaignId || st.id);
         if(id != null) statsById[id] = st;
       });
       if(sData && sData.byId && typeof sData.byId === 'object') Object.assign(statsById, sData.byId);
     }
+    const norm = s => (s || '').toString().trim().toLowerCase();
     window.__omnisendCampaigns = campaigns.map(c => {
       const id = c.campaignId || c.id;
-      return Object.assign({}, c, { stats: c.stats || statsById[id] || null });
+      let st = c.stats || statsById[id] || null;
+      // the Analytics API keys by marketingActivityID which may not equal the
+      // campaign list id - fall back to matching on name
+      if(!st && c.name) st = statList.find(s => norm(s.name) === norm(c.name)) || null;
+      return Object.assign({}, c, { stats: st });
     });
   } catch(err){
     window.__omnisendCampaigns = { error: err.message };
