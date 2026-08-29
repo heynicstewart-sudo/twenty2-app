@@ -9290,6 +9290,14 @@ function campaignFunnelStep(funnel, key){
   const s = funnel.steps.find(x => x.key === key);
   return s ? s.count : null;
 }
+function campaignFunnelReplyRate(campaign){
+  const f = (window.__campaignFunnels || {})[campaign.id];
+  return (f && !f.error && typeof f.replyRate === 'number') ? f.replyRate + '%' : '—';
+}
+function campaignFunnelConversionRate(campaign){
+  const f = (window.__campaignFunnels || {})[campaign.id];
+  return (f && !f.error && typeof f.conversionRate === 'number') ? f.conversionRate + '%' : '—';
+}
 
 // Reader over the cached funnel. Everything is null while the funnel is
 // still loading so the UI can show a placeholder instead of a fake zero
@@ -10560,18 +10568,16 @@ function renderCampaignAnalyticsTab(campaign){
   </div>
 
   <div class="card" style="margin-bottom:16px;">
-    <div class="section-title" style="margin-bottom:10px;"><i class="ti ti-database"></i> Campaign overview (all time)</div>
+    <div class="section-title" style="margin-bottom:10px;"><i class="ti ti-database"></i> Activity &amp; benchmarks</div>
     ${!data ? '<div class="muted"><i class="ti ti-loader-2"></i> Loading...</div>' :
       data.error ? `<div class="muted">Could not load: ${esc(data.error)}</div>` : `
       <div class="mini-cards analytics-stat-grid" style="margin-bottom:0;">
-        <div class="mini-card"><div class="num">${data.contactsTargeted}</div><div class="label">Contacts targeted</div></div>
         <div class="mini-card"><div class="num">${data.touchPointsSentThisWeek}</div><div class="label">Touch points this week</div></div>
-        <div class="mini-card"><div class="num">${data.replyRate}%</div><div class="label">Reply rate</div></div>
-        <div class="mini-card"><div class="num">${data.bookingRate}%</div><div class="label">Booking rate</div></div>
-        <div class="mini-card"><div class="num">${data.conversionRate}%</div><div class="label">Conversion rate</div></div>
+        <div class="mini-card"><div class="num">${campaignFunnelReplyRate(campaign)}</div><div class="label">Reply rate</div></div>
+        <div class="mini-card"><div class="num">${campaignFunnelConversionRate(campaign)}</div><div class="label">Conversion rate</div></div>
         <div class="mini-card"><div class="num">${data.avgTouchPointsToConvert ?? '—'}</div><div class="label">Avg touches to convert</div></div>
       </div>
-      <p style="font-size:12.5px;margin-top:14px;">Vs. T2C historical average: conversion rate ${data.conversionRate}% vs ${data.historicalComparison.avgConversionRate ?? '—'}% average, ${data.avgTouchPointsToConvert ?? '—'} vs ${data.historicalComparison.avgTouchPointsToConvert ?? '—'} touch points to convert.</p>
+      ${data.historicalComparison ? `<p style="font-size:12.5px;margin-top:14px;">Vs. T2C historical average: conversion rate ${campaignFunnelConversionRate(campaign)} vs ${data.historicalComparison.avgConversionRate ?? '—'}% average, ${data.avgTouchPointsToConvert ?? '—'} vs ${data.historicalComparison.avgTouchPointsToConvert ?? '—'} touch points to convert.</p>` : ''}
     `}
   </div>
 
@@ -10994,9 +11000,10 @@ function renderPipelineFunnel(data){
 /* -- Section 2: Scorecard strip -- */
 function computeSalesScorecards(data, period){
   const { start, end, prevStart, prevEnd } = campaignPeriodBounds(period);
+  const dedupedContacts = dedupeCampaignContacts(data.campaignContacts);
   function metricsFor(s, e){
     const connections = [], meetingsBooked = [];
-    data.campaignContacts.forEach(cc => {
+    dedupedContacts.forEach(cc => {
       (cc.stageHistory||[]).forEach(h => {
         if(h.stage === 'Connected' && inDateRange(h.date, s, e)) connections.push({ cc, date:h.date });
         if(h.stage === 'Meeting Booked' && inDateRange(h.date, s, e)) meetingsBooked.push({ cc, date:h.date });
