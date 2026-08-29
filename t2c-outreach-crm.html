@@ -64,12 +64,22 @@ if(window.Chart){
   --danger:#d4472f;
   --muted:#71717a;
   --text-dim:#a1a1aa;
-  --peach:#FF834C;
+  --peach:#d0703f;
   --blue:#1f80c4;
   --brown:#8a5a2b;
-  --yellow:#e0a010;
+  --yellow:#c98a0a;
   --purple:#7c5cd0;
   --text:#18181b;
+  /* Soft status tints - cool-leaning, tuned to the zinc palette. bg = pale
+     fill for tags/cells/chips; fg = readable label colour. */
+  --tint-blue-bg:#e7eef6;   --tint-blue-fg:#1b6ba6;
+  --tint-green-bg:#e0f0e8;  --tint-green-fg:#177a49;
+  --tint-amber-bg:#f4ecdb;  --tint-amber-fg:#8f5f11;
+  --tint-gold-bg:#efecd9;   --tint-gold-fg:#7a6212;
+  --tint-purple-bg:#ebe6f7; --tint-purple-fg:#6444bd;
+  --tint-orange-bg:#f6e6db; --tint-orange-fg:#a65c22;
+  --tint-red-bg:#f6e2de;    --tint-red-fg:#bd3b28;
+  --tint-grey-bg:#eaebee;   --tint-grey-fg:#5f5f68;
   --font-family:'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
   --font-size-base:14px;
   --label-size:11px;
@@ -255,26 +265,26 @@ label{font-size:var(--label-size);font-weight:700;color:var(--muted);display:blo
    and the Roadmap kanban column accents below. 'opened' predates a
    connection ever being sent and isn't part of that 5-stage scheme, so it
    keeps its own colour. */
-.tag-found{background:#e2f2fa;color:var(--blue);}
-.tag-opened{background:#fde9d6;color:#a1571c;}
-.tag-connectionPending{background:#fdf0d9;color:var(--warning);}
-.tag-connected{background:#e3f5eb;color:var(--success);}
-.tag-messaging{background:rgba(139,92,246,0.12);color:var(--purple);}
-.tag-booked{background:#fdf3d0;color:#96751a;}
-.tag-won{background:#e3f5eb;color:#1f7a4f;}
-.tag-lost{background:#fbe4e0;color:#b3413a;}
-.tag-pending{background:#fdf4e6;color:#8a6a1f;}
-.tag-started{background:#e2f2fa;color:#0d6a96;}
-.tag-sent-positive{background:#e3f5eb;color:#1f7a4f;}
-.tag-sent-neutral{background:#f1f1ee;color:#6b6558;}
-.tag-sent-cold{background:#e2f2fa;color:#0d6a96;}
-.tag-sent-negative{background:#fbe4e0;color:#b3413a;}
+.tag-found{background:var(--tint-blue-bg);color:var(--tint-blue-fg);}
+.tag-opened{background:var(--tint-orange-bg);color:var(--tint-orange-fg);}
+.tag-connectionPending{background:var(--tint-amber-bg);color:var(--tint-amber-fg);}
+.tag-connected{background:var(--tint-green-bg);color:var(--tint-green-fg);}
+.tag-messaging{background:var(--tint-purple-bg);color:var(--tint-purple-fg);}
+.tag-booked{background:var(--tint-gold-bg);color:var(--tint-gold-fg);}
+.tag-won{background:var(--tint-green-bg);color:var(--tint-green-fg);}
+.tag-lost{background:var(--tint-red-bg);color:var(--tint-red-fg);}
+.tag-pending{background:var(--tint-amber-bg);color:var(--tint-amber-fg);}
+.tag-started{background:var(--tint-blue-bg);color:var(--tint-blue-fg);}
+.tag-sent-positive{background:var(--tint-green-bg);color:var(--tint-green-fg);}
+.tag-sent-neutral{background:var(--tint-grey-bg);color:var(--tint-grey-fg);}
+.tag-sent-cold{background:var(--tint-blue-bg);color:var(--tint-blue-fg);}
+.tag-sent-negative{background:var(--tint-red-bg);color:var(--tint-red-fg);}
 .stage-select{border:none;outline:none;padding:4px 10px;border-radius:var(--radius-badge);font-size:11px;font-weight:700;font-family:inherit;cursor:pointer;}
-.stage-select:disabled{cursor:not-allowed;opacity:.6;background:#f1f1ee;color:var(--muted);}
+.stage-select:disabled{cursor:not-allowed;opacity:.6;background:var(--surface-2);color:var(--muted);}
 .day-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 9px;border-radius:var(--radius-pill);font-size:11px;font-weight:800;}
-.day-green{background:#e3f5eb;color:#1f7a4f;}
-.day-amber{background:#fdf0d9;color:#a1701c;}
-.day-red{background:#fbe3dc;color:var(--danger);}
+.day-green{background:var(--tint-green-bg);color:var(--tint-green-fg);}
+.day-amber{background:var(--tint-amber-bg);color:var(--tint-amber-fg);}
+.day-red{background:var(--tint-red-bg);color:var(--tint-red-fg);}
 
 /* Grid page */
 .toolbar{display:flex;gap:10px;align-items:flex-end;margin-bottom:16px;flex-wrap:wrap;}
@@ -288,12 +298,12 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .grid-col-remove:hover{background:var(--danger,#c0392b);color:#fff;}
 .company-cell{font-weight:700;white-space:nowrap;}
 .grid-cell{border-radius:var(--radius-badge);padding:10px;min-height:64px;}
-.cell-found{background:#e2f2fa;}
-.cell-opened{background:#fdf1e2;}
-.cell-connectionPending{background:#fdf0d9;}
-.cell-connected{background:#eaf7f0;}
-.cell-messaging{background:rgba(139,92,246,0.08);}
-.cell-booked{background:#fdf3d0;}
+.cell-found{background:var(--tint-blue-bg);}
+.cell-opened{background:var(--tint-orange-bg);}
+.cell-connectionPending{background:var(--tint-amber-bg);}
+.cell-connected{background:var(--tint-green-bg);}
+.cell-messaging{background:var(--tint-purple-bg);}
+.cell-booked{background:var(--tint-gold-bg);}
 .cell-empty{background:var(--surface-2);color:var(--muted);font-size:12px;display:flex;align-items:center;justify-content:center;min-height:64px;}
 .cell-searching{background:var(--surface-2);color:var(--muted);font-size:12px;display:flex;align-items:center;justify-content:center;min-height:64px;font-style:italic;}
 .cell-name{font-weight:700;font-size:13px;display:flex;align-items:center;gap:4px;}
@@ -330,15 +340,15 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .kanban-col[data-col="made"] .kanban-col-header{color:var(--success);}
 .kanban-col[data-col="messaging"]{border-top-color:var(--purple);}
 .kanban-col[data-col="messaging"] .kanban-col-header{color:var(--purple);}
-.kanban-col[data-col="booked"]{border-top-color:#96751a;}
-.kanban-col[data-col="booked"] .kanban-col-header{color:#96751a;}
+.kanban-col[data-col="booked"]{border-top-color:var(--tint-gold-fg);}
+.kanban-col[data-col="booked"] .kanban-col-header{color:var(--tint-gold-fg);}
 .kanban-cards{display:flex;flex-direction:column;gap:10px;min-height:60px;}
 .kcard{background:var(--surface);border:1px solid var(--border-light);border-radius:var(--radius-card);padding:12px;cursor:grab;box-shadow:var(--shadow-sm);}
 .kcard.dragging{opacity:0.4;}
 .kcard-head{display:flex;justify-content:space-between;align-items:flex-start;cursor:pointer;}
 .kcard-name{font-weight:700;font-size:13.5px;}
 .kcard-role{font-size:11.5px;color:var(--muted);margin-top:2px;}
-.kcard-flag{margin-top:8px;background:#fbe3dc;color:var(--danger);border-radius:var(--radius-badge);padding:6px 8px;font-size:11.5px;display:flex;justify-content:space-between;align-items:center;font-weight:700;}
+.kcard-flag{margin-top:8px;background:var(--tint-red-bg);color:var(--tint-red-fg);border-radius:var(--radius-badge);padding:6px 8px;font-size:11.5px;display:flex;justify-content:space-between;align-items:center;font-weight:700;}
 .thread{margin-top:12px;border-top:1px solid var(--border);padding-top:10px;display:flex;flex-direction:column;gap:10px;}
 .thread-step{display:flex;flex-direction:column;gap:6px;background:var(--surface-2);border-radius:var(--radius-badge);padding:10px;}
 .thread-step-head{display:flex;justify-content:space-between;align-items:center;font-weight:700;font-size:12px;}
@@ -367,20 +377,20 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .todo-item-main{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;}
 .todo-item-name{font-weight:700;font-size:14px;}
 .todo-item-actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;}
-.rec-product{background:#eaf7f0;border:1px solid #c9e9d7;border-radius:var(--radius-badge);padding:8px 10px;margin-bottom:6px;}
+.rec-product{background:var(--tint-green-bg);border:1px solid rgba(0,0,0,0.06);border-radius:var(--radius-badge);padding:8px 10px;margin-bottom:6px;}
 .rec-product:last-child{margin-bottom:0;}
-.rec-product-name{font-weight:700;font-size:12px;color:#1f7a4f;}
-.intel-draft{background:#e2f2fa;border:1px solid #bfe0f0;border-radius:var(--radius-card);padding:12px 14px;margin-bottom:12px;}
+.rec-product-name{font-weight:700;font-size:12px;color:var(--tint-green-fg);}
+.intel-draft{background:var(--tint-blue-bg);border:1px solid rgba(0,0,0,0.06);border-radius:var(--radius-card);padding:12px 14px;margin-bottom:12px;}
 .intel-draft:last-child{margin-bottom:0;}
 .intel-draft-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;}
-.intel-draft-name{font-weight:700;font-size:13px;color:#0d6a96;}
+.intel-draft-name{font-weight:700;font-size:13px;color:var(--tint-blue-fg);}
 .intel-draft-text{font-size:12.5px;white-space:pre-wrap;margin-top:8px;color:var(--text);line-height:1.5;}
 .campaign-card-name{font-weight:800;font-size:14.5px;}
 .campaign-status{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:var(--radius-pill);font-size:11px;font-weight:700;white-space:nowrap;}
 .campaign-status-draft{background:var(--border);color:var(--muted);}
-.campaign-status-active{background:#e3f5eb;color:#1f7a4f;}
-.campaign-status-complete{background:#e2f2fa;color:#0d6a96;}
-.campaign-status-paused{background:#fdf0d5;color:#a1731c;}
+.campaign-status-active{background:var(--tint-green-bg);color:var(--tint-green-fg);}
+.campaign-status-complete{background:var(--tint-blue-bg);color:var(--tint-blue-fg);}
+.campaign-status-paused{background:var(--tint-amber-bg);color:var(--tint-amber-fg);}
 .campaign-status.clickable{cursor:pointer;}
 .campaign-status.clickable:hover{filter:brightness(0.96);}
 .campaign-chat{display:flex;flex-direction:column;gap:10px;max-height:340px;overflow-y:auto;padding-right:2px;}
@@ -425,8 +435,8 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .seq-tab{padding:10px 16px;font-weight:700;font-size:13px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;}
 .seq-tab.active{color:var(--text);border-color:var(--accent-strong);}
 .seq-header{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:18px;gap:14px;flex-wrap:wrap;}
-.pill{display:inline-flex;padding:4px 11px;border-radius:var(--radius-pill);background:#faf0dc;color:#8a6a1f;font-size:11.5px;font-weight:600;margin-right:6px;}
-.pill-sky{background:#e6f1fa;color:#1a7bb0;}
+.pill{display:inline-flex;padding:4px 11px;border-radius:var(--radius-pill);background:var(--tint-gold-bg);color:var(--tint-gold-fg);font-size:11.5px;font-weight:600;margin-right:6px;}
+.pill-sky{background:var(--tint-blue-bg);color:var(--tint-blue-fg);}
 .flow{display:grid;grid-template-columns:repeat(4,1fr);gap:0;align-items:stretch;margin-bottom:6px;}
 .flow-3{grid-template-columns:repeat(3,1fr);}
 .analytics-stat-grid{grid-template-columns:repeat(6,1fr);}
@@ -461,14 +471,14 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .cal-cell.empty{background:transparent;border:none;}
 .cal-cell.today{border-color:var(--primary);border-width:2px;}
 .cal-date{font-size:12px;font-weight:700;color:var(--muted);margin-bottom:6px;}
-.event-chip{background:#e3f5eb;color:#1f7a4f;border-radius:4px;padding:3px 7px;font-size:10.5px;font-weight:700;margin-bottom:4px;cursor:default;position:relative;}
-.event-chip.blue{background:#e2f2fa;color:#0d6a96;}
-.event-chip.peach{background:#fde4d6;color:#a1571c;}
-.event-chip.grey{background:#eee9e2;color:#6b6355;}
-.event-chip.purple{background:#efe4f7;color:#6b3fa0;}
-.event-chip.yellow{background:#fef3d6;color:#8a6a1f;}
-.event-chip.teal{background:#d8f3f0;color:#1d7268;}
-.event-chip.reminder-chip{background:#f1f1ee;color:#6b6558;cursor:pointer;}
+.event-chip{background:var(--tint-green-bg);color:var(--tint-green-fg);border-radius:4px;padding:3px 7px;font-size:10.5px;font-weight:700;margin-bottom:4px;cursor:default;position:relative;}
+.event-chip.blue{background:var(--tint-blue-bg);color:var(--tint-blue-fg);}
+.event-chip.peach{background:var(--tint-orange-bg);color:var(--tint-orange-fg);}
+.event-chip.grey{background:var(--tint-grey-bg);color:var(--tint-grey-fg);}
+.event-chip.purple{background:var(--tint-purple-bg);color:var(--tint-purple-fg);}
+.event-chip.yellow{background:var(--tint-gold-bg);color:var(--tint-gold-fg);}
+.event-chip.teal{background:var(--accent-dim);color:var(--accent);}
+.event-chip.reminder-chip{background:var(--tint-grey-bg);color:var(--tint-grey-fg);cursor:pointer;}
 .cal-popover{position:fixed;z-index:320;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card);box-shadow:var(--shadow-lg);padding:12px 14px;min-width:200px;max-width:280px;}
 
 /* Profile drawer (contacts + companies) */
@@ -516,8 +526,8 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .signal-card:last-child{margin-bottom:0;}
 .contact-signal-text{font-size:12.5px;line-height:1.5;white-space:pre-wrap;}
 .contact-signal-text.clamped{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
-.signal-card-alert{background:#fdf0d9;border-color:#a1701c;}
-.job-change-badge{display:flex;align-items:flex-start;gap:8px;background:#fdf0d9;border:1px solid #a1701c;border-radius:var(--radius-card);padding:10px 12px;margin-bottom:14px;}
+.signal-card-alert{background:var(--tint-amber-bg);border-color:rgba(0,0,0,0.08);}
+.job-change-badge{display:flex;align-items:flex-start;gap:8px;background:var(--tint-amber-bg);border:1px solid rgba(0,0,0,0.08);border-radius:var(--radius-card);padding:10px 12px;margin-bottom:14px;}
 .format-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:middle;}
 .format-linkedin{background:#0084C5;}
 .format-blog{background:#44A574;}
@@ -525,13 +535,13 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .cta-row{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--border);}
 .cta-row:last-child{border-bottom:none;}
 .count-pill{background:var(--surface-2);color:var(--muted);border-radius:var(--radius-pill);padding:2px 10px;font-size:11.5px;font-weight:700;}
-.count-pill.has{background:#e3f5eb;color:#1f7a4f;}
+.count-pill.has{background:var(--tint-green-bg);color:var(--tint-green-fg);}
 .analysis-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:14px;}
 .analysis-block{border-radius:var(--radius-card);padding:16px;}
-.analysis-block.wins{background:#eaf7f0;border:1px solid #c9e9d7;}
-.analysis-block.gaps{background:#fdf1e0;border:1px solid #f5dcae;}
-.analysis-block.losses{background:#fbe3dc;border:1px solid #f0c2b0;}
-.analysis-block.recs{background:#e2f2fa;border:1px solid #bfe0f0;}
+.analysis-block.wins{background:var(--tint-green-bg);border:1px solid rgba(0,0,0,0.06);}
+.analysis-block.gaps{background:var(--tint-amber-bg);border:1px solid rgba(0,0,0,0.06);}
+.analysis-block.losses{background:var(--tint-red-bg);border:1px solid rgba(0,0,0,0.06);}
+.analysis-block.recs{background:var(--tint-blue-bg);border:1px solid rgba(0,0,0,0.06);}
 .analysis-block h4{display:flex;align-items:center;gap:7px;font-size:13px;margin-bottom:10px;}
 .analysis-block ul{padding-left:18px;font-size:12.5px;line-height:1.6;}
 .engine-run-card{background:var(--accent-dim);border-color:var(--accent);}
@@ -1616,7 +1626,7 @@ function renderContext(){
   return `
   <div class="section-title" style="font-size:20px;margin-bottom:2px;">${campaignTag ? 'Engine' : 'Context'}</div>
   <div class="muted" style="margin-bottom:14px;">Twenty2 Collective's primary data input hub - log touch points, upload context, and keep Engine Summaries current.${campaignTag ? ` Everything logged here also tags the record with the <strong>${esc(campaignTag.name)}</strong> campaign, so it shows up at account level and pre-loads intelligence for future similar campaigns.` : ''}</div>
-  ${campaignTag ? `<div class="card" style="margin-bottom:16px;background:#e2f2fa;border-color:#bfe0f0;"><span class="pill" style="background:#fff;"><i class="ti ti-rocket" style="font-size:11px;"></i> ${esc(campaignTag.name)}</span> <span class="muted" style="font-size:12px;">Everything saved below is tagged to this campaign.</span></div>` : ''}
+  ${campaignTag ? `<div class="card" style="margin-bottom:16px;background:var(--tint-blue-bg);border-color:rgba(0,0,0,0.06);"><span class="pill" style="background:#fff;"><i class="ti ti-rocket" style="font-size:11px;"></i> ${esc(campaignTag.name)}</span> <span class="muted" style="font-size:12px;">Everything saved below is tagged to this campaign.</span></div>` : ''}
   <div id="ctxUpdatingIndicator" class="muted" style="font-size:11.5px;margin-bottom:14px;display:none;"><i class="ti ti-loader-2"></i> Updating Engine summaries...</div>
   ${renderTouchPointLogger()}
   ${renderContextUploadSection()}
@@ -2695,7 +2705,7 @@ function renderLoggerLinkedInFields(){
     <div id="loggerConvoPreview" style="font-size:11.5px;margin-top:8px;"></div>
     <div class="field" style="margin-top:10px;"><label>Or paste text</label><textarea id="loggerConvoText" rows="4" placeholder="Paste the conversation...">${esc(l.convoText)}</textarea></div>
     <button class="btn btn-primary btn-sm" style="margin-top:8px;" id="loggerParseBtn" onclick="runLoggerParseConversation()"><i class="ti ti-sparkles"></i> Parse with the Engine</button>
-    ${l.convoParseError ? `<div class="card" style="background:#fbe3dc;border-color:#f0c6b8;margin-top:10px;"><i class="ti ti-alert-circle" style="color:var(--danger);"></i> ${esc(l.convoParseError)}</div>` : ''}
+    ${l.convoParseError ? `<div class="card" style="background:var(--tint-red-bg);border-color:rgba(0,0,0,0.06);margin-top:10px;"><i class="ti ti-alert-circle" style="color:var(--danger);"></i> ${esc(l.convoParseError)}</div>` : ''}
   </div>
   `;
 }
@@ -2965,7 +2975,7 @@ function renderLoggerAIMode(){
       <div id="loggerAIImagePreview" style="font-size:11.5px;margin-top:8px;"></div>
     </div>
     <button class="btn btn-primary" id="loggerAIParseBtn" onclick="runLoggerAIExtract()"><i class="ti ti-sparkles"></i> Extract touch points</button>
-    ${ai.parseError ? `<div class="card" style="background:#fbe3dc;border-color:#f0c6b8;margin-top:10px;"><i class="ti ti-alert-circle" style="color:var(--danger);"></i> ${esc(ai.parseError)}</div>` : ''}
+    ${ai.parseError ? `<div class="card" style="background:var(--tint-red-bg);border-color:rgba(0,0,0,0.06);margin-top:10px;"><i class="ti ti-alert-circle" style="color:var(--danger);"></i> ${esc(ai.parseError)}</div>` : ''}
   </div>
   <div id="loggerAIResults">${renderLoggerAIResults()}</div>
   `;
@@ -3100,12 +3110,12 @@ function renderLoggerConnResult(){
 
 function renderLoggerConnFinalCard(){
   const result = window.__loggerConnections.result;
-  if(result.error) return `<div class="card" style="background:#fbe3dc;border-color:#f0c6b8;margin-top:10px;"><i class="ti ti-alert-circle" style="color:var(--danger);"></i> ${esc(result.error)}</div>`;
+  if(result.error) return `<div class="card" style="background:var(--tint-red-bg);border-color:rgba(0,0,0,0.06);margin-top:10px;"><i class="ti ti-alert-circle" style="color:var(--danger);"></i> ${esc(result.error)}</div>`;
   const lines = [];
   if(result.matched && result.matched.length) lines.push(`${result.matched.length} contact${result.matched.length===1?'':'s'} marked as connected: ${result.matched.map(n=>esc(n)).join(', ')}`);
   if(result.imported && result.imported.length) lines.push(`${result.imported.length} new contact${result.imported.length===1?'':'s'} imported: ${result.imported.map(n=>esc(n)).join(', ')}`);
   if(!lines.length) lines.push(result.noneFound ? "Couldn't match anyone from that - try adding more detail or a clearer screenshot" : "Nothing was changed");
-  return `<div class="card" style="background:#eaf7f0;border-color:#c9e9d7;margin-top:10px;"><i class="ti ti-circle-check" style="color:var(--success);"></i> ${lines.join(' &middot; ')}</div>`;
+  return `<div class="card" style="background:var(--tint-green-bg);border-color:rgba(0,0,0,0.06);margin-top:10px;"><i class="ti ti-circle-check" style="color:var(--success);"></i> ${lines.join(' &middot; ')}</div>`;
 }
 
 // Nobody gets marked Connected purely off Claude's read of a screenshot/
@@ -3115,7 +3125,7 @@ function renderLoggerConnFinalCard(){
 function renderLoggerConnConfirmCard(){
   const pending = window.__loggerConnections.pendingMatches;
   return `
-  <div class="card" style="background:#eaf7f0;border-color:#c9e9d7;">
+  <div class="card" style="background:var(--tint-green-bg);border-color:rgba(0,0,0,0.06);">
     <div style="font-weight:700;font-size:12.5px;margin-bottom:8px;">${pending.length} contact${pending.length===1?'':'s'} matched - confirm before marking as connected:</div>
     ${pending.map((p,i) => `
       <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;padding:4px 0;">
@@ -3167,7 +3177,7 @@ function renderLoggerConnImportCard(){
   const pending = lc.pendingImports;
   const useNewGrid = lc.creatingNewGrid || !state.grids.length;
   return `
-  <div class="card" style="background:#e2f2fa;border-color:#bfe0f2;">
+  <div class="card" style="background:var(--tint-blue-bg);border-color:rgba(0,0,0,0.06);">
     <div style="font-weight:700;font-size:12.5px;margin-bottom:8px;">${pending.length} contact${pending.length===1?'':'s'} found that aren't in your CRM yet - import them?</div>
     ${pending.map((p,i) => `
       <div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);">
@@ -3432,7 +3442,7 @@ function renderLoggerAIResults(){
 function renderLoggerAICard(item){
   if(item.confirmed){
     const contactName = (state.contacts.find(c => c.id === item.matchedContactId) || {}).name || item.contactName;
-    return `<div class="card" style="margin-bottom:12px;background:#eaf7f0;border-color:#c9e9d7;"><i class="ti ti-circle-check" style="color:var(--success);"></i> Logged for ${esc(contactName)}</div>`;
+    return `<div class="card" style="margin-bottom:12px;background:var(--tint-green-bg);border-color:rgba(0,0,0,0.06);"><i class="ti ti-circle-check" style="color:var(--success);"></i> Logged for ${esc(contactName)}</div>`;
   }
   const matchedContact = item.matchedContactId ? state.contacts.find(c => c.id === item.matchedContactId) : null;
   const suggestedContact = (!matchedContact && item.suggestedContactId && !item.suggestionDismissed)
@@ -3998,7 +4008,7 @@ function renderTodaysActionItem(a){
       <div>
         <div class="todo-item-name" style="cursor:pointer;" onclick="openContactDrawer('${esc(c.name)}', ${a.campaignName ? `'${esc(a.campaignName)}'` : 'null'})">${esc(c.name)}</div>
         <div class="muted" style="font-size:12px;">${esc(c.role)} · ${esc(c.company)}</div>
-        ${a.campaignName ? `<div style="margin-top:4px;"><span class="pill" style="background:#e2f2fa;color:#0d6a96;"><i class="ti ti-rocket" style="font-size:11px;"></i> ${esc(a.campaignName)}</span></div>` : ''}
+        ${a.campaignName ? `<div style="margin-top:4px;"><span class="pill" style="background:var(--tint-blue-bg);color:var(--tint-blue-fg);"><i class="ti ti-rocket" style="font-size:11px;"></i> ${esc(a.campaignName)}</span></div>` : ''}
       </div>
       <div style="text-align:right;">
         <span class="pill" id="actionPill-${c.id}">${esc(a.type)}</span>
@@ -4037,7 +4047,7 @@ function renderReminderActionCard(a){
         <div style="margin-top:6px;font-size:12.5px;">${esc(a.description)}</div>
       </div>
       <div style="text-align:right;">
-        <span class="pill" style="background:#fdf3d0;color:#96751a;">Reminder</span>
+        <span class="pill" style="background:var(--tint-gold-bg);color:var(--tint-gold-fg);">Reminder</span>
         <div class="muted" style="font-size:11px;margin-top:4px;">Due ${fmtDate(a.dueDate)}</div>
       </div>
     </div>
@@ -4069,7 +4079,7 @@ function renderFastActionCard(a){
       <div>
         <div class="todo-item-name" style="cursor:pointer;" onclick="openContactDrawer('${esc(c.name)}', '${esc(a.campaignName)}')">${esc(c.name)}</div>
         <div class="muted" style="font-size:12px;">${esc(c.role)} · ${esc(c.company)}</div>
-        <div style="margin-top:4px;"><span class="pill" style="background:#e2f2fa;color:#0d6a96;"><i class="ti ti-rocket" style="font-size:11px;"></i> ${esc(a.campaignName)}</span></div>
+        <div style="margin-top:4px;"><span class="pill" style="background:var(--tint-blue-bg);color:var(--tint-blue-fg);"><i class="ti ti-rocket" style="font-size:11px;"></i> ${esc(a.campaignName)}</span></div>
       </div>
       <div style="text-align:right;">
         <span class="pill" id="actionPill-${c.id}">${esc(a.stageLabel)}</span>
@@ -4719,7 +4729,7 @@ function renderGrid(){
   return `
   <button class="btn btn-ghost btn-sm" style="margin-bottom:10px;" onclick="gridBackAction()"><i class="ti ti-arrow-left"></i> ${window.__gridReturnTo && window.__gridReturnTo.campaignId ? 'Back to campaign' : 'Home'}</button>
   <div class="section-title" style="margin-bottom:14px;"><i class="ti ti-grid-dots"></i> ${esc(grid.name)}</div>
-  ${campaignsForGrid(grid.id).length ? `<div style="margin-bottom:10px;">${campaignsForGrid(grid.id).map(c=>`<span class="pill" style="background:#e2f2fa;color:#0d6a96;">Linked to ${esc(c.name)}</span>`).join(' ')}</div>` : ''}
+  ${campaignsForGrid(grid.id).length ? `<div style="margin-bottom:10px;">${campaignsForGrid(grid.id).map(c=>`<span class="pill" style="background:var(--tint-blue-bg);color:var(--tint-blue-fg);">Linked to ${esc(c.name)}</span>`).join(' ')}</div>` : ''}
   <div class="toolbar">
     <div class="field">
       <label>Add company</label>
@@ -4908,12 +4918,12 @@ function renderGridViewArea(grid, cols){
     </table>
   </div>
   <div class="legend">
-    <div class="legend-item"><span class="legend-swatch" style="background:#e2f2fa;"></span> Found</div>
-    <div class="legend-item"><span class="legend-swatch" style="background:#fdf1e2;"></span> Opened</div>
-    <div class="legend-item"><span class="legend-swatch" style="background:#fdf0d9;"></span> Connection pending</div>
-    <div class="legend-item"><span class="legend-swatch" style="background:#eaf7f0;"></span> Connected</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:var(--tint-blue-bg);"></span> Found</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:var(--tint-orange-bg);"></span> Opened</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:var(--tint-amber-bg);"></span> Connection pending</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:var(--tint-green-bg);"></span> Connected</div>
     <div class="legend-item"><span class="legend-swatch" style="background:rgba(139,92,246,0.08);"></span> Messaging</div>
-    <div class="legend-item"><span class="legend-swatch" style="background:#fdf3d0;"></span> Booked</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:var(--tint-gold-bg);"></span> Booked</div>
   </div>
   `;
 }
@@ -5935,11 +5945,11 @@ function finishGridSearchUI(gridId, job){
   const el = document.getElementById('gridNotification');
   if(!el) return;
   if(job.status === 'error'){
-    el.innerHTML = `<div class="card" style="background:#fbe3dc;border-color:#f0c6b8;margin-bottom:14px;"><i class="ti ti-alert-circle" style="color:var(--danger);"></i> Daily search failed — ${esc(job.error||'unknown error')}</div>`;
+    el.innerHTML = `<div class="card" style="background:var(--tint-red-bg);border-color:rgba(0,0,0,0.06);margin-bottom:14px;"><i class="ti ti-alert-circle" style="color:var(--danger);"></i> Daily search failed — ${esc(job.error||'unknown error')}</div>`;
   } else if(job.status === 'cancelled'){
     el.innerHTML = `<div class="card" style="background:#f5f1e8;border-color:#e5dcc8;margin-bottom:14px;"><i class="ti ti-player-stop"></i> Search stopped — ${esc(job.error === 'Grid no longer exists' ? 'this grid no longer exists' : 'cancelled')}. ${esc(gridSearchResultSummary(job))} before stopping.</div>`;
   } else {
-    el.innerHTML = `<div class="card" style="background:#eaf7f0;border-color:#c9e9d7;margin-bottom:14px;"><i class="ti ti-circle-check" style="color:var(--success);"></i> Daily search complete — ${esc(gridSearchResultSummary(job))} across ${job.total} open items.</div>`;
+    el.innerHTML = `<div class="card" style="background:var(--tint-green-bg);border-color:rgba(0,0,0,0.06);margin-bottom:14px;"><i class="ti ti-circle-check" style="color:var(--success);"></i> Daily search complete — ${esc(gridSearchResultSummary(job))} across ${job.total} open items.</div>`;
   }
 }
 
@@ -7644,7 +7654,7 @@ let __tpRenderCounter = 0;
 
 function touchPointTypeBadgeColors(type){
   const key = (type || '').toLowerCase().trim();
-  if(key === 'meeting') return { bg:'#faf0dc', color:'#8a6a1f' };
+  if(key === 'meeting') return { bg:'var(--tint-gold-bg)', color:'var(--tint-gold-fg)' };
   if(key.startsWith('linkedin')) return { bg:'#e3edfb', color:'#2d5da8' };
   if(key === 'email') return { bg:'#e2f3e6', color:'#2c7a43' };
   if(key === 'call' || key === 'phone call') return { bg:'#f1e6fa', color:'#7a3fa8' };
@@ -7746,23 +7756,23 @@ const SEQUENCE_STAGE_TO_DRAWER_LABEL = { 'Connected': 'Connection Made' };
 // amber, and a "Ready for Message N" (drafted, not yet sent) is the blue
 // used for Found - an outstanding next action, same as Found is.
 const CONTACT_DRAWER_STAGE_COLORS = {
-  'Found': { bg:'#e2f2fa', color:'var(--blue)' },
-  'Connection Pending': { bg:'#fdf0d9', color:'var(--warning)' },
-  'Connection Made': { bg:'#e3f5eb', color:'var(--success)' },
-  'Message 1 Sent': { bg:'#e3f5eb', color:'var(--success)' },
-  'Pending Reply M1': { bg:'#fdf0d9', color:'var(--warning)' },
-  'Ready for Message 2': { bg:'#e2f2fa', color:'var(--blue)' },
-  'Message 2 Sent': { bg:'#e3f5eb', color:'var(--success)' },
-  'Pending Reply M2': { bg:'#fdf0d9', color:'var(--warning)' },
-  'Ready for Message 3': { bg:'#e2f2fa', color:'var(--blue)' },
-  'Message 3 Sent': { bg:'#e3f5eb', color:'var(--success)' },
-  'Pending Reply M3': { bg:'#fdf0d9', color:'var(--warning)' },
-  'Meeting Booked': { bg:'#fdf3d0', color:'#96751a' },
-  'Lost': { bg:'#fbe4e0', color:'#b3413a' },
-  'Excluded': { bg:'#f1f1ee', color:'#6b6558' }
+  'Found': { bg:'var(--tint-blue-bg)', color:'var(--tint-blue-fg)' },
+  'Connection Pending': { bg:'var(--tint-amber-bg)', color:'var(--tint-amber-fg)' },
+  'Connection Made': { bg:'var(--tint-green-bg)', color:'var(--tint-green-fg)' },
+  'Message 1 Sent': { bg:'var(--tint-green-bg)', color:'var(--tint-green-fg)' },
+  'Pending Reply M1': { bg:'var(--tint-amber-bg)', color:'var(--tint-amber-fg)' },
+  'Ready for Message 2': { bg:'var(--tint-blue-bg)', color:'var(--tint-blue-fg)' },
+  'Message 2 Sent': { bg:'var(--tint-green-bg)', color:'var(--tint-green-fg)' },
+  'Pending Reply M2': { bg:'var(--tint-amber-bg)', color:'var(--tint-amber-fg)' },
+  'Ready for Message 3': { bg:'var(--tint-blue-bg)', color:'var(--tint-blue-fg)' },
+  'Message 3 Sent': { bg:'var(--tint-green-bg)', color:'var(--tint-green-fg)' },
+  'Pending Reply M3': { bg:'var(--tint-amber-bg)', color:'var(--tint-amber-fg)' },
+  'Meeting Booked': { bg:'var(--tint-gold-bg)', color:'var(--tint-gold-fg)' },
+  'Lost': { bg:'var(--tint-red-bg)', color:'var(--tint-red-fg)' },
+  'Excluded': { bg:'var(--tint-grey-bg)', color:'var(--tint-grey-fg)' }
 };
 function contactDrawerStageColor(label){
-  return CONTACT_DRAWER_STAGE_COLORS[label] || { bg:'#f1f1ee', color:'#6b6558' };
+  return CONTACT_DRAWER_STAGE_COLORS[label] || { bg:'var(--tint-grey-bg)', color:'var(--tint-grey-fg)' };
 }
 
 // Replaces the old static Journey Stage/Sequence Stage badges with an
@@ -12760,10 +12770,11 @@ function renderContentAllTypesPanel(filterStatus){
     if(filterStatus) items = items.filter(it => (it.status || '') === filterStatus);
     const groups = {};
     items.forEach(it => {
-      const g = normalizeContentType(it.type);
+      const g = String(it.type || '').trim();
+      if(!CONTENT_TYPE_GROUPS.includes(g)) return;
       (groups[g] = groups[g] || []).push(it);
     });
-    const order = CONTENT_TYPE_GROUPS.concat(Object.keys(groups).filter(g => !CONTENT_TYPE_GROUPS.includes(g)));
+    const order = CONTENT_TYPE_GROUPS;
     const sections = order.filter(g => groups[g] && groups[g].length).map(g => {
       const cards = groups[g].sort((a, b) => new Date(b.dateAdded || 0) - new Date(a.dateAdded || 0)).map(it => {
         const editable = draftIds.has(it.id);
@@ -12927,7 +12938,7 @@ function renderContentEditorView(draftsList){
         ${esc(CONTENT_FORMAT_META[draft.format] ? CONTENT_FORMAT_META[draft.format].label : draft.format)}
         ${contentStatusTag(draft.status)}
       </div>
-      ${draft.campaignName ? `<div style="margin-bottom:8px;"><span class="pill" style="background:#e2f2fa;color:#0d6a96;"><i class="ti ti-rocket" style="font-size:11px;"></i> ${esc(draft.campaignName)}</span></div>` : ''}
+      ${draft.campaignName ? `<div style="margin-bottom:8px;"><span class="pill" style="background:var(--tint-blue-bg);color:var(--tint-blue-fg);"><i class="ti ti-rocket" style="font-size:11px;"></i> ${esc(draft.campaignName)}</span></div>` : ''}
       ${signal ? `
         <div class="muted" style="font-size:11.5px;margin-bottom:4px;font-weight:700;">Detected signal</div>
         <div style="font-size:12.5px;margin-bottom:4px;">${esc(signal.theme)}</div>
