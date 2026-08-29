@@ -12720,8 +12720,9 @@ ${JSON.stringify(Array.isArray(campaignContext) ? campaignContext.slice(0, 50) :
 });
 
 // ===================== OMNISEND EMAIL MARKETING =====================
-// Omnisend REST API v3 (https://api.omnisend.com/v3), authenticated with the
-// OMNISEND_API_KEY env var via the X-API-KEY header. These routes back the
+// Omnisend REST API (https://api.omnisend.com/api), authenticated with the
+// OMNISEND_API_KEY env var via the X-API-KEY header, versioned with the
+// Omnisend-Version header. These routes back the
 // Marketing tab's Email work: campaign reporting, contact sync from the
 // Airtable Contacts table, a low-engagement export, campaign creation, and an
 // AI email-copy generator that reuses the same voice-profile + Learning Data
@@ -12732,7 +12733,8 @@ ${JSON.stringify(Array.isArray(campaignContext) ? campaignContext.slice(0, 50) :
 // helpers below read every field name Omnisend has used so a schema change
 // degrades to blank stats rather than a crash.
 
-const OMNISEND_API_BASE = 'https://api.omnisend.com/v3';
+const OMNISEND_API_BASE = 'https://api.omnisend.com/api';
+const OMNISEND_API_VERSION = '2026-03-15';
 const OMNISEND_CACHE_MS = 60 * 60 * 1000; // 1 hour, same as the Google Ads sheet cache
 const OMNISEND_LOW_ENGAGEMENT_DAYS = 90;
 let omnisendCampaignStatsCache = null; // { at: epochMs, data }
@@ -12751,6 +12753,7 @@ async function omnisendFetch(method, pathOrUrl, body) {
     method,
     headers: {
       'X-API-KEY': process.env.OMNISEND_API_KEY,
+      'Omnisend-Version': OMNISEND_API_VERSION,
       'Content-Type': 'application/json',
       'Accept': 'application/json'
     },
@@ -13093,10 +13096,9 @@ app.post('/api/omnisend/create-campaign', async (req, res) => {
   }
 });
 
-// The Omnisend email-templates API lives under /api/ (not /v3/) and needs its
-// own dated version header, so it can't go through omnisendFetch.
+// The email-templates endpoints take a full URL (import lives at a sub-path),
+// so they use this thin fetch wrapper rather than omnisendFetch's path join.
 const OMNISEND_TEMPLATES_URL = 'https://api.omnisend.com/api/email-templates';
-const OMNISEND_API_VERSION = '2026-03-15';
 
 async function omnisendTemplatesFetch(method, url, body) {
   const res = await fetch(url, {
@@ -13153,6 +13155,25 @@ app.get('/api/omnisend/templates', async (req, res) => {
     res.json({ templates, count: templates.length });
   } catch (err) {
     console.error('Omnisend templates error:', err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// GET /api/omnisend/segments - the Omnisend segments, each trimmed to
+// { id, name, contactCount } for the campaign audience picker.
+app.get('/api/omnisend/segments', async (req, res) => {
+  if (!omnisendConfigured()) return res.status(500).json({ error: 'OMNISEND_API_KEY not configured' });
+  try {
+    const data = await omnisendFetch('GET', '/segments');
+    const list = Array.isArray(data && data.segments) ? data.segments : (Array.isArray(data) ? data : []);
+    const segments = list.map(s => ({
+      id: s.segmentID || s.segmentId || s.id || null,
+      name: s.name || s.title || 'Untitled segment',
+      contactCount: omnisendStat(s, ['contactCount', 'contactsCount', 'membersCount', 'count', 'size'])
+    }));
+    res.json({ segments, count: segments.length });
+  } catch (err) {
+    console.error('Omnisend segments error:', err.message);
     res.status(502).json({ error: err.message });
   }
 });
