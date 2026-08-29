@@ -13357,6 +13357,37 @@ async function fetchActiveEmailTemplates() {
   }
 }
 
+// Fetch one Omnisend email template's HTML by id, for the "reproduce this
+// exact layout" path in generate-email-copy. Tries the list endpoint first
+// (known good), then a by-id GET. Returns null if nothing usable is found.
+async function fetchOmnisendTemplateById(id) {
+  if (!id || !omnisendConfigured()) return null;
+  const pickHtml = t => {
+    if (!t) return '';
+    const h = t.html || t.bodyHtml || t.body || (t.content && (t.content.html || t.content)) || '';
+    return typeof h === 'string' ? h : '';
+  };
+  const matchesId = t => t && [t.id, t.templateID, t.templateId].some(v => v != null && String(v) === String(id));
+  try {
+    const data = await omnisendFetch('GET', '/email-templates');
+    const list = Array.isArray(data && data.templates) ? data.templates : (Array.isArray(data) ? data : []);
+    const found = list.find(matchesId);
+    const fromList = pickHtml(found);
+    if (found && fromList) return { id, name: found.name || found.title || '', html: fromList };
+    try {
+      let one = await omnisendFetch('GET', `/email-templates/${encodeURIComponent(id)}`);
+      one = (one && (one.template || one.emailTemplate)) || one;
+      const fromOne = pickHtml(one);
+      if (fromOne) return { id, name: (one && (one.name || one.title)) || (found && found.name) || '', html: fromOne };
+    } catch (e) { /* by-id endpoint may not exist */ }
+    if (found) return { id, name: found.name || '', html: '' };
+    return null;
+  } catch (err) {
+    console.warn('generate-email-copy - could not load Omnisend template', id, '-', err.message);
+    return null;
+  }
+}
+
 // Recent Trigify-sourced signals. The app has no table literally named
 // "Signals"; the Content Signals table is where network post themes land, so
 // that is what this reads, filtered to the last `days` days by Detected Date.
@@ -13407,7 +13438,7 @@ const OMNISEND_EMAIL_COPY_SYSTEM_PROMPT = `You write email marketing copy for Tw
 
 You are given a voice profile, past approved email copy with the feedback that shaped it, email template structures, recent content signals from the team's network, and recent outreach touch points.
 
-Write in the voice profile's tone. Use the template structures only as a layout guide for how many sections and in what order, never lift their wording. Ground the angle in the recent signals and touch points where you can.
+Write in the voice profile's tone. Use the template structures only as a layout guide for how many sections and in what order, never lift their wording. Ground the angle in the recent signals and touch points where you can. If a SELECTED TEMPLATE is given, its structure is mandatory - match its section count and length exactly and do not expand it.
 
 Return ONLY valid JSON, no markdown, in exactly this shape:
 {
@@ -13421,28 +13452,70 @@ Return ONLY valid JSON, no markdown, in exactly this shape:
 }
 Rules: subject under 60 characters. preheader under 100 characters. 2 to 3 body sections. heroImageSearchTerm is 2 to 4 plain words for a stock photo search. ctaUrl is always the literal placeholder {{CTA_URL}}. No commentary.`;
 
-// POST /api/omnisend/generate-email-copy - { brief, campaignName } -> voice
-// profile + approved Learning Data + template structure + last 30 days of
-// signals + recent touch points -> claude-opus-4-6 -> structured email copy,
-// then the full 3-pass plain-text humanizer chain on every copy field.
+// POST /api/omnisend/generate-email-copy
+// Body: { brief, campaignName, templateId, templateHtml, feedback, previousCopy }.
+// voice profile + approved Learning Data + (a selected template's exact layout
+// OR generic template structures) + last 30 days of signals + recent touch
+// points -> claude-opus-4-6 -> structured email copy, then the combined 3-pass
+// plain-text humanizer. With feedback + previousCopy it revises that draft
+// instead of starting fresh.
 app.post('/api/omnisend/generate-email-copy', async (req, res) => {
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   const brief = ((req.body && (req.body.brief || req.body.prompt || req.body.topic)) || '').toString().trim();
   const campaignName = ((req.body && req.body.campaignName) || '').toString().trim();
+  const templateId = ((req.body && req.body.templateId) || '').toString().trim();
+  const templateHtmlIn = ((req.body && req.body.templateHtml) || '').toString();
+  const feedback = ((req.body && req.body.feedback) || '').toString().trim();
+  const previousCopy = (req.body && req.body.previousCopy && typeof req.body.previousCopy === 'object')
+    ? req.body.previousCopy : null;
 
   try {
-    const [settingsRecord, approvedCopy, templates, signals, touchPoints] = await Promise.all([
+    const [settingsRecord, approvedCopy, templates, signals, touchPoints, selectedTemplate] = await Promise.all([
       getSettingsRecord().catch(() => null),
       fetchApprovedEmailCopyLearning(5),
       fetchActiveEmailTemplates(),
       fetchRecentSignals(30),
-      fetchRecentTouchPointsBrief(40)
+      fetchRecentTouchPointsBrief(40),
+      (templateId && !templateHtmlIn) ? fetchOmnisendTemplateById(templateId) : Promise.resolve(null)
     ]);
 
     const sf = (settingsRecord && settingsRecord.fields) || {};
     const voiceProfile = (sf['Email Voice Profile'] || sf['SEO Voice Profile'] || '').toString().trim()
       || 'No voice profile on file. Write plainly, peer to peer, with no marketing speak.';
+
+    // When a template is chosen it is the authority on structure. Prefer the
+    // HTML the client cached at upload time; otherwise what we could pull from
+    // Omnisend. Capped so a huge template doesn't blow the context.
+    const templateHtml = (templateHtmlIn || (selectedTemplate && selectedTemplate.html) || '').slice(0, 14000);
+    const templateName = ((req.body && req.body.templateName) || (selectedTemplate && selectedTemplate.name) || '').toString().trim();
+
+    const structureBlock = templateHtml
+      ? `SELECTED TEMPLATE - REPRODUCE THIS LAYOUT EXACTLY.
+Template "${templateName || 'reference'}" is the required structure. Match it precisely:
+- the same number of body sections (count them in the template - it may be 1, 2, or more, not necessarily 3)
+- the same use of section headings (if the template has none, return empty heading strings)
+- the same order of sections
+- the same approximate length: each section about the same word count as the template's, and the whole email no longer than the template
+Replace only the wording with copy for this campaign. Do not add sections, do not expand it, do not restructure it. The "2 to 3 body sections" rule does not apply here - the template's section count wins.
+
+TEMPLATE HTML:
+${templateHtml}`
+      : `EMAIL TEMPLATE STRUCTURES (layout guide only, do not reuse wording):
+${JSON.stringify(templates, null, 2)}`;
+
+    const revisionBlock = (feedback && previousCopy)
+      ? `
+
+REVISION REQUEST - this is a revision of the draft below, not a fresh one.
+CURRENT DRAFT (JSON):
+${JSON.stringify(previousCopy, null, 2)}
+
+THE USER WANTS THESE CHANGES:
+${feedback}
+
+Apply the feedback. Leave everything the user did not ask to change as close to the current draft as possible - same structure, same sections, same order - unless the feedback explicitly asks otherwise.`
+      : '';
 
     const userContent = `EMAIL VOICE PROFILE:
 ${voiceProfile}
@@ -13453,14 +13526,13 @@ CAMPAIGN NAME: ${campaignName || '(untitled)'}
 LAST 5 APPROVED EMAIL COPY RECORDS (final approved copy and the feedback that shaped it):
 ${JSON.stringify(approvedCopy, null, 2)}
 
-EMAIL TEMPLATE STRUCTURES (layout guide only, do not reuse wording):
-${JSON.stringify(templates, null, 2)}
+${structureBlock}
 
 RECENT CONTENT SIGNALS (last 30 days):
 ${JSON.stringify(signals, null, 2)}
 
 RECENT TOUCH POINTS:
-${JSON.stringify(touchPoints, null, 2)}`;
+${JSON.stringify(touchPoints, null, 2)}${revisionBlock}`;
 
     let raw;
     try {
@@ -13531,7 +13603,9 @@ ${JSON.stringify(touchPoints, null, 2)}`;
         approvedCopyCount: approvedCopy.length,
         templateCount: templates.length,
         signalCount: signals.length,
-        touchPointCount: touchPoints.length
+        touchPointCount: touchPoints.length,
+        templateStructureUsed: !!templateHtml,
+        revisedFromFeedback: !!(feedback && previousCopy)
       }
     });
   } catch (err) {

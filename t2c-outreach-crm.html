@@ -16447,6 +16447,7 @@ function handlePastCampaignFile(event){
       .then(res => res.json().then(data => ({ ok: res.ok, data })))
       .then(({ ok, data }) => {
         if(!ok || !data.success) throw new Error((data && data.error) || 'Request failed');
+        if(data.id) cacheEmailTemplateHtml(data.id, html);
         toast('Saved as a structure reference — its copy is not reused', 'success');
         window.__emailTemplates = undefined;
         loadEmailTemplates();
@@ -16503,9 +16504,40 @@ function renderEmailGenerateCard(){
   </div>`;
 }
 
-async function runGenerateEmailCopy(){
-  const brief = (document.getElementById('emailBrief') || {}).value || '';
-  window.__emailCopyForm = { brief };
+// Uploaded template HTML is cached locally (survives sessions) so
+// generate-email-copy can be handed the exact layout to reproduce without a
+// round-trip that depends on Omnisend returning template bodies.
+function cacheEmailTemplateHtml(id, html){
+  if(!id) return;
+  try { localStorage.setItem('t2c_email_tpl_' + id, html || ''); } catch(e){}
+}
+function getCachedEmailTemplateHtml(id){
+  if(!id) return '';
+  try { return localStorage.getItem('t2c_email_tpl_' + id) || ''; } catch(e){ return ''; }
+}
+
+// opts.feedback set => revise the current draft instead of starting fresh.
+async function runGenerateEmailCopy(opts){
+  opts = opts || {};
+  const isRevision = !!(opts.feedback && opts.feedback.trim());
+
+  if(isRevision) collectEmailCopy();
+  const brief = isRevision
+    ? ((window.__emailCopyForm || {}).brief || '')
+    : ((document.getElementById('emailBrief') || {}).value || '');
+  if(!isRevision) window.__emailCopyForm = { brief };
+
+  let previousCopy = null;
+  if(isRevision && window.__emailCopy && !window.__emailCopy.error){
+    const c = window.__emailCopy;
+    previousCopy = {
+      subject: c.subject, preheader: c.preheader,
+      heroImageSearchTerm: c.heroImage.searchTerm, intro: c.intro,
+      bodySections: c.bodySections.map(s => ({ heading: s.heading, body: s.body })),
+      ctaText: c.cta.label, ctaUrl: c.cta.url
+    };
+  }
+
   window.__emailCopyLoading = true;
   window.__emailCopy = undefined;
   window.__emailHeroOptions = undefined;
@@ -16516,16 +16548,34 @@ async function runGenerateEmailCopy(){
     const ref = window.__emailActiveTemplate || {};
     const res = await fetch('/api/omnisend/generate-email-copy', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ brief: brief.trim(), voiceProfile: s.voiceProfile || '', templateId: ref.id || '', templateName: ref.name || '' })
+      body: JSON.stringify({
+        brief: brief.trim(),
+        voiceProfile: s.voiceProfile || '',
+        templateId: ref.id || '',
+        templateName: ref.name || '',
+        templateHtml: ref.id ? getCachedEmailTemplateHtml(ref.id) : '',
+        feedback: isRevision ? opts.feedback.trim() : '',
+        previousCopy
+      })
     });
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
     window.__emailCopy = normalizeEmailCopy(data.copy || data);
+    if(isRevision){
+      window.__emailFeedbackState = Object.assign({}, window.__emailFeedbackState, { feedback: '', finalVersion: null });
+      toast('Revised with your feedback', 'success');
+    }
   } catch(err){
     window.__emailCopy = { error: err.message };
   }
   window.__emailCopyLoading = false;
   emailRerender('copy');
+}
+
+function regenerateEmailCopyWithFeedback(){
+  const fb = readEmailFeedbackState();
+  if(!(fb.feedback || '').trim()){ toast('Add some feedback first', 'warn'); return; }
+  runGenerateEmailCopy({ feedback: fb.feedback });
 }
 
 function normalizeEmailCopy(c){
@@ -16824,11 +16874,15 @@ function renderEmailFeedbackPanel(){
   return `
   <div class="card" style="margin-bottom:18px;">
     <div class="section-title"><i class="ti ti-message-2"></i> Feedback</div>
-    <div class="field"><label>Written feedback</label><textarea id="emailFeedback" rows="3" placeholder="What to change, what landed, tone notes...">${esc(fb.feedback || '')}</textarea></div>
+    <p class="muted" style="font-size:12px;margin-bottom:12px;">Tell the Engine what to change — "shorten section 2", "warmer tone", "drop the stats" — then Regenerate. It keeps everything you didn't flag. Or edit fields directly above and Approve.</p>
+    <div class="field"><label>Written feedback</label><textarea id="emailFeedback" rows="3" placeholder="e.g. tone down the urgency, cut the third section, use plainer language...">${esc(fb.feedback || '')}</textarea></div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
+      <button class="btn btn-primary btn-sm" ${window.__emailCopyLoading ? 'disabled' : ''} onclick="regenerateEmailCopyWithFeedback()"><i class="ti ${window.__emailCopyLoading ? 'ti-loader-2' : 'ti-refresh'}"></i> ${window.__emailCopyLoading ? 'Regenerating...' : 'Regenerate with feedback'}</button>
+    </div>
     <div class="field"><label>Final version</label><textarea id="emailFinalVersion" rows="10">${esc(fb.finalVersion != null ? fb.finalVersion : buildEmailCopyText(c))}</textarea></div>
     <div class="field" style="max-width:240px;"><label>Scheduled date <span class="muted" style="text-transform:none;font-weight:400;">(optional)</span></label><input type="date" id="emailScheduledFor" value="${esc(fb.scheduledFor || '')}"></div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;">
-      <button class="btn btn-primary btn-sm" ${window.__emailApproving ? 'disabled' : ''} onclick="approveAndSaveEmailCopy()"><i class="ti ${window.__emailApproving ? 'ti-loader-2' : 'ti-check'}"></i> ${window.__emailApproving ? 'Saving...' : 'Approve and Save'}</button>
+      <button class="btn btn-secondary btn-sm" ${window.__emailApproving ? 'disabled' : ''} onclick="approveAndSaveEmailCopy()"><i class="ti ${window.__emailApproving ? 'ti-loader-2' : 'ti-check'}"></i> ${window.__emailApproving ? 'Saving...' : 'Approve and Save'}</button>
       <button class="btn btn-accent btn-sm" ${window.__emailCampaignCreating ? 'disabled' : ''} onclick="createOmnisendCampaign()"><i class="ti ti-send"></i> Create Campaign in Omnisend</button>
     </div>
     ${resultBlock}
