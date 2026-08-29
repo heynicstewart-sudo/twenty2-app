@@ -1355,7 +1355,7 @@ function buildCompanyGridTags(){
 function confirmBackfillContactGridTags(){
   const contactCount = state.contacts.filter(c => c.gridId && gridNameForContact(c)).length;
   const companyCount = buildCompanyGridTags().length;
-  const body = `<p style="font-size:13px;">Tag ${contactCount} contact${contactCount===1?'':'s'} and ${companyCount} compan${companyCount===1?'y':'ies'} with their current grid(s), directly on their Airtable records? Only affects records that don't already have a matching tag - safe to run more than once.</p>`;
+  const body = `<p style="font-size:13px;">Tag ${contactCount} contact${contactCount===1?'':'s'} and ${companyCount} compan${companyCount===1?'y':'ies'} with their current grid(s), directly in the database? Only affects records that don't already have a matching tag - safe to run more than once.</p>`;
   const footer = `
     <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
     <button class="btn btn-primary" id="confirmBackfillGridTagsBtn" onclick="backfillContactGridTagsConfirmed()"><i class="ti ti-tag"></i> Tag ${contactCount} contact${contactCount===1?'':'s'} &amp; ${companyCount} compan${companyCount===1?'y':'ies'}</button>
@@ -1680,7 +1680,7 @@ async function loadContextData(silent){
 
 function renderContext(){
   if(window.__contextDataLoading){
-    return '<div class="card"><div class="muted"><i class="ti ti-loader-2"></i> Loading context data from Airtable...</div></div>';
+    return '<div class="card"><div class="muted"><i class="ti ti-loader-2"></i> Loading context data...</div></div>';
   }
   if(window.__contextDataError){
     return `<div class="card"><div class="muted">Could not load context data: ${esc(window.__contextDataError)}</div><button class="btn btn-secondary btn-sm" style="margin-top:10px;" onclick="loadContextData()"><i class="ti ti-refresh"></i> Retry</button></div>`;
@@ -2417,10 +2417,10 @@ function renderLoggerPage(){
   const mode = window.__loggerMode || 'manual';
   return `
   <div class="section-title" style="font-size:20px;margin-bottom:2px;">Logger</div>
-  <div class="muted" style="margin-bottom:16px;">Quickly capture any touch point - LinkedIn messages, calls, meetings, proposals, research and more - straight into Airtable.</div>
+  <div class="muted" style="margin-bottom:16px;">Quickly capture any touch point - LinkedIn messages, calls, meetings, proposals, research and more - straight into your database.</div>
   <div class="logger-type-grid" style="grid-template-columns:repeat(3,minmax(140px,180px));margin-bottom:16px;">
     <div class="logger-type-btn ${mode==='manual'?'active':''}" onclick="setLoggerMode('manual')"><i class="ti ti-edit"></i> Manual</div>
-    <div class="logger-type-btn ${mode==='ai'?'active':''}" onclick="setLoggerMode('ai')"><i class="ti ti-sparkles"></i> AI Assistant</div>
+    <div class="logger-type-btn ${mode==='ai'?'active':''}" onclick="setLoggerMode('ai')"><i class="ti ti-sparkles"></i> Quick Capture</div>
     <div class="logger-type-btn ${mode==='connections'?'active':''}" onclick="setLoggerMode('connections')"><i class="ti ti-user-check"></i> Log Connections</div>
   </div>
   ${mode === 'ai' ? renderLoggerAIMode() : mode === 'connections' ? renderLoggerConnectionsMode() : renderLoggerManualMode()}
@@ -4183,7 +4183,7 @@ async function handleMarkActionDone(cid){
     if(!res.ok) throw new Error(data.error || 'Request failed');
   } catch(err){
     console.warn('Could not mark action done:', err.message);
-    toast('Marked done locally, but could not sync to Airtable: ' + err.message, 'warn');
+    toast('Marked done locally, but could not sync to the database: ' + err.message, 'warn');
   }
 }
 
@@ -4222,7 +4222,7 @@ async function handleDismissReminder(reminderId, cid){
     if(!res.ok) throw new Error(data.error || 'Request failed');
   } catch(err){
     console.warn('Could not dismiss reminder:', err.message);
-    toast('Marked done locally, but could not delete the reminder in Airtable: ' + err.message, 'warn');
+    toast('Marked done locally, but could not delete the reminder in the database: ' + err.message, 'warn');
   }
 }
 
@@ -4254,7 +4254,7 @@ async function handleMarkAllActionsDone(){
   })));
 
   const failed = results.filter(r => r.status === 'rejected').length;
-  if(failed) toast(`Marked ${ids.length} done locally, but ${failed} couldn't sync to Airtable`, 'warn');
+  if(failed) toast(`Marked ${ids.length} done locally, but ${failed} could not sync to the database`, 'warn');
   else toast(`Marked ${ids.length} action${ids.length===1?'':'s'} as done`, 'success');
 }
 
@@ -4292,7 +4292,7 @@ async function handleContactLinkedInOpened(cid, e){
   if(!c) return;
   if(!isAirtableRecordId(cid)){
     console.warn('Skipping Airtable Journey Stage sync - contact has no Airtable record id yet:', cid);
-    toast('LinkedIn opened, but this contact hasn\'t synced to Airtable yet - press "Sync to Airtable" first.', 'warn');
+    toast('LinkedIn opened, but this contact has not synced to the database yet - press "Sync" first.', 'warn');
     return;
   }
 
@@ -4421,7 +4421,7 @@ async function confirmSkipContact(cid){
 
   if(!isAirtableRecordId(cid)){
     console.warn('Skipping Airtable writes - contact has no Airtable record id yet:', cid);
-    toast(`${c.name} skipped locally, but hasn't synced to Airtable yet - press "Sync to Airtable" first.`, 'warn');
+    toast(`${c.name} skipped locally, but has not synced to the database yet - press "Sync" first.`, 'warn');
     return;
   }
 
@@ -4439,7 +4439,7 @@ async function confirmSkipContact(cid){
     }
 
     if(!campaign){
-      toast(`${c.name} skipped, but no linked campaign was found to exclude them from in Airtable`, 'warn');
+      toast(`${c.name} skipped, but no linked campaign was found to exclude them from`, 'warn');
       return;
     }
 
@@ -4452,7 +4452,7 @@ async function confirmSkipContact(cid){
     toast(`${c.name} skipped and excluded from ${campaign.name}`, 'success');
   } catch(err){
     console.warn('Could not process skip:', err.message);
-    toast(`${c.name} skipped locally, but could not update Airtable: ` + err.message, 'warn');
+    toast(`${c.name} skipped locally, but could not update the database: ` + err.message, 'warn');
   }
 }
 
@@ -4814,7 +4814,7 @@ function renderGrid(){
     <button class="btn btn-secondary" onclick="openApolloSearchModal()"><i class="ti ti-building-skyscraper"></i> Search Apollo</button>
     <button class="btn btn-ghost" onclick="resetGrid()"><i class="ti ti-refresh"></i> Reset</button>
     <button class="btn btn-secondary" onclick="exportContactsCsv()"><i class="ti ti-file-download"></i> Export contacts</button>
-    <button class="btn btn-secondary" id="syncAirtableBtn" onclick="syncAllContactsToAirtable()"><i class="ti ti-cloud-upload"></i> Sync to Airtable</button>
+    <button class="btn btn-secondary" id="syncAirtableBtn" onclick="syncAllContactsToAirtable()"><i class="ti ti-cloud-upload"></i> Sync</button>
     <button class="btn btn-secondary" id="findCompanyLinkedInBtn" onclick="findCompanyLinkedInPages()"><i class="ti ti-brand-linkedin"></i> Find LinkedIn pages</button>
     <button class="btn btn-secondary" id="orgIdBtn" onclick="fetchLinkedInOrgIds()"><i class="ti ti-id"></i> Get LinkedIn org IDs</button>
   </div>
@@ -5297,7 +5297,7 @@ function removeGridColumn(index){
   if(!role) return;
   const occupied = gridContacts(grid.id).filter(c => c.role === role && !isContactExcludedFromGrid(c)).length;
   if(occupied){
-    const body = `<p style="font-size:13px;">${occupied} contact${occupied===1?' is':'s are'} in the "${esc(role)}" column. Removing it hides ${occupied===1?'it':'them'} from this grid — they stay in Airtable and keep their job title, and they'll show again if you add the column back.</p>`;
+    const body = `<p style="font-size:13px;">${occupied} contact${occupied===1?' is':'s are'} in the "${esc(role)}" column. Removing it hides ${occupied===1?'it':'them'} from this grid — they stay in the database and keep their job title, and they'll show again if you add the column back.</p>`;
     const footer = `
       <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
       <button class="btn btn-primary" style="background:var(--danger);border-color:var(--danger);" onclick="doRemoveGridColumn(${index})"><i class="ti ti-trash"></i> Remove column</button>
@@ -6230,7 +6230,7 @@ function addDays(dateStr, days){
 // by directly - grid membership only exists in this app's own state.
 function resetGrid(){
   const grid = currentGrid();
-  const body = `<p style="font-size:13px;">This will permanently delete all contacts and companies in "${esc(grid.name)}" from Airtable. This cannot be undone.</p>`;
+  const body = `<p style="font-size:13px;">This will permanently delete all contacts and companies in "${esc(grid.name)}" from the database. This cannot be undone.</p>`;
   const footer = `
     <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
     <button class="btn btn-primary" id="confirmResetGridBtn" style="background:var(--danger);border-color:var(--danger);" onclick="resetGridConfirmed('${grid.id}')"><i class="ti ti-trash"></i> Delete everything</button>
@@ -6474,7 +6474,7 @@ async function syncAllContactsToAirtable(){
   btn.disabled = false;
   btn.innerHTML = original;
   const allSynced = syncedCount === contacts.length && companySyncedCount === grid.companies.length;
-  toast(`${syncedCount} contacts and ${companySyncedCount} companies synced to Airtable`, allSynced ? 'success' : 'warn');
+  toast(`${syncedCount} contacts and ${companySyncedCount} companies synced to the database`, allSynced ? 'success' : 'warn');
 }
 
 // 'Identified' is kept alongside 'Found' for contacts synced before
@@ -6555,7 +6555,7 @@ async function hydrateContactsFromAirtable(){
     });
 
     renderPage();
-    toast('Contacts loaded from Airtable', 'success');
+    toast('Contacts loaded', 'success');
   } catch(err){
     console.warn('Could not load contacts from Airtable:', err.message);
   }
@@ -7419,7 +7419,7 @@ async function markSent(cid, key){
     if(window.__roadmapCampaignId === campaign.id) await loadCampaignSequenceStages(campaign);
   } catch(err){
     console.warn('Could not sync sent message to Airtable:', err.message);
-    toast('Marked as sent locally, but could not sync to Airtable: ' + err.message, 'warn');
+    toast('Marked as sent locally, but could not sync to the database: ' + err.message, 'warn');
   }
 }
 // This used to only flip c.thread[key].replied in local memory and stop
@@ -7446,7 +7446,7 @@ async function setReply(cid, key, val){
     if(window.__roadmapCampaignId === campaign.id) await loadCampaignSequenceStages(campaign);
   } catch(err){
     console.warn('Could not sync reply status to Airtable:', err.message);
-    toast('Marked locally, but could not sync reply to Airtable: ' + err.message, 'warn');
+    toast('Marked locally, but could not sync reply to the database: ' + err.message, 'warn');
   }
 }
 // Renamed from writing straight to c.thread.cta - that field is now the
@@ -7536,7 +7536,7 @@ async function syncJourneyStageForColumn(contactId, colKey){
   if(!journeyStage) return;
   if(!isAirtableRecordId(contactId)){
     console.warn('Skipping Airtable Journey Stage sync - contact has no Airtable record id yet:', contactId);
-    toast('Moved locally, but this contact hasn\'t synced to Airtable yet - press "Sync to Airtable" first.', 'warn');
+    toast('Moved locally, but this contact has not synced to the database yet - press "Sync" first.', 'warn');
     return;
   }
   try {
@@ -7548,7 +7548,7 @@ async function syncJourneyStageForColumn(contactId, colKey){
     if(!res.ok){ const data = await res.json().catch(()=>({})); throw new Error(data.error || 'Request failed'); }
   } catch(err){
     console.warn('Could not sync Journey Stage to Airtable:', err.message);
-    toast('Moved locally, but could not sync stage to Airtable: ' + err.message, 'warn');
+    toast('Moved locally, but could not sync stage to the database: ' + err.message, 'warn');
   }
 }
 
@@ -8000,7 +8000,7 @@ async function saveContactCompany(){
     profile.contact.companyName = data.companyName;
     profile.contact.companyId = data.companyId;
     input.value = data.companyName;
-    toast(data.created ? `Company updated - "${data.companyName}" was created in Airtable` : 'Company updated', 'success');
+    toast(data.created ? `Company updated - "${data.companyName}" was created in the database` : 'Company updated', 'success');
 
     if(localContact && grid){
       localContact.company = data.companyName;
@@ -8121,7 +8121,7 @@ function renderContactDrawerContent(data, campaignName){
         <input id="contactJobTitleInput" class="muted" value="${esc(c.jobTitle)}" placeholder="Job title" title="Click to correct - useful if the Serper/Apollo search got it wrong, or if their real title just changed" style="font-size:12.5px;border:1px dashed var(--border,#ccc);border-radius:4px;padding:1px 4px;margin-left:-4px;background:transparent;min-width:0;flex:0 1 auto;" size="${Math.max(8, c.jobTitle.length)}" onfocus="this.style.borderColor='var(--blue)';this.style.borderStyle='solid';" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}" onblur="this.style.borderColor='var(--border,#ccc)';this.style.borderStyle='dashed';saveContactJobTitle();" />
         <i class="ti ti-pencil" style="font-size:11px;color:var(--muted);flex-shrink:0;" title="Job title is editable"></i>
         <span class="muted" style="font-size:12.5px;">·</span>
-        <input id="contactCompanyInput" class="muted" value="${esc(c.companyName)}" placeholder="Company" title="Click to correct - useful if Serper/Apollo data is outdated or they've moved companies. Creates the company in Airtable if it doesn't exist yet." style="font-size:12.5px;border:1px dashed var(--border,#ccc);border-radius:4px;padding:1px 4px;background:transparent;min-width:0;flex:0 1 auto;" size="${Math.max(8, (c.companyName||'').length)}" onfocus="this.style.borderColor='var(--blue)';this.style.borderStyle='solid';" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}" onblur="this.style.borderColor='var(--border,#ccc)';this.style.borderStyle='dashed';saveContactCompany();" />
+        <input id="contactCompanyInput" class="muted" value="${esc(c.companyName)}" placeholder="Company" title="Click to correct - useful if Serper/Apollo data is outdated or they've moved companies. Creates the company in the database if it does not exist yet." style="font-size:12.5px;border:1px dashed var(--border,#ccc);border-radius:4px;padding:1px 4px;background:transparent;min-width:0;flex:0 1 auto;" size="${Math.max(8, (c.companyName||'').length)}" onfocus="this.style.borderColor='var(--blue)';this.style.borderStyle='solid';" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}" onblur="this.style.borderColor='var(--border,#ccc)';this.style.borderStyle='dashed';saveContactCompany();" />
         <i class="ti ti-pencil" style="font-size:11px;color:var(--muted);flex-shrink:0;" title="Company is editable"></i>
       </div>
       <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
@@ -8164,7 +8164,7 @@ function renderContactDrawerContent(data, campaignName){
       <span><i class="ti ti-notes"></i> Notes</span>
       <button class="btn btn-secondary btn-sm" onclick="cleanUpContactNotes()" id="cleanupNotesBtn" ${c.notes ? '' : 'disabled title="No notes to clean up yet"'}><i class="ti ti-wand"></i> Clean up notes</button>
     </div>
-    <div class="muted" style="font-size:11px;font-weight:700;margin-top:10px;margin-bottom:4px;">AI SUMMARY - what message generation reads</div>
+    <div class="muted" style="font-size:11px;font-weight:700;margin-top:10px;margin-bottom:4px;">PROFILE SUMMARY - what message generation reads</div>
     <div id="contactAiSummaryText" style="font-size:12.5px;white-space:pre-wrap;${c.aiSummary ? '' : 'color:var(--muted);'}">${c.aiSummary ? esc(c.aiSummary) : 'No summary yet - press "Clean up notes" to generate one from what\'s on file below.'}</div>
     <div class="muted" style="font-size:11px;font-weight:700;margin-top:12px;margin-bottom:4px;">RAW NOTES - unchanged, kept as the source record</div>
     <div id="contactNotesThread">${renderNotesThread(c.notes)}</div>
@@ -8588,7 +8588,7 @@ async function confirmBooking(cid){
     if(!tpRes.ok || !tpData.success) throw new Error(tpData.error || 'Touch point save failed');
   } catch(err){
     console.warn('Could not sync booking to Airtable:', err.message);
-    toast('Booked locally, but could not sync to Airtable: ' + err.message, 'warn');
+    toast('Booked locally, but could not sync to the database: ' + err.message, 'warn');
   }
 }
 
@@ -8922,7 +8922,7 @@ function openGenerateModal(cid, stageKey, onDone){
         <button type="button" class="btn btn-secondary btn-sm" onclick="saveGenModalNotes('${cid}')" id="saveGenNotesBtn"><i class="ti ti-device-floppy"></i> Save notes</button>
       </label>
       <textarea id="genNotes" rows="2">${esc(c.notes)}</textarea>
-      <div class="muted" style="font-size:11px;margin-top:4px;">Saves straight to this contact's Notes in Airtable and feeds their AI Summary, same as the profile drawer - so future message generation (here or anywhere else) reads it too.</div>
+      <div class="muted" style="font-size:11px;margin-top:4px;">Saves straight to this contact's Notes and feeds their profile summary, same as the profile drawer - so future message generation (here or anywhere else) reads it too.</div>
     </div>
     <div class="field">
       <label>Their profile</label>
@@ -9209,7 +9209,7 @@ async function saveGeneratedMessage(cid, stageKey){
       if(window.__roadmapCampaignId === campaign.id) await loadCampaignSequenceStages(campaign);
     } catch(err){
       console.warn('Could not log sent message to Airtable:', err.message);
-      toast('Saved locally, but could not log the send to Airtable: ' + err.message, 'warn');
+      toast('Saved locally, but could not log the send to the database: ' + err.message, 'warn');
     }
     return;
   }
@@ -9224,7 +9224,7 @@ async function saveGeneratedMessage(cid, stageKey){
     if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
   } catch(err){
     console.warn('Could not sync draft to Airtable:', err.message);
-    toast('Saved locally, but could not sync draft to Airtable: ' + err.message, 'warn');
+    toast('Saved locally, but could not sync draft to the database: ' + err.message, 'warn');
   }
 }
 
@@ -9668,7 +9668,7 @@ function saveCampaignToDraft(){
 // once syncCampaignToAirtable's callback confirms campaign.recordId is set,
 // since the Offers record must link to a real Campaign record.
 function saveOfferForCampaign(campaign, offer){
-  if(!campaign.recordId){ console.warn('Cannot save offer - campaign has no Airtable record id yet'); return; }
+  if(!campaign.recordId){ console.warn('Cannot save offer - campaign has not been saved yet'); return; }
   fetch('/api/offers/save', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -10460,7 +10460,7 @@ function renderCampaignAnalyticsTab(campaign){
   </div>
 
   <div class="card" style="margin-bottom:16px;">
-    <div class="section-title" style="margin-bottom:10px;"><i class="ti ti-database"></i> Campaign overview (all time, from Airtable)</div>
+    <div class="section-title" style="margin-bottom:10px;"><i class="ti ti-database"></i> Campaign overview (all time)</div>
     ${!data ? '<div class="muted"><i class="ti ti-loader-2"></i> Loading...</div>' :
       data.error ? `<div class="muted">Could not load: ${esc(data.error)}</div>` : `
       <div class="mini-cards analytics-stat-grid" style="margin-bottom:0;">
@@ -10734,7 +10734,7 @@ async function acceptGeneratedOffer(){
   const campaign = state.campaigns.find(c => c.id === window.__campaignDetailId);
   const pending = window.__campaignOfferPending;
   if(!campaign || !pending) return;
-  if(!campaign.recordId){ toast('Cannot save offer - campaign has no Airtable record id yet', 'warn'); return; }
+  if(!campaign.recordId){ toast('Cannot save offer - campaign has not been saved yet', 'warn'); return; }
   try {
     const res = await fetch('/api/offers/save', {
       method: 'POST',
@@ -11352,7 +11352,7 @@ function renderSalesTranscriptCard(campaign){
   return `
   <div class="card" style="margin-top:16px;">
     <div class="section-title"><i class="ti ti-file-text"></i> Sales conversation transcripts</div>
-    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Paste a transcript or upload a file. The Engine scores it against this campaign's Strategy (script adherence, CTAs used, objections raised) and saves the analysis to Airtable, tagged to this campaign so it feeds account-level intelligence.</p>
+    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Paste a transcript or upload a file. The Engine scores it against this campaign's Strategy (script adherence, CTAs used, objections raised) and saves the analysis, tagged to this campaign so it feeds account-level intelligence.</p>
     <input type="file" id="salesTranscriptFile" accept=".txt,.pdf,text/plain,application/pdf" style="display:none;" onchange="handleSalesTranscriptFile(event)">
     <button class="btn btn-secondary btn-sm" onclick="document.getElementById('salesTranscriptFile').click()"><i class="ti ti-upload"></i> Upload file</button>
     <div id="salesTranscriptFilePreview" style="font-size:11.5px;margin-top:8px;"></div>
@@ -11445,7 +11445,7 @@ async function analyzeSalesTranscript(campaignId){
     if(!campaign.transcriptAnalyses) campaign.transcriptAnalyses = [];
     campaign.transcriptAnalyses.push(analysis);
 
-    toast('Transcript scored and saved to Airtable', 'success');
+    toast('Transcript scored and saved', 'success');
     const textEl = document.getElementById('salesTranscriptText');
     if(textEl) textEl.value = '';
     clearSalesTranscriptFile();
@@ -12270,7 +12270,7 @@ async function runIntelligence(){
     renderCampaignPerformance(data.campaignPerformance);
 
     const generatedAt = data.generatedAt ? new Date(data.generatedAt).toLocaleString('en-AU') : '';
-    document.getElementById('intelMeta').textContent = `Based on ${data.contactCount ?? '—'} contacts and ${data.touchPointCount ?? '—'} touch points from Airtable${generatedAt ? ' · '+generatedAt : ''}`;
+    document.getElementById('intelMeta').textContent = `Based on ${data.contactCount ?? '—'} contacts and ${data.touchPointCount ?? '—'} touch points${generatedAt ? ' · '+generatedAt : ''}`;
     toast('Engine updated', 'success');
   } catch(err){
     console.warn('Intelligence request failed:', err.message);
@@ -12328,7 +12328,7 @@ async function runTrackInsights(){
       data.avgTouchPoints != null ? [`${data.avgTouchPoints} touch points on average across ${data.conversionCount} conversion${data.conversionCount===1?'':'s'}`] : [],
       'No conversions logged yet.');
 
-    document.getElementById('insightsMeta').textContent = `Based on ${data.conversionCount ?? '—'} logged conversions from Airtable`;
+    document.getElementById('insightsMeta').textContent = `Based on ${data.conversionCount ?? '—'} logged conversions`;
     toast('Insights updated', 'success');
   } catch(err){
     console.warn('Track insights request failed:', err.message);
@@ -12355,7 +12355,7 @@ async function runEngineHealth(){
       stages.map(s => `${s.stage}: ${s.count}`),
       'No contacts on file yet.');
 
-    document.getElementById('healthMeta').textContent = `Live from Airtable · ${new Date().toLocaleString('en-AU')}`;
+    document.getElementById('healthMeta').textContent = `Updated ${new Date().toLocaleString('en-AU')}`;
     toast('Engine health refreshed', 'success');
   } catch(err){
     console.warn('Engine health request failed:', err.message);
@@ -12507,7 +12507,7 @@ function renderLearningResult(kind, data, recordCount){
     html += learningListSection('Best industries', data.bestIndustries);
     html += learningListSection('Seasonal patterns', data.seasonalPatterns);
   }
-  html += `<div class="learning-meta muted">Based on ${recordCount} uploaded rows &middot; saved to Airtable Learning Data</div>`;
+  html += `<div class="learning-meta muted">Based on ${recordCount} uploaded rows &middot; saved to the Learning library</div>`;
   el.innerHTML = html;
 }
 
@@ -13396,7 +13396,7 @@ function renderContentPerformanceTab(){
         <button class="btn btn-secondary btn-sm" id="refreshPostsBtn" onclick="runMarcusContentAnalysis(true)" ${isRunning?'disabled':''} title="Re-pull the last month of posts from Trigify"><i class="ti ti-refresh"></i> Refresh from LinkedIn</button>
       </div>
     </div>
-    <p class="muted" style="font-size:12.5px;margin-top:6px;margin-bottom:0;">Pulls Twenty2 Collective's last month of LinkedIn posts via Trigify, scores them with the Engine, and saves the results to Airtable. Runs in the background - safe to navigate away.</p>
+    <p class="muted" style="font-size:12.5px;margin-top:6px;margin-bottom:0;">Pulls Twenty2 Collective's last month of LinkedIn posts via Trigify, scores them with the Engine, and saves the results. Runs in the background - safe to navigate away.</p>
     ${isRunning ? `<div class="muted" style="font-size:12px;margin-top:8px;"><i class="ti ti-loader-2"></i> Running - ${job.savedCount || 0} post${job.savedCount===1?'':'s'} saved so far.</div>` : ''}
     ${job && job.status==='error' ? `<div style="font-size:12px;margin-top:8px;color:var(--danger,#b42318);">Last run failed: ${esc(job.error||'unknown error')}</div>` : ''}
   </div>
@@ -14741,7 +14741,7 @@ function renderSeoKeywordTable(list){
 }
 
 async function deleteSeoKeyword(id, keyword){
-  if(!confirm(`Permanently delete "${keyword}" from the keyword library? This removes the whole row from Airtable, including its Volume/KD/Intent and any generated post content. This cannot be undone here. If a draft was already sent to Framer, it is NOT affected.`)) return;
+  if(!confirm(`Permanently delete "${keyword}" from the keyword library? This removes the whole row from the database, including its Volume/KD/Intent and any generated post content. This cannot be undone here. If a draft was already sent to Framer, it is NOT affected.`)) return;
   try {
     const res = await fetch(`/api/seo/keywords/${id}`, { method:'DELETE' });
     const data = await res.json();
@@ -17013,6 +17013,7 @@ function renderEmailFeedbackPanel(){
     resultBlock = `<div class="muted" style="margin-top:10px;">Could not create the campaign: ${esc(result.error)}</div>`;
   } else if(result){
     resultBlock = `<div class="tag tag-won" style="margin-top:12px;"><i class="ti ti-circle-check"></i>&nbsp; Campaign ${result.scheduledFor ? 'scheduled' : 'created'} in Omnisend</div>
+      ${result.note ? `<div class="muted" style="font-size:11.5px;margin-top:8px;"><i class="ti ti-alert-triangle"></i> ${esc(result.note)}</div>` : ''}
       ${result.scheduledFor ? `<div class="muted" style="font-size:11.5px;margin-top:6px;">Sends ${esc(fmtDate(result.scheduledFor))}</div>` : ''}
       ${result.url ? `<div style="margin-top:8px;"><a class="btn btn-secondary btn-sm" href="${esc(result.url)}" target="_blank" rel="noopener"><i class="ti ti-external-link"></i> Open in Omnisend</a></div>` : ''}`;
   }
@@ -17102,12 +17103,17 @@ async function createOmnisendCampaign(){
     const camp = data.campaign || {};
     window.__emailCampaignResult = {
       url: data.url || camp.url || camp.editUrl || '',
-      scheduledFor: data.scheduledFor || ''
+      scheduledFor: data.scheduledFor || '',
+      note: data.templateNote || ''
     };
-    toast(
-      data.templateUpdated ? `Updated "${ref.name || 'your template'}" and created the campaign draft`
-      : data.scheduledFor ? 'Campaign scheduled in Omnisend' : 'Campaign created in Omnisend',
-      'success');
+    if(data.templateNote){
+      toast(data.templateNote, 'warn');
+    } else {
+      toast(
+        data.templateUpdated ? `Updated "${ref.name || 'your template'}" and created the campaign draft`
+        : data.scheduledFor ? 'Campaign scheduled in Omnisend' : 'Campaign created in Omnisend',
+        'success');
+    }
   } catch(err){
     window.__emailCampaignResult = { error: err.message };
   }
@@ -17129,14 +17135,18 @@ async function loadOmnisendCampaigns(){
     const campaigns = Array.isArray(cData.campaigns) ? cData.campaigns : (Array.isArray(cData) ? cData : []);
     const statsById = {};
     let statList = [];
+    window.__omnisendStatsError = '';
     if(sRes && sRes.ok){
       const sData = await sRes.json().catch(() => ({}));
+      if(sData && sData.statsError) window.__omnisendStatsError = sData.statsError;
       statList = Array.isArray(sData.stats) ? sData.stats : (Array.isArray(sData) ? sData : []);
       statList.forEach(st => {
         const id = st && (st.campaignId || st.id);
         if(id != null) statsById[id] = st;
       });
       if(sData && sData.byId && typeof sData.byId === 'object') Object.assign(statsById, sData.byId);
+    } else if(sRes){
+      window.__omnisendStatsError = 'analytics request failed (' + sRes.status + ')';
     }
     const norm = s => (s || '').toString().trim().toLowerCase();
     window.__omnisendCampaigns = campaigns.map(c => {
@@ -17164,11 +17174,15 @@ function renderEmailCampaignsTab(){
   if(!list.length){
     return '<div class="card"><div class="empty-state">No Omnisend campaigns yet.</div></div>';
   }
+  const statsErr = window.__omnisendStatsError
+    ? `<div class="muted" style="font-size:11.5px;margin-bottom:12px;"><i class="ti ti-alert-triangle"></i> Rates unavailable: ${esc(window.__omnisendStatsError)}</div>`
+    : '';
   return `
   <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
     <div class="section-title" style="margin-bottom:0;"><i class="ti ti-mail"></i> Omnisend campaigns</div>
     <button class="btn btn-secondary btn-sm" onclick="loadOmnisendCampaigns()"><i class="ti ti-refresh"></i> Refresh</button>
   </div>
+  ${statsErr}
   ${list.map(renderOmnisendCampaignCard).join('')}`;
 }
 
@@ -17991,14 +18005,14 @@ function renderSettings(){
 
   <div class="settings-section card" style="border-color:#f0c2b0;">
     <div class="section-title"><i class="ti ti-alert-triangle" style="color:var(--danger);"></i> Danger zone</div>
-    <p class="muted" style="font-size:12px;margin-bottom:14px;">Permanently deletes all contacts, bookings, dead contacts and activity for everyone from Airtable (Contacts, Companies, Touch Points, Campaign Contacts, Deals, Content Signals, Learning Data, Bookings, Dead Contacts, Activity) - this is shared data, not just this browser's, so it affects every user. Grids, Sequences, Campaigns, Reps, Content Settings and Content are kept. This cannot be undone.</p>
+    <p class="muted" style="font-size:12px;margin-bottom:14px;">Permanently deletes all contacts, bookings, dead contacts and activity for everyone from the database (Contacts, Companies, Touch Points, Campaign Contacts, Deals, Content Signals, Learning Data, Bookings, Dead Contacts, Activity) - this is shared data, not just this browser's, so it affects every user. Grids, Sequences, Campaigns, Reps, Content Settings and Content are kept. This cannot be undone.</p>
     <button class="btn btn-danger" onclick="confirmResetAllData()"><i class="ti ti-trash"></i> Reset all data</button>
   </div>
   `;
 }
 
 function confirmResetAllData(){
-  const body = `<p style="font-size:13px;">This will permanently delete all contacts, companies, touch points and related data from Airtable. This cannot be undone. Are you sure?</p>`;
+  const body = `<p style="font-size:13px;">This will permanently delete all contacts, companies, touch points and related data from the database. This cannot be undone. Are you sure?</p>`;
   const footer = `
     <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
     <button class="btn btn-primary" id="confirmResetAllDataBtn" style="background:var(--danger);border-color:var(--danger);" onclick="resetAllDataConfirmed()"><i class="ti ti-trash"></i> Wipe all data</button>
@@ -18018,7 +18032,7 @@ async function resetAllDataConfirmed(){
     const json = await res.json();
     if(!res.ok || !json.success) throw new Error(json.error || 'Wipe failed');
   } catch(err){
-    toast('Could not wipe Airtable data: ' + err.message, 'warn');
+    toast('Could not wipe the database: ' + err.message, 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-trash"></i> Wipe all data'; }
     return;
   }
