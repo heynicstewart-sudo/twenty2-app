@@ -12744,15 +12744,17 @@ function omnisendConfigured() {
 }
 
 // Omnisend's /api/* surface accepts the newer Authorization header; older
-// setups also honour X-API-KEY, so send both.
-function omnisendHeaders() {
-  return {
+// setups also honour X-API-KEY, so send both. The Analytics API does not use
+// the dated Omnisend-Version header, so callers can opt out with {version:false}.
+function omnisendHeaders(opts) {
+  const h = {
     'Authorization': `Omnisend-API-Key ${process.env.OMNISEND_API_KEY || ''}`,
     'X-API-KEY': process.env.OMNISEND_API_KEY,
-    'Omnisend-Version': OMNISEND_API_VERSION,
     'Content-Type': 'application/json',
     'Accept': 'application/json'
   };
+  if (!opts || opts.version !== false) h['Omnisend-Version'] = OMNISEND_API_VERSION;
+  return h;
 }
 
 // Omnisend errors come in two shapes: the campaigns/templates APIs use RFC
@@ -12774,14 +12776,15 @@ function omnisendErrorDetail(json, text, res) {
 }
 
 // `pathOrUrl` is either a "/campaigns?..." path or a full URL (Omnisend's
-// pagination hands back an absolute paging.next URL).
-async function omnisendFetch(method, pathOrUrl, body) {
+// pagination hands back an absolute paging.next URL). `opts` is passed to
+// omnisendHeaders (e.g. { version: false } for the Analytics API).
+async function omnisendFetch(method, pathOrUrl, body, opts) {
   const url = /^https?:\/\//i.test(pathOrUrl)
     ? pathOrUrl
     : `${OMNISEND_API_BASE}${pathOrUrl.startsWith('/') ? '' : '/'}${pathOrUrl}`;
   const res = await fetch(url, {
     method,
-    headers: omnisendHeaders(),
+    headers: omnisendHeaders(opts),
     body: body ? JSON.stringify(body) : undefined
   });
   const text = await res.text();
@@ -12923,9 +12926,10 @@ app.get('/api/omnisend/campaign-stats', async (req, res) => {
     return res.json({ ...omnisendCampaignStatsCache.data, cached: true });
   }
   try {
-    const now = new Date();
-    const from = new Date(now); from.setMonth(from.getMonth() - 12); from.setDate(1); from.setHours(0, 0, 0, 0);
-    const to = new Date(now); to.setDate(to.getDate() + 1); to.setHours(0, 0, 0, 0);
+    // Month granularity allows at most a 12-month span; stay comfortably
+    // under it. `to` is exclusive.
+    const to = new Date(); to.setHours(0, 0, 0, 0); to.setDate(to.getDate() + 1);
+    const from = new Date(to); from.setMonth(from.getMonth() - 11); from.setDate(1);
     const iso = d => d.toISOString().replace(/\.\d{3}Z$/, 'Z');
 
     const body = {
@@ -12945,9 +12949,11 @@ app.get('/api/omnisend/campaign-stats', async (req, res) => {
       }]
     };
 
-    const resp = await omnisendFetch('POST', '/analytics/statistics', body);
+    // The Analytics API does not take the Omnisend-Version header.
+    const resp = await omnisendFetch('POST', '/analytics/statistics', body, { version: false });
     const stat = (Array.isArray(resp && resp.statistics) ? resp.statistics : []).find(s => s.alias === 'campaigns')
       || (resp && resp.statistics && resp.statistics[0]) || { rows: [] };
+    console.log(`Omnisend campaign-stats - analytics returned ${(stat.rows || []).length} rows for ${iso(from)}..${iso(to)}`);
 
     // Sum the monthly rows per campaign.
     const byId = {};
@@ -12974,12 +12980,20 @@ app.get('/api/omnisend/campaign-stats', async (req, res) => {
       revenue: Math.round(a.revenue * 100) / 100
     }));
 
-    const data = { stats, count: stats.length, fetchedAt: new Date().toISOString(), cached: false };
+    const data = {
+      stats,
+      count: stats.length,
+      rowCount: (stat.rows || []).length,
+      fetchedAt: new Date().toISOString(),
+      cached: false
+    };
     omnisendCampaignStatsCache = { at: Date.now(), data };
     res.json(data);
   } catch (err) {
     console.error('Omnisend campaign-stats error:', err.message);
-    res.status(502).json({ error: err.message });
+    // 200 with an error field, not 502 - the campaigns list still renders,
+    // the tab can show why the rates are blank, and we don't cache a failure.
+    res.json({ stats: [], count: 0, statsError: err.message, fetchedAt: new Date().toISOString(), cached: false });
   }
 });
 
@@ -13120,24 +13134,30 @@ app.post('/api/omnisend/create-campaign', async (req, res) => {
   const copy = (b.copy && typeof b.copy === 'object') ? b.copy : null;
 
   try {
-    // A campaign needs a templateID. Preferred path: the caller selected one
-    // of their saved templates and we swap the new copy into it in place, so
-    // no throwaway template is created. Fall back to importing the generated
-    // HTML as a fresh template only when there's nothing to update.
+    // A campaign needs a templateID.
+    //  - Template selected + copy: swap the new copy into that template in
+    //    place (no throwaway template). If the swap fails, still point the
+    //    campaign at that template with its current content and tell the user
+    //    to paste the copy in Omnisend.
+    //  - No template selected: import the generated HTML as a fresh template
+    //    (the only path that creates one).
     let templateID = '';
     let templateUpdated = false;
+    let templateNote = '';
 
-    if (templateIdIn && copy) {
-      try {
-        if (await updateOmnisendTemplateCopy(templateIdIn, copy)) {
-          templateID = templateIdIn;
+    if (templateIdIn) {
+      templateID = templateIdIn;
+      if (copy) {
+        let result;
+        try { result = await updateOmnisendTemplateCopy(templateIdIn, copy); }
+        catch (updErr) { result = { ok: false, reason: updErr.message }; }
+        if (result.ok) {
           templateUpdated = true;
+        } else {
+          templateNote = `Could not push the new copy into your template (${result.reason}). The campaign uses the template's current content - open it in Omnisend and paste the copy from the app.`;
+          console.warn('create-campaign - template copy update failed:', result.reason);
         }
-      } catch (updErr) {
-        console.warn('create-campaign - could not update the selected template, importing a fresh one:', updErr.message);
       }
-    } else if (templateIdIn) {
-      templateID = templateIdIn; // template given but no copy to swap - use as is
     }
 
     if (!templateID) {
@@ -13197,6 +13217,7 @@ app.post('/api/omnisend/create-campaign', async (req, res) => {
       campaignId: camp.id || camp.campaignID || camp.campaignId || null,
       templateId: templateID,
       templateUpdated,
+      templateNote: templateNote || undefined,
       scheduledFor: scheduledForIso,
       campaign: result
     });
@@ -13318,27 +13339,40 @@ async function swapOmnisendTemplateCopy(templateHtml, copy) {
   return stripCodeFences(raw).trim();
 }
 
-// Update the selected template's copy in place (GET -> swap text in its
-// htmlCode block -> PUT). Returns true on success, false if it couldn't
-// (caller then falls back to importing a fresh template).
+// Update the selected template's copy in place: GET the template, swap the
+// text inside its htmlCode block (one Claude call, layout/styles/images
+// untouched), PUT it back. Returns { ok: true } or { ok: false, reason }.
 async function updateOmnisendTemplateCopy(templateId, copy) {
   let tpl = await omnisendTemplatesFetch('GET', `${OMNISEND_TEMPLATES_URL}/${encodeURIComponent(templateId)}`);
   tpl = (tpl && (tpl.emailTemplate || tpl.template)) || tpl;
-  if (!tpl || !tpl.name) return false;
+  if (!tpl || !tpl.name) return { ok: false, reason: 'template GET returned nothing usable' };
+
   let block = null;
-  forEachTemplateBlock(tpl, b => { if (!block && b && b.type === 'htmlCode') block = b; });
-  if (!block) return false;
+  forEachTemplateBlock(tpl, b => { if (!block && b && (b.type === 'htmlCode' || b.type === 'html')) block = b; });
+  if (!block) return { ok: false, reason: 'template has no htmlCode block (was it built in the visual editor rather than imported from HTML?)' };
+
   const original = htmlCodeBlockBody(block);
-  if (!original) return false;
-  const swapped = await swapOmnisendTemplateCopy(original, copy);
-  if (!swapped || !/[<][a-z!/]/i.test(swapped)) return false;
-  if (!setHtmlCodeBlockBody(block, swapped)) return false;
-  await omnisendTemplatesFetch('PUT', `${OMNISEND_TEMPLATES_URL}/${encodeURIComponent(templateId)}`, {
-    name: tpl.name,
-    generalSettings: tpl.generalSettings || {},
-    sections: tpl.sections || []
-  });
-  return true;
+  if (!original) return { ok: false, reason: 'the template htmlCode block is empty' };
+
+  let swapped;
+  try {
+    swapped = await swapOmnisendTemplateCopy(original, copy);
+  } catch (e) {
+    return { ok: false, reason: `copy swap failed: ${e.message}` };
+  }
+  if (!swapped || !/<[a-z!/]/i.test(swapped)) return { ok: false, reason: 'copy swap produced no usable HTML' };
+  if (!setHtmlCodeBlockBody(block, swapped)) return { ok: false, reason: 'could not write the swapped HTML back to the block' };
+
+  const putBody = { name: tpl.name, sections: tpl.sections || [] };
+  if (tpl.generalSettings && typeof tpl.generalSettings === 'object' && Object.keys(tpl.generalSettings).length) {
+    putBody.generalSettings = tpl.generalSettings;
+  }
+  try {
+    await omnisendTemplatesFetch('PUT', `${OMNISEND_TEMPLATES_URL}/${encodeURIComponent(templateId)}`, putBody);
+  } catch (e) {
+    return { ok: false, reason: `template PUT failed: ${e.message}` };
+  }
+  return { ok: true };
 }
 
 // POST /api/omnisend/upload-template - { name, html } -> imports the HTML as a
