@@ -517,7 +517,14 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .funnel-fill{background:var(--blue);height:100%;display:flex;align-items:center;justify-content:flex-end;padding-right:10px;color:#fff;font-size:12px;font-weight:800;border-radius:var(--radius-badge);transition:width .3s;}
 .funnel-fill.won{background:var(--success);}
 .funnel-fill.lost{background:var(--danger);}
-.funnel-conv{width:96px;flex-shrink:0;font-size:11px;color:var(--muted);text-align:right;}
+.funnel-conv{width:150px;flex-shrink:0;font-size:11px;color:var(--muted);text-align:right;}
+.funnel-strip{display:flex;align-items:stretch;gap:2px;overflow-x:auto;padding-bottom:4px;}
+.funnel-strip-step{flex:1 1 0;min-width:78px;text-align:center;padding:8px 6px;background:var(--surface-2);border:1px solid var(--border-light);border-radius:var(--radius-card);}
+.funnel-strip-num{font-size:19px;font-weight:800;line-height:1.1;color:var(--accent-strong);}
+.funnel-strip-label{font-size:10.5px;font-weight:700;color:var(--muted);margin-top:2px;text-transform:uppercase;letter-spacing:.02em;}
+.funnel-strip-conv{font-size:11px;font-weight:700;color:var(--success);margin-top:4px;}
+.funnel-strip-conv.is-drop{color:var(--danger);}
+.funnel-strip-arrow{display:flex;align-items:center;color:var(--border);flex-shrink:0;}
 .heatmap-grid{display:grid;grid-template-columns:70px repeat(5,1fr);gap:3px;font-size:10.5px;}
 .heatmap-grid .hm-head{font-weight:700;text-align:center;color:var(--muted);padding:4px 2px;}
 .heatmap-grid .hm-row-label{font-weight:700;padding:6px 4px;display:flex;align-items:center;}
@@ -1470,6 +1477,9 @@ function ensureContextDataLoaded(){
 }
 
 function afterRender(page){
+  if(page === 'campaigns' && (window.__campaignView || 'list') === 'list'){
+    loadAllCampaignFunnels();
+  }
   if(page === 'campaigns' && window.__campaignView === 'detail'){
     const tab = window.__campaignDetailTab;
     const campaign = state.campaigns.find(c => c.id === window.__campaignDetailId);
@@ -6929,7 +6939,12 @@ function renderRoadmap(contactsOverride){
   // getRoadmapColumn returns null for an Excluded/Lost contact - skip
   // pushing rather than crashing on grouped[null], since they shouldn't
   // appear in any column at all.
-  contactsList.forEach(c => { const col = getRoadmapColumn(c); if(col) grouped[col].push(c); });
+  let excludedCount = 0;
+  contactsList.forEach(c => {
+    const col = getRoadmapColumn(c);
+    if(col) grouped[col].push(c);
+    else if(window.__roadmapCampaignId && ROADMAP_EXCLUDED_SEQUENCE_STAGES.includes(campaignSequenceStageFor(c.name))) excludedCount++;
+  });
 
   return `
   <div class="kanban" id="kanbanBoard">
@@ -6942,6 +6957,7 @@ function renderRoadmap(contactsOverride){
       </div>
     `).join('')}
   </div>
+  ${excludedCount ? `<div class="muted" style="font-size:11.5px;margin-top:8px;"><i class="ti ti-user-off"></i> ${excludedCount} contact${excludedCount===1?'':'s'} excluded from this campaign (not shown on the board).</div>` : ''}
 
   <div class="archive-box">
     <div class="archive-toggle" onclick="toggleArchive()"><i class="ti ti-chevron-${state.archiveOpen?'down':'right'}"></i> Pending connections — unsuccessful (${state.deadContacts.length})</div>
@@ -9249,19 +9265,53 @@ function renderCampaigns(){
   return renderCampaignListView();
 }
 
+// Canonical funnel for one campaign, from GET /api/campaign/:id/funnel
+// (Campaign Contacts + Stage History + Deals - see the server module).
+// Cached on window.__campaignFunnels[campaign.id] until a hard refresh;
+// null while a fetch is in flight, {error} on failure.
+async function loadCampaignFunnel(campaign){
+  window.__campaignFunnels = window.__campaignFunnels || {};
+  if(window.__campaignFunnels[campaign.id] !== undefined) return;
+  window.__campaignFunnels[campaign.id] = null;
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaignRouteKey(campaign))}/funnel`);
+    const json = await res.json();
+    if(!res.ok) throw new Error(json.error || ('Request failed with status '+res.status));
+    window.__campaignFunnels[campaign.id] = json;
+  } catch(err){
+    window.__campaignFunnels[campaign.id] = { error: err.message };
+  }
+  renderPage();
+}
+function loadAllCampaignFunnels(){ state.campaigns.forEach(loadCampaignFunnel); }
+
+function campaignFunnelStep(funnel, key){
+  if(!funnel || funnel.error || !Array.isArray(funnel.steps)) return null;
+  const s = funnel.steps.find(x => x.key === key);
+  return s ? s.count : null;
+}
+
+// Reader over the cached funnel. Everything is null while the funnel is
+// still loading so the UI can show a placeholder instead of a fake zero
+// (the old version computed replies/bookings from local thread state that
+// is never hydrated from Airtable, so it always read 0).
 function campaignMetrics(campaign){
-  const contacts = campaignContacts(campaign);
-  const contactCount = contacts.length;
-  let touchPoints = 0, replies = 0;
-  contacts.forEach(c => {
-    touchPoints += (c.touchPoints||[]).length;
-    if(c.thread.m1 && c.thread.m1.replied) replies++;
-    if(c.thread.m2 && c.thread.m2.replied) replies++;
-  });
-  const bookings = contacts.filter(c => c.thread.booked).length;
-  const conversionRate = contactCount ? Math.round((bookings/contactCount)*100) : 0;
-  const replyRate = touchPoints ? Math.round((replies/touchPoints)*100) : 0;
-  return { contactCount, touchPoints, replies, replyRate, bookings, conversionRate };
+  const funnel = (window.__campaignFunnels || {})[campaign.id];
+  const loading = funnel === undefined || funnel === null;
+  const error = funnel && funnel.error ? funnel.error : null;
+  const step = k => campaignFunnelStep(funnel, k);
+  return {
+    loading, error,
+    contactCount: step('contacts') ?? campaignContacts(campaign).length,
+    connected: step('connected'),
+    m1: step('m1'), m2: step('m2'), m3: step('m3'),
+    meetings: step('meeting'),
+    won: step('won'),
+    excluded: (funnel && !funnel.error) ? funnel.excluded : null,
+    replies: (funnel && !funnel.error) ? funnel.replies : null,
+    replyRate: (funnel && !funnel.error) ? funnel.replyRate : null,
+    conversionRate: (funnel && !funnel.error) ? funnel.conversionRate : null
+  };
 }
 
 function campaignContactStatus(c){
@@ -9285,7 +9335,15 @@ function renderCampaignListView(){
     ${campaigns.length ? `
     <div class="perf-table-wrap">
       <table class="perf-table">
-        <thead><tr><th>Name</th><th>Status</th><th>Contacts</th><th>Touch points sent</th><th>Reply rate</th><th>Bookings</th><th>Conversion rate</th><th>Last modified</th></tr></thead>
+        <thead><tr>
+          <th>Name</th><th>Status</th>
+          <th title="Contacts in the campaign">Contacts</th>
+          <th title="Connection request accepted">Connected</th>
+          <th title="Reached Message 1 / 2 / 3">M1 / M2 / M3</th>
+          <th title="Distinct contacts who replied (of connected)">Reply rate</th>
+          <th title="Meetings booked (from the Deals table)">Meetings</th>
+          <th>Last modified</th>
+        </tr></thead>
         <tbody>
           ${campaigns.map(renderCampaignListRow).join('')}
         </tbody>
@@ -9298,15 +9356,17 @@ function renderCampaignListView(){
 function renderCampaignListRow(campaign){
   const m = campaignMetrics(campaign);
   const statusClass = CAMPAIGN_STATUS_CLASS[campaign.status] || 'campaign-status-draft';
+  const n = v => (v === null || v === undefined) ? '·' : v;
+  const cell = m.loading ? '<span class="muted">·</span>' : (m.error ? '<span class="muted" title="'+esc(m.error)+'">!</span>' : null);
   return `
   <tr class="home-grid-row" onclick="openCampaignDetail('${campaign.id}')">
-    <td class="perf-name">${esc(campaign.name)}</td>
+    <td class="perf-name">${esc(campaign.name)}${m.excluded ? ` <span class="muted" style="font-weight:400;">· ${m.excluded} excluded</span>` : ''}</td>
     <td><span class="campaign-status ${statusClass}">${esc(campaign.status)}</span></td>
     <td>${m.contactCount}</td>
-    <td>${m.touchPoints}</td>
-    <td>${m.replyRate}%</td>
-    <td>${m.bookings}</td>
-    <td>${m.conversionRate}%</td>
+    <td>${cell ?? n(m.connected)}</td>
+    <td>${cell ?? `${n(m.m1)} / ${n(m.m2)} / ${n(m.m3)}`}</td>
+    <td>${cell ?? (m.replyRate === null ? '·' : m.replyRate + '%')}</td>
+    <td>${cell ?? n(m.meetings)}</td>
     <td>${fmtDate(campaign.updatedAt || campaign.createdAt)}</td>
   </tr>`;
 }
@@ -9946,12 +10006,50 @@ function unlinkGridFromCampaign(campaignId, gridId){
 function renderCampaignRoadmapTab(campaign){
   window.__roadmapCampaignId = campaign.id;
   if(!window.__campaignSequenceStages || !window.__campaignSequenceStages[campaign.id]) loadCampaignSequenceStages(campaign);
+  loadCampaignFunnel(campaign);
   return `
+  ${renderCampaignFunnelStrip(campaign)}
   <div style="display:flex;justify-content:flex-end;margin-bottom:10px;">
     <button class="btn btn-secondary btn-sm" onclick="openAddCampaignContactsModal('${campaign.id}')"><i class="ti ti-user-plus"></i> Add contacts</button>
   </div>
   ${renderRoadmap(campaignContacts(campaign))}
   `;
+}
+
+// Horizontal funnel above the Roadmap board - the "where is the drop-off"
+// view. Reads the canonical funnel (GET /api/campaign/:id/funnel), the same
+// numbers the Campaigns list and the Sales tab now show.
+function renderCampaignFunnelStrip(campaign){
+  const f = (window.__campaignFunnels || {})[campaign.id];
+  if(f === undefined || f === null){
+    return `<div class="card" style="margin-bottom:14px;"><div class="muted" style="font-size:12px;"><i class="ti ti-loader-2"></i> Loading funnel...</div></div>`;
+  }
+  if(f.error){
+    return `<div class="card" style="margin-bottom:14px;"><div class="muted" style="font-size:12px;">Could not load funnel: ${esc(f.error)}</div></div>`;
+  }
+  const steps = Array.isArray(f.steps) ? f.steps : [];
+  const top = steps[0] ? steps[0].count : 0;
+  const cells = steps.map((s, i) => {
+    const prev = i > 0 ? steps[i-1].count : null;
+    const fromPrev = (prev && prev > 0) ? Math.round(s.count/prev*100) : null;
+    return `
+      <div class="funnel-strip-step">
+        <div class="funnel-strip-num">${s.count}</div>
+        <div class="funnel-strip-label">${esc(s.label)}</div>
+        ${i>0 ? `<div class="funnel-strip-conv ${fromPrev!==null && fromPrev < 40 ? 'is-drop' : ''}">${fromPrev!==null ? fromPrev+'%' : '—'}</div>` : `<div class="funnel-strip-conv">&nbsp;</div>`}
+      </div>
+      ${i < steps.length-1 ? '<div class="funnel-strip-arrow"><i class="ti ti-chevron-right"></i></div>' : ''}`;
+  }).join('');
+  return `
+  <div class="card" style="margin-bottom:14px;">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-filter"></i> Funnel — where contacts drop off</div>
+      <div class="muted" style="font-size:11px;">
+        ${typeof f.replyRate === 'number' ? `${f.replyRate}% reply rate · ` : ''}${f.excluded||0} excluded${f.noOutcomeAfterM3 ? ` · ${f.noOutcomeAfterM3} dead after M3` : ''}
+      </div>
+    </div>
+    <div class="funnel-strip">${cells}</div>
+  </div>`;
 }
 
 // Sequence Stage now lives on Campaign Contacts (Airtable), filtered to
@@ -10438,7 +10536,9 @@ function renderCampaignAnalyticsTab(campaign){
   const data = window.__campaignAnalytics;
   const insights = window.__campaignInsights;
   const insightsErr = window.__campaignInsightsError;
+  loadCampaignFunnel(campaign);
   return `
+  ${renderCampaignFunnelStrip(campaign)}
   <div class="card" style="margin-bottom:16px;">
     <div class="toolbar" style="margin-bottom:6px;">
       <div class="field" style="max-width:220px;"><label>Time range</label>
@@ -10801,12 +10901,26 @@ function renderSalesPeriodSelector(period){
 // before Stage History existed). Won/Lost come from Deals, not Sequence
 // Stage - there are no Won/Lost stage options, and deal outcomes are the
 // real source of truth for those two.
+// Same ladder the server uses (search-server.js FUNNEL_LADDER) - the funnel
+// ordering, so a contact's "furthest reached" is well-defined even if its
+// Stage History bounced around.
+const FUNNEL_LADDER_CLIENT = [
+  'Found','Connection Pending','Connected',
+  'Message 1 Sent','Pending Reply M1','Ready for Message 2',
+  'Message 2 Sent','Pending Reply M2','Ready for Message 3',
+  'Message 3 Sent','Pending Reply M3','Meeting Booked'
+];
+const OFF_LADDER_STAGES_CLIENT = ['Excluded','Lost','Timed Out'];
+const CONNECTED_LADDER = FUNNEL_LADDER_CLIENT.slice(FUNNEL_LADDER_CLIENT.indexOf('Connected'));
+
 const FUNNEL_STAGE_GROUPS = [
-  { key:'connected', label:'Connections Made', stages:['Connected','Message 1 Sent','Pending Reply M1','Ready for Message 2','Message 2 Sent','Pending Reply M2','Ready for Message 3','Message 3 Sent','Pending Reply M3','Meeting Booked'] },
-  { key:'m1', label:'Message 1 Sent', stages:['Message 1 Sent','Pending Reply M1','Ready for Message 2','Message 2 Sent','Pending Reply M2','Ready for Message 3','Message 3 Sent','Pending Reply M3','Meeting Booked'] },
-  { key:'m2', label:'Message 2 Sent', stages:['Message 2 Sent','Pending Reply M2','Ready for Message 3','Message 3 Sent','Pending Reply M3','Meeting Booked'] },
-  { key:'m3', label:'Message 3 Sent', stages:['Message 3 Sent','Pending Reply M3','Meeting Booked'] },
-  { key:'meeting', label:'Meetings Booked', stages:['Meeting Booked'] }
+  { key:'contacts', label:'Contacts', all:true },
+  { key:'connectionSent', label:'Connection sent', stages:FUNNEL_LADDER_CLIENT.slice(FUNNEL_LADDER_CLIENT.indexOf('Connection Pending')) },
+  { key:'connected', label:'Connected', stages:CONNECTED_LADDER },
+  { key:'m1', label:'Message 1 sent', stages:FUNNEL_LADDER_CLIENT.slice(FUNNEL_LADDER_CLIENT.indexOf('Message 1 Sent')) },
+  { key:'m2', label:'Message 2 sent', stages:FUNNEL_LADDER_CLIENT.slice(FUNNEL_LADDER_CLIENT.indexOf('Message 2 Sent')) },
+  { key:'m3', label:'Message 3 sent', stages:FUNNEL_LADDER_CLIENT.slice(FUNNEL_LADDER_CLIENT.indexOf('Message 3 Sent')) },
+  { key:'meeting', label:'Meeting booked', deal:true, stages:['Meeting Booked'] }
 ];
 
 function reachedStagesFor(cc){
@@ -10814,28 +10928,54 @@ function reachedStagesFor(cc){
   if(cc.sequenceStage) set.add(cc.sequenceStage);
   return set;
 }
+function furthestRungFor(cc){
+  return Math.max(-1, ...[...reachedStagesFor(cc)].map(s => FUNNEL_LADDER_CLIENT.indexOf(s)));
+}
+
+// One row per contact - the Campaign Contacts junction should already be
+// deduped (the app enforces one row per contact per campaign), but a stray
+// duplicate must never double-count in the funnel, so collapse to the
+// furthest-reached row here too.
+function dedupeCampaignContacts(list){
+  const by = new Map();
+  (list||[]).forEach(cc => {
+    const id = cc.contactId || cc.campaignContactId;
+    const prev = by.get(id);
+    if(!prev || furthestRungFor(cc) > furthestRungFor(prev)) by.set(id, cc);
+  });
+  return [...by.values()];
+}
 
 function computeFunnelCounts(data){
-  const stageCounts = FUNNEL_STAGE_GROUPS.map(g => ({
-    key: g.key, label: g.label,
-    count: data.campaignContacts.filter(cc => g.stages.some(s => reachedStagesFor(cc).has(s))).length
-  }));
-  const won = data.deals.filter(d => d.outcome === 'Won').length;
-  const lost = data.deals.filter(d => d.outcome === 'Lost').length;
-  return { stageCounts, won, lost };
+  const contacts = dedupeCampaignContacts(data.campaignContacts);
+  const active = contacts.filter(cc => !OFF_LADDER_STAGES_CLIENT.includes(cc.sequenceStage));
+  const dealContactIds = new Set((data.deals||[]).filter(d => d.contactId).map(d => d.contactId));
+  const stageCounts = FUNNEL_STAGE_GROUPS.map(g => {
+    let count;
+    if(g.all) count = contacts.length;
+    else if(g.deal) count = contacts.filter(cc => dealContactIds.has(cc.contactId) || reachedStagesFor(cc).has('Meeting Booked')).length;
+    else count = active.filter(cc => g.stages.some(s => reachedStagesFor(cc).has(s))).length;
+    return { key: g.key, label: g.label, count };
+  });
+  const won = (data.deals||[]).filter(d => d.outcome === 'Won').length;
+  const lost = (data.deals||[]).filter(d => d.outcome === 'Lost').length;
+  const excluded = contacts.filter(cc => cc.sequenceStage === 'Excluded').length;
+  return { stageCounts, won, lost, excluded };
 }
 
 function renderPipelineFunnel(data){
-  const { stageCounts, won, lost } = computeFunnelCounts(data);
+  const { stageCounts, won, lost, excluded } = computeFunnelCounts(data);
+  const topCount = stageCounts[0] ? stageCounts[0].count : 0;
   const maxCount = Math.max(1, ...stageCounts.map(s=>s.count), won, lost);
   const rows = stageCounts.map((s,i) => {
     const prev = i>0 ? stageCounts[i-1].count : null;
     const conv = (prev !== null && prev > 0) ? Math.round(s.count/prev*100) : null;
+    const ofTop = (topCount > 0 && i > 0) ? Math.round(s.count/topCount*100) : null;
     const width = Math.max(4, Math.round(s.count/maxCount*100));
     return `<div class="funnel-row">
       <div class="funnel-label">${s.label}</div>
       <div class="funnel-track"><div class="funnel-fill" style="width:${width}%">${s.count}</div></div>
-      <div class="funnel-conv">${conv!==null ? `${conv}% moved from prior` : '—'}</div>
+      <div class="funnel-conv">${conv!==null ? `${conv}% from prior${ofTop!==null?` · ${ofTop}% of all` : ''}` : '—'}</div>
     </div>`;
   }).join('');
   const meetingsCount = stageCounts[stageCounts.length-1].count;
@@ -10844,7 +10984,7 @@ function renderPipelineFunnel(data){
   return `
   <div class="card" style="margin-bottom:16px;">
     <div class="section-title"><i class="ti ti-filter"></i> Pipeline progress</div>
-    <div class="muted" style="font-size:11.5px;margin-bottom:12px;">How many contacts in this campaign have reached each stage, and the conversion rate into it. Won/Lost come from the Sales Log below.</div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:12px;">Distinct contacts in this campaign who have reached each stage (from Campaign Contacts + Stage History), and the conversion into it. Meeting booked / Won / Lost come from the Deals table.${excluded ? ` ${excluded} contact${excluded===1?'':'s'} excluded, not counted below.` : ''}</div>
     ${rows}
     <div class="funnel-row"><div class="funnel-label">Won</div><div class="funnel-track"><div class="funnel-fill won" style="width:${Math.max(4,Math.round(won/maxCount*100))}%">${won}</div></div><div class="funnel-conv">${meetingsCount?`${wonPct}% of meetings`:'—'}</div></div>
     <div class="funnel-row"><div class="funnel-label">Lost</div><div class="funnel-track"><div class="funnel-fill lost" style="width:${Math.max(4,Math.round(lost/maxCount*100))}%">${lost}</div></div><div class="funnel-conv">${meetingsCount?`${lostPct}% of meetings`:'—'}</div></div>
