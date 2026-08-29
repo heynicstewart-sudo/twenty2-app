@@ -12886,8 +12886,10 @@ app.get('/api/omnisend/campaigns', async (req, res) => {
   }
 });
 
-// GET /api/omnisend/campaign-stats - open/click/unsubscribe rates and revenue
-// per campaign, plus account rollups. Cached 1 hour; ?refresh=1 bypasses it.
+// GET /api/omnisend/campaign-stats - open/click/unsubscribe rates per
+// campaign. Omnisend has no working bulk stats endpoint, so this fetches
+// each campaign individually from GET /api/campaigns/{id} and reads the
+// statistics block off each response. Cached 1 hour; ?refresh=1 bypasses it.
 app.get('/api/omnisend/campaign-stats', async (req, res) => {
   if (!omnisendConfigured()) return res.status(500).json({ error: 'OMNISEND_API_KEY not configured' });
   const force = req.query.refresh === '1' || req.query.refresh === 'true';
@@ -12896,33 +12898,30 @@ app.get('/api/omnisend/campaign-stats', async (req, res) => {
   }
   try {
     const raw = await omnisendFetchAllCampaigns();
-    const campaigns = raw.map(c => {
-      const s = omnisendCampaignStatsBlock(c);
-      const rate = n => (s.sent > 0 ? Math.round((n / s.sent) * 1000) / 10 : 0);
+    const stats = await Promise.all(raw.map(async (c) => {
+      const id = omnisendCampaignId(c);
+      if (!id) return null;
+      let stat = {};
+      try {
+        const detail = await omnisendFetch('GET', `/campaigns/${encodeURIComponent(id)}`) || {};
+        stat = (detail.campaign || detail).statistics || {};
+      } catch (err) {
+        console.warn(`Omnisend campaign-stats - could not fetch campaign ${id}:`, err.message);
+      }
+      const num = v => (v == null || isNaN(Number(v)) ? null : Number(v));
       return {
-        id: omnisendCampaignId(c),
+        campaignId: id,
+        id,
         name: c.name || '',
         status: c.status || '',
-        sent: s.sent,
-        openRate: rate(s.opens),
-        clickRate: rate(s.clicks),
-        unsubscribeRate: rate(s.unsubscribes),
-        revenue: Math.round(s.revenue * 100) / 100
+        openRate: num(stat.openRate),
+        clickRate: num(stat.clickRate),
+        unsubscribeRate: num(stat.unsubscribeRate)
       };
-    });
-    const avg = key => (campaigns.length
-      ? Math.round((campaigns.reduce((sum, c) => sum + c[key], 0) / campaigns.length) * 10) / 10
-      : 0);
+    }));
     const data = {
-      campaigns,
-      totals: {
-        campaigns: campaigns.length,
-        sent: campaigns.reduce((n, c) => n + c.sent, 0),
-        revenue: Math.round(campaigns.reduce((n, c) => n + c.revenue, 0) * 100) / 100,
-        avgOpenRate: avg('openRate'),
-        avgClickRate: avg('clickRate'),
-        avgUnsubscribeRate: avg('unsubscribeRate')
-      },
+      stats: stats.filter(Boolean),
+      count: stats.filter(Boolean).length,
       fetchedAt: new Date().toISOString(),
       cached: false
     };
