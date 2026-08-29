@@ -4,6 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>T2C Outreach</title>
+<script>
+(function(){
+  try { if(localStorage.getItem('t2c_sidebar_collapsed') === '1') document.documentElement.classList.add('sidebar-collapsed'); } catch(e){}
+})();
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -98,7 +103,20 @@ a{color:inherit;text-decoration:none;}
 .nav-item:hover{color:var(--sidebar-text);background:var(--sidebar-hover-bg);}
 .nav-item.active{background:var(--sidebar-active-bg);color:var(--sidebar-active-text);font-weight:700;}
 .nav-divider{font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--sidebar-muted);padding:18px 12px 6px;margin-top:6px;}
-.sidebar-footer{margin-top:auto;padding:16px 8px 12px;color:var(--sidebar-muted);font-size:11.5px;border-top:1px solid rgba(255,255,255,0.1);}
+.sidebar-collapse-btn{margin-top:auto;display:flex;align-items:center;gap:11px;width:100%;padding:10px 12px;border-radius:11px;border:none;background:none;color:var(--sidebar-muted);font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;transition:background .12s ease,color .12s ease;}
+.sidebar-collapse-btn:hover{background:var(--sidebar-hover-bg);color:var(--sidebar-text);}
+.sidebar-collapse-btn i{font-size:18px;}
+.sidebar-footer{padding:14px 12px 4px;color:var(--sidebar-muted);font-size:11.5px;}
+/* Manual collapse (toggled on <html>; also see the max-width:1024px block) */
+html.sidebar-collapsed .sidebar{width:72px;min-width:72px;padding-left:8px;padding-right:8px;}
+html.sidebar-collapsed .logo-text,
+html.sidebar-collapsed .nav-item span,
+html.sidebar-collapsed .sidebar-collapse-btn span,
+html.sidebar-collapsed .sidebar-footer{display:none;}
+html.sidebar-collapsed .nav-divider{font-size:0;padding:8px 0 0;margin-top:6px;}
+html.sidebar-collapsed .nav-item,
+html.sidebar-collapsed .sidebar-collapse-btn{justify-content:center;}
+html.sidebar-collapsed .sidebar-logo{justify-content:center;padding-left:0;padding-right:0;}
 
 /* Main */
 .main{flex:1;min-width:0;display:flex;flex-direction:column;}
@@ -605,6 +623,7 @@ table.spreadsheet-table{border-collapse:collapse;width:100%;min-width:960px;font
       </div>
     </div>
     <nav class="sidebar-nav" id="sidebarNav"></nav>
+    <button type="button" class="sidebar-collapse-btn" id="sidebarCollapseBtn" onclick="toggleSidebar()" title="Collapse sidebar"><i class="ti ti-layout-sidebar-left-collapse"></i><span>Collapse</span></button>
     <div class="sidebar-footer">Twenty2 Collective<br>Perth, WA</div>
   </aside>
 
@@ -16459,6 +16478,39 @@ function renderEmailCopyTab(){
   `;
 }
 
+// Structure-template picker shown right in the Generate Copy card, so the
+// template that shapes the layout is chosen at the point of generating -
+// not hidden behind "Use as reference" on the Templates sub-tab.
+function emailTemplatePickerHtml(){
+  const t = window.__emailTemplates;
+  const activeId = (window.__emailActiveTemplate || {}).id || '';
+  if(t === undefined){
+    return `<div class="field"><label>Structure template</label><div class="muted" style="font-size:11.5px;"><i class="ti ti-loader-2"></i> Loading templates…</div></div>`;
+  }
+  const list = (t && !t.error && Array.isArray(t)) ? t : [];
+  const opts = ['<option value="">No template — free layout</option>']
+    .concat(list.map(x => `<option value="${esc(x.id||'')}" ${String(x.id)===String(activeId)?'selected':''}>${esc(x.name||'Untitled template')}</option>`))
+    .join('');
+  return `<div class="field">
+    <label>Structure template</label>
+    <select onchange="onEmailTemplatePick(this.value)" ${window.__emailCopyLoading ? 'disabled' : ''}>${opts}</select>
+    <div class="muted" style="font-size:11.5px;margin-top:4px;">${list.length
+      ? 'The Engine reproduces this template\'s layout exactly — same sections, same length — with fresh copy.'
+      : 'Upload a past campaign above to add one.'}</div>
+  </div>`;
+}
+
+function onEmailTemplatePick(id){
+  collectEmailCopy();
+  if(!id){ window.__emailActiveTemplate = null; }
+  else {
+    const list = Array.isArray(window.__emailTemplates) ? window.__emailTemplates : [];
+    const t = list.find(x => String(x.id) === String(id));
+    window.__emailActiveTemplate = { id, name: (t && t.name) || '' };
+  }
+  emailRerender('copy');
+}
+
 function renderEmailGenerateCard(){
   const f = window.__emailCopyForm || {};
   return `
@@ -16466,7 +16518,7 @@ function renderEmailGenerateCard(){
     <div class="section-title"><i class="ti ti-sparkles"></i> Generate Copy</div>
     <p class="muted" style="font-size:12px;margin-bottom:12px;">Describe what this email needs to do. The Engine drafts subject, preheader, hero image search term, intro, body sections and CTA.</p>
     <div class="field"><label>Campaign brief</label><textarea id="emailBrief" rows="4" placeholder="e.g. Community Connect — invite Perth members to the September in-person session, highlight the guest speaker, keep it warm and short.">${esc(f.brief || '')}</textarea></div>
-    ${window.__emailActiveTemplate && window.__emailActiveTemplate.name ? `<p class="muted" style="font-size:11.5px;margin-bottom:10px;"><i class="ti ti-layout-board"></i> Structure reference: <strong>${esc(window.__emailActiveTemplate.name)}</strong></p>` : ''}
+    ${emailTemplatePickerHtml()}
     <button class="btn btn-primary btn-sm" ${window.__emailCopyLoading ? 'disabled' : ''} onclick="runGenerateEmailCopy()"><i class="ti ${window.__emailCopyLoading ? 'ti-loader-2' : 'ti-wand'}"></i> ${window.__emailCopyLoading ? 'Generating...' : 'Generate Copy'}</button>
   </div>`;
 }
@@ -17994,11 +18046,32 @@ async function hydrateLastAnalysisFromAirtable(){
   }
 }
 
+/* ===================== SIDEBAR COLLAPSE ===================== */
+// Class lives on <html> (set pre-paint by the inline <head> script to avoid
+// a flash); this just flips it, persists, and syncs the toggle's icon.
+function isSidebarCollapsed(){
+  return document.documentElement.classList.contains('sidebar-collapsed');
+}
+function syncSidebarCollapseBtn(){
+  const btn = document.getElementById('sidebarCollapseBtn');
+  if(!btn) return;
+  const collapsed = isSidebarCollapsed();
+  const icon = btn.querySelector('i');
+  if(icon) icon.className = 'ti ' + (collapsed ? 'ti-layout-sidebar-left-expand' : 'ti-layout-sidebar-left-collapse');
+  btn.title = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+}
+function toggleSidebar(){
+  const collapsed = document.documentElement.classList.toggle('sidebar-collapsed');
+  try { localStorage.setItem('t2c_sidebar_collapsed', collapsed ? '1' : '0'); } catch(e){}
+  syncSidebarCollapseBtn();
+}
+
 /* ===================== INIT ===================== */
 
 loadPersistedState();
 state = makeReactive(rawState, persistState);
 renderSidebar();
+syncSidebarCollapseBtn();
 renderPage();
 
 // Contacts, campaigns, companies, grids, sequences, settings, bookings,
