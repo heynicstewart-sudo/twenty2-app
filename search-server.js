@@ -13480,25 +13480,42 @@ ${JSON.stringify(touchPoints, null, 2)}`;
       draft = JSON.parse(m[0]);
     }
 
-    // Full 3-pass plain-text humanizer chain on every copy field (not the
-    // image search term or the CTA URL placeholder). Sequential to stay under
-    // the Anthropic rate limit - each field is itself 3 calls.
-    const humanize = async (v) => {
-      const s = (v == null ? '' : String(v)).trim();
-      return s ? await humanizePlainText(s) : s;
-    };
+    // The 3-pass humanizer is 3 Claude calls. Running it once per copy field
+    // (subject, preheader, intro, CTA, plus heading + body per section) meant
+    // ~25-30 sequential calls per request, which timed out. Instead join every
+    // copy field into one delimited block, humanize that in a single 3-pass
+    // chain, then split it back. The image search term and CTA URL are not
+    // copy, so they stay out of the block. If the delimiters don't survive
+    // the rewrite cleanly, fall back to the raw generated copy for every
+    // field rather than failing the request.
+    const clean = v => (v == null ? '' : String(v)).trim();
+    const rawSections = (Array.isArray(draft.bodySections) ? draft.bodySections : [])
+      .map(sec => ({ heading: clean(sec && sec.heading), body: clean(sec && sec.body) }));
 
-    const subject = await humanize(draft.subject);
-    const preheader = await humanize(draft.preheader);
-    const intro = await humanize(draft.intro);
-    const ctaText = await humanize(draft.ctaText);
-    const bodySections = [];
-    for (const sec of (Array.isArray(draft.bodySections) ? draft.bodySections : [])) {
-      bodySections.push({
-        heading: await humanize(sec && sec.heading),
-        body: await humanize(sec && sec.body)
-      });
+    const fieldTexts = [clean(draft.subject), clean(draft.preheader), clean(draft.intro), clean(draft.ctaText)];
+    rawSections.forEach(sec => { fieldTexts.push(sec.heading); fieldTexts.push(sec.body); });
+
+    const combined = fieldTexts.map((t, i) => `[[[${i}]]]\n${t}`).join('\n\n');
+    let humanizedFields = null;
+    try {
+      const humanizedCombined = await humanizePlainText(combined);
+      const chunks = humanizedCombined.split(/\s*\[\[\[\s*\d+\s*\]\]\]\s*/).map(s => s.trim());
+      const body = chunks.length && chunks[0] === '' ? chunks.slice(1) : chunks;
+      if (body.length === fieldTexts.length) humanizedFields = body;
+      else console.warn(`Omnisend generate-email-copy - humanized block split into ${body.length} parts, expected ${fieldTexts.length}; using raw copy`);
+    } catch (humErr) {
+      console.warn('Omnisend generate-email-copy - combined humanize failed, using raw copy:', humErr.message);
     }
+
+    const outText = i => (humanizedFields ? humanizedFields[i] : fieldTexts[i]);
+    const subject = outText(0);
+    const preheader = outText(1);
+    const intro = outText(2);
+    const ctaText = outText(3);
+    const bodySections = rawSections.map((sec, i) => ({
+      heading: outText(4 + i * 2),
+      body: outText(4 + i * 2 + 1)
+    }));
 
     res.json({
       campaignName: campaignName || null,
