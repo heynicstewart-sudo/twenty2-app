@@ -2328,12 +2328,29 @@ app.get('/api/track/insights', async (req, res) => {
 
 async function fetchCampaigns() {
   try {
-    const records = await airtableFetchAllRecords('Campaigns');
+    const [records, ccRows] = await Promise.all([
+      airtableFetchAllRecords('Campaigns'),
+      fetchCampaignContactsRows()
+    ]);
+    // The real roster is the Campaign Contacts junction, not the legacy
+    // "Contact IDs" text field (which only ever held the AI chat builder's
+    // first few matched names and was never kept in sync). contactRecordIds
+    // is every Contact this campaign has a junction row for.
+    const contactIdsByCampaign = {};
+    ccRows.forEach(r => {
+      const contactId = (r.fields['Contact'] || [])[0];
+      if (!contactId) return;
+      (r.fields['Campaign'] || []).forEach(campId => {
+        (contactIdsByCampaign[campId] = contactIdsByCampaign[campId] || new Set()).add(contactId);
+      });
+    });
     return records.map(r => ({
       name: r.fields['Name'] || '',
       status: r.fields['Status'] || '',
       product: r.fields['Product'] || '',
       contactNamesRaw: r.fields['Contact IDs'] || '',
+      contactRecordIds: [...(contactIdsByCampaign[r.id] || [])],
+      campaignRecordId: r.id,
       startDate: r.fields['Start Date'] || ''
     }));
   } catch (err) {
@@ -2434,8 +2451,9 @@ function computeCampaignPerformance(campaigns, contacts, touchPoints, conversion
   return campaigns
     .filter(camp => camp.status === 'Live')
     .map(camp => {
-      const targetNames = (camp.contactNamesRaw || '').split(',').map(s => s.trim()).filter(Boolean);
-      const targetRecordIds = targetNames.map(n => nameToId[n]).filter(Boolean);
+      const targetRecordIds = (camp.contactRecordIds && camp.contactRecordIds.length)
+        ? camp.contactRecordIds
+        : (camp.contactNamesRaw || '').split(',').map(s => s.trim()).filter(Boolean).map(n => nameToId[n]).filter(Boolean);
 
       const campaignTouchPoints = touchPoints.filter(tp =>
         tp.contact && targetRecordIds.includes(tp.contact) &&
@@ -2444,7 +2462,7 @@ function computeCampaignPerformance(campaigns, contacts, touchPoints, conversion
       const touchPointsSent = campaignTouchPoints.length;
       const replies = campaignTouchPoints.filter(tp => tp.outcome === 'Replied').length;
       const bookings = conversions.filter(cv => cv.campaign === camp.name).length;
-      const contactsTargeted = targetNames.length;
+      const contactsTargeted = targetRecordIds.length;
       const conversionRate = contactsTargeted ? Math.round((bookings / contactsTargeted) * 100) : 0;
 
       return { campaignName: camp.name, contactsTargeted, touchPointsSent, replies, bookings, conversionRate };
@@ -3359,8 +3377,9 @@ function computeCampaignAnalytics(campaign, contacts, touchPoints, conversions) 
   const nameToId = {};
   contacts.forEach(c => { if (c.name) nameToId[c.name] = c.id; });
 
-  const targetNames = (campaign.contactNamesRaw || '').split(',').map(s => s.trim()).filter(Boolean);
-  const targetRecordIds = targetNames.map(n => nameToId[n]).filter(Boolean);
+  const targetRecordIds = (campaign.contactRecordIds && campaign.contactRecordIds.length)
+    ? campaign.contactRecordIds
+    : (campaign.contactNamesRaw || '').split(',').map(s => s.trim()).filter(Boolean).map(n => nameToId[n]).filter(Boolean);
 
   const campaignTouchPoints = touchPoints.filter(tp =>
     tp.contact && targetRecordIds.includes(tp.contact) &&
@@ -3376,7 +3395,7 @@ function computeCampaignAnalytics(campaign, contacts, touchPoints, conversions) 
 
   const campaignConversions = conversions.filter(cv => cv.campaign === campaign.name);
   const bookings = campaignConversions.length;
-  const contactsTargeted = targetNames.length;
+  const contactsTargeted = targetRecordIds.length;
   const bookingRate = contactsTargeted ? Math.round((bookings / contactsTargeted) * 100) : 0;
 
   const touchCounts = campaignConversions.map(cv => cv.touchPointCount).filter(n => typeof n === 'number' && n > 0);
@@ -3573,8 +3592,9 @@ app.get('/api/campaign/:id/insights', async (req, res) => {
 
     const nameToId = {};
     contacts.forEach(c => { if (c.name) nameToId[c.name] = c.id; });
-    const targetNames = (campaign.contactNamesRaw || '').split(',').map(s => s.trim()).filter(Boolean);
-    const targetRecordIds = targetNames.map(n => nameToId[n]).filter(Boolean);
+    const targetRecordIds = (campaign.contactRecordIds && campaign.contactRecordIds.length)
+      ? campaign.contactRecordIds
+      : (campaign.contactNamesRaw || '').split(',').map(s => s.trim()).filter(Boolean).map(n => nameToId[n]).filter(Boolean);
 
     const campaignContacts = contacts.filter(c => targetRecordIds.includes(c.id));
     const campaignTouchPoints = touchPoints.filter(tp => tp.contact && targetRecordIds.includes(tp.contact));
@@ -4104,6 +4124,170 @@ app.get('/api/campaign/:id/conversion-intelligence', async (req, res) => {
 // Shared by /api/sales/insights and the offer learning-loop metrics below.
 const CONNECTED_OR_LATER_STAGES = ['Connected', 'Message 1 Sent', 'Pending Reply M1', 'Ready for Message 2', 'Message 2 Sent', 'Pending Reply M2', 'Ready for Message 3', 'Message 3 Sent', 'Pending Reply M3', 'Meeting Booked'];
 
+/* ===================== CANONICAL CAMPAIGN FUNNEL =====================
+ * One definition of the outreach funnel, shared by every analytics surface
+ * (Campaigns list, Roadmap, the campaign Analytics + Sales tabs, the
+ * top-level Sales page). Sourced from:
+ *   - Campaign Contacts junction rows (one per contact per campaign; deduped
+ *     defensively here in case bad data reappears)
+ *   - each row's Sequence Stage (current snapshot) + Stage History (dated log)
+ *   - the Deals table for real booking / win / loss outcomes
+ *
+ * "Furthest stage reached" = the highest rung on FUNNEL_LADDER touched by
+ * either the contact's current Sequence Stage or any of its Stage History
+ * lines, so a rep manually walking someone back a step doesn't erase funnel
+ * progress. Meeting Booked / Won / Lost are read from Deals, never from a
+ * stage string, so a mis-logged "Meeting Booked" history line can't invent a
+ * booking. Excluded / Lost / Timed Out sit off the ladder and are reported
+ * as their own buckets beside the funnel.
+ */
+const FUNNEL_LADDER = [
+  'Found', 'Connection Pending', 'Connected',
+  'Message 1 Sent', 'Pending Reply M1', 'Ready for Message 2',
+  'Message 2 Sent', 'Pending Reply M2', 'Ready for Message 3',
+  'Message 3 Sent', 'Pending Reply M3', 'Meeting Booked'
+];
+const OFF_LADDER_STAGES = new Set(['Excluded', 'Lost', 'Timed Out']);
+const RUNG = {
+  connectionSent: FUNNEL_LADDER.indexOf('Connection Pending'),
+  connected: FUNNEL_LADDER.indexOf('Connected'),
+  m1: FUNNEL_LADDER.indexOf('Message 1 Sent'),
+  m2: FUNNEL_LADDER.indexOf('Message 2 Sent'),
+  m3: FUNNEL_LADDER.indexOf('Message 3 Sent'),
+  meeting: FUNNEL_LADDER.indexOf('Meeting Booked')
+};
+
+function ladderRung(stage) {
+  return FUNNEL_LADDER.indexOf(normalizeSequenceStage(stage));
+}
+
+// Collapse every Campaign Contacts row for one campaign into one canonical
+// record per contact: { contactId, current, furthestRung, connectionSentDate,
+// off, booked, won, lost }. dealsByContactId maps a contact id -> [{outcome}].
+function buildFunnelContacts(ccRows, campaignRecordId, dealsByContactId) {
+  const byContact = new Map();
+  ccRows
+    .filter(r => (r.fields['Campaign'] || []).includes(campaignRecordId))
+    .forEach(r => {
+      const contactId = (r.fields['Contact'] || [])[0] || null;
+      if (!contactId) return; // orphan row - nothing to attribute it to
+      const current = normalizeSequenceStage(r.fields['Sequence Stage']);
+      let rung = ladderRung(current);
+      parseStageHistory(r.fields['Stage History']).forEach(h => {
+        const x = ladderRung(h.stage);
+        if (x > rung) rung = x;
+      });
+      const csd = r.fields['Connection Sent Date'] || null;
+      const prev = byContact.get(contactId);
+      if (!prev) {
+        byContact.set(contactId, {
+          contactId, current, furthestRung: rung, connectionSentDate: csd,
+          off: OFF_LADDER_STAGES.has(current)
+        });
+        return;
+      }
+      // Merge duplicate rows: keep the furthest rung; prefer an on-ladder
+      // current stage over Excluded/Lost; keep any connection-sent date.
+      prev.furthestRung = Math.max(prev.furthestRung, rung);
+      if (prev.off && !OFF_LADDER_STAGES.has(current)) { prev.current = current; prev.off = false; }
+      else if (!prev.off && ladderRung(current) > ladderRung(prev.current)) prev.current = current;
+      if (!prev.connectionSentDate && csd) prev.connectionSentDate = csd;
+    });
+  for (const fc of byContact.values()) {
+    const deals = dealsByContactId[fc.contactId] || [];
+    fc.won = deals.some(d => d.outcome === 'Won');
+    fc.lost = deals.some(d => d.outcome === 'Lost');
+    fc.booked = deals.length > 0 || fc.furthestRung >= RUNG.meeting;
+  }
+  return [...byContact.values()];
+}
+
+// funnelContacts from buildFunnelContacts; deals = this campaign's Deal rows
+// [{outcome}]. Returns the step counts + step-to-step conversion the UI draws.
+function computeCampaignFunnel(funnelContacts, deals) {
+  const active = funnelContacts.filter(c => !c.off);
+  const reached = minRung => active.filter(c => c.furthestRung >= minRung).length;
+  const steps = [
+    { key: 'contacts', label: 'Contacts', count: funnelContacts.length },
+    { key: 'connectionSent', label: 'Connection sent', count: active.filter(c => c.connectionSentDate || c.furthestRung >= RUNG.connectionSent).length },
+    { key: 'connected', label: 'Connected', count: reached(RUNG.connected) },
+    { key: 'm1', label: 'Message 1 sent', count: reached(RUNG.m1) },
+    { key: 'm2', label: 'Message 2 sent', count: reached(RUNG.m2) },
+    { key: 'm3', label: 'Message 3 sent', count: reached(RUNG.m3) },
+    { key: 'meeting', label: 'Meeting booked', count: funnelContacts.filter(c => c.booked).length },
+    { key: 'won', label: 'Won', count: (deals || []).filter(d => d.outcome === 'Won').length }
+  ];
+  steps.forEach((s, i) => {
+    const prev = i > 0 ? steps[i - 1].count : null;
+    s.pctOfPrev = (prev && prev > 0) ? Math.round((s.count / prev) * 100) : null;
+    s.pctOfContacts = steps[0].count ? Math.round((s.count / steps[0].count) * 100) : null;
+  });
+  const reachedM3 = active.filter(c => c.furthestRung >= RUNG.m3);
+  return {
+    steps,
+    excluded: funnelContacts.filter(c => c.current === 'Excluded').length,
+    lost: (deals || []).filter(d => d.outcome === 'Lost').length,
+    // sent all 3 messages, no booking and no live reply thread -> dead after the full sequence
+    noOutcomeAfterM3: reachedM3.filter(c => !c.booked && !c.won && !c.lost).length,
+    active: active.length
+  };
+}
+
+// GET /api/campaign/:id/funnel -> the canonical funnel for one campaign.
+// :id is a campaign record id or Name. Backs the Campaigns list, the Roadmap
+// funnel strip, and anywhere else that needs "where is the drop-off".
+app.get('/api/campaign/:id/funnel', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const campaignRecord = await resolveCampaignRecord(decodeURIComponent(req.params.id));
+    if (!campaignRecord) return res.status(404).json({ error: 'Campaign not found' });
+
+    const [ccRows, dealRecords, tpRecords] = await Promise.all([
+      fetchCampaignContactsRows(),
+      airtableFetchAllRecords('Deals'),
+      airtableFetchAllRecords('Touch Points')
+    ]);
+
+    const myDeals = dealRecords
+      .filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id))
+      .map(r => ({ contactId: (r.fields['Contact'] || [])[0] || null, outcome: r.fields['Outcome'] || 'Pending' }));
+    const dealsByContactId = {};
+    myDeals.forEach(d => { if (d.contactId) (dealsByContactId[d.contactId] = dealsByContactId[d.contactId] || []).push(d); });
+
+    const funnelContacts = buildFunnelContacts(ccRows, campaignRecord.id, dealsByContactId);
+    const funnel = computeCampaignFunnel(funnelContacts, myDeals);
+
+    // Reply + message-sent counts, campaign-scoped, deduped to distinct contacts.
+    const myContactIds = new Set(funnelContacts.map(c => c.contactId));
+    const myTouchPoints = tpRecords.filter(r =>
+      (r.fields['Campaign'] || []).includes(campaignRecord.id) ||
+      (r.fields['Contact'] || []).some(cid => myContactIds.has(cid))
+    );
+    const messagesSent = myTouchPoints.filter(r => !touchPointIsReply(r.fields)).length;
+    const repliedContactIds = new Set();
+    myTouchPoints.forEach(r => {
+      if (touchPointIsReply(r.fields)) (r.fields['Contact'] || []).forEach(cid => repliedContactIds.add(cid));
+    });
+
+    const connected = funnel.steps.find(s => s.key === 'connected').count;
+    const meetings = funnel.steps.find(s => s.key === 'meeting').count;
+
+    res.json({
+      campaignName: campaignRecord.fields['Name'] || campaignRecord.fields['Campaign Name'] || '',
+      campaignRecordId: campaignRecord.id,
+      ...funnel,
+      messagesSent,
+      replies: repliedContactIds.size,
+      replyRate: connected ? Math.round((repliedContactIds.size / connected) * 100) : 0,
+      conversionRate: funnel.steps[0].count ? Math.round((meetings / funnel.steps[0].count) * 100) : 0,
+      generatedAt: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Campaign funnel error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/sales/insights', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   try {
@@ -4123,18 +4307,25 @@ app.get('/api/sales/insights', async (req, res) => {
     }
 
     const summary = campaigns.map(c => {
-      const myCc = ccRows.filter(r => (r.fields['Campaign'] || []).includes(c.id));
-      const myDeals = dealRecords.filter(r => (r.fields['Campaign'] || []).includes(c.id));
-      const myContactIds = new Set(myCc.map(r => (r.fields['Contact'] || [])[0]).filter(Boolean));
-      const myTouchPoints = tpRecords.filter(r => (r.fields['Campaign'] || []).includes(c.id) || (r.fields['Contact'] || []).some(cid => myContactIds.has(cid)));
+      const myDealRows = dealRecords
+        .filter(r => (r.fields['Campaign'] || []).includes(c.id))
+        .map(r => ({ contactId: (r.fields['Contact'] || [])[0] || null, outcome: r.fields['Outcome'] || 'Pending' }));
+      const dealsByContactId = {};
+      myDealRows.forEach(d => { if (d.contactId) (dealsByContactId[d.contactId] = dealsByContactId[d.contactId] || []).push(d); });
 
-      const connections = myCc.filter(r => CONNECTED_OR_LATER_STAGES.includes(r.fields['Sequence Stage'] || '')).length;
-      const messagesSent = myTouchPoints.filter(r => !touchPointIsReply(r.fields)).length;
-      const meetingsBooked = myCc.filter(r => (r.fields['Sequence Stage'] || '') === 'Meeting Booked').length;
-      const won = myDeals.filter(r => r.fields['Outcome'] === 'Won').length;
-      const lost = myDeals.filter(r => r.fields['Outcome'] === 'Lost').length;
+      const funnelContacts = buildFunnelContacts(ccRows, c.id, dealsByContactId);
+      const funnel = computeCampaignFunnel(funnelContacts, myDealRows);
+      const contactIds = new Set(funnelContacts.map(x => x.contactId));
+      const myTouchPoints = tpRecords.filter(r => (r.fields['Campaign'] || []).includes(c.id) || (r.fields['Contact'] || []).some(cid => contactIds.has(cid)));
 
-      return { name: c.name, status: c.status, contacts: myCc.length, connections, messagesSent, meetingsBooked, won, lost };
+      const step = k => funnel.steps.find(s => s.key === k).count;
+      return {
+        name: c.name, status: c.status, contacts: funnelContacts.length,
+        connections: step('connected'),
+        messagesSent: myTouchPoints.filter(r => !touchPointIsReply(r.fields)).length,
+        meetingsBooked: step('meeting'),
+        won: step('won'), lost: funnel.lost, excluded: funnel.excluded
+      };
     });
 
     const prompt = `You are a sales analyst reviewing outreach campaign performance for a B2B agency. Here is a summary of every live or past campaign:
