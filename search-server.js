@@ -13105,11 +13105,16 @@ app.post('/api/omnisend/create-campaign', async (req, res) => {
       if (!templateID) throw new Error('Omnisend did not return a template id when importing the campaign HTML');
     }
 
-    const email = { templateID, subject: subject.slice(0, 250) };
+    // Omnisend requires content.email.senderName (despite the OpenAPI spec
+    // listing only templateID). Fall back to the company name. senderEmail is
+    // genuinely optional - omitted, Omnisend uses the brand's verified sender.
+    const email = {
+      templateID,
+      subject: subject.slice(0, 250),
+      senderName: ((b.senderName || b.fromName || '').toString().trim() || 'Twenty2 Collective').slice(0, 250)
+    };
     const preheader = (b.preheader || '').toString().trim();
     if (preheader) email.preheader = preheader.slice(0, 250);
-    const senderName = (b.senderName || b.fromName || '').toString().trim();
-    if (senderName) email.senderName = senderName.slice(0, 250);
     const senderEmail = (b.senderEmail || b.fromEmail || '').toString().trim();
     if (senderEmail) email.senderEmail = senderEmail;
 
