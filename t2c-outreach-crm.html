@@ -4,14 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>T2C Outreach</title>
-<script>
-(function(){
-  try {
-    var saved = localStorage.getItem('t2c_theme_mode');
-    if(saved === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
-  } catch(e){}
-})();
-</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -16540,6 +16532,7 @@ async function runGenerateEmailCopy(opts){
 
   window.__emailCopyLoading = true;
   window.__emailCopy = undefined;
+  window.__emailCopyContext = undefined;
   window.__emailHeroOptions = undefined;
   window.__emailCampaignResult = undefined;
   emailRerender('copy');
@@ -16561,6 +16554,7 @@ async function runGenerateEmailCopy(opts){
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
     window.__emailCopy = normalizeEmailCopy(data.copy || data);
+    window.__emailCopyContext = data.context || {};
     if(isRevision){
       window.__emailFeedbackState = Object.assign({}, window.__emailFeedbackState, { feedback: '', finalVersion: null });
       toast('Revised with your feedback', 'success');
@@ -16790,10 +16784,20 @@ function renderEmailCopyPreview(){
       <div class="field" style="margin-bottom:0;"><label>Body</label><textarea id="emailCopy_secBody_${i}" rows="4">${esc(sec.body)}</textarea></div>
     </div>`).join('');
 
+  const ref = window.__emailActiveTemplate || {};
+  const ctx = window.__emailCopyContext || {};
+  let tplNote = '';
+  if(ref.id){
+    tplNote = ctx.templateStructureUsed
+      ? `<p class="muted" style="font-size:11.5px;margin-bottom:12px;color:var(--success,#1a7f37);"><i class="ti ti-check"></i> Matched <strong>${esc(ref.name || 'template')}</strong>'s structure.</p>`
+      : `<p class="muted" style="font-size:11.5px;margin-bottom:12px;"><i class="ti ti-alert-triangle"></i> Couldn't load <strong>${esc(ref.name || 'that template')}</strong>'s layout, so this was generated freely. Re-upload the template from the Templates tab and generate again.</p>`;
+  }
+
   return `
   <div class="card" style="margin-bottom:18px;">
     <div class="section-title"><i class="ti ti-mail-opened"></i> Editable preview</div>
     <p class="muted" style="font-size:12px;margin-bottom:12px;">Edit any field. Every section has its own Copy button.</p>
+    ${tplNote}
     ${fieldBlock('Subject line', 'emailCopy_subject', c.subject, 'subject')}
     ${fieldBlock('Preheader', 'emailCopy_preheader', c.preheader, 'preheader')}
     ${renderEmailHeroPicker(c)}

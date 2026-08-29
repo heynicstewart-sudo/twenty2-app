@@ -13120,41 +13120,64 @@ async function omnisendTemplatesFetch(method, url, body) {
   return json || {};
 }
 
-// POST /api/omnisend/upload-template - { name, html } -> imports the HTML as a
-// new Omnisend email template via POST .../email-templates/import.
+// POST /api/omnisend/upload-template - { name, html } -> a new row in the
+// Airtable Email Templates table (Template Name, HTML Content, Active, Date
+// Added), and a best-effort push into the Omnisend template library on top.
+// Airtable is the source of truth here: the copy generator has to be able to
+// read the HTML back to reproduce a layout, and Omnisend's template API does
+// not reliably return template bodies.
 app.post('/api/omnisend/upload-template', async (req, res) => {
-  if (!omnisendConfigured()) return res.status(500).json({ error: 'OMNISEND_API_KEY not configured' });
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   const b = req.body || {};
   const name = (b.name || '').toString().trim();
   const html = (b.html || b.htmlContent || '').toString();
   if (!name) return res.status(400).json({ error: 'name is required' });
   if (!html) return res.status(400).json({ error: 'html is required' });
   try {
-    const data = await omnisendTemplatesFetch('POST', `${OMNISEND_TEMPLATES_URL}/import`, { name, html });
-    const tpl = (data && (data.template || data)) || {};
-    res.json({ success: true, id: tpl.id || tpl.templateID || tpl.templateId || null, name: tpl.name || name });
+    const data = await airtableRequest('POST', 'Email Templates', {
+      records: [{
+        fields: {
+          'Template Name': name,
+          'HTML Content': html,
+          'Active': true,
+          'Date Added': new Date().toISOString().slice(0, 10)
+        }
+      }],
+      typecast: true
+    });
+    const id = data.records[0].id;
+    if (omnisendConfigured()) {
+      omnisendTemplatesFetch('POST', `${OMNISEND_TEMPLATES_URL}/import`, { name, html })
+        .catch(err => console.warn('Omnisend template import failed (kept in Airtable):', err.message));
+    }
+    res.json({ success: true, id, name });
   } catch (err) {
-    console.error('Omnisend upload-template error:', err.message);
-    res.status(502).json({ error: err.message });
+    console.error('upload-template error:', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// GET /api/omnisend/templates - the Omnisend email templates, each trimmed to
-// { id, name, createdAt } for the Email Marketing > Copy Generator tab.
+// GET /api/omnisend/templates - the Airtable Email Templates rows, each
+// trimmed to { id, name, active, createdAt } for the Email Marketing tab.
 app.get('/api/omnisend/templates', async (req, res) => {
-  if (!omnisendConfigured()) return res.status(500).json({ error: 'OMNISEND_API_KEY not configured' });
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   try {
-    const data = await omnisendTemplatesFetch('GET', OMNISEND_TEMPLATES_URL);
-    const list = Array.isArray(data && data.templates) ? data.templates : [];
-    const templates = list.map(t => ({
-      id: t.id || t.templateID || t.templateId || null,
-      name: t.name || t.templateName || 'Untitled template',
-      createdAt: t.createdAt || t.createdDate || t.created || null
-    }));
+    const records = await airtableFetchAllRecords('Email Templates');
+    const templates = records
+      .map(r => {
+        const f = r.fields || {};
+        return {
+          id: r.id,
+          name: f['Template Name'] || f['Name'] || 'Untitled template',
+          active: f['Active'] === true || f['Active'] === 'true' || f['Active'] === 1,
+          createdAt: f['Date Added'] || f['Created'] || null
+        };
+      })
+      .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
     res.json({ templates, count: templates.length });
   } catch (err) {
-    console.error('Omnisend templates error:', err.message);
-    res.status(502).json({ error: err.message });
+    console.error('templates list error:', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -13357,33 +13380,21 @@ async function fetchActiveEmailTemplates() {
   }
 }
 
-// Fetch one Omnisend email template's HTML by id, for the "reproduce this
-// exact layout" path in generate-email-copy. Tries the list endpoint first
-// (known good), then a by-id GET. Returns null if nothing usable is found.
-async function fetchOmnisendTemplateById(id) {
-  if (!id || !omnisendConfigured()) return null;
-  const pickHtml = t => {
-    if (!t) return '';
-    const h = t.html || t.bodyHtml || t.body || (t.content && (t.content.html || t.content)) || '';
-    return typeof h === 'string' ? h : '';
-  };
-  const matchesId = t => t && [t.id, t.templateID, t.templateId].some(v => v != null && String(v) === String(id));
+// Fetch one Email Templates row's HTML by Airtable record id, for the
+// "reproduce this exact layout" path in generate-email-copy.
+async function fetchEmailTemplateHtmlById(id) {
+  if (!id || !isAirtableRecordId(id)) return null;
   try {
-    const data = await omnisendFetch('GET', '/email-templates');
-    const list = Array.isArray(data && data.templates) ? data.templates : (Array.isArray(data) ? data : []);
-    const found = list.find(matchesId);
-    const fromList = pickHtml(found);
-    if (found && fromList) return { id, name: found.name || found.title || '', html: fromList };
-    try {
-      let one = await omnisendFetch('GET', `/email-templates/${encodeURIComponent(id)}`);
-      one = (one && (one.template || one.emailTemplate)) || one;
-      const fromOne = pickHtml(one);
-      if (fromOne) return { id, name: (one && (one.name || one.title)) || (found && found.name) || '', html: fromOne };
-    } catch (e) { /* by-id endpoint may not exist */ }
-    if (found) return { id, name: found.name || '', html: '' };
-    return null;
+    const rec = await airtableGetRecord('Email Templates', id);
+    if (!rec) return null;
+    const f = rec.fields || {};
+    return {
+      id,
+      name: f['Template Name'] || f['Name'] || '',
+      html: (f['HTML Content'] || f['HTML'] || '').toString()
+    };
   } catch (err) {
-    console.warn('generate-email-copy - could not load Omnisend template', id, '-', err.message);
+    console.warn('generate-email-copy - could not load template', id, '-', err.message);
     return null;
   }
 }
@@ -13450,7 +13461,7 @@ Return ONLY valid JSON, no markdown, in exactly this shape:
   "ctaText": string,
   "ctaUrl": "{{CTA_URL}}"
 }
-Rules: subject under 60 characters. preheader under 100 characters. 2 to 3 body sections. heroImageSearchTerm is 2 to 4 plain words for a stock photo search. ctaUrl is always the literal placeholder {{CTA_URL}}. No commentary.`;
+Rules: subject under 60 characters. preheader under 100 characters. 2 to 3 body sections UNLESS a SELECTED TEMPLATE is given, in which case match the template's block count exactly (which may be 0, 1 or more). heroImageSearchTerm is 2 to 4 plain words for a stock photo search. ctaUrl is always the literal placeholder {{CTA_URL}}. No commentary.`;
 
 // POST /api/omnisend/generate-email-copy
 // Body: { brief, campaignName, templateId, templateHtml, feedback, previousCopy }.
@@ -13477,7 +13488,7 @@ app.post('/api/omnisend/generate-email-copy', async (req, res) => {
       fetchActiveEmailTemplates(),
       fetchRecentSignals(30),
       fetchRecentTouchPointsBrief(40),
-      (templateId && !templateHtmlIn) ? fetchOmnisendTemplateById(templateId) : Promise.resolve(null)
+      (templateId && !templateHtmlIn) ? fetchEmailTemplateHtmlById(templateId) : Promise.resolve(null)
     ]);
 
     const sf = (settingsRecord && settingsRecord.fields) || {};
@@ -13491,15 +13502,19 @@ app.post('/api/omnisend/generate-email-copy', async (req, res) => {
     const templateName = ((req.body && req.body.templateName) || (selectedTemplate && selectedTemplate.name) || '').toString().trim();
 
     const structureBlock = templateHtml
-      ? `SELECTED TEMPLATE - REPRODUCE THIS LAYOUT EXACTLY.
-Template "${templateName || 'reference'}" is the required structure. Match it precisely:
-- the same number of body sections (count them in the template - it may be 1, 2, or more, not necessarily 3)
-- the same use of section headings (if the template has none, return empty heading strings)
-- the same order of sections
-- the same approximate length: each section about the same word count as the template's, and the whole email no longer than the template
-Replace only the wording with copy for this campaign. Do not add sections, do not expand it, do not restructure it. The "2 to 3 body sections" rule does not apply here - the template's section count wins.
+      ? `SELECTED TEMPLATE - REPRODUCE THIS LAYOUT EXACTLY. This is the single most important instruction.
 
-TEMPLATE HTML:
+First, read the template HTML below and work out its real structure: how many distinct content blocks does it have between the hero and the footer? Does each block have its own heading, or is it just running paragraphs? How long is each block? How long is the whole email?
+
+Then produce copy that drops into that exact structure:
+- bodySections MUST have exactly as many entries as the template has body blocks. If the template is basically a hero image, one short intro paragraph and a call to action, then bodySections is empty or a single short entry - do NOT invent two or three sections with headings.
+- Match the template's heading usage. No headings in the template means empty "heading" strings.
+- Match the length. Each section roughly the template's word count for that block. The finished email must not be longer than the template.
+- Keep the same order.
+
+Replace only the words. Do not add blocks, do not expand, do not restructure. The "2 to 3 body sections" guideline is void when a template is given - the template wins.
+
+TEMPLATE "${templateName || 'reference'}" HTML:
 ${templateHtml}`
       : `EMAIL TEMPLATE STRUCTURES (layout guide only, do not reuse wording):
 ${JSON.stringify(templates, null, 2)}`;
