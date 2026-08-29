@@ -12905,10 +12905,12 @@ app.get('/api/omnisend/campaigns', async (req, res) => {
   }
 });
 
-// GET /api/omnisend/campaign-stats - open/click/unsubscribe rates per
-// campaign. Omnisend has no working bulk stats endpoint, so this fetches
-// each campaign individually from GET /api/campaigns/{id} and reads the
-// statistics block off each response. Cached 1 hour; ?refresh=1 bypasses it.
+// GET /api/omnisend/campaign-stats - per-campaign open/click/unsubscribe
+// rates and attributed revenue, from the Analytics Statistics API
+// (POST /api/analytics/statistics), aggregated per campaign over the last
+// 12 months. That API is grouped by EVENT date so totals differ slightly
+// from Omnisend's in-app reports. Rate limited hard (10/min, 55/day) so the
+// 1-hour cache matters; ?refresh=1 bypasses it.
 app.get('/api/omnisend/campaign-stats', async (req, res) => {
   if (!omnisendConfigured()) return res.status(500).json({ error: 'OMNISEND_API_KEY not configured' });
   const force = req.query.refresh === '1' || req.query.refresh === 'true';
@@ -12916,34 +12918,58 @@ app.get('/api/omnisend/campaign-stats', async (req, res) => {
     return res.json({ ...omnisendCampaignStatsCache.data, cached: true });
   }
   try {
-    const raw = await omnisendFetchAllCampaigns();
-    const stats = await Promise.all(raw.map(async (c) => {
-      const id = omnisendCampaignId(c);
-      if (!id) return null;
-      let stat = {};
-      try {
-        const detail = await omnisendFetch('GET', `/campaigns/${encodeURIComponent(id)}`) || {};
-        stat = (detail.campaign || detail).statistics || {};
-      } catch (err) {
-        console.warn(`Omnisend campaign-stats - could not fetch campaign ${id}:`, err.message);
-      }
-      const num = v => (v == null || isNaN(Number(v)) ? null : Number(v));
-      return {
-        campaignId: id,
-        id,
-        name: c.name || '',
-        status: c.status || '',
-        openRate: num(stat.openRate),
-        clickRate: num(stat.clickRate),
-        unsubscribeRate: num(stat.unsubscribeRate)
-      };
-    }));
-    const data = {
-      stats: stats.filter(Boolean),
-      count: stats.filter(Boolean).length,
-      fetchedAt: new Date().toISOString(),
-      cached: false
+    const now = new Date();
+    const from = new Date(now); from.setMonth(from.getMonth() - 12); from.setDate(1); from.setHours(0, 0, 0, 0);
+    const to = new Date(now); to.setDate(to.getDate() + 1); to.setHours(0, 0, 0, 0);
+    const iso = d => d.toISOString().replace(/\.\d{3}Z$/, 'Z');
+
+    const body = {
+      queries: [{
+        alias: 'campaigns',
+        metrics: [
+          { name: 'sent' }, { name: 'openedUnique' }, { name: 'clickedUnique' },
+          { name: 'unsubscribedUnique' }, { name: 'attributedRevenue' }
+        ],
+        dimensions: [
+          { name: 'timestamp', granularity: 'month' },
+          { name: 'marketingActivityID' },
+          { name: 'marketingActivityName' }
+        ],
+        dateRange: { from: iso(from), to: iso(to) },
+        filters: [{ name: 'marketingActivityType', operator: 'in', values: ['Campaign'] }]
+      }]
     };
+
+    const resp = await omnisendFetch('POST', '/analytics/statistics', body);
+    const stat = (Array.isArray(resp && resp.statistics) ? resp.statistics : []).find(s => s.alias === 'campaigns')
+      || (resp && resp.statistics && resp.statistics[0]) || { rows: [] };
+
+    // Sum the monthly rows per campaign.
+    const byId = {};
+    (stat.rows || []).forEach(r => {
+      const id = r.marketingActivityID || r.marketingActivityId;
+      if (!id) return;
+      const agg = byId[id] || (byId[id] = { id, name: r.marketingActivityName || '', sent: 0, opened: 0, clicked: 0, unsub: 0, revenue: 0 });
+      if (!agg.name && r.marketingActivityName) agg.name = r.marketingActivityName;
+      agg.sent += Number(r.sent) || 0;
+      agg.opened += Number(r.openedUnique) || 0;
+      agg.clicked += Number(r.clickedUnique) || 0;
+      agg.unsub += Number(r.unsubscribedUnique) || 0;
+      agg.revenue += Number(r.attributedRevenue) || 0;
+    });
+
+    const stats = Object.values(byId).map(a => ({
+      campaignId: a.id,
+      id: a.id,
+      name: a.name,
+      sent: a.sent,
+      openRate: a.sent > 0 ? a.opened / a.sent : null,
+      clickRate: a.sent > 0 ? a.clicked / a.sent : null,
+      unsubscribeRate: a.sent > 0 ? a.unsub / a.sent : null,
+      revenue: Math.round(a.revenue * 100) / 100
+    }));
+
+    const data = { stats, count: stats.length, fetchedAt: new Date().toISOString(), cached: false };
     omnisendCampaignStatsCache = { at: Date.now(), data };
     res.json(data);
   } catch (err) {
@@ -13086,10 +13112,29 @@ app.post('/api/omnisend/create-campaign', async (req, res) => {
     scheduledForIso = when.toISOString().replace(/\.\d{3}Z$/, 'Z');
   }
 
+  const copy = (b.copy && typeof b.copy === 'object') ? b.copy : null;
+
   try {
-    // A campaign needs a templateID. Import the generated HTML as a fresh
-    // template unless the caller already has one.
-    let templateID = templateIdIn;
+    // A campaign needs a templateID. Preferred path: the caller selected one
+    // of their saved templates and we swap the new copy into it in place, so
+    // no throwaway template is created. Fall back to importing the generated
+    // HTML as a fresh template only when there's nothing to update.
+    let templateID = '';
+    let templateUpdated = false;
+
+    if (templateIdIn && copy) {
+      try {
+        if (await updateOmnisendTemplateCopy(templateIdIn, copy)) {
+          templateID = templateIdIn;
+          templateUpdated = true;
+        }
+      } catch (updErr) {
+        console.warn('create-campaign - could not update the selected template, importing a fresh one:', updErr.message);
+      }
+    } else if (templateIdIn) {
+      templateID = templateIdIn; // template given but no copy to swap - use as is
+    }
+
     if (!templateID) {
       let imported;
       try {
@@ -13146,6 +13191,7 @@ app.post('/api/omnisend/create-campaign', async (req, res) => {
       success: true,
       campaignId: camp.id || camp.campaignID || camp.campaignId || null,
       templateId: templateID,
+      templateUpdated,
       scheduledFor: scheduledForIso,
       campaign: result
     });
@@ -13226,6 +13272,68 @@ async function fetchOmnisendTemplateHtml(id) {
     console.warn('generate-email-copy - could not load Omnisend template', id, '-', err.message);
     return null;
   }
+}
+
+// Walk every block in a template's section -> row -> column -> block tree.
+function forEachTemplateBlock(tpl, fn) {
+  (Array.isArray(tpl && tpl.sections) ? tpl.sections : []).forEach(s =>
+    (s.rows || []).forEach(r => (r.columns || []).forEach(col => (col.blocks || []).forEach(fn))));
+}
+
+// Imported-from-HTML templates hold the whole body in one htmlCode block.
+// Read/write its body content, tolerating the shape variants Omnisend uses.
+function htmlCodeBlockBody(b) {
+  if (!b || typeof b !== 'object') return '';
+  if (b.content && typeof b.content === 'object') return String(b.content.body || b.content.html || '');
+  if (b.htmlCode && typeof b.htmlCode === 'object') return String(b.htmlCode.body || b.htmlCode.html || '');
+  return String(b.body || b.html || b.code || '');
+}
+function setHtmlCodeBlockBody(b, html) {
+  if (b.content && typeof b.content === 'object') { b.content.body = html; return true; }
+  if (b.htmlCode && typeof b.htmlCode === 'object') { b.htmlCode.body = html; return true; }
+  if ('body' in b || 'html' in b || 'code' in b) { b.body = html; return true; }
+  return false;
+}
+
+// Rewrite just the visible copy inside a template's HTML, leaving layout,
+// styles, images and links intact. One Claude call.
+async function swapOmnisendTemplateCopy(templateHtml, copy) {
+  const c = copy || {};
+  const sections = Array.isArray(c.bodySections) ? c.bodySections : [];
+  const copyText = [
+    `SUBJECT: ${c.subject || c.subjectLine || ''}`,
+    `PREHEADER: ${c.preheader || c.previewText || ''}`,
+    `INTRO: ${c.intro || ''}`,
+    ...sections.map((s, i) => `SECTION ${i + 1} HEADING: ${(s && s.heading) || ''}\nSECTION ${i + 1} BODY: ${(s && s.body) || ''}`),
+    `CTA TEXT: ${(c.cta && c.cta.label) || c.ctaText || ''}`,
+    `CTA URL: ${(c.cta && c.cta.url) || c.ctaUrl || ''}`
+  ].join('\n');
+  const system = `You update the visible text in an HTML email template. Return the template's HTML with its wording replaced by the NEW COPY below, and nothing else changed: same tags, same structure, same inline styles, same images, same links (except swap a CTA/button href to the CTA URL if one is given). Do not add or remove sections. Keep the template's own section count even if the new copy has more. Return only the HTML, no commentary, no code fences.`;
+  const raw = await callClaudeMessages(`TEMPLATE HTML:\n${templateHtml}\n\nNEW COPY:\n${copyText}`, 8000, system);
+  return stripCodeFences(raw).trim();
+}
+
+// Update the selected template's copy in place (GET -> swap text in its
+// htmlCode block -> PUT). Returns true on success, false if it couldn't
+// (caller then falls back to importing a fresh template).
+async function updateOmnisendTemplateCopy(templateId, copy) {
+  let tpl = await omnisendTemplatesFetch('GET', `${OMNISEND_TEMPLATES_URL}/${encodeURIComponent(templateId)}`);
+  tpl = (tpl && (tpl.emailTemplate || tpl.template)) || tpl;
+  if (!tpl || !tpl.name) return false;
+  let block = null;
+  forEachTemplateBlock(tpl, b => { if (!block && b && b.type === 'htmlCode') block = b; });
+  if (!block) return false;
+  const original = htmlCodeBlockBody(block);
+  if (!original) return false;
+  const swapped = await swapOmnisendTemplateCopy(original, copy);
+  if (!swapped || !/[<][a-z!/]/i.test(swapped)) return false;
+  if (!setHtmlCodeBlockBody(block, swapped)) return false;
+  await omnisendTemplatesFetch('PUT', `${OMNISEND_TEMPLATES_URL}/${encodeURIComponent(templateId)}`, {
+    name: tpl.name,
+    generalSettings: tpl.generalSettings || {},
+    sections: tpl.sections || []
+  });
+  return true;
 }
 
 // POST /api/omnisend/upload-template - { name, html } -> imports the HTML as a
