@@ -6294,6 +6294,32 @@ app.post('/api/contacts/check-job-changes', async (req, res) => {
   }
 });
 
+// Manual "Scan for signals" - the Home page Contact signals strip button.
+// Runs all three job-change detectors that used to be on a cron (see the
+// SCHEDULED SYNC JOBS block at the bottom of this file). Each is best-effort:
+// a missing API key or unconfigured monitor is reported, not fatal, so the
+// others still run. Job Change Signal fields written here surface on the
+// Home strip via GET /api/contacts/job-change-signals.
+app.post('/api/contacts/scan-job-changes', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const runs = [
+    { key: 'trigifyPosts', label: 'Trigify post scan', fn: syncTrigifyContactPosts, needs: process.env.TRIGIFY_API_KEY },
+    { key: 'jobChangeMonitor', label: 'Job change monitor', fn: syncJobChangeMonitorSignals, needs: process.env.TRIGIFY_API_KEY },
+    { key: 'serperCheck', label: 'Serper title check', fn: checkContactJobChanges, needs: process.env.SERPER_API_KEY }
+  ];
+  const results = {};
+  for (const r of runs) {
+    if (!r.needs) { results[r.key] = { skipped: 'API key not configured' }; continue; }
+    try {
+      results[r.key] = await r.fn();
+    } catch (err) {
+      console.warn(`scan-job-changes: ${r.label} failed:`, err.message);
+      results[r.key] = { error: err.message };
+    }
+  }
+  res.json({ success: true, results, ranAt: new Date().toISOString() });
+});
+
 // ---- Part 3: Marcus's content performance analysis ----
 
 // Looks up an existing Trigify search by profile URL or name - used when
@@ -14123,18 +14149,15 @@ app.post('/api/omnisend/fetch-pexels-image', async (req, res) => {
 // are logged, not thrown, same as every other cron-eligible job in this
 // file (detectContentSignals, etc).
 
-// Daily 6am: Trigify contact post sync + post-based job change detection,
-// the Job Change Monitor keyword search, and the offer learning-loop
-// metrics sweep - unrelated jobs that just happen to share a daily cadence.
+// Daily 6am: offer learning-loop metrics sweep.
+//
+// Contact job-change signal detection (syncTrigifyContactPosts,
+// syncJobChangeMonitorSignals, checkContactJobChanges) used to run here and
+// weekly too, but was turned off at user request - it now only runs on
+// demand via POST /api/contacts/scan-job-changes (the Home page "Scan for
+// signals" button). Re-add those calls here to put it back on a schedule.
 cron.schedule('0 6 * * *', () => {
-  syncTrigifyContactPosts().catch(err => console.warn('Scheduled Trigify contact sync failed:', err.message));
-  syncJobChangeMonitorSignals().catch(err => console.warn('Scheduled job change monitor sync failed:', err.message));
   updateAllOfferMetrics().catch(err => console.warn('Scheduled offer metrics update failed:', err.message));
-});
-
-// Weekly Sunday 7am: Serper-based job title drift detection.
-cron.schedule('0 7 * * 0', () => {
-  checkContactJobChanges().catch(err => console.warn('Scheduled job change check failed:', err.message));
 });
 
 const PORT = process.env.PORT || 3000;

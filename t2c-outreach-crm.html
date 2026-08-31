@@ -17623,12 +17623,46 @@ function downloadOmnisendLowEngagementCsv(){
 function renderContactSignalsStrip(){
   const signals = window.__homeContactSignals;
   const count = Array.isArray(signals) ? signals.length : 0;
+  const scanning = !!window.__contactSignalsScanning;
   return `
   <div class="card" style="margin-bottom:22px;">
-    <div class="section-title"><i class="ti ti-alert-triangle"></i> Contact signals ${count ? `<span class="count-pill has" style="margin-left:6px;">${count}</span>` : ''}</div>
-    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">These contacts have changed roles recently - a fresh job change is one of the strongest windows to reach out.</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-alert-triangle"></i> Contact signals ${count ? `<span class="count-pill has" style="margin-left:6px;">${count}</span>` : ''}</div>
+      <button class="btn btn-secondary btn-sm" onclick="scanContactSignals()" ${scanning ? 'disabled' : ''}>
+        <i class="ti ${scanning ? 'ti-loader-2' : 'ti-radar'}"></i> ${scanning ? 'Scanning...' : 'Scan for signals'}
+      </button>
+    </div>
+    <div class="muted" style="font-size:11.5px;margin:6px 0 10px;">These contacts have changed roles recently - a fresh job change is one of the strongest windows to reach out. Automatic scanning is off; press <strong>Scan for signals</strong> to check now.${window.__contactSignalsLastScan ? ` Last scan ${esc(window.__contactSignalsLastScan)}.` : ''}</div>
     ${renderContactSignalCards(signals)}
   </div>`;
+}
+
+// Manual job-change signal scan - runs the Trigify + Serper detectors that
+// used to be on a cron (POST /api/contacts/scan-job-changes), then reloads
+// the strip. This is the only thing that populates Contacts.Job Change
+// Signal now.
+async function scanContactSignals(){
+  if(window.__contactSignalsScanning) return;
+  window.__contactSignalsScanning = true;
+  renderPage();
+  try {
+    const res = await fetch('/api/contacts/scan-job-changes', { method:'POST' });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Scan failed');
+    const r = data.results || {};
+    const matched = ['trigifyPosts','jobChangeMonitor','serperCheck']
+      .reduce((n,k) => n + ((r[k] && typeof r[k].matched === 'number') ? r[k].matched : 0), 0);
+    const skipped = Object.values(r).filter(v => v && v.skipped).length;
+    toast(matched ? `${matched} new signal${matched===1?'':'s'} found` : `Scan complete - no new signals${skipped ? ` (${skipped} source${skipped===1?'':'s'} not configured)` : ''}`, matched ? 'success' : undefined);
+    window.__contactSignalsLastScan = new Date().toLocaleString('en-AU', { day:'numeric', month:'short', hour:'numeric', minute:'2-digit' });
+    window.__homeContactSignals = undefined;
+    loadHomeContactSignals();
+  } catch(err){
+    toast('Could not scan for signals: ' + err.message, 'warn');
+  } finally {
+    window.__contactSignalsScanning = false;
+    renderPage();
+  }
 }
 
 function renderContactSignalCards(signals){
