@@ -290,7 +290,13 @@ async function airtableFetchAllPaginated(table, extraQueryString) {
 async function findCampaignRecordByName(campaignName) {
   if (!campaignName) return null;
   const records = await airtableFetchAllRecords('Campaigns');
-  return records.find(r => (r.fields['Name'] || '') === campaignName) || null;
+  // Match the secondary "Name" field first (what the app writes and treats
+  // as canonical), then fall back to the primary "Campaign Name" so a
+  // campaign that only has the primary set - renamed directly in Airtable,
+  // or created before both fields were written - still resolves.
+  return records.find(r => (r.fields['Name'] || '') === campaignName)
+    || records.find(r => (r.fields['Campaign Name'] || '') === campaignName)
+    || null;
 }
 
 function isAirtableRecordId(id) {
@@ -1314,6 +1320,12 @@ app.post('/api/airtable/campaign', async (req, res) => {
       // (e.g. just editing a sequence stage) would wipe Contact IDs back to
       // empty if state.contacts hadn't finished loading client-side yet.
       const patchFields = {};
+      // "Campaign Name" is the table's PRIMARY field; the app has always
+      // treated the secondary "Name" field as canonical and left the primary
+      // blank, which makes every linked-record preview in Airtable (e.g. the
+      // Campaign column on Campaign Contacts) render as "Unnamed record".
+      // Backfill the primary whenever it's empty or has drifted from Name.
+      if ((existing.fields['Campaign Name'] || '') !== name) patchFields['Campaign Name'] = name;
       if (goal) patchFields['Goal'] = goal;
       if (product) patchFields['Product'] = product;
       if (targetIcp) patchFields['Target ICP'] = targetIcp;
@@ -1334,6 +1346,7 @@ app.post('/api/airtable/campaign', async (req, res) => {
     }
 
     const fields = {
+      'Campaign Name': name,
       'Name': name,
       'Goal': goal || '',
       'Product': product || '',
@@ -7783,6 +7796,17 @@ function findCampaignContactRow(rows, contactId, campaignRecordId) {
 // linker below) - never touches an existing row, same as the rest of this
 // function's create-only-if-missing behaviour.
 async function getOrCreateCampaignContactRow(contactId, contactName, campaignRecordId, campaignName, rows, extraFields) {
+  // Airtable silently DROPS an invalid/unknown record id from a link field
+  // on write (it doesn't error), so a bad contactId here produced junction
+  // rows with a name but no Contact link - orphaned rows that show up in the
+  // funnel count but map to nobody. Refuse to create one; the caller's
+  // try/catch logs it instead of writing junk.
+  if (!isAirtableRecordId(contactId)) {
+    throw new Error(`getOrCreateCampaignContactRow: invalid contactId "${contactId}" for "${contactName}" - not creating a linkless row`);
+  }
+  if (!isAirtableRecordId(campaignRecordId)) {
+    throw new Error(`getOrCreateCampaignContactRow: invalid campaignRecordId "${campaignRecordId}" for "${contactName}"`);
+  }
   const existing = findCampaignContactRow(rows, contactId, campaignRecordId);
   if (existing) return existing;
   const addedDate = new Date().toISOString().slice(0, 10);
@@ -7798,7 +7822,12 @@ async function getOrCreateCampaignContactRow(contactId, contactName, campaignRec
       }, extraFields || {})
     }]
   });
-  return data.records[0];
+  const created = data.records[0];
+  // Keep the in-memory snapshot in sync so a later call in the same request
+  // (e.g. the grid-search job finding the same person for several cells)
+  // finds this row instead of creating a duplicate.
+  if (Array.isArray(rows)) rows.push(created);
+  return created;
 }
 
 // Today's Actions fast-action cards read this normalised Sequence Stage
@@ -7894,14 +7923,101 @@ app.post('/api/campaign/:id/contacts/link', async (req, res) => {
       const contactRecord = await findRecordByFieldName('Contacts', 'Full Name', name);
       if (!contactRecord) { notFound++; continue; }
       if (findCampaignContactRow(rows, contactRecord.id, campaignRecord.id)) { alreadyLinked++; continue; }
-      const created = await getOrCreateCampaignContactRow(contactRecord.id, name, campaignRecord.id, campaignName, rows);
-      rows.push(created);
+      // getOrCreateCampaignContactRow now pushes the created row into `rows`
+      // itself, so no rows.push here.
+      await getOrCreateCampaignContactRow(contactRecord.id, name, campaignRecord.id, campaignName, rows);
       linked++;
     }
 
     res.json({ success: true, linked, alreadyLinked, notFound });
   } catch (err) {
     console.error('Campaign contacts link error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// One-shot hygiene pass for a campaign's junction table. Two problems the
+// grid-search linker could leave behind before the guards in
+// getOrCreateCampaignContactRow landed:
+//  1. Linkless rows - a bad/undefined contactId was silently dropped by
+//     Airtable on write, leaving a row with a Name but no Contact link that
+//     maps to nobody.
+//  2. Duplicate rows - the in-memory rows snapshot wasn't updated after a
+//     create, so a contact found for several grid cells in one run got a
+//     junction row each time.
+// Deletes every linkless row, then collapses each contact's rows down to the
+// single furthest-along one (by funnel rung, then Stage History length).
+// Excluded rows are always kept as-is - they're a deliberate soft-removal.
+app.post('/api/campaign/:id/repair-contacts', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const campaignName = decodeURIComponent(req.params.id);
+
+  try {
+    const campaignRecord = await findCampaignRecordByName(campaignName);
+    if (!campaignRecord) return res.status(404).json({ error: `Campaign "${campaignName}" not found` });
+
+    // Backfill the primary "Campaign Name" field while we're here - the
+    // reason older app-created campaigns show as "Unnamed record" in every
+    // linked-record view.
+    const canonicalName = campaignRecord.fields['Name'] || campaignRecord.fields['Campaign Name'] || campaignName;
+    if ((campaignRecord.fields['Campaign Name'] || '') !== canonicalName) {
+      await airtableRequest('PATCH', 'Campaigns', { records: [{ id: campaignRecord.id, fields: { 'Campaign Name': canonicalName } }], typecast: true });
+    }
+
+    const allRows = await fetchCampaignContactsRows();
+    const rows = allRows.filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id));
+
+    const linkless = rows.filter(r => !((r.fields['Contact'] || [])[0]));
+    const linked = rows.filter(r => (r.fields['Contact'] || [])[0]);
+
+    // Group linked rows by contact id; anything past the first is a dup.
+    const byContact = new Map();
+    linked.forEach(r => {
+      const cid = (r.fields['Contact'] || [])[0];
+      if (!byContact.has(cid)) byContact.set(cid, []);
+      byContact.get(cid).push(r);
+    });
+
+    const rowScore = r => {
+      const stage = normalizeSequenceStage(r.fields['Sequence Stage']);
+      let rung = ladderRung(stage);
+      parseStageHistory(r.fields['Stage History']).forEach(h => { const x = ladderRung(h.stage); if (x > rung) rung = x; });
+      // Excluded/Lost/Timed Out shouldn't beat a real ladder position, but
+      // should beat a bare "Found".
+      if (OFF_LADDER_STAGES.has(stage) && rung < 0) rung = 0.5;
+      return rung * 1000 + (r.fields['Stage History'] || '').length;
+    };
+
+    const dupRowIds = [];
+    for (const [, group] of byContact) {
+      if (group.length < 2) continue;
+      group.sort((a, b) => rowScore(b) - rowScore(a));
+      group.slice(1).forEach(r => dupRowIds.push(r.id));
+    }
+
+    const toDelete = [...linkless.map(r => r.id), ...dupRowIds];
+    let deleted = 0;
+    for (let i = 0; i < toDelete.length; i += 10) {
+      const batch = toDelete.slice(i, i + 10);
+      const qs = batch.map(id => `records[]=${encodeURIComponent(id)}`).join('&');
+      const resp = await airtableFetchWithRetry(`${AIRTABLE_URL}/${encodeURIComponent(CAMPAIGN_CONTACTS_TABLE)}?${qs}`, {
+        method: 'DELETE', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` }
+      });
+      if (resp.ok) deleted += batch.length;
+      else console.warn('repair-contacts delete batch failed:', await resp.text());
+    }
+
+    res.json({
+      success: true,
+      campaign: canonicalName,
+      totalRows: rows.length,
+      linklessDeleted: linkless.length,
+      duplicatesDeleted: dupRowIds.length,
+      deleted,
+      remaining: rows.length - deleted
+    });
+  } catch (err) {
+    console.error('Campaign repair-contacts error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

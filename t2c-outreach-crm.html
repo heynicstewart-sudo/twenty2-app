@@ -10169,11 +10169,42 @@ function renderCampaignRoadmapTab(campaign){
   loadCampaignFunnel(campaign);
   return `
   ${renderCampaignFunnelStrip(campaign)}
-  <div style="display:flex;justify-content:flex-end;margin-bottom:10px;">
+  <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:10px;">
+    <button class="btn btn-ghost btn-sm" onclick="repairCampaignContacts('${campaign.id}')" id="repairCcBtn" title="Remove junction rows that don't link a contact, and de-duplicate contacts that ended up with more than one row"><i class="ti ti-tool"></i> Repair sync</button>
     <button class="btn btn-secondary btn-sm" onclick="openAddCampaignContactsModal('${campaign.id}')"><i class="ti ti-user-plus"></i> Add contacts</button>
   </div>
   ${renderRoadmap(campaignContacts(campaign))}
   `;
+}
+
+// "Repair sync" - one-shot cleanup of this campaign's Campaign Contacts
+// junction rows: deletes rows that link no contact and de-duplicates any
+// contact that ended up with more than one row (keeping the furthest-along
+// one). Also backfills the campaign's primary name field. Safe to run any
+// time; a no-op once the table is clean.
+async function repairCampaignContacts(campaignId){
+  const campaign = state.campaigns.find(c => c.id === campaignId);
+  if(!campaign) return;
+  const campaignName = campaign.name;
+  const btn = document.getElementById('repairCcBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Repairing...'; }
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaignName)}/repair-contacts`, { method:'POST' });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Repair failed');
+    const parts = [];
+    if(data.linklessDeleted) parts.push(`${data.linklessDeleted} unlinked row${data.linklessDeleted===1?'':'s'}`);
+    if(data.duplicatesDeleted) parts.push(`${data.duplicatesDeleted} duplicate${data.duplicatesDeleted===1?'':'s'}`);
+    toast(parts.length ? `Cleaned up ${parts.join(' and ')}. ${data.remaining} contacts now.` : 'Junction table already clean.', 'success');
+    window.__campaignFunnels = window.__campaignFunnels || {};
+    delete window.__campaignFunnels[campaignId];
+    if(window.__campaignSequenceStages) delete window.__campaignSequenceStages[campaignId];
+    renderPage();
+  } catch(err){
+    toast('Could not repair: ' + err.message, 'warn');
+  } finally {
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-tool"></i> Repair sync'; }
+  }
 }
 
 // Horizontal funnel above the Roadmap board - the "where is the drop-off"
