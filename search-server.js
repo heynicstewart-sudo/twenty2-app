@@ -11377,12 +11377,18 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 // Wraps the first plain-text occurrence of `phrase` in `html` (at or after
 // `fromIndex`) in an <a href="url"> tag, skipping occurrences that fall
 // inside a tag or inside an existing <a>...</a>. Returns the new html, or
-// null if the phrase couldn't be placed safely.
+// null if the phrase couldn't be placed safely. Matches the phrase both
+// verbatim and whitespace-tolerantly (runs of spaces/newlines in the HTML
+// where the phrase has a single space), since the model copies anchors
+// out of the whitespace-collapsed plain text.
 function wrapPhraseInLink(html, phrase, url, fromIndex = 0) {
-  let searchFrom = Math.max(0, fromIndex);
+  const from = Math.max(0, fromIndex);
+
+  // 1) verbatim
+  let searchFrom = from;
   while (true) {
     const idx = html.indexOf(phrase, searchFrom);
-    if (idx === -1) return null;
+    if (idx === -1) break;
     const before = html.slice(0, idx);
     const insideTag = before.lastIndexOf('<') > before.lastIndexOf('>');
     const insideAnchor = before.lastIndexOf('<a ') > before.lastIndexOf('</a>');
@@ -11391,6 +11397,26 @@ function wrapPhraseInLink(html, phrase, url, fromIndex = 0) {
     }
     searchFrom = idx + phrase.length;
   }
+
+  // 2) whitespace-tolerant
+  const pattern = phrase
+    .trim()
+    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    .replace(/\s+/g, '\\s+');
+  const re = new RegExp(pattern, 'g');
+  re.lastIndex = from;
+  let m;
+  while ((m = re.exec(html))) {
+    const idx = m.index;
+    const before = html.slice(0, idx);
+    const insideTag = before.lastIndexOf('<') > before.lastIndexOf('>');
+    const insideAnchor = before.lastIndexOf('<a ') > before.lastIndexOf('</a>');
+    if (!insideTag && !insideAnchor && !m[0].includes('<')) {
+      return html.slice(0, idx) + `<a href="${url}">${m[0]}</a>` + html.slice(idx + m[0].length);
+    }
+    re.lastIndex = idx + m[0].length;
+  }
+  return null;
 }
 
 // Internal linking - once a post is drafted, pull every page already in
@@ -11450,15 +11476,17 @@ Rules:
 - anchorText must be a substring of context
 - Choose anchor phrases in ordinary body sentences, never in a heading, an FAQ question, or the final call-to-action paragraph
 - Use each URL at most once, and take the phrases from different parts of the post
-- If fewer than 2 pages are genuinely relevant, return only those (or an empty array)
+- If fewer than 2 pages are genuinely relevant, include only those (or an empty list)
 
-Return ONLY valid JSON, no markdown, no commentary: an array in exactly this shape:
-[{ "anchorText": "text to link", "url": "https://...", "context": "a few words of surrounding text that contains the anchor" }]`;
+Return ONLY valid JSON, no markdown, no commentary, an object in exactly this shape:
+{ "links": [ { "anchorText": "text to link", "url": "https://...", "context": "a few words of surrounding text that contains the anchor" } ] }`;
 
   let patches;
   try {
     const result = await callClaudeJson(prompt, 1500);
-    patches = Array.isArray(result) ? result : (result && Array.isArray(result.links) ? result.links : null);
+    patches = Array.isArray(result) ? result
+      : (result && Array.isArray(result.links) ? result.links
+        : (result && Array.isArray(result.internalLinks) ? result.internalLinks : null));
   } catch (err) {
     console.warn('Internal linking pass failed:', err.message);
     return { html, warning: 'Internal links could not be added automatically (the linking pass failed) - add them by hand before publishing.' };
