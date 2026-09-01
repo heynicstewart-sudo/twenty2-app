@@ -4474,10 +4474,18 @@ async function handleGenerateFastMessage(cid){
   const action = (window.__todaysActions || {})[cid];
   const area = document.getElementById('fastActionArea-' + cid);
   if(!action || !action.campaignName || !area) return;
+
+  // A steer/remember pair is only on screen once a first draft has been
+  // generated - on the first click these are just absent.
+  const { steer, rememberSteer } = readSteer('fast-' + cid);
   area.innerHTML = '<span class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Generating message...</span>';
 
   try {
-    const res = await fetch(`/api/campaign/${encodeURIComponent(action.campaignName)}/contacts/${cid}/generate-message`, { method: 'POST' });
+    const res = await fetch(`/api/campaign/${encodeURIComponent(action.campaignName)}/contacts/${cid}/generate-message`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ steer, rememberSteer })
+    });
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
 
@@ -4491,12 +4499,27 @@ async function handleGenerateFastMessage(cid){
     window.__fastActionCtaMeta = window.__fastActionCtaMeta || {};
     window.__fastActionCtaMeta[cid] = { ctaBroughtForward: !!data.ctaBroughtForward, ctaReasoning: data.ctaReasoning || '' };
 
+    const campaign = state.campaigns.find(c => c.name === action.campaignName) || null;
+    const stageKey = data.stageKey || 'm1';
+    if(campaign && data.styleCorrections) applyStyleCorrectionsToCampaign(campaign.id, data.styleCorrections);
+    if(steer) toast(data.steerRemembered ? 'Steer applied and saved as a standing rule' : 'Steer applied to this draft', 'success');
+
     const ctaNoteHtml = data.ctaBroughtForward
       ? `<div style="font-size:11.5px;color:var(--warning,#b45309);background:var(--warning-bg,#fef3c7);border-radius:6px;padding:6px 9px;margin-bottom:8px;">CTA brought forward early - ${esc(data.ctaReasoning || 'based on the conversation so far')}</div>`
       : '';
+    const ruleCount = campaign ? campaignStyleRules(campaign, stageKey).length : 0;
+    const stageLabel = { connect:'Connection request', m1:'Message 1', m2:'Message 2', cta:'CTA' }[stageKey] || stageKey;
     area.innerHTML = `
       <textarea id="fastActionDraft-${cid}" rows="4" style="width:100%;margin-bottom:8px;">${esc(data.message)}</textarea>
       ${ctaNoteHtml}
+      <div style="width:100%;margin-bottom:8px;padding:8px;border:1px dashed var(--border);border-radius:6px;">
+        <div class="muted" style="font-size:11px;margin-bottom:4px;"><i class="ti ti-message-2-cog"></i> Not right? Steer it — ${esc(action.campaignName)} · ${esc(stageLabel)}${ruleCount ? ` · ${ruleCount} standing rule${ruleCount===1?'':'s'}` : ''}</div>
+        <textarea id="fast-${cid}-steer" rows="2" style="width:100%;" placeholder="e.g. too long and too hedgy, 3 sentences, no 'I might be wrong' caveats"></textarea>
+        <label style="display:flex;gap:6px;align-items:center;font-size:11px;margin-top:5px;">
+          <input type="checkbox" id="fast-${cid}-remember" checked> Remember for ${esc(action.campaignName)} · ${esc(stageLabel)}
+        </label>
+        <button class="btn btn-secondary btn-sm" style="margin-top:6px;" onclick="handleGenerateFastMessage('${cid}')"><i class="ti ti-refresh"></i> Regenerate with steer</button>
+      </div>
       <button class="btn btn-primary btn-sm" onclick="handleCopyAndMarkSent('${cid}')"><i class="ti ti-check"></i> Copy &amp; mark sent</button>
     `;
   } catch(err){
@@ -6735,6 +6758,7 @@ async function hydrateCampaignsFromAirtable(){
         status: f['Status'] || 'Draft',
         ctas: f['CTAs'] || '',
         contentContext: f['Content Context'] || '',
+        styleCorrections: parseCampaignStyleCorrections(f['Style Corrections']),
         conversationHistory: []
       };
     });
@@ -8833,6 +8857,119 @@ function messageNumberForStage(stageKey){
   return { m1:1, m2:2, cta:3 }[stageKey] || 0;
 }
 
+/* ---- Steer box / per-campaign per-stage style corrections ---- */
+
+const STYLE_STAGE_KEYS = ['connect','m1','m2','cta'];
+// Campaign sequence-editor keys -> canonical style-correction bucket keys.
+const SEQ_STAGE_TO_STYLE_BUCKET = { message1:'m1', followUp1:'m2', followUp2:'cta', connect:'connect' };
+
+function parseCampaignStyleCorrections(raw){
+  const out = { connect:[], m1:[], m2:[], cta:[] };
+  if(!raw || !String(raw).trim()) return out;
+  try {
+    const j = JSON.parse(raw);
+    if(j && typeof j === 'object'){
+      STYLE_STAGE_KEYS.forEach(k => { if(Array.isArray(j[k])) out[k] = j[k].map(s=>String(s).trim()).filter(Boolean); });
+    }
+  } catch(e){ /* not JSON yet */ }
+  return out;
+}
+
+function styleBucketKey(stageKeyOrSeqKey){
+  if(!stageKeyOrSeqKey) return null;
+  if(STYLE_STAGE_KEYS.includes(stageKeyOrSeqKey)) return stageKeyOrSeqKey;
+  return SEQ_STAGE_TO_STYLE_BUCKET[stageKeyOrSeqKey] || null;
+}
+
+function campaignStyleRules(campaign, stageKeyOrSeqKey){
+  const bucket = styleBucketKey(stageKeyOrSeqKey);
+  if(!campaign || !bucket) return [];
+  const sc = campaign.styleCorrections || {};
+  return Array.isArray(sc[bucket]) ? sc[bucket] : [];
+}
+
+// After any draft/redraft call that returns an updated styleCorrections
+// blob, fold it back into local campaign state so the standing-rules list
+// and future drafts stay in sync without a full reload.
+function applyStyleCorrectionsToCampaign(campaignId, styleCorrections){
+  if(!styleCorrections) return;
+  const c = state.campaigns.find(x => x.id === campaignId || x.name === campaignId);
+  if(c) c.styleCorrections = Object.assign({ connect:[], m1:[], m2:[], cta:[] }, styleCorrections);
+}
+
+// The shared "Steer this draft" block: a textarea, a remember toggle, and
+// the current standing rules for this campaign + stage with per-rule delete.
+// `ctx` = { campaignId, campaignName, stageKey (canonical or seq key), idPrefix }
+function steerBoxHtml(campaign, stageKeyOrSeqKey, idPrefix, opts){
+  opts = opts || {};
+  const hasCampaign = !!campaign;
+  const rules = campaignStyleRules(campaign, stageKeyOrSeqKey);
+  const bucket = styleBucketKey(stageKeyOrSeqKey) || '';
+  const stageLabel = { connect:'Connection request', m1:'Message 1', m2:'Message 2', cta:'CTA' }[bucket] || bucket;
+  const rulesHtml = rules.length
+    ? rules.map((r,i)=>`<div class="steer-rule" style="display:flex;gap:6px;align-items:flex-start;font-size:11.5px;padding:4px 0;border-bottom:1px solid var(--border);">
+        <span style="flex:1;">${esc(r.replace(/^\d{4}-\d{2}-\d{2}\s*[—-]\s*/,''))}</span>
+        ${hasCampaign ? `<button class="btn btn-ghost btn-sm" style="padding:0 5px;" title="Remove this standing rule" onclick="deleteStyleRule('${esc(campaign.id)}','${bucket}',${i},'${idPrefix}')">&times;</button>` : ''}
+      </div>`).join('')
+    : `<div class="muted" style="font-size:11.5px;">No standing rules for ${esc(stageLabel)} yet.</div>`;
+  return `
+    <div class="field" style="margin-top:12px;padding-top:12px;border-top:1px dashed var(--border);">
+      <label style="display:flex;justify-content:space-between;align-items:center;">
+        <span><i class="ti ti-message-2-cog"></i> Steer this draft</span>
+        <span class="muted" style="font-size:11px;font-weight:400;">${hasCampaign ? esc(campaign.name)+' · '+esc(stageLabel) : 'no campaign - steer applies once, not saved'}</span>
+      </label>
+      <textarea id="${idPrefix}-steer" rows="2" placeholder="e.g. way too long, keep it to 3 sentences. drop the hedging and the 'I could be wrong' stuff."></textarea>
+      <label style="display:flex;gap:6px;align-items:flex-start;font-size:11.5px;margin-top:6px;text-transform:none;letter-spacing:0;${hasCampaign ? '' : 'opacity:.5;'}">
+        <input type="checkbox" id="${idPrefix}-remember" ${hasCampaign ? 'checked' : 'disabled'} style="margin-top:2px;">
+        <span>Remember this and re-teach future <strong>${esc(stageLabel)}</strong> drafts for ${hasCampaign ? esc(campaign.name) : 'this campaign'}</span>
+      </label>
+      <details style="margin-top:8px;">
+        <summary class="muted" style="font-size:11px;cursor:pointer;">Standing style rules (${rules.length})</summary>
+        <div id="${idPrefix}-rules" style="margin-top:6px;">${rulesHtml}</div>
+      </details>
+    </div>`;
+}
+
+function readSteer(idPrefix){
+  const t = document.getElementById(idPrefix+'-steer');
+  const r = document.getElementById(idPrefix+'-remember');
+  return { steer: t ? t.value.trim() : '', rememberSteer: r ? !!r.checked : false };
+}
+
+function renderSteerRules(idPrefix, campaign, stageKeyOrSeqKey){
+  const el = document.getElementById(idPrefix+'-rules');
+  if(!el) return;
+  const rules = campaignStyleRules(campaign, stageKeyOrSeqKey);
+  const bucket = styleBucketKey(stageKeyOrSeqKey) || '';
+  const stageLabel = { connect:'Connection request', m1:'Message 1', m2:'Message 2', cta:'CTA' }[bucket] || bucket;
+  el.innerHTML = rules.length
+    ? rules.map((r,i)=>`<div class="steer-rule" style="display:flex;gap:6px;align-items:flex-start;font-size:11.5px;padding:4px 0;border-bottom:1px solid var(--border);">
+        <span style="flex:1;">${esc(r.replace(/^\d{4}-\d{2}-\d{2}\s*[—-]\s*/,''))}</span>
+        <button class="btn btn-ghost btn-sm" style="padding:0 5px;" title="Remove this standing rule" onclick="deleteStyleRule('${esc(campaign.id)}','${bucket}',${i},'${idPrefix}')">&times;</button>
+      </div>`).join('')
+    : `<div class="muted" style="font-size:11.5px;">No standing rules for ${esc(stageLabel)} yet.</div>`;
+}
+
+async function deleteStyleRule(campaignId, bucket, index, idPrefix){
+  const campaign = state.campaigns.find(c => c.id === campaignId);
+  if(!campaign) return;
+  const current = campaignStyleRules(campaign, bucket).slice();
+  current.splice(index, 1);
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/style-corrections`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ stageKey: bucket, corrections: current })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
+    applyStyleCorrectionsToCampaign(campaign.id, data.styleCorrections);
+    renderSteerRules(idPrefix, campaign, bucket);
+    toast('Standing rule removed', 'success');
+  } catch(err){
+    toast('Could not remove rule: ' + err.message, 'warn');
+  }
+}
+
 function ctaStrategyNote(stageKey){
   const n = parseInt(state.settings.strategy.messagesBeforeCta) || 2;
   const num = messageNumberForStage(stageKey);
@@ -8920,6 +9057,7 @@ function openGenerateModal(cid, stageKey, onDone){
   const c = state.contacts.find(x=>x.id===cid);
   const seq = state.sequences.find(s=>s.id===c.seqId) || state.sequences[0];
   const st = STAGE_META.find(s=>s.key===stageKey);
+  const genModalCampaign = activeCampaignForContact(c) || null;
   const body = `
     <div class="row">
       <div class="field">
@@ -8950,6 +9088,7 @@ function openGenerateModal(cid, stageKey, onDone){
     </div>
     <div class="field"><label>Generated message</label><textarea id="genOutput" rows="6">Generating...</textarea></div>
     <div id="genCtaNote" style="display:none;font-size:12px;color:var(--warning,#b45309);background:var(--warning-bg,#fef3c7);border-radius:6px;padding:7px 10px;margin-top:-4px;"></div>
+    ${steerBoxHtml(genModalCampaign, stageKey, 'gen')}
   `;
   const footer = `
     <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
@@ -8957,7 +9096,7 @@ function openGenerateModal(cid, stageKey, onDone){
     <button class="btn btn-secondary" onclick="copyGeneratedMessage()"><i class="ti ti-copy"></i> Copy</button>
     <button class="btn btn-primary" onclick="saveGeneratedMessage('${cid}','${stageKey}')"><i class="ti ti-check"></i> Save &amp; advance</button>
   `;
-  window.__genCtx = { cid, stageKey, onDone, profileImages: [], convoImages: [] };
+  window.__genCtx = { cid, stageKey, onDone, profileImages: [], convoImages: [], campaignId: genModalCampaign ? genModalCampaign.id : null };
   openModal('Write message — '+st.label, body, footer);
   generateMessageForModal(cid, stageKey);
 }
@@ -9099,6 +9238,8 @@ async function generateMessageForModal(cid, stageKey){
   const enrichment = (window.__enrichmentProfiles && window.__enrichmentProfiles[cid]) || c.enrichment || null;
   const v = state.settings.strategy;
 
+  const { steer, rememberSteer } = readSteer('gen');
+
   let result;
   try {
     const res = await fetch('/api/messages/generate', {
@@ -9110,7 +9251,9 @@ async function generateMessageForModal(cid, stageKey){
         campaign: campaign ? { name: campaign.name, goal: campaign.goal, strategyBrief: campaign.strategyBrief || '' } : null,
         stage: { key: stageKey, label: st.label, messageNumber: messageNumberForStage(stageKey), template },
         voice: { tone: v.tone, connLength: v.connLength, cadence: v.cadence, voiceInstructions: v.voiceInstructions, messagesBeforeCta: v.messagesBeforeCta },
-        images
+        images,
+        steer,
+        rememberSteer
       })
     });
     const data = await res.json();
@@ -9123,6 +9266,15 @@ async function generateMessageForModal(cid, stageKey){
     if(window.__genCtx){
       window.__genCtx.ctaBroughtForward = !!data.ctaBroughtForward;
       window.__genCtx.ctaReasoning = data.ctaReasoning || '';
+    }
+    if(campaign && data.styleCorrections){
+      applyStyleCorrectionsToCampaign(campaign.id, data.styleCorrections);
+      renderSteerRules('gen', campaign, stageKey);
+    }
+    if(steer){
+      const steerEl = document.getElementById('gen-steer');
+      if(steerEl && data.steerRemembered){ steerEl.value = ''; toast('Steer applied and saved as a standing rule', 'success'); }
+      else if(steerEl){ toast('Steer applied to this draft', 'success'); }
     }
   } catch(err){
     console.warn('Message generation unavailable, using local fallback:', err.message);
@@ -10172,6 +10324,7 @@ function openSequenceEditModal(campaignId, stageKey){
       <textarea id="seqEditContent" rows="8">${esc(stage.content||'')}</textarea>
     </div>
     <div id="seqEditAiStatus" class="muted" style="font-size:11.5px;"></div>
+    ${steerBoxHtml(campaign, stageKey, 'seq')}
   `;
   const footer = `
     <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
@@ -10210,6 +10363,8 @@ async function aiRedraftSequenceStage(campaignId, stageKey){
     ? window.__campaignInsights.join(' ')
     : 'no campaign insights run yet for this campaign';
 
+  const { steer, rememberSteer } = readSteer('seq');
+
   let result;
   try {
     const res = await fetch('/api/campaign/redraft-stage', {
@@ -10218,14 +10373,26 @@ async function aiRedraftSequenceStage(campaignId, stageKey){
       body: JSON.stringify({
         campaign: { name: campaign.name, goal: campaign.goal, targetSegmentSummary: campaign.targetSegmentSummary, pitchAngle: campaign.pitchAngle, objectionHandling: campaign.objectionHandling, strategyBrief: campaign.strategyBrief },
         stageLabel: label,
+        stageKey,
         currentType,
         currentContent,
-        historicalNote
+        historicalNote,
+        steer,
+        rememberSteer
       })
     });
     const data = await res.json();
     if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
     result = data.message;
+    if(data.styleCorrections){
+      applyStyleCorrectionsToCampaign(campaign.id, data.styleCorrections);
+      renderSteerRules('seq', campaign, stageKey);
+    }
+    if(steer){
+      const steerEl = document.getElementById('seq-steer');
+      if(steerEl && data.steerRemembered){ steerEl.value = ''; toast('Steer applied and saved as a standing rule', 'success'); }
+      else if(steerEl){ toast('Steer applied to this redraft', 'success'); }
+    }
   } catch(err){
     console.warn('Redraft unavailable, using local fallback:', err.message);
     result = currentContent || 'Following up given where things stand - keen to hear how things are tracking.\n\nTwenty2 Collective';

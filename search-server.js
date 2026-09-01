@@ -3340,11 +3340,23 @@ Guidance:
 app.post('/api/campaign/redraft-stage', async (req, res) => {
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
 
-  const { campaign, stageLabel, currentType, currentContent, historicalNote } = req.body || {};
+  const { campaign, stageLabel, stageKey, currentType, currentContent, historicalNote, steer, rememberSteer } = req.body || {};
   if (!campaign || !campaign.name) return res.status(400).json({ error: 'campaign.name is required' });
   if (!stageLabel) return res.status(400).json({ error: 'stageLabel is required' });
 
   try {
+    // The campaign object in the body may not be saved to Airtable yet, so a
+    // lookup can legitimately miss - style corrections just stay empty and
+    // "remember" is a no-op until the campaign is saved.
+    let campaignRecord = null;
+    try {
+      campaignRecord = await findCampaignRecordByName(campaign.name);
+    } catch (lookupErr) {
+      console.warn('redraft-stage: campaign lookup failed (non-fatal):', lookupErr.message);
+    }
+    const styleCorrections = campaignRecord ? parseStyleCorrections(campaignRecord.fields['Style Corrections']) : emptyStyleCorrections();
+    const stageRef = stageKey || stageLabel;
+
     const prompt = `You are redrafting the "${stageLabel}" step of a LinkedIn outreach sequence for the campaign "${campaign.name}" at Twenty2 Collective, a Perth-based Agile and change consultancy.
 
 Campaign goal: ${campaign.goal || 'not specified'}
@@ -3355,14 +3367,65 @@ Strategy: ${campaign.strategyBrief || 'not specified'}
 Touch type: ${currentType || 'not specified'}
 Current draft: ${currentContent || '(none yet)'}
 
-T2C's historical conversion data for this campaign, factor it in if relevant: ${historicalNote || 'no campaign insights run yet for this campaign'}.
+T2C's historical conversion data for this campaign, factor it in if relevant: ${historicalNote || 'no campaign insights run yet for this campaign'}.${styleCorrectionsPromptText(styleCorrections, stageRef)}${steerPromptText(steer)}
 
 Rewrite this message. UK English, no em dashes, peer to peer tone, one observation and one question, 3-4 sentences, signed off "Twenty2 Collective". Return only the message text, nothing else.`;
 
     const message = await callClaudeText(prompt, 300);
-    res.json({ success: true, message });
+
+    let steerRemembered = false;
+    let updatedCorrections = styleCorrections;
+    if (steer && steer.trim() && rememberSteer && campaignRecord) {
+      try {
+        const r = await appendStyleCorrection(campaignRecord.id, campaignRecord.fields['Style Corrections'], stageRef, steer);
+        steerRemembered = r.saved;
+        updatedCorrections = r.corrections;
+      } catch (saveErr) {
+        console.warn('Could not save style correction (non-fatal):', saveErr.message);
+      }
+    }
+
+    res.json({ success: true, message, steerRemembered, styleCorrections: updatedCorrections });
   } catch (err) {
     console.error('Campaign redraft-stage error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Read / overwrite a campaign's per-stage Style Corrections. The steer box's
+// "remember" toggle appends via the drafting routes; this route is for the
+// manage view - deleting a rule that no longer applies, or clearing a stage.
+// Body: { stageKey, corrections: string[] } replaces exactly that one bucket.
+app.get('/api/campaign/:id/style-corrections', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const record = await findCampaignRecordByName(decodeURIComponent(req.params.id));
+    if (!record) return res.status(404).json({ error: 'Campaign not found' });
+    res.json({ success: true, styleCorrections: parseStyleCorrections(record.fields['Style Corrections']) });
+  } catch (err) {
+    console.error('Get style-corrections error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/campaign/:id/style-corrections', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { stageKey, corrections } = req.body || {};
+  const bucket = styleCorrectionBucketKey(stageKey);
+  if (!bucket) return res.status(400).json({ error: 'Unknown stageKey' });
+  if (!Array.isArray(corrections)) return res.status(400).json({ error: 'corrections must be an array' });
+  try {
+    const record = await findCampaignRecordByName(decodeURIComponent(req.params.id));
+    if (!record) return res.status(404).json({ error: 'Campaign not found' });
+    const merged = parseStyleCorrections(record.fields['Style Corrections']);
+    merged[bucket] = corrections.map(s => String(s).trim()).filter(Boolean).slice(-STYLE_CORRECTIONS_PER_STAGE_CAP);
+    await airtableRequest('PATCH', 'Campaigns', {
+      records: [{ id: record.id, fields: { 'Style Corrections': JSON.stringify(merged) } }],
+      typecast: true
+    });
+    res.json({ success: true, styleCorrections: merged });
+  } catch (err) {
+    console.error('Save style-corrections error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -8120,6 +8183,97 @@ function extractStageTemplate(sequenceTemplatesBlob, messageNumber) {
 // number.
 const STAGE_KEY_FOR_MESSAGE_NUMBER = { 1: 'm1', 2: 'm2', 3: 'cta' };
 
+// ---- Per-campaign, per-stage style corrections ("steer box") ----
+// Marcus types a steer ("stop hedging", "way too long, 3 sentences max")
+// against a specific draft; with "remember" ticked it's appended to the
+// campaign's Style Corrections field, bucketed by stage, and fed back into
+// every future draft for that same campaign + stage as a hard rule. Scoped
+// per campaign so one campaign's voice tuning never leaks into another's,
+// and per stage so an M1 correction doesn't reshape the CTA message.
+const STYLE_CORRECTION_STAGES = ['connect', 'm1', 'm2', 'cta'];
+const STYLE_CORRECTIONS_PER_STAGE_CAP = 12;
+// Campaign sequence-editor stage keys (CAMPAIGN_STAGE_META in the client)
+// map onto the canonical bucket keys used everywhere else.
+const SEQ_EDITOR_STAGE_TO_BUCKET = { message1: 'm1', followUp1: 'm2', followUp2: 'cta', connect: 'connect' };
+
+function emptyStyleCorrections() {
+  return { connect: [], m1: [], m2: [], cta: [] };
+}
+
+function parseStyleCorrections(fieldValue) {
+  const out = emptyStyleCorrections();
+  if (!fieldValue || !String(fieldValue).trim()) return out;
+  try {
+    const j = JSON.parse(fieldValue);
+    if (j && typeof j === 'object') {
+      STYLE_CORRECTION_STAGES.forEach(k => {
+        if (Array.isArray(j[k])) out[k] = j[k].map(s => String(s).trim()).filter(Boolean);
+      });
+    }
+  } catch (e) { /* not JSON yet - treat as empty */ }
+  return out;
+}
+
+function styleCorrectionBucketKey(stageKeyOrLabel) {
+  if (!stageKeyOrLabel) return null;
+  const raw = String(stageKeyOrLabel).trim();
+  if (STYLE_CORRECTION_STAGES.includes(raw)) return raw;
+  if (SEQ_EDITOR_STAGE_TO_BUCKET[raw]) return SEQ_EDITOR_STAGE_TO_BUCKET[raw];
+  const lc = raw.toLowerCase();
+  if (/connect|connection/.test(lc)) return 'connect';
+  if (/message\s*1\b|\bm1\b|^1$/.test(lc)) return 'm1';
+  if (/message\s*2\b|\bm2\b|follow\s*up\s*1|^2$/.test(lc)) return 'm2';
+  if (/message\s*3\b|\bm3\b|\bcta\b|follow\s*up\s*2|invite|^3$/.test(lc)) return 'cta';
+  return null;
+}
+
+// The prompt block handed to the drafting model. Corrections are framed as
+// the strongest style signal available - they came straight from Marcus
+// rejecting a real draft - so they beat the generic voice rules on conflict.
+function styleCorrectionsPromptText(corrections, stageKeyOrLabel) {
+  const bucket = styleCorrectionBucketKey(stageKeyOrLabel);
+  const list = (bucket && corrections && corrections[bucket]) ? corrections[bucket] : [];
+  if (!list.length) return '';
+  return `\n\nSTYLE CORRECTIONS for this exact campaign and message stage - Marcus gave these after rejecting past drafts here. They override the generic voice rules wherever they conflict. Follow every one:\n${list.map(s => `- ${s.replace(/^\d{4}-\d{2}-\d{2}\s*[—-]\s*/, '')}`).join('\n')}`;
+}
+
+// Whether the Campaigns table actually has the Style Corrections field yet -
+// same graceful-degradation pattern as airtableWriteAllowingMissingCtaFields.
+let styleCorrectionsFieldMissing = false;
+
+async function appendStyleCorrection(campaignRecordId, existingFieldValue, stageKeyOrLabel, steerText) {
+  const bucket = styleCorrectionBucketKey(stageKeyOrLabel);
+  const text = (steerText || '').trim();
+  if (!campaignRecordId || !bucket || !text) return { saved: false, corrections: parseStyleCorrections(existingFieldValue) };
+  if (styleCorrectionsFieldMissing) return { saved: false, corrections: parseStyleCorrections(existingFieldValue) };
+
+  const corrections = parseStyleCorrections(existingFieldValue);
+  const entry = `${new Date().toISOString().slice(0, 10)} — ${text}`;
+  corrections[bucket] = [...corrections[bucket], entry].slice(-STYLE_CORRECTIONS_PER_STAGE_CAP);
+
+  try {
+    await airtableRequest('PATCH', 'Campaigns', {
+      records: [{ id: campaignRecordId, fields: { 'Style Corrections': JSON.stringify(corrections) } }],
+      typecast: true
+    });
+    return { saved: true, corrections };
+  } catch (err) {
+    if (/Unknown field name|UNKNOWN_FIELD_NAME|Style Corrections/i.test(err.message)) {
+      console.warn('Campaigns."Style Corrections" field not found - style-corrections learning disabled until it is added.');
+      styleCorrectionsFieldMissing = true;
+      return { saved: false, corrections };
+    }
+    throw err;
+  }
+}
+
+// The one-off steer for THIS draft (whether or not it gets remembered).
+function steerPromptText(steerText) {
+  const t = (steerText || '').trim();
+  if (!t) return '';
+  return `\n\nMARCUS'S STEER FOR THIS DRAFT (highest priority - apply it even if it contradicts everything above): ${t}`;
+}
+
 // "Winning feedback loop" for fast-action drafting: before writing message N
 // for this contact, shows Claude how message N has actually landed with
 // everyone else in this campaign so far, so the draft can lean into whatever
@@ -8188,7 +8342,7 @@ function campaignMessagePerformanceNote(touchPoints, campaignName, messageNumber
 app.post('/api/messages/generate', async (req, res) => {
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
 
-  const { contact, enrichment, campaign, stage, voice, images } = req.body || {};
+  const { contact, enrichment, campaign, stage, voice, images, steer, rememberSteer } = req.body || {};
   if (!contact || !contact.name) return res.status(400).json({ error: 'contact.name is required' });
   if (!stage || !stage.key) return res.status(400).json({ error: 'stage.key is required' });
 
@@ -8228,33 +8382,48 @@ app.post('/api/messages/generate', async (req, res) => {
       console.warn('Could not load contact conversation history for message generation (non-fatal):', lookupErr.message);
     }
 
-    // CTAs live on the Campaigns record itself (Campaigns.CTAs), not on the
-    // lightweight {name, goal, strategyBrief} object the client sends up as
-    // `campaign` - only worth the extra fetch at the CTA stage, where
-    // there's actually a choice to make.
-    let ctaOptions = [];
-    if (campaign && campaign.name && stage.key === 'cta') {
+    // The campaign record carries both this campaign's CTAs (Campaigns.CTAs)
+    // and its per-stage Style Corrections - resolve it once when the client
+    // says this contact is in a campaign, rather than only at the CTA stage.
+    let campaignRecord = null;
+    if (campaign && campaign.name) {
       try {
-        const campaignRecord = await findCampaignRecordByName(campaign.name);
-        if (campaignRecord) ctaOptions = parseCtaList(campaignRecord.fields['CTAs']);
-      } catch (ctaErr) {
-        console.warn('Could not load campaign CTAs for message generation (non-fatal):', ctaErr.message);
+        campaignRecord = await findCampaignRecordByName(campaign.name);
+      } catch (lookupErr) {
+        console.warn('Could not load campaign record for message generation (non-fatal):', lookupErr.message);
       }
     }
+    const ctaOptions = (campaignRecord && stage.key === 'cta') ? parseCtaList(campaignRecord.fields['CTAs']) : [];
+    const styleCorrections = campaignRecord ? parseStyleCorrections(campaignRecord.fields['Style Corrections']) : emptyStyleCorrections();
 
-    const promptText = `Template for this stage:\n${stage.template || ''}\n\nContact: ${contact.name}, ${contact.role || ''} at ${contact.company || ''}. Sequence stage: ${stage.label || stage.key} (message ${stage.messageNumber || 'n/a'} in the sequence). Profile notes: ${contact.notes || 'none'}.${conversationNote}\n\n${ctaStrategyNoteText(stage.key, stage.messageNumber, voice && voice.messagesBeforeCta)}${ctaOptionsPromptText(ctaOptions)}\n\n${voiceRulesPromptText(voice)}${imageNote}${campaignNote}${enrichmentNote}\n\nWrite the actual message for this specific contact, replacing placeholders naturally - if the conversation so far shows they've already replied, respond to what they actually said rather than reintroducing yourself.${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${DRAFT_JSON_CONTRACT}`;
+    const promptText = `Template for this stage:\n${stage.template || ''}\n\nContact: ${contact.name}, ${contact.role || ''} at ${contact.company || ''}. Sequence stage: ${stage.label || stage.key} (message ${stage.messageNumber || 'n/a'} in the sequence). Profile notes: ${contact.notes || 'none'}.${conversationNote}\n\n${ctaStrategyNoteText(stage.key, stage.messageNumber, voice && voice.messagesBeforeCta)}${ctaOptionsPromptText(ctaOptions)}\n\n${voiceRulesPromptText(voice)}${imageNote}${campaignNote}${enrichmentNote}${styleCorrectionsPromptText(styleCorrections, stage.key)}${steerPromptText(steer)}\n\nWrite the actual message for this specific contact, replacing placeholders naturally - if the conversation so far shows they've already replied, respond to what they actually said rather than reintroducing yourself.${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${DRAFT_JSON_CONTRACT}`;
 
     const content = imgs.map(img => ({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.base64 } }));
     content.push({ type: 'text', text: promptText });
 
     const rawMessage = await callClaudeText(content, 800);
     const envelope = parseDraftEnvelope(rawMessage);
-    const message = await humanizePlainText(envelope.message);
+    const message = await humanizeOutreachMessage(envelope.message);
     const ctaBroughtForward = ctaBroughtForwardEarly(stage.messageNumber, voice && voice.messagesBeforeCta, envelope.ctaIncluded);
     // Only surface/store the reasoning when the draft actually brought the
     // CTA forward - an on-cadence "I didn't pitch because..." line is noise.
     const ctaReasoning = ctaBroughtForward ? envelope.ctaReasoning : '';
-    res.json({ success: true, message, ctaBroughtForward, ctaReasoning });
+
+    // Persist the steer as a standing correction for this campaign + stage
+    // when Marcus ticked "remember" - future drafts here then inherit it.
+    let steerRemembered = false;
+    let updatedCorrections = styleCorrections;
+    if (steer && steer.trim() && rememberSteer && campaignRecord) {
+      try {
+        const r = await appendStyleCorrection(campaignRecord.id, campaignRecord.fields['Style Corrections'], stage.key, steer);
+        steerRemembered = r.saved;
+        updatedCorrections = r.corrections;
+      } catch (saveErr) {
+        console.warn('Could not save style correction (non-fatal):', saveErr.message);
+      }
+    }
+
+    res.json({ success: true, message, ctaBroughtForward, ctaReasoning, steerRemembered, styleCorrections: updatedCorrections });
   } catch (err) {
     console.error('Message generate error:', err.message);
     res.status(500).json({ error: err.message });
@@ -8295,6 +8464,7 @@ app.post('/api/campaign/:id/contacts/:contactId/generate-message', async (req, r
 
   const campaignName = decodeURIComponent(req.params.id);
   const contactId = req.params.contactId;
+  const { steer, rememberSteer } = req.body || {};
 
   try {
     const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
@@ -8346,6 +8516,7 @@ app.post('/api/campaign/:id/contacts/:contactId/generate-message', async (req, r
     const template = extractStageTemplate(camp['Sequence Templates'], messageNumber);
     let ctaOptions = [];
     if (stageKey === 'cta') ctaOptions = parseCtaList(camp['CTAs']);
+    const styleCorrections = parseStyleCorrections(camp['Style Corrections']);
 
     // The offer used to be handed over with an unconditional "weave this in
     // naturally" for every message >= 2, which pushed the pitch into message
@@ -8371,13 +8542,13 @@ ${offerNote}
 
 ${ctaStrategyNoteText(stageKey, messageNumber, voice.messagesBeforeCta)}${ctaOptionsPromptText(ctaOptions)}
 
-${voiceRulesPromptText(voice)}
+${voiceRulesPromptText(voice)}${styleCorrectionsPromptText(styleCorrections, stageKey)}${steerPromptText(steer)}
 
 Write only message ${messageNumber} in this contact's sequence for this specific campaign, following on naturally from the conversation so far (if any) - if the conversation shows they've already replied, respond to what they actually said rather than reintroducing yourself.${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${examplesNote}${performanceNote}${DRAFT_JSON_CONTRACT}`;
 
     const rawMessage = await callClaudeText(promptText, 800);
     const envelope = parseDraftEnvelope(rawMessage);
-    const message = await humanizePlainText(envelope.message);
+    const message = await humanizeOutreachMessage(envelope.message);
     const ctaBroughtForward = ctaBroughtForwardEarly(messageNumber, voice.messagesBeforeCta, envelope.ctaIncluded);
     const ctaReasoning = ctaBroughtForward ? envelope.ctaReasoning : '';
     await airtableWriteAllowingMissingCtaFields('PATCH', CAMPAIGN_CONTACTS_TABLE, {
@@ -8389,7 +8560,19 @@ Write only message ${messageNumber} in this contact's sequence for this specific
       typecast: true
     });
 
-    res.json({ success: true, message, messageNumber, stage, ctaBroughtForward, ctaReasoning });
+    let steerRemembered = false;
+    let updatedCorrections = styleCorrections;
+    if (steer && steer.trim() && rememberSteer) {
+      try {
+        const r = await appendStyleCorrection(campaignRecord.id, camp['Style Corrections'], stageKey, steer);
+        steerRemembered = r.saved;
+        updatedCorrections = r.corrections;
+      } catch (saveErr) {
+        console.warn('Could not save style correction (non-fatal):', saveErr.message);
+      }
+    }
+
+    res.json({ success: true, message, messageNumber, stage, stageKey, ctaBroughtForward, ctaReasoning, steerRemembered, styleCorrections: updatedCorrections });
   } catch (err) {
     console.error('Generate message error:', err.message);
     res.status(500).json({ error: err.message });
@@ -10694,6 +10877,54 @@ async function runPlainTextHumanizerChain(text) {
     console.warn('Plain-text humanizer pass 3 failed - using pass 1 output:', err.message);
     return pass1;
   }
+}
+
+// Outreach-only humanizer. The three-pass humanizePlainText chain above is
+// tuned for long-form content (blog, newsletter, repurposed LinkedIn posts):
+// its audit pass flags "endings that wrap up too neatly" and "missing asides
+// / mixed feelings / unresolved tension" as defects, and its final pass is
+// told to "add genuine asides and self-corrections", "add mixed feelings or
+// unresolved tension" and make sentence length "vary dramatically... some
+// long winding ones" - with no length ceiling. Run on a tight 4-sentence
+// LinkedIn DM that produced rambling, over-hedged drafts (see the "I could be
+// wrong about that. I sometimes project my own experience..." class of
+// output). This variant keeps only the safe cleanups - AI vocabulary, em/en
+// dashes, promotional puffery, participle openers, vague attributions,
+// fake-candid hooks, filler phrases - and is a SINGLE pass that must not add
+// sentences, hedges, caveats or new points, and must hold the message to the
+// voice rules' 3-to-4-sentence / one-question shape. Content routes keep
+// humanizePlainText unchanged.
+const OUTREACH_HUMANIZER_SYSTEM_PROMPT = `You are lightly editing a short outbound LinkedIn outreach message so it does not read as AI-written. This is a peer-to-peer direct message, not an article.
+
+Fix only these, and only where they actually occur:
+- AI vocabulary: utilise -> use, leverage -> use, delve -> look into, foster -> build, demonstrate -> show, facilitate -> help, robust -> strong, comprehensive -> full, navigate -> work through, tapestry/landscape/realm -> plain words
+- Inflated or promotional language: drop puffery, superlatives and marketing speak; no "testament to", "stands as", "pivotal", "crucial", "underscores"
+- Em dashes and en dashes: replace with commas, full stops or a reworded sentence
+- Sentences that open with a present participle ("Looking at", "Navigating", "Drawing on", "Having spent")
+- Vague attributions: "many leaders say", "studies show", "it is widely believed" - cut or make specific
+- Fake-candid hooks: "Honestly?", "The truth is", "Let's be real"
+- Filler: "In today's world", "at the end of the day", "it is worth noting", "needless to say"
+- Obvious AI parallelisms: "not just X, but Y"
+
+Hard rules:
+- Keep the message to 3 to 4 sentences. Do NOT add sentences, caveats, hedges, asides, self-corrections, disclaimers, or new points.
+- Do NOT add "mixed feelings", "unresolved tension", or deliberately varied sentence length. Leave the structure alone.
+- Keep every name, company, link and the sign-off exactly as they are. Keep any single question the message asks.
+- If the message already reads naturally, return it essentially unchanged.
+- Plain text only, no markdown, no preamble. Return only the edited message.`;
+
+async function humanizeOutreachMessage(text) {
+  if (!text || !text.trim()) return text;
+  let out = text;
+  try {
+    const raw = await callClaudeMessages(`Message to edit:\n\n${text}`, 700, OUTREACH_HUMANIZER_SYSTEM_PROMPT);
+    const cleaned = stripCodeFences(raw).trim();
+    if (cleaned) out = cleaned;
+    else console.warn('Outreach humanizer returned nothing - keeping the original draft');
+  } catch (err) {
+    console.warn('Outreach humanizer failed - keeping the original draft:', err.message);
+  }
+  return stripEnEmDashes(out);
 }
 
 async function generateSeoPostForKeyword(keywordRecord) {
