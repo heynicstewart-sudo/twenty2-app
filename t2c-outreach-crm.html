@@ -10177,33 +10177,73 @@ function renderCampaignRoadmapTab(campaign){
   `;
 }
 
-// "Repair sync" - one-shot cleanup of this campaign's Campaign Contacts
-// junction rows: deletes rows that link no contact and de-duplicates any
-// contact that ended up with more than one row (keeping the furthest-along
-// one). Also backfills the campaign's primary name field. Safe to run any
-// time; a no-op once the table is clean.
+// "Repair sync" - cleans up this campaign's Campaign Contacts junction rows.
+// It NEVER touches a Contact record and never deletes a properly-linked,
+// non-duplicated row. It (a) re-links or removes rows that link no contact,
+// (b) collapses any contact with more than one row down to the furthest-
+// along one, merging the useful fields up first. Runs a dry-run and shows
+// the exact plan before changing anything.
 async function repairCampaignContacts(campaignId){
   const campaign = state.campaigns.find(c => c.id === campaignId);
   if(!campaign) return;
   const campaignName = campaign.name;
   const btn = document.getElementById('repairCcBtn');
-  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Repairing...'; }
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Checking...'; }
   try {
-    const res = await fetch(`/api/campaign/${encodeURIComponent(campaignName)}/repair-contacts`, { method:'POST' });
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaignName)}/repair-contacts`, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ dryRun:true })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Check failed');
+    const p = data.plan;
+
+    const nothingToDo = !p.primaryNameBackfill && !p.linklessRelinked.length && !p.linklessDeleted.length && !p.duplicateContacts.length;
+    if(nothingToDo){ toast('Junction table is already clean, nothing to repair.', 'success'); return; }
+
+    const lines = [];
+    if(p.primaryNameBackfill) lines.push(`<li>Set the campaign's name field (currently blank, shows as "Unnamed record")</li>`);
+    if(p.linklessRelinked.length) lines.push(`<li><strong>${p.linklessRelinked.length}</strong> row(s) missing their contact link will be <strong>re-linked</strong> to the right contact: ${esc(p.linklessRelinked.slice(0,8).join(', '))}${p.linklessRelinked.length>8?'…':''}</li>`);
+    if(p.linklessDeleted.length) lines.push(`<li><strong>${p.linklessDeleted.length}</strong> row(s) that link to nobody and match no contact will be <strong>deleted</strong> (no progress is stored on these): ${esc(p.linklessDeleted.slice(0,8).map(d=>d.contactName).join(', '))}${p.linklessDeleted.length>8?'…':''}</li>`);
+    if(p.duplicateContacts.length){
+      const dl = p.duplicateContacts.map(d=>`${esc(d.contact)} (keeps "${esc(d.keepStage)}"${d.fieldsMergedUp.length?`, merges up: ${esc(d.fieldsMergedUp.join(', '))}`:''})`).join('<br>');
+      lines.push(`<li><strong>${p.duplicateContacts.length}</strong> contact(s) have more than one row. The furthest-along row is kept, its data topped up from the others, then the extras removed:<div style="margin-top:4px;font-size:11.5px;color:var(--muted);">${dl}</div></li>`);
+    }
+
+    const body = `
+      <p style="font-size:12.5px;margin-bottom:8px;">This will not delete any contact, and won't touch a contact that has a single clean row. Here's exactly what it will do for <strong>${esc(p.campaign)}</strong>:</p>
+      <ul style="font-size:12.5px;line-height:1.5;padding-left:18px;margin:0;">${lines.join('')}</ul>
+      <p class="muted" style="font-size:11.5px;margin-top:10px;">${p.rowsToDelete} junction row(s) deleted, ${p.contactsAffected} contact(s) affected. ${p.totalRows} rows before.</p>`;
+    const footer = `
+      <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" id="repairGoBtn" onclick="runRepairCampaignContacts('${campaignId}')"><i class="ti ti-check"></i> Run repair</button>`;
+    openModal('Repair sync — ' + p.campaign, body, footer);
+  } catch(err){
+    toast('Could not check: ' + err.message, 'warn');
+  } finally {
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-tool"></i> Repair sync'; }
+  }
+}
+
+async function runRepairCampaignContacts(campaignId){
+  const campaign = state.campaigns.find(c => c.id === campaignId);
+  if(!campaign) return;
+  const go = document.getElementById('repairGoBtn');
+  if(go){ go.disabled = true; go.innerHTML = '<i class="ti ti-loader-2"></i> Repairing...'; }
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/repair-contacts`, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({})
+    });
     const data = await res.json();
     if(!res.ok || !data.success) throw new Error(data.error || 'Repair failed');
-    const parts = [];
-    if(data.linklessDeleted) parts.push(`${data.linklessDeleted} unlinked row${data.linklessDeleted===1?'':'s'}`);
-    if(data.duplicatesDeleted) parts.push(`${data.duplicatesDeleted} duplicate${data.duplicatesDeleted===1?'':'s'}`);
-    toast(parts.length ? `Cleaned up ${parts.join(' and ')}. ${data.remaining} contacts now.` : 'Junction table already clean.', 'success');
+    closeModal();
+    toast(`Done — re-linked ${data.relinked}, merged ${data.merged}, removed ${data.deleted}. ${data.remaining} rows now.`, 'success');
     window.__campaignFunnels = window.__campaignFunnels || {};
     delete window.__campaignFunnels[campaignId];
     if(window.__campaignSequenceStages) delete window.__campaignSequenceStages[campaignId];
     renderPage();
   } catch(err){
-    toast('Could not repair: ' + err.message, 'warn');
-  } finally {
-    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-tool"></i> Repair sync'; }
+    toast('Repair failed: ' + err.message, 'warn');
+    if(go){ go.disabled = false; go.innerHTML = '<i class="ti ti-check"></i> Run repair'; }
   }
 }
 

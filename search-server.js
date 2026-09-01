@@ -7940,62 +7940,147 @@ app.post('/api/campaign/:id/contacts/link', async (req, res) => {
 // grid-search linker could leave behind before the guards in
 // getOrCreateCampaignContactRow landed:
 //  1. Linkless rows - a bad/undefined contactId was silently dropped by
-//     Airtable on write, leaving a row with a Name but no Contact link that
-//     maps to nobody.
+//     Airtable on write, leaving a row with a Name but no Contact link.
 //  2. Duplicate rows - the in-memory rows snapshot wasn't updated after a
 //     create, so a contact found for several grid cells in one run got a
 //     junction row each time.
-// Deletes every linkless row, then collapses each contact's rows down to the
-// single furthest-along one (by funnel rung, then Stage History length).
-// Excluded rows are always kept as-is - they're a deliberate soft-removal.
+//
+// It is deliberately loss-averse:
+//  - A Contact record is NEVER touched - only rows in the junction table.
+//  - A linkless row is only deleted if its named contact already has a
+//    proper row in this campaign (nothing to preserve). If the contact
+//    exists but has no proper row, the link is BACKFILLED onto the linkless
+//    row instead of deleting it. If no such contact exists at all, the row
+//    maps to nobody and is deleted.
+//  - For a duplicated contact, the furthest-along row is kept and every
+//    useful field from the other rows (sent message, connection date, draft
+//    outcome, CTA notes, sentiment, earliest added date, the union of stage
+//    history) is merged onto it BEFORE the extras are deleted.
+//  - Excluded rows are left exactly as they are.
+//
+// POST body { dryRun: true } returns the full plan without changing anything.
+const REPAIR_MERGE_FIELDS = ['Final Message Sent', 'Original Message Draft', 'Next Message Draft', 'Connection Sent Date', 'Draft Outcome', 'Sentiment', 'CTA Judgement Note', 'Skip Reason', 'Skip Note'];
+
 app.post('/api/campaign/:id/repair-contacts', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   const campaignName = decodeURIComponent(req.params.id);
+  const dryRun = !!(req.body && req.body.dryRun);
 
   try {
     const campaignRecord = await findCampaignRecordByName(campaignName);
     if (!campaignRecord) return res.status(404).json({ error: `Campaign "${campaignName}" not found` });
-
-    // Backfill the primary "Campaign Name" field while we're here - the
-    // reason older app-created campaigns show as "Unnamed record" in every
-    // linked-record view.
     const canonicalName = campaignRecord.fields['Name'] || campaignRecord.fields['Campaign Name'] || campaignName;
-    if ((campaignRecord.fields['Campaign Name'] || '') !== canonicalName) {
-      await airtableRequest('PATCH', 'Campaigns', { records: [{ id: campaignRecord.id, fields: { 'Campaign Name': canonicalName } }], typecast: true });
-    }
+    const primaryNeedsBackfill = (campaignRecord.fields['Campaign Name'] || '') !== canonicalName;
 
     const allRows = await fetchCampaignContactsRows();
     const rows = allRows.filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id));
-
     const linkless = rows.filter(r => !((r.fields['Contact'] || [])[0]));
     const linked = rows.filter(r => (r.fields['Contact'] || [])[0]);
 
-    // Group linked rows by contact id; anything past the first is a dup.
+    const linkedContactIds = new Set(linked.map(r => (r.fields['Contact'] || [])[0]));
+
+    const rowScore = r => {
+      const stage = normalizeSequenceStage(r.fields['Sequence Stage']);
+      let rung = ladderRung(stage);
+      parseStageHistory(r.fields['Stage History']).forEach(h => { const x = ladderRung(h.stage); if (x > rung) rung = x; });
+      if (OFF_LADDER_STAGES.has(stage) && rung < 0) rung = 0.5;
+      return rung * 1000 + (r.fields['Stage History'] || '').length;
+    };
+
+    // --- Plan the linkless rows ---
+    const backfills = [];   // { rowId, contactId, contactName } - set the link
+    const linklessDeletes = []; // { rowId, contactName, reason }
+    for (const r of linkless) {
+      const nm = (r.fields['Name'] || '');
+      const contactName = nm.includes(' — ') ? nm.slice(0, nm.lastIndexOf(' — ')).trim() : nm.trim();
+      let contactRecord = null;
+      if (contactName) {
+        try { contactRecord = await findRecordByFieldName('Contacts', 'Full Name', contactName); } catch (e) { /* leave null */ }
+      }
+      if (contactRecord && !linkedContactIds.has(contactRecord.id)) {
+        backfills.push({ rowId: r.id, contactId: contactRecord.id, contactName });
+        linkedContactIds.add(contactRecord.id); // so a second linkless row for the same person still gets deleted, not double-linked
+      } else {
+        linklessDeletes.push({ rowId: r.id, contactName: contactName || '(no name)', reason: contactRecord ? 'contact already has a row in this campaign' : 'no matching contact exists' });
+      }
+    }
+
+    // --- Plan the duplicates ---
     const byContact = new Map();
     linked.forEach(r => {
       const cid = (r.fields['Contact'] || [])[0];
       if (!byContact.has(cid)) byContact.set(cid, []);
       byContact.get(cid).push(r);
     });
-
-    const rowScore = r => {
-      const stage = normalizeSequenceStage(r.fields['Sequence Stage']);
-      let rung = ladderRung(stage);
-      parseStageHistory(r.fields['Stage History']).forEach(h => { const x = ladderRung(h.stage); if (x > rung) rung = x; });
-      // Excluded/Lost/Timed Out shouldn't beat a real ladder position, but
-      // should beat a bare "Found".
-      if (OFF_LADDER_STAGES.has(stage) && rung < 0) rung = 0.5;
-      return rung * 1000 + (r.fields['Stage History'] || '').length;
-    };
-
-    const dupRowIds = [];
+    const dupPlans = []; // { keepRowId, contactName, mergedFields:{}, deleteRowIds:[] }
     for (const [, group] of byContact) {
       if (group.length < 2) continue;
       group.sort((a, b) => rowScore(b) - rowScore(a));
-      group.slice(1).forEach(r => dupRowIds.push(r.id));
+      const keep = group[0];
+      const losers = group.slice(1);
+      const merged = {};
+      // Fill any field the survivor is missing from a loser that has it.
+      REPAIR_MERGE_FIELDS.forEach(f => {
+        if (keep.fields[f]) return;
+        const donor = losers.find(l => l.fields[f]);
+        if (donor) merged[f] = donor.fields[f];
+      });
+      // CTA Brought Forward: true wins.
+      if (!keep.fields['CTA Brought Forward'] && losers.some(l => l.fields['CTA Brought Forward'])) merged['CTA Brought Forward'] = true;
+      // Added Date: keep the earliest across the group.
+      const dates = group.map(r => r.fields['Added Date']).filter(Boolean).sort();
+      if (dates[0] && dates[0] !== keep.fields['Added Date']) merged['Added Date'] = dates[0];
+      // Stage History: union of all lines, chronological, deduped.
+      const histLines = [];
+      const seen = new Set();
+      group.map(r => r.fields['Stage History'] || '').join('\n').split('\n').map(s => s.trim()).filter(Boolean).forEach(line => {
+        if (!seen.has(line)) { seen.add(line); histLines.push(line); }
+      });
+      const unionHist = histLines.sort().join('\n');
+      if (unionHist && unionHist !== (keep.fields['Stage History'] || '')) merged['Stage History'] = unionHist;
+
+      dupPlans.push({
+        keepRowId: keep.id,
+        contactName: (keep.fields['Name'] || '').split(' — ')[0],
+        keepStage: normalizeSequenceStage(keep.fields['Sequence Stage']),
+        mergedFieldNames: Object.keys(merged),
+        _merged: merged,
+        deleteRowIds: losers.map(l => l.id)
+      });
     }
 
-    const toDelete = [...linkless.map(r => r.id), ...dupRowIds];
+    const plan = {
+      campaign: canonicalName,
+      primaryNameBackfill: primaryNeedsBackfill,
+      totalRows: rows.length,
+      linklessRowsFound: linkless.length,
+      linklessRelinked: backfills.map(b => b.contactName),
+      linklessDeleted: linklessDeletes,
+      duplicateContacts: dupPlans.map(d => ({ contact: d.contactName, keepStage: d.keepStage, extraRowsRemoved: d.deleteRowIds.length, fieldsMergedUp: d.mergedFieldNames })),
+      rowsToDelete: linklessDeletes.length + dupPlans.reduce((n, d) => n + d.deleteRowIds.length, 0),
+      contactsAffected: 0
+    };
+    plan.contactsAffected = backfills.length + dupPlans.length;
+
+    if (dryRun) return res.json({ success: true, dryRun: true, plan });
+
+    // --- Execute ---
+    if (primaryNeedsBackfill) {
+      await airtableRequest('PATCH', 'Campaigns', { records: [{ id: campaignRecord.id, fields: { 'Campaign Name': canonicalName } }], typecast: true });
+    }
+    // Backfill links onto salvageable linkless rows.
+    for (let i = 0; i < backfills.length; i += 10) {
+      await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, {
+        records: backfills.slice(i, i + 10).map(b => ({ id: b.rowId, fields: { 'Contact': [b.contactId] } })),
+        typecast: true
+      });
+    }
+    // Merge donor fields onto each survivor, then delete the losers.
+    const patchSurvivors = dupPlans.filter(d => Object.keys(d._merged).length).map(d => ({ id: d.keepRowId, fields: d._merged }));
+    for (let i = 0; i < patchSurvivors.length; i += 10) {
+      await airtableWriteAllowingMissingCtaFields('PATCH', CAMPAIGN_CONTACTS_TABLE, { records: patchSurvivors.slice(i, i + 10), typecast: true });
+    }
+    const toDelete = [...linklessDeletes.map(d => d.rowId), ...dupPlans.flatMap(d => d.deleteRowIds)];
     let deleted = 0;
     for (let i = 0; i < toDelete.length; i += 10) {
       const batch = toDelete.slice(i, i + 10);
@@ -8007,15 +8092,7 @@ app.post('/api/campaign/:id/repair-contacts', async (req, res) => {
       else console.warn('repair-contacts delete batch failed:', await resp.text());
     }
 
-    res.json({
-      success: true,
-      campaign: canonicalName,
-      totalRows: rows.length,
-      linklessDeleted: linkless.length,
-      duplicatesDeleted: dupRowIds.length,
-      deleted,
-      remaining: rows.length - deleted
-    });
+    res.json({ success: true, plan, relinked: backfills.length, merged: patchSurvivors.length, deleted, remaining: rows.length - deleted });
   } catch (err) {
     console.error('Campaign repair-contacts error:', err.message);
     res.status(500).json({ error: err.message });
