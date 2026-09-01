@@ -14970,11 +14970,12 @@ async function generateServicePageQueueItem(id){
       keyword: data.keyword || (q.service + ' ' + q.location),
       title: data.title, html: data.html, metaTitle: data.metaTitle, metaDescription: data.metaDescription,
       publishedUrl: data.url, linkedInDraft: data.linkedInDraft || '',
-      gscSubmitted: data.gscSubmitted, usedCustomVoiceProfile: data.usedCustomVoiceProfile
+      gscSubmitted: data.gscSubmitted, usedCustomVoiceProfile: data.usedCustomVoiceProfile, linkWarning: data.linkWarning || null
     };
     window.__seoSitemap = undefined;
     loadSeoSitemap(true);
     toast('Service page generated and sent to Framer as a draft', 'success');
+    if(data.linkWarning) toast(data.linkWarning, 'warn');
     renderPage();
   } catch(err){
     q.status = prevStatus;
@@ -15026,6 +15027,7 @@ function renderSeoServicePreviewPanel(){
     <div class="card">
       ${p.usedCustomVoiceProfile === true ? `<div class="muted" style="font-size:11.5px;margin-bottom:10px;"><i class="ti ti-circle-check" style="color:#2f9e44;"></i> Generated using your saved SEO Voice Profile</div>` : ''}
       ${p.usedCustomVoiceProfile === false ? `<div class="muted" style="font-size:11.5px;margin-bottom:10px;"><i class="ti ti-alert-triangle" style="color:#a1701c;"></i> Generated using T2C's default voice profile</div>` : ''}
+      ${p.linkWarning ? `<div style="font-size:11.5px;margin-bottom:10px;color:#a1701c;background:rgba(161,112,28,.08);border:1px solid rgba(161,112,28,.25);border-radius:6px;padding:7px 10px;"><i class="ti ti-link-off"></i> ${esc(p.linkWarning)}</div>` : ''}
       <div class="field"><label>Keyword</label><input value="${esc(p.keyword)}" disabled></div>
       <div class="field"><label>Title</label><input id="seoServicePreviewTitle" value="${esc(p.title)}"></div>
       <div class="field"><label>Meta title <span class="muted">(${(p.metaTitle||'').length}/60)</span></label><input id="seoServicePreviewMetaTitle" value="${esc(p.metaTitle)}"></div>
@@ -15348,9 +15350,10 @@ async function generateSeoPost(id){
     window.__seoPreview = {
       keywordId: id, keyword: k ? k.keyword : '',
       title: data.title, html: data.html, metaTitle: data.metaTitle, metaDescription: data.metaDescription,
-      status: 'Generated', usedCustomVoiceProfile: data.usedCustomVoiceProfile
+      status: 'Generated', usedCustomVoiceProfile: data.usedCustomVoiceProfile, linkWarning: data.linkWarning || null
     };
     toast('Post generated', 'success');
+    if(data.linkWarning) toast(data.linkWarning, 'warn');
     renderPage();
   } catch(err){
     if(k) k.status = 'Queued';
@@ -15386,6 +15389,7 @@ function renderSeoPreviewPanel(){
     <div class="card">
       ${p.usedCustomVoiceProfile === true ? `<div class="muted" style="font-size:11.5px;margin-bottom:10px;"><i class="ti ti-circle-check" style="color:#2f9e44;"></i> Generated using your saved SEO Voice Profile</div>` : ''}
       ${p.usedCustomVoiceProfile === false ? `<div class="muted" style="font-size:11.5px;margin-bottom:10px;"><i class="ti ti-alert-triangle" style="color:#a1701c;"></i> Generated using T2C's default voice profile - no custom profile was saved at generation time</div>` : ''}
+      ${p.linkWarning ? `<div style="font-size:11.5px;margin-bottom:10px;color:#a1701c;background:rgba(161,112,28,.08);border:1px solid rgba(161,112,28,.25);border-radius:6px;padding:7px 10px;"><i class="ti ti-link-off"></i> ${esc(p.linkWarning)}</div>` : ''}
       <div class="field"><label>Title</label><input id="seoPreviewTitle" value="${esc(p.title)}"></div>
       <div class="field"><label>Meta title <span class="muted">(${(p.metaTitle||'').length}/60)</span></label><input id="seoPreviewMetaTitle" value="${esc(p.metaTitle)}"></div>
       <div class="field"><label>Meta description <span class="muted">(${(p.metaDescription||'').length}/160)</span></label><textarea id="seoPreviewMetaDesc" rows="2">${esc(p.metaDescription)}</textarea></div>
@@ -15452,10 +15456,11 @@ async function regenerateSeoPreview(){
     });
     const data = await res.json();
     if(!res.ok || !data.success) throw new Error(data.error || 'Regenerate failed');
-    Object.assign(p, { title:data.title, html:data.html, metaTitle:data.metaTitle, metaDescription:data.metaDescription, usedCustomVoiceProfile:data.usedCustomVoiceProfile });
+    Object.assign(p, { title:data.title, html:data.html, metaTitle:data.metaTitle, metaDescription:data.metaDescription, usedCustomVoiceProfile:data.usedCustomVoiceProfile, linkWarning:data.linkWarning || null });
     const k = (window.__seoKeywords||[]).find(x=>x.id===p.keywordId);
     if(k) Object.assign(k, { status:'Generated', postTitle:data.title, postHtml:data.html, metaTitle:data.metaTitle, metaDescription:data.metaDescription });
     toast('Regenerated', 'success');
+    if(data.linkWarning) toast(data.linkWarning, 'warn');
     renderPage();
   } catch(err){
     toast('Could not regenerate: ' + err.message, 'warn');
@@ -15477,9 +15482,11 @@ async function publishSeoPreview(){
     if(!res.ok || !data.success) throw new Error(data.error || 'Send to Framer failed');
     p.status = 'Published';
     p.publishedUrl = data.url;
+    p.linkWarning = data.linkWarning || null;
     const k = (window.__seoKeywords||[]).find(x=>x.id===p.keywordId);
     if(k) Object.assign(k, { status:'Published', publishedUrl:data.url });
     toast('Added to Framer as a draft - review and publish it there', 'success');
+    if(data.linkWarning) toast(data.linkWarning, 'warn');
     renderPage();
   } catch(err){
     toast('Could not send to Framer: ' + err.message, 'warn');

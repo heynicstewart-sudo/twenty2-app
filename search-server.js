@@ -10888,7 +10888,7 @@ const SEO_CHECKLIST = `Apply this on-page SEO checklist:
 6. A keyword cluster of 5-8 closely related terms woven naturally throughout, not just the primary keyword repeated
 7. Natural keyword density between 1-2% for the primary keyword
 8. Exactly one H1, multiple H2s, and H3s nested under relevant H2s where useful
-9. 2-3 internal links to other T2C blog posts, as placeholder URLs like /blog/related-post-slug
+9. Prose written so that internal links to other T2C /research/ articles could sit naturally in the body - do not invent placeholder internal links or slugs yourself; real internal links are added in a later pass
 10. 2-3 external links to real, relevant, authoritative outside sources
 11. An FAQ section with 4-6 questions targeting related search queries, each with a real answer, formatted as an open accordion: each question is a <details open><summary>Question</summary><p>Answer</p></details> block
 12. A clear call to action at the end, pointing to a specific T2C service
@@ -11292,7 +11292,7 @@ Average competitor length: approximately ${avgWordCount} words - write to a simi
 
 ${SEO_CHECKLIST}
 
-Write a full SEO blog post as clean HTML - a single string of HTML using h1/h2/h3/p/ul/li/a tags, no <html>/<head>/<body> wrapper and no <img> tags (images are added manually after generation). Internal links: <a href="/blog/relevant-slug">. External links: <a href="..." target="_blank" rel="noopener"> to real, well-known, relevant domains. The FAQ section must use <details open><summary><strong>Question text?</strong></summary><p>Answer text</p></details> for every question - this renders as a native, no-JavaScript-needed accordion that's expanded by default, not a plain list of bolded questions. The question inside each <summary> must be wrapped in <strong> tags so the FAQ question heading renders bold; the answer stays in a plain <p>. UK/AU English, no em dashes, in T2C's voice as described above.
+Write a full SEO blog post as clean HTML - a single string of HTML using h1/h2/h3/p/ul/li/a tags, no <html>/<head>/<body> wrapper and no <img> tags (images are added manually after generation). Do NOT write internal links or invent slugs for other T2C pages - just write natural body prose where an internal link to a related T2C /research/ article could later sit; those real internal links are added in a separate pass after drafting. External links: <a href="..." target="_blank" rel="noopener"> to real, well-known, relevant domains. The FAQ section must use <details open><summary><strong>Question text?</strong></summary><p>Answer text</p></details> for every question - this renders as a native, no-JavaScript-needed accordion that's expanded by default, not a plain list of bolded questions. The question inside each <summary> must be wrapped in <strong> tags so the FAQ question heading renders bold; the answer stays in a plain <p>. UK/AU English, no em dashes, in T2C's voice as described above.
 
 Also write an "excerpt": a 2-3 sentence plain text summary of the post, written to entice clicks. Plain text only, no HTML tags, no markdown.
 
@@ -11374,13 +11374,37 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
   }
 }
 
+// Wraps the first plain-text occurrence of `phrase` in `html` (at or after
+// `fromIndex`) in an <a href="url"> tag, skipping occurrences that fall
+// inside a tag or inside an existing <a>...</a>. Returns the new html, or
+// null if the phrase couldn't be placed safely.
+function wrapPhraseInLink(html, phrase, url, fromIndex = 0) {
+  let searchFrom = Math.max(0, fromIndex);
+  while (true) {
+    const idx = html.indexOf(phrase, searchFrom);
+    if (idx === -1) return null;
+    const before = html.slice(0, idx);
+    const insideTag = before.lastIndexOf('<') > before.lastIndexOf('>');
+    const insideAnchor = before.lastIndexOf('<a ') > before.lastIndexOf('</a>');
+    if (!insideTag && !insideAnchor) {
+      return html.slice(0, idx) + `<a href="${url}">${phrase}</a>` + html.slice(idx + phrase.length);
+    }
+    searchFrom = idx + phrase.length;
+  }
+}
+
 // Internal linking - once a post is drafted, pull every page already in
-// the Sitemap table and ask Claude to weave contextual links to the 2-3
-// most topically-relevant ones into the body prose. Best-effort: no
-// Sitemap rows yet (nothing to link to), a failed Claude call, or a
-// structurally-broken result all fall back to the un-linked html rather
-// than failing generation. Runs after drafting and before the post is
-// saved/published, so the links are baked into what reaches Framer.
+// the Sitemap table and ask Claude which 2-3 are worth linking to and
+// where. Claude returns a small PATCH LIST (anchor text + target URL + a
+// snippet of surrounding context), never the whole document - so there's
+// no output-truncation risk and no structure-revalidation step. Each
+// patch is applied locally by finding its context/anchor in the HTML and
+// wrapping the anchor in an <a href>. Best-effort: returns
+// { html, warning } where `html` is always safe to use and `warning` is a
+// human-readable string (surfaced in the preview panel) when the pass
+// couldn't add the links it should have. Runs after drafting and again at
+// publish time, so posts published once more content is live pick up
+// links to it.
 async function injectInternalLinks(html, keyword, sitemapRecords) {
   const candidates = (sitemapRecords || [])
     .map(r => ({
@@ -11389,7 +11413,7 @@ async function injectInternalLinks(html, keyword, sitemapRecords) {
       keyword: r.fields['Keyword'] || ''
     }))
     .filter(c => c.url && !html.includes(c.url));
-  if (!candidates.length) return html;
+  if (!candidates.length) return { html, warning: null };
 
   // Bound the prompt: pages sharing a meaningful word with this keyword
   // first, then fill up to 25 with the rest.
@@ -11404,35 +11428,66 @@ async function injectInternalLinks(html, keyword, sitemapRecords) {
     .sort((a, b) => b.score - a.score)
     .slice(0, 25);
 
-  const prompt = `You are adding internal links to a blog post for T2C Outreach, Twenty2 Collective.
+  const plainText = stripHtmlToText(html);
+
+  const prompt = `You are choosing internal links to add to a blog post for T2C Outreach, Twenty2 Collective.
 
 POST PRIMARY KEYWORD: "${keyword}"
 
-EXISTING PUBLISHED PAGES (candidates to link to):
+EXISTING PUBLISHED PAGES (the only pages you may link to):
 ${scored.map((c, i) => `${i + 1}. ${c.url} - "${c.title}"${c.keyword ? ' (targets: ' + c.keyword + ')' : ''}`).join('\n')}
 
-Choose the 2-3 pages most topically relevant to this post and insert a natural, contextual internal link to each: an <a href="EXACT_URL_FROM_LIST">descriptive anchor text</a> placed inside an existing body <p> where that topic is actually discussed. Rules:
+POST BODY (plain text):
+---
+${plainText}
+---
+
+Choose the 2-3 published pages most genuinely relevant to this post. For each, pick a short phrase (2-6 words) that ALREADY APPEARS VERBATIM in the post body and would make natural anchor text for a link to that page, plus roughly 8-12 words of surrounding text from the post that contains that phrase, so it can be located exactly.
+
+Rules:
 - Use only URLs from the list above, exactly as written
-- No links inside headings, <summary> elements, or the closing call to action
-- Spread the links across different paragraphs, do not stack them together
-- Change nothing else: keep every heading, paragraph, FAQ item, image, and existing link exactly as-is
-- If fewer than 2 pages are genuinely relevant, add only the ones that are (or none at all)
+- anchorText and context must be copied verbatim from the POST BODY above - same case, same punctuation
+- anchorText must be a substring of context
+- Choose anchor phrases in ordinary body sentences, never in a heading, an FAQ question, or the final call-to-action paragraph
+- Use each URL at most once, and take the phrases from different parts of the post
+- If fewer than 2 pages are genuinely relevant, return only those (or an empty array)
 
-Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
-{ "html": string }`;
+Return ONLY valid JSON, no markdown, no commentary: an array in exactly this shape:
+[{ "anchorText": "text to link", "url": "https://...", "context": "a few words of surrounding text that contains the anchor" }]`;
 
+  let patches;
   try {
-    const result = await callClaudeJson(prompt, 8000);
-    if (!result.html) return html;
-    if (!validateSeoStructure(result.html).valid) {
-      console.warn('Internal linking pass returned structurally-broken html - keeping the un-linked version');
-      return html;
-    }
-    return result.html;
+    const result = await callClaudeJson(prompt, 1500);
+    patches = Array.isArray(result) ? result : (result && Array.isArray(result.links) ? result.links : null);
   } catch (err) {
     console.warn('Internal linking pass failed:', err.message);
-    return html;
+    return { html, warning: 'Internal links could not be added automatically (the linking pass failed) - add them by hand before publishing.' };
   }
+  if (!patches || !patches.length) return { html, warning: null };
+
+  const validUrls = new Set(scored.map(c => c.url));
+  let out = html;
+  let applied = 0;
+  const skipped = [];
+  for (const p of patches) {
+    const anchor = ((p && p.anchorText) || '').trim();
+    const url = ((p && p.url) || '').trim();
+    const context = ((p && p.context) || '').trim();
+    if (!anchor || !validUrls.has(url)) { skipped.push(anchor || url || 'unknown'); continue; }
+    if (out.includes(`href="${url}"`)) { skipped.push(anchor); continue; }
+    const ctxIdx = context ? out.indexOf(context) : -1;
+    const linked = wrapPhraseInLink(out, anchor, url, ctxIdx > -1 ? ctxIdx : 0);
+    if (linked && linked !== out) { out = linked; applied++; }
+    else skipped.push(anchor);
+  }
+
+  if (applied === 0) {
+    return { html, warning: 'The linking pass ran but none of its suggested anchors could be placed in the post - add internal links by hand before publishing.' };
+  }
+  const warning = skipped.length
+    ? `Added ${applied} internal link${applied === 1 ? '' : 's'}; ${skipped.length} suggestion${skipped.length === 1 ? '' : 's'} could not be placed - review before publishing.`
+    : null;
+  return { html: out, warning };
 }
 
 app.post('/api/seo/generate-post', async (req, res) => {
@@ -11457,11 +11512,15 @@ app.post('/api/seo/generate-post', async (req, res) => {
 
     // Weave in internal links to already-published pages before saving, so
     // they travel with the post through preview and on to Framer.
+    let linkWarning = null;
     try {
       const sitemapRecords = await airtableFetchAllRecords(SITEMAP_TABLE);
-      post.html = await injectInternalLinks(post.html, keywordRecord.fields['Keyword'], sitemapRecords);
+      const linked = await injectInternalLinks(post.html, keywordRecord.fields['Keyword'], sitemapRecords);
+      post.html = linked.html;
+      linkWarning = linked.warning;
     } catch (err) {
       console.warn('Internal linking skipped:', err.message);
+      linkWarning = 'Internal links could not be added automatically - add them by hand before publishing.';
     }
 
     await airtableRequest('PATCH', KEYWORDS_TABLE, {
@@ -11479,7 +11538,7 @@ app.post('/api/seo/generate-post', async (req, res) => {
       typecast: true
     });
 
-    res.json({ success: true, keywordId, title: post.title, html: post.html, excerpt: post.excerpt, metaTitle: post.metaTitle, metaDescription: post.metaDescription, status: 'Generated', usedCustomVoiceProfile: post.usedCustomVoiceProfile });
+    res.json({ success: true, keywordId, title: post.title, html: post.html, excerpt: post.excerpt, metaTitle: post.metaTitle, metaDescription: post.metaDescription, status: 'Generated', usedCustomVoiceProfile: post.usedCustomVoiceProfile, linkWarning });
   } catch (err) {
     console.error('Generate SEO post error:', err.message);
     airtableRequest('PATCH', KEYWORDS_TABLE, { records: [{ id: keywordId, fields: { 'Status': 'Queued' } }], typecast: true })
@@ -11762,6 +11821,19 @@ app.post('/api/seo/publish', async (req, res) => {
       metaDescription: kf['Meta Description'] || ''
     };
 
+    // Re-link pass: the post may have been generated before other pages
+    // went live, so refresh its internal links against the current Sitemap
+    // before it reaches Framer.
+    let linkWarning = null;
+    try {
+      const sitemapRecords = await airtableFetchAllRecords(SITEMAP_TABLE);
+      const linked = await injectInternalLinks(post.html, kf['Keyword'] || '', sitemapRecords);
+      post.html = linked.html;
+      linkWarning = linked.warning;
+    } catch (err) {
+      console.warn('Publish-time internal linking skipped:', err.message);
+    }
+
     const published = await publishToFramer(post);
     const today = new Date().toISOString().slice(0, 10);
 
@@ -11772,13 +11844,13 @@ app.post('/api/seo/publish', async (req, res) => {
     const sitemapRecordId = sitemapWrite && sitemapWrite.records && sitemapWrite.records[0] && sitemapWrite.records[0].id;
 
     await airtableRequest('PATCH', KEYWORDS_TABLE, {
-      records: [{ id: keywordId, fields: { 'Status': 'Published', 'Published URL': published.url } }],
+      records: [{ id: keywordId, fields: { 'Status': 'Published', 'Published URL': published.url, 'Content': post.html } }],
       typecast: true
     });
 
     const followUps = await runSeoPublishFollowUps({ sitemapRecordId, url: published.url, title: post.title, html: post.html });
 
-    res.json({ success: true, url: published.url, linkedInDraft: followUps.linkedInDraft, gscSubmitted: followUps.gsc.submitted });
+    res.json({ success: true, url: published.url, linkedInDraft: followUps.linkedInDraft, gscSubmitted: followUps.gsc.submitted, linkWarning });
   } catch (err) {
     console.error('Publish SEO post error:', err.message);
     res.status(500).json({ error: err.message });
@@ -12088,7 +12160,7 @@ ${SERVICE_PAGE_SECTIONS.replace(/\{service\}/g, service).replace(/\{location\}/g
 
 ${SEO_CHECKLIST}
 
-Write the page as clean HTML - a single string using h1/h2/h3/p/ul/li/a/details/summary tags, no <html>/<head>/<body> wrapper and no <img> tags (images are added manually after generation). Internal links: <a href="/blog/relevant-slug"> or <a href="/services/relevant-slug">. External links: <a href="..." target="_blank" rel="noopener"> to real, well-known, relevant domains. Every FAQ question must be its own <details open><summary><strong>Question?</strong></summary><p>Answer</p></details> block - a native no-JavaScript accordion, expanded by default. The question inside each <summary> must be wrapped in <strong> tags so the FAQ question heading renders bold; the answer stays in a plain <p>. Reference ${location} naturally throughout - this page targets people searching for this service in that specific place. UK/AU English, no em dashes, in T2C's voice as described above.
+Write the page as clean HTML - a single string using h1/h2/h3/p/ul/li/a/details/summary tags, no <html>/<head>/<body> wrapper and no <img> tags (images are added manually after generation). Do NOT write internal links or invent slugs for other T2C pages - just write natural body prose where an internal link to a related T2C /research/ article could later sit; those real internal links are added in a separate pass after drafting. External links: <a href="..." target="_blank" rel="noopener"> to real, well-known, relevant domains. Every FAQ question must be its own <details open><summary><strong>Question?</strong></summary><p>Answer</p></details> block - a native no-JavaScript accordion, expanded by default. The question inside each <summary> must be wrapped in <strong> tags so the FAQ question heading renders bold; the answer stays in a plain <p>. Reference ${location} naturally throughout - this page targets people searching for this service in that specific place. UK/AU English, no em dashes, in T2C's voice as described above.
 
 Also write an "excerpt": a 2-3 sentence plain text summary of the page, written to entice clicks. Plain text only, no HTML tags, no markdown.
 
@@ -12099,6 +12171,19 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
   let html = await ensureValidSeoStructure(drafted.html || '', keyword);
   html = await humanizeSeoHtml(html);
 
+  // Same internal-linking pass as blog posts - service pages were
+  // previously skipped entirely.
+  let linkWarning = null;
+  try {
+    const sitemapRecords = await airtableFetchAllRecords(SITEMAP_TABLE);
+    const linked = await injectInternalLinks(html, keyword, sitemapRecords);
+    html = linked.html;
+    linkWarning = linked.warning;
+  } catch (err) {
+    console.warn('Service page internal linking skipped:', err.message);
+    linkWarning = 'Internal links could not be added automatically - add them by hand before publishing.';
+  }
+
   return {
     title: drafted.title || keyword,
     html,
@@ -12108,7 +12193,8 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
     keyword,
     service,
     location,
-    usedCustomVoiceProfile
+    usedCustomVoiceProfile,
+    linkWarning
   };
 }
 
@@ -12165,7 +12251,8 @@ app.post('/api/seo/generate-service-page', async (req, res) => {
       location: page.location,
       linkedInDraft: followUps.linkedInDraft,
       gscSubmitted: followUps.gsc.submitted,
-      usedCustomVoiceProfile: page.usedCustomVoiceProfile
+      usedCustomVoiceProfile: page.usedCustomVoiceProfile,
+      linkWarning: page.linkWarning
     });
   } catch (err) {
     console.error('Generate service page error:', err.message);
