@@ -8025,6 +8025,35 @@ app.post('/api/campaign/:id/check-timeouts', async (req, res) => {
 // explicit constraint always outranks whatever else the summary offers.
 const RESPECT_SUMMARY_INSTRUCTIONS_NOTE = " If the AI summary, profile notes, or conversation above state an explicit instruction about how to approach this contact (e.g. what not to mention, or how not to frame something - such as not treating a well-established role change as recent or newsworthy), treat that as a hard constraint that overrides any other angle the summary might otherwise suggest, however interesting.";
 
+// The single biggest quality lever on outreach drafts: the model is handed
+// rich profile notes / an enrichment profile / an AI summary and then
+// ignores the specifics, reaching for interchangeable change-management
+// phrasing ("driving meaningful change", "keeping momentum", "complex
+// multi-site operations", "the organisation has seen it all before"). This
+// forces at least one concrete, this-person-only detail into every message.
+const GROUND_IN_SPECIFICS_NOTE = `\n\nGround this message in this specific person. The profile notes, enrichment profile and AI summary above contain concrete detail - a named site or refinery, a system they've rolled out, headcount or a contractor base they carry, a specific specialism (e.g. IR in heavy industry), a named prior role, a "best outreach angle", a stated likely pain point. Pick ONE of those specifics and build the observation around it, in Marcus's own words. A message that would read the same sent to anyone with this job title has failed - do not fall back on generic change-management phrasing like "driving meaningful change", "keeping momentum", "complex multi-site operations" or "the organisation has seen it all before". If genuinely nothing specific is available, say less rather than padding with generic lines.`;
+
+// Turns the enrichment profile (currentTitle/company/workHistory/education/
+// location/bio/recentActivity/likelyPainPoints/bestOutreachAngle - see the
+// research route around line 2913) into a prompt block. The old version
+// only passed the first five and dropped bio, recent activity, likely pain
+// points and the best-outreach-angle - i.e. everything actually useful for
+// picking a hook.
+function buildEnrichmentNote(e) {
+  if (!e) return '';
+  const has = v => v && String(v).trim() && !/^not enough public info/i.test(String(v).trim());
+  const lines = [];
+  if (has(e.currentTitle) || has(e.company)) lines.push(`Current role: ${e.currentTitle || 'unknown'}${has(e.company) ? ` at ${e.company}` : ''}`);
+  if (has(e.workHistory)) lines.push(`Work history: ${e.workHistory}`);
+  if (has(e.location)) lines.push(`Location: ${e.location}`);
+  if (has(e.bio)) lines.push(`Bio: ${e.bio}`);
+  if (has(e.recentActivity)) lines.push(`Recent activity: ${e.recentActivity}`);
+  if (has(e.likelyPainPoints)) lines.push(`Likely pain points: ${e.likelyPainPoints}`);
+  if (has(e.bestOutreachAngle)) lines.push(`Suggested outreach angle (a starting point, not a script): ${e.bestOutreachAngle}`);
+  if (!lines.length) return '';
+  return `\n\nEnrichment profile from research on this contact (weave the relevant parts in naturally, do not list them back):\n${lines.map(l => `- ${l}`).join('\n')}`;
+}
+
 // A campaign's CTAs (Campaigns.CTAs, one per line) were previously only
 // ever read for the Sales tab's "CTA converting to bookings" chart -
 // matched against whatever a rep manually typed into a Touch Point's CTA
@@ -8356,7 +8385,10 @@ app.post('/api/messages/generate', async (req, res) => {
 
     const campaignNote = campaign ? `\n\nThis contact is part of the active campaign "${campaign.name}" (goal: ${campaign.goal || 'not recorded'}). Campaign strategy: ${campaign.strategyBrief || 'none recorded'}. Write in line with this strategy.` : '';
 
-    const enrichmentNote = enrichment ? `\n\nEnrichment data from research on this contact (weave in naturally, don't just list it back): current title ${enrichment.currentTitle || 'unknown'}; company ${enrichment.company || 'unknown'}; work history ${enrichment.workHistory || 'unknown'}; education ${enrichment.education || 'unknown'}; location ${enrichment.location || 'unknown'}.` : '';
+    // Prefer the enrichment the client sends; fall back to the block stored
+    // on the Contact's AI Summary so a contact enriched elsewhere (or before
+    // this client cached it) still gets the full profile into the draft.
+    let enrichmentProfile = enrichment || null;
 
     // This modal has no built-in memory of what's already been said - unlike
     // POST /api/campaign/:id/contacts/:contactId/generate-message below,
@@ -8376,11 +8408,17 @@ app.post('/api/messages/generate', async (req, res) => {
         : await findRecordByFieldName('Contacts', 'Full Name', contact.name);
       if (contactRecord) {
         const cf = contactRecord.fields || {};
-        conversationNote = `\n\nAI summary of this contact so far: ${cf['AI Summary'] || 'none yet'}. Conversation so far: ${cf['Conversation Context'] || 'none yet - this is the first message'}.`;
+        // AI Summary may carry a prepended ENRICHMENT_JSON block - the client
+        // already sends that data cleanly as `enrichment`, so strip it here
+        // rather than feeding the model raw JSON twice.
+        const aiSummaryNarrative = stripContactEnrichmentBlock(cf['AI Summary']).trim();
+        conversationNote = `\n\nAI summary of this contact so far: ${aiSummaryNarrative || 'none yet'}. Conversation so far: ${cf['Conversation Context'] || 'none yet - this is the first message'}.`;
+        if (!enrichmentProfile) enrichmentProfile = parseContactEnrichment(cf['AI Summary']);
       }
     } catch (lookupErr) {
       console.warn('Could not load contact conversation history for message generation (non-fatal):', lookupErr.message);
     }
+    const enrichmentNote = buildEnrichmentNote(enrichmentProfile);
 
     // The campaign record carries both this campaign's CTAs (Campaigns.CTAs)
     // and its per-stage Style Corrections - resolve it once when the client
@@ -8396,7 +8434,7 @@ app.post('/api/messages/generate', async (req, res) => {
     const ctaOptions = (campaignRecord && stage.key === 'cta') ? parseCtaList(campaignRecord.fields['CTAs']) : [];
     const styleCorrections = campaignRecord ? parseStyleCorrections(campaignRecord.fields['Style Corrections']) : emptyStyleCorrections();
 
-    const promptText = `Template for this stage:\n${stage.template || ''}\n\nContact: ${contact.name}, ${contact.role || ''} at ${contact.company || ''}. Sequence stage: ${stage.label || stage.key} (message ${stage.messageNumber || 'n/a'} in the sequence). Profile notes: ${contact.notes || 'none'}.${conversationNote}\n\n${ctaStrategyNoteText(stage.key, stage.messageNumber, voice && voice.messagesBeforeCta)}${ctaOptionsPromptText(ctaOptions)}\n\n${voiceRulesPromptText(voice)}${imageNote}${campaignNote}${enrichmentNote}${styleCorrectionsPromptText(styleCorrections, stage.key)}${steerPromptText(steer)}\n\nWrite the actual message for this specific contact, replacing placeholders naturally - if the conversation so far shows they've already replied, respond to what they actually said rather than reintroducing yourself.${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${DRAFT_JSON_CONTRACT}`;
+    const promptText = `Template for this stage:\n${stage.template || ''}\n\nContact: ${contact.name}, ${contact.role || ''} at ${contact.company || ''}. Sequence stage: ${stage.label || stage.key} (message ${stage.messageNumber || 'n/a'} in the sequence). Profile notes: ${contact.notes || 'none'}.${conversationNote}\n\n${ctaStrategyNoteText(stage.key, stage.messageNumber, voice && voice.messagesBeforeCta)}${ctaOptionsPromptText(ctaOptions)}\n\n${voiceRulesPromptText(voice)}${imageNote}${campaignNote}${enrichmentNote}${styleCorrectionsPromptText(styleCorrections, stage.key)}${steerPromptText(steer)}\n\nWrite the actual message for this specific contact, replacing placeholders naturally - if the conversation so far shows they've already replied, respond to what they actually said rather than reintroducing yourself.${GROUND_IN_SPECIFICS_NOTE}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${DRAFT_JSON_CONTRACT}`;
 
     const content = imgs.map(img => ({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.base64 } }));
     content.push({ type: 'text', text: promptText });
@@ -8532,19 +8570,27 @@ app.post('/api/campaign/:id/contacts/:contactId/generate-message', async (req, r
           : `\nThis campaign's offer: ${offer.summary}\nWeave the offer above into this message naturally, in your own words - do not paste it verbatim.`)
       : '';
 
+    // The enrichment profile is stored as a JSON block prepended to AI
+    // Summary - pull it out and present it cleanly (same buildEnrichmentNote
+    // the modal route uses) rather than dumping raw JSON into the prompt,
+    // and hand the model only the narrative part of AI Summary.
+    const enrichmentProfile = parseContactEnrichment(cf['AI Summary']);
+    const enrichmentNote = buildEnrichmentNote(enrichmentProfile);
+    const aiSummaryNarrative = stripContactEnrichmentBlock(cf['AI Summary']).trim();
+
     const promptText = `You are drafting LinkedIn outreach message ${messageNumber} of 3 for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM.
 
 Campaign: "${campaignName}". Goal: ${camp['Goal'] || 'not recorded'}. Product: ${camp['Product'] || 'not recorded'}. Target ICP: ${camp['Target ICP'] || 'not recorded'}. Strategy notes: ${camp['Strategy Notes'] || 'none recorded'}.
 ${template ? `\nTemplate for this stage:\n${template}\n` : ''}
-Contact: ${cf['Full Name'] || 'Unknown'}, ${cf['Job Title'] || ''}. Profile notes: ${cf['Notes'] || 'none'}. AI summary: ${cf['AI Summary'] || 'none yet'}. Conversation so far: ${cf['Conversation Context'] || 'none yet - this is the first message'}.
-Recent posts (last 30 days only): ${recentPosts}
+Contact: ${cf['Full Name'] || 'Unknown'}, ${cf['Job Title'] || ''}. Profile notes: ${cf['Notes'] || 'none'}. AI summary: ${aiSummaryNarrative || 'none yet'}. Conversation so far: ${cf['Conversation Context'] || 'none yet - this is the first message'}.
+Recent posts (last 30 days only): ${recentPosts}${enrichmentNote}
 ${offerNote}
 
 ${ctaStrategyNoteText(stageKey, messageNumber, voice.messagesBeforeCta)}${ctaOptionsPromptText(ctaOptions)}
 
 ${voiceRulesPromptText(voice)}${styleCorrectionsPromptText(styleCorrections, stageKey)}${steerPromptText(steer)}
 
-Write only message ${messageNumber} in this contact's sequence for this specific campaign, following on naturally from the conversation so far (if any) - if the conversation shows they've already replied, respond to what they actually said rather than reintroducing yourself.${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${examplesNote}${performanceNote}${DRAFT_JSON_CONTRACT}`;
+Write only message ${messageNumber} in this contact's sequence for this specific campaign, following on naturally from the conversation so far (if any) - if the conversation shows they've already replied, respond to what they actually said rather than reintroducing yourself.${GROUND_IN_SPECIFICS_NOTE}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${examplesNote}${performanceNote}${DRAFT_JSON_CONTRACT}`;
 
     const rawMessage = await callClaudeText(promptText, 800);
     const envelope = parseDraftEnvelope(rawMessage);
@@ -10910,6 +10956,7 @@ Hard rules:
 - Keep the message to 3 to 4 sentences. Do NOT add sentences, caveats, hedges, asides, self-corrections, disclaimers, or new points.
 - Do NOT add "mixed feelings", "unresolved tension", or deliberately varied sentence length. Leave the structure alone.
 - Keep every name, company and link exactly as they are, and keep any single question the message asks. Keep the sign-off, but if the draft signs off with a company name or "Twenty2 Collective", change it to just "Marcus".
+- Keep every concrete, specific detail about the person or their work (a named site, refinery, system, prior role, headcount, specialism). Do not generalise a specific into a vaguer phrase.
 - If the message already reads naturally, return it essentially unchanged.
 - Plain text only, no markdown, no preamble. Return only the edited message.`;
 
