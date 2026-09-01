@@ -5446,7 +5446,7 @@ ${performancePatterns ? `\nWHAT HAS PERFORMED WELL BEFORE (Marcus's own top post
 
 Write a ${resolvedFormat} of target length ${lengthTarget}. UK English, no em dashes, first person as Marcus.
 
-Avoid the tells of AI-written LinkedIn content: no three-part lists where two items would do ("thorough, well-documented and professionally designed"), no scaffolded argument skeleton ("The problem was... The issue is rarely X, it's Y... What actually works is..."), and don't lean on one-line sentence fragments for emphasis more than once or twice in the whole piece. Vary how paragraphs open. Let at least one point stay a little unresolved rather than tying everything off.
+Write with a clear point of view - Marcus knows what he thinks. Avoid the tells of AI-written content: no three-part lists where two items would do ("thorough, well-documented and professionally designed"), no scaffolded argument skeleton ("The problem was... The issue is rarely X, it's Y... What actually works is..."), and don't lean on one-line sentence fragments for emphasis more than once or twice. Vary how paragraphs open. One genuine nuance or open question is fine, but don't hedge the whole piece ("part of me thinks... another part of me...", "I'm not sure anyone has the answer") and don't end on a shrug - land on a position or a real question to the reader.
 
 Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 { "title": string, "body": string }`;
@@ -5454,14 +5454,17 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 
     const drafted = await callClaudeJson(prompt, 3500);
 
-    // Run the drafted body through the same 3-pass plain-text humanizer the
-    // SEO LinkedIn post and email copy already use, so Draft Centre content
-    // (LinkedIn posts / blogs / newsletters drafted from a signal) gets the
-    // AI-tell cleanup too rather than shipping raw model prose. Best-effort:
-    // humanizePlainText returns the input unchanged on any failure.
+    // Humanize the drafted body. LinkedIn posts use the single-pass
+    // LinkedIn humanizer (keeps a confident point of view - the 3-pass
+    // chain's "add asides / mixed feelings / unresolved tension" passes
+    // turn a post into a hand-wringing essay). Blog and Newsletter keep the
+    // 3-pass humanizePlainText, where that texture is appropriate.
+    // Best-effort: both return the input unchanged on failure.
     if (drafted && drafted.body && drafted.body.trim()) {
       try {
-        drafted.body = await humanizePlainText(drafted.body);
+        drafted.body = /linkedin/i.test(resolvedFormat)
+          ? await humanizeLinkedInPost(drafted.body)
+          : await humanizePlainText(drafted.body);
       } catch (humanizeErr) {
         console.warn('Content draft humanize failed, keeping raw draft:', humanizeErr.message);
       }
@@ -10473,7 +10476,7 @@ async function runSeoPublishFollowUps({ sitemapRecordId, url, title, html }) {
   let linkedInDraft = '';
   try {
     linkedInDraft = await generateLinkedInPostDraft(title, html, url);
-    if (linkedInDraft) linkedInDraft = await humanizePlainText(linkedInDraft);
+    if (linkedInDraft) linkedInDraft = await humanizeLinkedInPost(linkedInDraft);
     if (linkedInDraft && sitemapRecordId) {
       await ensureSitemapLinkedInDraftField();
       await airtableRequest('PATCH', SITEMAP_TABLE, {
@@ -11178,6 +11181,52 @@ async function humanizeOutreachMessage(text) {
     else console.warn('Outreach humanizer returned nothing - keeping the original draft');
   } catch (err) {
     console.warn('Outreach humanizer failed - keeping the original draft:', err.message);
+  }
+  return stripEnEmDashes(out);
+}
+
+// LinkedIn-post humanizer. The 3-pass humanizePlainText chain's audit +
+// final passes are built to ADD "asides and self-corrections", "mixed
+// feelings or unresolved tension" and dramatic length variation - great for
+// a personal essay, wrong for a LinkedIn post, where they turn a confident
+// point of view into "part of me thinks X, another part of me remembers Y...
+// I don't have a clean answer and I'm suspicious of anyone who claims to".
+// This is a SINGLE pass: it does the safe AI-tell cleanup and, critically,
+// strips manufactured self-doubt so the post reads like someone who knows
+// what they think. Used for content Format "LinkedIn Post"; Blog and
+// Newsletter keep humanizePlainText.
+const LINKEDIN_HUMANIZER_SYSTEM_PROMPT = `You are lightly editing a LinkedIn post so it does not read as AI-written, while keeping it confident and worth posting. The author (Marcus, a Perth Agile and change consultant) has a point of view and is sharing it.
+
+Fix these where they occur:
+- AI vocabulary: utilise -> use, leverage -> use, delve -> look into, foster -> build, facilitate -> help, robust -> strong, comprehensive -> full, navigate -> work through, tapestry/landscape/realm -> plain words
+- Inflated or promotional language: puffery, superlatives, "testament to", "stands as", "pivotal", "crucial", "underscores", "in today's world"
+- Em dashes and en dashes: replace with commas, full stops or a reworded sentence
+- Present-participle sentence openers ("Looking at", "Navigating", "Drawing on", "Having spent")
+- Vague attributions: "many leaders say", "studies show" - cut or make specific
+- Fake-candid hooks: "Honestly?", "The truth is", "Let's be real"
+- Three-part lists where two items would do
+- The scaffolded argument skeleton: "The problem was X. The issue is rarely X, it's Y. What actually works is Z."
+- Overused one-line fragments for emphasis - keep at most one or two in the whole post
+
+Hard rules - the post must stay CONFIDENT:
+- Remove manufactured self-doubt the draft leans on: "part of me thinks... another part of me...", "I'm not sure the answer is...", "I don't have a clean answer", "I'm not sure anyone does", "I'm suspicious of anyone who claims to", "honestly I don't think I did it well". Marcus can acknowledge ONE genuine nuance or open question, but the post should read like he knows what he thinks, not like he's talking himself out of a position.
+- Do NOT add hedges, caveats, asides, "mixed feelings" or "unresolved tension" that aren't already there.
+- Do NOT end on a shrug. End on a clear position or a real question to the reader. If the draft ends by disclaiming that it has an answer, rewrite that ending into an actual take or a question.
+- Keep it roughly the same length. Do not add paragraphs or new points.
+- Keep every concrete specific - names, numbers, sectors, the story.
+- If the post already reads confident and natural, return it essentially unchanged.
+- Plain text only, no markdown, no preamble. Return only the edited post.`;
+
+async function humanizeLinkedInPost(text) {
+  if (!text || !text.trim()) return text;
+  let out = text;
+  try {
+    const raw = await callClaudeMessages(`LinkedIn post to edit:\n\n${text}`, 1600, LINKEDIN_HUMANIZER_SYSTEM_PROMPT);
+    const cleaned = stripCodeFences(raw).trim();
+    if (cleaned) out = cleaned;
+    else console.warn('LinkedIn humanizer returned nothing - keeping the original draft');
+  } catch (err) {
+    console.warn('LinkedIn humanizer failed - keeping the original draft:', err.message);
   }
   return stripEnEmDashes(out);
 }
@@ -12759,7 +12808,7 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 { "title": string, "post": string }`;
 
   const drafted = await callClaudeJson(prompt, 2000);
-  const post = await humanizePlainText(drafted.post || '');
+  const post = await humanizeLinkedInPost(drafted.post || '');
   return { title: drafted.title || topic, post, usedCustomVoiceProfile };
 }
 
