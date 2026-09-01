@@ -6207,6 +6207,31 @@ app.get('/api/contacts/job-change-signals', async (req, res) => {
   }
 });
 
+// Dismiss ("mark as done") job-change signals from the Home strip. Clears
+// Job Change Signal + its date on the given contacts, or on every contact
+// with a live signal when contactIds is omitted. A later manual scan can
+// still surface a genuinely new signal (the detectors gate on the field
+// being empty), but the stale post that triggered this one will be outside
+// their recency window by then, so in practice dismissed stays dismissed.
+app.post('/api/contacts/job-change-signals/dismiss', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const requested = Array.isArray(req.body && req.body.contactIds) ? req.body.contactIds.filter(Boolean) : null;
+  try {
+    const contactRecords = await airtableFetchAllRecords('Contacts');
+    const targets = contactRecords.filter(r =>
+      r.fields['Job Change Signal'] && (requested ? requested.includes(r.id) : true)
+    );
+    const updates = targets.map(r => ({ id: r.id, fields: { 'Job Change Signal': '', 'Job Change Signal Date': null } }));
+    for (let i = 0; i < updates.length; i += 10) {
+      await airtableRequest('PATCH', 'Contacts', { records: updates.slice(i, i + 10) });
+    }
+    res.json({ success: true, dismissed: updates.length });
+  } catch (err) {
+    console.error('Dismiss job change signals error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---- Part 2: Serper job title drift detection ----
 
 // Pulls the headline/title portion out of a Google result title for a

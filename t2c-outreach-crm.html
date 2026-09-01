@@ -17628,9 +17628,12 @@ function renderContactSignalsStrip(){
   <div class="card" style="margin-bottom:22px;">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-alert-triangle"></i> Contact signals ${count ? `<span class="count-pill has" style="margin-left:6px;">${count}</span>` : ''}</div>
-      <button class="btn btn-secondary btn-sm" onclick="scanContactSignals()" ${scanning ? 'disabled' : ''}>
-        <i class="ti ${scanning ? 'ti-loader-2' : 'ti-radar'}"></i> ${scanning ? 'Scanning...' : 'Scan for signals'}
-      </button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        ${count ? `<button class="btn btn-ghost btn-sm" onclick="dismissAllContactSignals()" ${scanning ? 'disabled' : ''}><i class="ti ti-checks"></i> Mark all done</button>` : ''}
+        <button class="btn btn-secondary btn-sm" onclick="scanContactSignals()" ${scanning ? 'disabled' : ''}>
+          <i class="ti ${scanning ? 'ti-loader-2' : 'ti-radar'}"></i> ${scanning ? 'Scanning...' : 'Scan for signals'}
+        </button>
+      </div>
     </div>
     <div class="muted" style="font-size:11.5px;margin:6px 0 10px;">These contacts have changed roles recently - a fresh job change is one of the strongest windows to reach out. Automatic scanning is off; press <strong>Scan for signals</strong> to check now.${window.__contactSignalsLastScan ? ` Last scan ${esc(window.__contactSignalsLastScan)}.` : ''}</div>
     ${renderContactSignalCards(signals)}
@@ -17679,12 +17682,43 @@ function renderContactSignalCards(signals){
           </div>
           <div style="font-size:12.5px;margin-top:6px;">${esc(s.jobChangeSignal)}</div>
         </div>
-        <div style="flex-shrink:0;">
+        <div style="flex-shrink:0;display:flex;gap:6px;align-items:center;">
           ${s.linkedinUrl ? `<a href="${esc(s.linkedinUrl)}" target="_blank" rel="noopener" class="btn btn-primary btn-sm"><i class="ti ti-brand-linkedin"></i> Reach out</a>` : ''}
+          <button class="btn btn-ghost btn-sm" title="Mark done" onclick="dismissContactSignals(['${esc(s.contactId)}'])"><i class="ti ti-check"></i></button>
         </div>
       </div>
     </div>
   `).join('');
+}
+
+// "Mark done" - clears the Job Change Signal on those contacts so they drop
+// off the strip (POST /api/contacts/job-change-signals/dismiss).
+async function dismissContactSignals(contactIds){
+  const list = Array.isArray(window.__homeContactSignals) ? window.__homeContactSignals : [];
+  if(contactIds && contactIds.length){
+    // optimistic: drop them from the strip right away
+    window.__homeContactSignals = list.filter(s => !contactIds.includes(s.contactId));
+    renderPage();
+  }
+  try {
+    const res = await fetch('/api/contacts/job-change-signals/dismiss', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(contactIds && contactIds.length ? { contactIds } : {})
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
+    toast(`${data.dismissed} signal${data.dismissed===1?'':'s'} marked done`, 'success');
+  } catch(err){
+    toast('Could not mark done: ' + err.message, 'warn');
+  }
+  window.__homeContactSignals = undefined;
+  loadHomeContactSignals();
+}
+function dismissAllContactSignals(){
+  const list = Array.isArray(window.__homeContactSignals) ? window.__homeContactSignals : [];
+  if(!list.length) return;
+  if(!confirm(`Mark all ${list.length} contact signal${list.length===1?'':'s'} as done? They'll drop off this strip.`)) return;
+  dismissContactSignals(list.map(s => s.contactId));
 }
 
 /* ---- Per-campaign Content sub-tab ---- */
