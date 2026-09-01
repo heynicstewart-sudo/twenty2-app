@@ -2631,7 +2631,7 @@ Guidance for each section:
 - campaignSuggestions: 3-5 concrete outreach campaign or angle ideas based on real patterns in the data (shared roles, industries, company clusters, recurring themes in notes) and, where relevant, the learning data and conversion patterns above (ICP profiles, products and communication methods that have actually converted).
 - coldContacts: contacts with no recent touch points or who have gone quiet after early engagement, each as one sentence naming the contact and why they're worth a nudge.
 - relationshipHealth: a short read on which relationships are warm and which are at risk, each as one sentence naming the contact and the reasoning.
-- messageDrafts: 2-4 ready-to-send message drafts for specific contacts who look due for a follow-up. UK English, no em dashes, peer to peer tone, one observation and one question, 3-4 sentences, signed off "Twenty2 Collective". For a Website Lead contact with a CVC report, use their primary leak's mapped T2C product (per the mapping above) to pick the outreach angle and reference their specific archetype/leak rather than writing a generic message.
+- messageDrafts: 2-4 ready-to-send message drafts for specific contacts who look due for a follow-up. UK English, no em dashes, peer to peer tone, one observation and one question, 3-4 sentences, signed off as "Marcus" (first name only, never the company name). For a Website Lead contact with a CVC report, use their primary leak's mapped T2C product (per the mapping above) to pick the outreach angle and reference their specific archetype/leak rather than writing a generic message.
 - learningInsights: 3-5 specific, numbers-backed observations pulled directly from the data above, in the style of "You haven't contacted 34 Transformation leads in 21+ days" or "Mining sector contacts convert after 3 touch points vs 6 for government". Every number must be real, counted from the data given, never estimated or invented.
 - optimisationSuggestions: 3-5 specific, actionable improvements - which contacts to prioritise this week, which campaign needs attention (use the campaign performance data above), which ICP segment is underperforming, what message angle to try next. Each one grounded in something specific from the data, not generic sales advice.
 
@@ -3277,7 +3277,7 @@ Guidance:
 - objectionHandling: 2-3 sentences on the most likely objection this audience will raise and how to handle it.
 - successMetric: one short phrase for what counts as success (e.g. "Booked discovery calls", "Workshop bookings").
 - matchedContactNames: full names of contacts from the list above whose role, company or notes plausibly match the audience described in the conversation. Only include contacts that actually appear in the list above. Return an empty array if nothing matches rather than inventing names.
-- sequence: three outreach stages. "type" is one of "LinkedIn message", "Email", "Call" - pick whatever fits the conversation, default to "LinkedIn message" if nothing was specified. If an existing strategy/script was mentioned in the conversation, adapt it rather than starting from scratch. Otherwise write fresh copy. UK English, no em dashes, peer to peer tone, one observation and one question per message, 3-4 sentences, signed off "Twenty2 Collective". "timing" is when to send relative to the previous step, e.g. "Day 0", "3 days after message 1", "7 days after follow-up 1".
+- sequence: three outreach stages. "type" is one of "LinkedIn message", "Email", "Call" - pick whatever fits the conversation, default to "LinkedIn message" if nothing was specified. If an existing strategy/script was mentioned in the conversation, adapt it rather than starting from scratch. Otherwise write fresh copy. UK English, no em dashes, peer to peer tone, one observation and one question per message, 3-4 sentences, signed off as "Marcus" (first name only, never the company name). "timing" is when to send relative to the previous step, e.g. "Day 0", "3 days after message 1", "7 days after follow-up 1".
 - strategyBrief: 3-5 sentences summarising the angle and why it should work for this audience.
 - estimatedConversions: one or two sentences estimating likely bookings, grounded in the historical conversion rate above and the number of matched contacts. Be honest if the sample is too small to be confident.`;
 
@@ -3369,7 +3369,7 @@ Current draft: ${currentContent || '(none yet)'}
 
 T2C's historical conversion data for this campaign, factor it in if relevant: ${historicalNote || 'no campaign insights run yet for this campaign'}.${styleCorrectionsPromptText(styleCorrections, stageRef)}${steerPromptText(steer)}
 
-Rewrite this message. UK English, no em dashes, peer to peer tone, one observation and one question, 3-4 sentences, signed off "Twenty2 Collective". Return only the message text, nothing else.`;
+Rewrite this message. UK English, no em dashes, peer to peer tone, one observation and one question, 3-4 sentences, signed off as "Marcus" (first name only, never the company name). Return only the message text, nothing else.`;
 
     const message = await callClaudeText(prompt, 300);
 
@@ -8128,7 +8128,7 @@ function ctaBroughtForwardEarly(messageNumber, messagesBeforeCta, ctaIncluded) {
 // Mirrors the client's voiceRulesText() - ported here for the same reason.
 function voiceRulesPromptText(voice) {
   const v = voice || {};
-  return `Voice rules: UK English, no em dashes, ${(v.tone || 'peer to peer').toLowerCase()} tone, one observation and one question per message, 3 to 4 sentences, signed off "Twenty2 Collective", conditional CTA framing (never pushy). Connection requests should be ${(v.connLength || 'short').toLowerCase()}. Follow-up cadence is ${(v.cadence || 'steady').toLowerCase()}. ${v.voiceInstructions || ''}`;
+  return `Voice rules: UK English, no em dashes, ${(v.tone || 'peer to peer').toLowerCase()} tone, one observation and one question per message, 3 to 4 sentences, signed off as "Marcus" (first name only, never the company name), conditional CTA framing (never pushy). Make the observation from your own vantage point (what you're seeing across similar leaders), never by telling the contact what they already know, what they'd "know well", or how their own role feels. Connection requests should be ${(v.connLength || 'short').toLowerCase()}. Follow-up cadence is ${(v.cadence || 'steady').toLowerCase()}. ${v.voiceInstructions || ''}`;
 }
 
 // Same defaults as the client's state.settings.strategy (t2c-outreach-crm.html,
@@ -8139,7 +8139,7 @@ const DEFAULT_STRATEGY_VOICE = {
   tone: 'Peer to peer',
   connLength: 'Short',
   cadence: 'Steady',
-  voiceInstructions: 'UK English. No em dashes. Peer to peer, not salesy. One observation, one question per message. 3 to 4 sentences. Sign off as Twenty2 Collective. Frame CTAs conditionally, never pushy.'
+  voiceInstructions: 'UK English. No em dashes. Peer to peer, not salesy. One observation, one question per message. 3 to 4 sentences. Sign off as Marcus, first name only, never the company name. Frame CTAs conditionally, never pushy.'
 };
 
 // Today's Actions fast-action drafting (POST /api/campaign/:id/contacts/:contactId/
@@ -9409,7 +9409,7 @@ AI Summary: ${f['AI Summary'] || 'none yet'}
 Recent posts (last 30 days only): ${recentPosts}
 ${offer && offer.summary ? `This campaign's offer: ${offer.summary}\nWeave the offer above into this message naturally, in your own words - do not paste it verbatim.\n` : ''}Conversation so far: ${newContext}
 
-Write the next message in the conversation, following on naturally from what they just said. UK English, no em dashes, peer to peer tone, 3-4 sentences, one observation and one question, signed off "Twenty2 Collective".${RESPECT_SUMMARY_INSTRUCTIONS_NOTE} Return only the message text.`;
+Write the next message in the conversation, following on naturally from what they just said. UK English, no em dashes, peer to peer tone, 3-4 sentences, one observation and one question, signed off as "Marcus" (first name only, never the company name).${RESPECT_SUMMARY_INSTRUCTIONS_NOTE} Return only the message text.`;
           draft = await callClaudeText(draftPrompt, 400);
           rowUpdateFields['Next Message Draft'] = draft;
         }
@@ -10909,7 +10909,7 @@ Fix only these, and only where they actually occur:
 Hard rules:
 - Keep the message to 3 to 4 sentences. Do NOT add sentences, caveats, hedges, asides, self-corrections, disclaimers, or new points.
 - Do NOT add "mixed feelings", "unresolved tension", or deliberately varied sentence length. Leave the structure alone.
-- Keep every name, company, link and the sign-off exactly as they are. Keep any single question the message asks.
+- Keep every name, company and link exactly as they are, and keep any single question the message asks. Keep the sign-off, but if the draft signs off with a company name or "Twenty2 Collective", change it to just "Marcus".
 - If the message already reads naturally, return it essentially unchanged.
 - Plain text only, no markdown, no preamble. Return only the edited message.`;
 

@@ -836,17 +836,17 @@ let rawState = {
   sequences: [
     { id:'seniorLeaders', name:'Senior Leaders', roles:['Product Owner','Transformation Lead'], voice:'Peer to peer',
       stages:{
-        connect:"Hi {{first}}, I work with transformation and delivery leaders across WA and noticed your work at {{company}}. Would be good to connect.\n\nTwenty2 Collective",
-        m1:"Thanks for connecting, {{first}}. I've been speaking with a few {{role}}s in WA lately about how their teams are handling the pace of change at the moment. How's that landing for you at {{company}}?\n\nTwenty2 Collective",
-        m2:"No worries if you're flat out, {{first}}. I ask because a few of the leaders I've spoken with have found it useful to get a quick outside read on where their delivery rhythm might be losing time. Would that be worth a look for you?\n\nTwenty2 Collective",
-        cta:"If it's useful, {{first}}, I've got a short Change Value Check that gives a clear picture in under 15 minutes, no pitch involved. Happy to send it through if you'd like a look.\n\nTwenty2 Collective"
+        connect:"Hi {{first}}, I work with transformation and delivery leaders across WA and noticed your work at {{company}}. Would be good to connect.\n\nMarcus",
+        m1:"Thanks for connecting, {{first}}. I've been speaking with a few {{role}}s in WA lately about how their teams are handling the pace of change at the moment. How's that landing for you at {{company}}?\n\nMarcus",
+        m2:"No worries if you're flat out, {{first}}. I ask because a few of the leaders I've spoken with have found it useful to get a quick outside read on where their delivery rhythm might be losing time. Would that be worth a look for you?\n\nMarcus",
+        cta:"If it's useful, {{first}}, I've got a short Change Value Check that gives a clear picture in under 15 minutes, no pitch involved. Happy to send it through if you'd like a look.\n\nMarcus"
       } },
     { id:'digitalTech', name:'Digital and Tech', roles:['Digital and Tech'], voice:'Warm consultant',
       stages:{
-        connect:"Hi {{first}}, I work with tech and delivery teams across WA and saw your background in {{role}} at {{company}}. Would be good to connect.\n\nTwenty2 Collective",
-        m1:"Thanks for connecting, {{first}}. Curious how things are tracking on the engineering and delivery side at {{company}} at the moment, sprint cadence, tooling, that sort of thing. What's top of mind for you right now?\n\nTwenty2 Collective",
-        m2:"All good if you're deep in it, {{first}}. A few tech leads I've spoken with lately have found it useful to get a quick outside view on where their sprint cycle is actually losing time. Worth a look for you?\n\nTwenty2 Collective",
-        cta:"If it'd help, {{first}}, I've put together a short Change Value Check that maps this out in under 15 minutes, no pitch. Keen to send it over if useful.\n\nTwenty2 Collective"
+        connect:"Hi {{first}}, I work with tech and delivery teams across WA and saw your background in {{role}} at {{company}}. Would be good to connect.\n\nMarcus",
+        m1:"Thanks for connecting, {{first}}. Curious how things are tracking on the engineering and delivery side at {{company}} at the moment, sprint cadence, tooling, that sort of thing. What's top of mind for you right now?\n\nMarcus",
+        m2:"All good if you're deep in it, {{first}}. A few tech leads I've spoken with lately have found it useful to get a quick outside view on where their sprint cycle is actually losing time. Worth a look for you?\n\nMarcus",
+        cta:"If it'd help, {{first}}, I've put together a short Change Value Check that maps this out in under 15 minutes, no pitch. Keen to send it over if useful.\n\nMarcus"
       } }
   ],
   settings: {
@@ -861,7 +861,7 @@ let rawState = {
       tone: 'Peer to peer',
       connLength: 'Short (under 300 characters)',
       cadence: '3-4 days between messages',
-      voiceInstructions: 'UK English. No em dashes. Peer to peer, not salesy. One observation, one question per message. 3 to 4 sentences. Sign off as Twenty2 Collective. Frame CTAs conditionally, never pushy.'
+      voiceInstructions: 'UK English. No em dashes. Peer to peer, not salesy. One observation, one question per message. 3 to 4 sentences. Sign off as Marcus, first name only, never the company name. Frame CTAs conditionally, never pushy.'
     },
     leadMagnets: [
       { name:'Change Value Check', enabled:true, url:'https://twenty2collective.com/change-value-check' },
@@ -4684,7 +4684,7 @@ function localBriefFallback(c, action, method, isMessage){
     const opener = painPoint
       ? `Last time we touched on ${painPoint.toLowerCase()}, keen to hear how that is tracking.`
       : `Keen to hear how things are tracking on your end.`;
-    return `Hi ${firstName(c.name)}, following up given where things are with ${c.company}. ${opener}\n\nTwenty2 Collective`;
+    return `Hi ${firstName(c.name)}, following up given where things are with ${c.company}. ${opener}\n\nMarcus`;
   }
   return [
     `- Cover: where things stand since the last touch point and next steps for ${c.company}.`,
@@ -8850,7 +8850,7 @@ async function generateTemplate(seqId, stageKey){
 
 function voiceRulesText(){
   const v = state.settings.strategy;
-  return `Voice rules: UK English, no em dashes, ${v.tone.toLowerCase()} tone, one observation and one question per message, 3 to 4 sentences, signed off "Twenty2 Collective", conditional CTA framing (never pushy). Connection requests should be ${v.connLength.toLowerCase()}. Follow-up cadence is ${v.cadence.toLowerCase()}. ${v.voiceInstructions}`;
+  return `Voice rules: UK English, no em dashes, ${v.tone.toLowerCase()} tone, one observation and one question per message, 3 to 4 sentences, signed off as "Marcus" (first name only, never the company name), conditional CTA framing (never pushy). Make the observation from your own vantage point (what you're seeing across similar leaders), never by telling the contact what they already know, what they'd "know well", or how their own role feels. Connection requests should be ${v.connLength.toLowerCase()}. Follow-up cadence is ${v.cadence.toLowerCase()}. ${v.voiceInstructions}`;
 }
 
 function messageNumberForStage(stageKey){
@@ -8994,16 +8994,16 @@ function appendCtaNudge(text, stageKey){
   if(messageNumberForStage(stageKey) < n) return text;
   const nudge = ctaNudgeLine();
   if(!nudge) return text;
-  if(/\n\nTwenty2 Collective\s*$/.test(text)) return text.replace(/\n\nTwenty2 Collective\s*$/, `\n\n${nudge}\n\nTwenty2 Collective`);
+  if(/\n\n(Marcus|Twenty2 Collective)\s*$/.test(text)) return text.replace(/\n\n(Marcus|Twenty2 Collective)\s*$/, `\n\n${nudge}\n\nMarcus`);
   return text + `\n\n${nudge}`;
 }
 
 function localTemplateFallback(seq, stageKey){
   const fallbacks = {
-    connect: "Hi {{first}}, I work with {{role}}s across WA and came across your profile at {{company}}. Would be good to connect.\n\nTwenty2 Collective",
-    m1: "Thanks for connecting, {{first}}. Curious how things are tracking at {{company}} at the moment. What's top of mind for you right now?\n\nTwenty2 Collective",
-    m2: "No worries if you're flat out, {{first}}. A few {{role}}s I've spoken with lately have found it useful to get a quick outside read on their delivery rhythm. Worth a look for you?\n\nTwenty2 Collective",
-    cta: "If it's useful, {{first}}, I've got a short Change Value Check that gives a clear picture in under 15 minutes, no pitch. Happy to send it through.\n\nTwenty2 Collective"
+    connect: "Hi {{first}}, I work with {{role}}s across WA and came across your profile at {{company}}. Would be good to connect.\n\nMarcus",
+    m1: "Thanks for connecting, {{first}}. Curious how things are tracking at {{company}} at the moment. What's top of mind for you right now?\n\nMarcus",
+    m2: "No worries if you're flat out, {{first}}. A few {{role}}s I've spoken with lately have found it useful to get a quick outside read on their delivery rhythm. Worth a look for you?\n\nMarcus",
+    cta: "If it's useful, {{first}}, I've got a short Change Value Check that gives a clear picture in under 15 minutes, no pitch. Happy to send it through.\n\nMarcus"
   };
   return appendCtaNudge(fallbacks[stageKey], stageKey);
 }
@@ -10395,7 +10395,7 @@ async function aiRedraftSequenceStage(campaignId, stageKey){
     }
   } catch(err){
     console.warn('Redraft unavailable, using local fallback:', err.message);
-    result = currentContent || 'Following up given where things stand - keen to hear how things are tracking.\n\nTwenty2 Collective';
+    result = currentContent || 'Following up given where things stand - keen to hear how things are tracking.\n\nMarcus';
   }
   const contentEl = document.getElementById('seqEditContent');
   if(contentEl) contentEl.value = result;
