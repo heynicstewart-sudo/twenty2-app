@@ -5446,11 +5446,26 @@ ${performancePatterns ? `\nWHAT HAS PERFORMED WELL BEFORE (Marcus's own top post
 
 Write a ${resolvedFormat} of target length ${lengthTarget}. UK English, no em dashes, first person as Marcus.
 
+Avoid the tells of AI-written LinkedIn content: no three-part lists where two items would do ("thorough, well-documented and professionally designed"), no scaffolded argument skeleton ("The problem was... The issue is rarely X, it's Y... What actually works is..."), and don't lean on one-line sentence fragments for emphasis more than once or twice in the whole piece. Vary how paragraphs open. Let at least one point stay a little unresolved rather than tying everything off.
+
 Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 { "title": string, "body": string }`;
     }
 
     const drafted = await callClaudeJson(prompt, 3500);
+
+    // Run the drafted body through the same 3-pass plain-text humanizer the
+    // SEO LinkedIn post and email copy already use, so Draft Centre content
+    // (LinkedIn posts / blogs / newsletters drafted from a signal) gets the
+    // AI-tell cleanup too rather than shipping raw model prose. Best-effort:
+    // humanizePlainText returns the input unchanged on any failure.
+    if (drafted && drafted.body && drafted.body.trim()) {
+      try {
+        drafted.body = await humanizePlainText(drafted.body);
+      } catch (humanizeErr) {
+        console.warn('Content draft humanize failed, keeping raw draft:', humanizeErr.message);
+      }
+    }
 
     if (draftMode === 'new') {
       const fields = {
