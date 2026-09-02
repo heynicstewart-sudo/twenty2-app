@@ -10745,17 +10745,19 @@ async function getGscAccessToken() {
 }
 
 function gscPropertyForSite() {
-  if (process.env.GSC_PROPERTY) return process.env.GSC_PROPERTY;
+  const t = currentTenant();
+  if (t.gsc && t.gsc.property) return t.gsc.property;
   try {
-    return `sc-domain:${new URL(process.env.FRAMER_SITE_URL || '').hostname}`;
+    return `sc-domain:${new URL((t.framer && t.framer.siteUrl) || '').hostname}`;
   } catch (err) {
     return '';
   }
 }
 
 function gscSitemapUrl() {
-  if (process.env.GSC_SITEMAP_URL) return process.env.GSC_SITEMAP_URL;
-  const siteUrl = (process.env.FRAMER_SITE_URL || '').replace(/\/$/, '');
+  const t = currentTenant();
+  if (t.gsc && t.gsc.sitemapUrl) return t.gsc.sitemapUrl;
+  const siteUrl = (((t.framer && t.framer.siteUrl) || '')).replace(/\/$/, '');
   return siteUrl ? `${siteUrl}/sitemap.xml` : '';
 }
 
@@ -12024,17 +12026,22 @@ function buildFramerTextFieldEntry(field, value) {
 // dumping a service page into the blog. kind 'blog' (the default) keeps
 // the existing blog/post/article heuristic with collections[0] as a last
 // resort.
+// The active client's Framer config (apiKey, projectUrl, siteUrl,
+// blogCollection, blogPathPrefix, serviceCollection, servicePathPrefix),
+// resolved from that client's Railway env vars / control-base row.
+function fr() { return currentTenant().framer || {}; }
+
 function resolveFramerCollection(collections, kind) {
   const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
   if (kind === 'service') {
-    const envHint = process.env.FRAMER_SERVICE_COLLECTION_NAME;
+    const envHint = fr().serviceCollection;
     const match = (envHint && collections.find(c => c.name.toLowerCase() === envHint.toLowerCase()))
       || collections.find(c => norm(c.name) === 'servicepages')
       || collections.find(c => /service/i.test(c.name));
     if (!match) throw new Error('No Framer CMS collection named "service-pages" found (set FRAMER_SERVICE_COLLECTION_NAME to override)');
     return match;
   }
-  const blogHint = process.env.FRAMER_BLOG_COLLECTION_NAME;
+  const blogHint = fr().blogCollection;
   return (blogHint && collections.find(c => c.name.toLowerCase() === blogHint.toLowerCase()))
     || collections.find(c => /blog|post|article/i.test(c.name))
     || collections[0];
@@ -12043,7 +12050,7 @@ function resolveFramerCollection(collections, kind) {
 async function publishToFramer(post, options = {}) {
   const kind = options.collectionKind || 'blog';
   const { connect } = await import('framer-api');
-  const framer = await connect(process.env.FRAMER_PROJECT_URL, process.env.FRAMER_API_KEY);
+  const framer = await connect(fr().projectUrl, fr().apiKey);
   try {
     const collections = await framer.getCollections();
     if (!collections.length) throw new Error('No CMS collections found in the connected Framer project');
@@ -12108,10 +12115,10 @@ async function publishToFramer(post, options = {}) {
     // (Status set above, if the field/case were found) until a human
     // reviews it and presses Publish in the Framer UI themselves.
 
-    const siteUrl = (process.env.FRAMER_SITE_URL || '').replace(/\/$/, '');
+    const siteUrl = (fr().siteUrl || '').replace(/\/$/, '');
     const defaultPrefix = kind === 'service'
-      ? (process.env.FRAMER_SERVICE_PATH_PREFIX || '/services')
-      : (process.env.FRAMER_BLOG_PATH_PREFIX || '/research');
+      ? (fr().servicePathPrefix || '/services')
+      : (fr().blogPathPrefix || '/research');
     const pathPrefix = defaultPrefix.replace(/\/$/, '');
     const url = siteUrl ? `${siteUrl}${pathPrefix}/${slug}` : slug;
     return { url, slug, collectionName: collection.name };
@@ -12126,19 +12133,19 @@ async function publishToFramer(post, options = {}) {
 // after a Railway deploy without creating a real draft post as a side
 // effect of testing.
 app.get('/api/seo/framer-status', async (req, res) => {
-  if (!process.env.FRAMER_API_KEY) return res.status(500).json({ error: 'FRAMER_API_KEY not configured' });
-  if (!process.env.FRAMER_PROJECT_URL) return res.status(500).json({ error: 'FRAMER_PROJECT_URL not configured' });
+  if (!fr().apiKey) return res.status(500).json({ error: 'FRAMER_API_KEY not configured' });
+  if (!fr().projectUrl) return res.status(500).json({ error: 'FRAMER_PROJECT_URL not configured' });
 
   let framer;
   try {
     const { connect } = await import('framer-api');
-    framer = await connect(process.env.FRAMER_PROJECT_URL, process.env.FRAMER_API_KEY);
+    framer = await connect(fr().projectUrl, fr().apiKey);
 
     const info = await framer.getProjectInfo();
     const collections = await framer.getCollections();
     if (!collections.length) return res.json({ connected: true, projectName: info.name, error: 'No CMS collections found in this project' });
 
-    const nameHint = process.env.FRAMER_BLOG_COLLECTION_NAME;
+    const nameHint = fr().blogCollection;
     const collection = (nameHint && collections.find(c => c.name.toLowerCase() === nameHint.toLowerCase()))
       || collections.find(c => /blog|post|article/i.test(c.name))
       || collections[0];
@@ -12177,8 +12184,8 @@ app.get('/api/seo/framer-status', async (req, res) => {
 // Framer itself (see publishToFramer's comment above).
 app.post('/api/seo/publish', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
-  if (!process.env.FRAMER_API_KEY) return res.status(500).json({ error: 'FRAMER_API_KEY not configured' });
-  if (!process.env.FRAMER_PROJECT_URL) return res.status(500).json({ error: 'FRAMER_PROJECT_URL not configured' });
+  if (!fr().apiKey) return res.status(500).json({ error: 'FRAMER_API_KEY not configured' });
+  if (!fr().projectUrl) return res.status(500).json({ error: 'FRAMER_PROJECT_URL not configured' });
 
   const { keywordId } = req.body;
   if (!keywordId) return res.status(400).json({ error: 'keywordId is required' });
@@ -12585,8 +12592,8 @@ app.post('/api/seo/generate-service-page', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
   if (!process.env.SERPER_API_KEY) return res.status(500).json({ error: 'SERPER_API_KEY not configured' });
-  if (!process.env.FRAMER_API_KEY) return res.status(500).json({ error: 'FRAMER_API_KEY not configured' });
-  if (!process.env.FRAMER_PROJECT_URL) return res.status(500).json({ error: 'FRAMER_PROJECT_URL not configured' });
+  if (!fr().apiKey) return res.status(500).json({ error: 'FRAMER_API_KEY not configured' });
+  if (!fr().projectUrl) return res.status(500).json({ error: 'FRAMER_PROJECT_URL not configured' });
 
   const service = (req.body.service || '').trim();
   const location = (req.body.location || '').trim();
@@ -13668,11 +13675,16 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 // client_email as a viewer. /data batch-reads all 5 tabs and caches the
 // result in memory for an hour; /insights and /draft-campaign layer
 // claude-opus-4-6 on top of the same data.
-const GOOGLE_ADS_SHEET_ID = process.env.GOOGLE_ADS_SHEET_ID || '1_2nSes09zHgNHxcwGGS3dMuEIE1BlogouqwSSgH4e2w';
+// Per active client: their Google Ads sheet from the control-base row /
+// GOOGLE_ADS_SHEET_ID_<SLUG>, falling back (for the default client only,
+// via clientConf) to GOOGLE_ADS_SHEET_ID, then to Twenty2's sheet.
+function googleAdsSheetId() {
+  return currentTenant().googleAdsSheetId || '1_2nSes09zHgNHxcwGGS3dMuEIE1BlogouqwSSgH4e2w';
+}
 const GOOGLE_ADS_SHEET_TABS = ['Campaigns', 'Keywords', 'Ads', 'Search Terms', 'Ad Groups'];
 const GOOGLE_ADS_SHEETS_SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly'];
 const GOOGLE_ADS_CACHE_MS = 60 * 60 * 1000;
-let googleAdsDataCache = null; // { at: epochMs, data }
+const googleAdsDataCacheBySheet = new Map(); // sheetId -> { at: epochMs, data }
 
 async function getGoogleSheetsClient() {
   const raw = process.env.GSC_SERVICE_ACCOUNT_JSON;
@@ -13727,8 +13739,10 @@ function googleAdsTotalRecordCount(sheets) {
 }
 
 async function fetchGoogleAdsData(force) {
-  if (!force && googleAdsDataCache && (Date.now() - googleAdsDataCache.at) < GOOGLE_ADS_CACHE_MS) {
-    return { ...googleAdsDataCache.data, cached: true };
+  const sheetId = googleAdsSheetId();
+  const cached = googleAdsDataCacheBySheet.get(sheetId);
+  if (!force && cached && (Date.now() - cached.at) < GOOGLE_ADS_CACHE_MS) {
+    return { ...cached.data, cached: true };
   }
 
   let sheets;
@@ -13741,13 +13755,13 @@ async function fetchGoogleAdsData(force) {
   let resp;
   try {
     resp = await sheets.spreadsheets.values.batchGet({
-      spreadsheetId: GOOGLE_ADS_SHEET_ID,
+      spreadsheetId: sheetId,
       ranges: GOOGLE_ADS_SHEET_TABS.map(t => `'${t}'!A1:BZ5000`)
     });
   } catch (err) {
     // googleapis errors carry the useful detail on err.errors / err.response.data
     const detail = (err.response && err.response.data && err.response.data.error && err.response.data.error.message) || err.message;
-    throw new Error(`Google Sheets API request failed for spreadsheet ${GOOGLE_ADS_SHEET_ID} (is it shared with the service account and are the tab names ${GOOGLE_ADS_SHEET_TABS.join(', ')} correct?): ${detail}`);
+    throw new Error(`Google Sheets API request failed for spreadsheet ${sheetId} (is it shared with the service account and are the tab names ${GOOGLE_ADS_SHEET_TABS.join(', ')} correct?): ${detail}`);
   }
 
   const valueRanges = (resp.data && resp.data.valueRanges) || [];
@@ -13758,13 +13772,13 @@ async function fetchGoogleAdsData(force) {
   });
 
   const data = {
-    sheetId: GOOGLE_ADS_SHEET_ID,
+    sheetId,
     fetchedAt: new Date().toISOString(),
     cached: false,
     recordCount: googleAdsTotalRecordCount(out),
     sheets: out
   };
-  googleAdsDataCache = { at: Date.now(), data };
+  googleAdsDataCacheBySheet.set(sheetId, { at: Date.now(), data });
   return data;
 }
 
@@ -13980,10 +13994,11 @@ const OMNISEND_API_BASE = 'https://api.omnisend.com/api';
 const OMNISEND_API_VERSION = '2026-03-15';
 const OMNISEND_CACHE_MS = 60 * 60 * 1000; // 1 hour, same as the Google Ads sheet cache
 const OMNISEND_LOW_ENGAGEMENT_DAYS = 90;
-let omnisendCampaignStatsCache = null; // { at: epochMs, data }
+const omnisendCampaignStatsCacheByKey = new Map(); // omnisend api key -> { at, data }
 
+function omnisendApiKey() { return currentTenant().omnisendApiKey || ''; }
 function omnisendConfigured() {
-  return !!process.env.OMNISEND_API_KEY;
+  return !!omnisendApiKey();
 }
 
 // Omnisend's /api/* surface accepts the newer Authorization header; older
@@ -13991,8 +14006,8 @@ function omnisendConfigured() {
 // the dated Omnisend-Version header, so callers can opt out with {version:false}.
 function omnisendHeaders(opts) {
   const h = {
-    'Authorization': `Omnisend-API-Key ${process.env.OMNISEND_API_KEY || ''}`,
-    'X-API-KEY': process.env.OMNISEND_API_KEY,
+    'Authorization': `Omnisend-API-Key ${omnisendApiKey()}`,
+    'X-API-KEY': omnisendApiKey(),
     'Content-Type': 'application/json',
     'Accept': 'application/json'
   };
@@ -14165,8 +14180,10 @@ app.get('/api/omnisend/campaigns', async (req, res) => {
 app.get('/api/omnisend/campaign-stats', async (req, res) => {
   if (!omnisendConfigured()) return res.status(500).json({ error: 'OMNISEND_API_KEY not configured' });
   const force = req.query.refresh === '1' || req.query.refresh === 'true';
-  if (!force && omnisendCampaignStatsCache && (Date.now() - omnisendCampaignStatsCache.at) < OMNISEND_CACHE_MS) {
-    return res.json({ ...omnisendCampaignStatsCache.data, cached: true });
+  const omniCacheKey = omnisendApiKey();
+  const omniCached = omnisendCampaignStatsCacheByKey.get(omniCacheKey);
+  if (!force && omniCached && (Date.now() - omniCached.at) < OMNISEND_CACHE_MS) {
+    return res.json({ ...omniCached.data, cached: true });
   }
   try {
     // Month granularity allows at most a 12-month span; stay comfortably
@@ -14230,7 +14247,7 @@ app.get('/api/omnisend/campaign-stats', async (req, res) => {
       fetchedAt: new Date().toISOString(),
       cached: false
     };
-    omnisendCampaignStatsCache = { at: Date.now(), data };
+    omnisendCampaignStatsCacheByKey.set(omniCacheKey, { at: Date.now(), data });
     res.json(data);
   } catch (err) {
     console.error('Omnisend campaign-stats error:', err.message);
