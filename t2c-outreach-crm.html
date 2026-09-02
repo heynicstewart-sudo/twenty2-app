@@ -1493,28 +1493,10 @@ function applyClientBranding(c){
 
 function ensureAgencyNav(s){
   const multi = s && (s.controlPlane || (s.clients && s.clients.length > 1));
-  let changed = false;
   if(multi && !NAV.some(n => n.id === 'agency')){
     NAV.unshift({ id:'agency', label:'Agency', icon:'ti-building-community' });
-    changed = true;
+    renderSidebar();
   }
-  // Email-mode clients (Google business search + cold email, no LinkedIn
-  // market-map) get a Prospecting entry in place of the hidden Grid page.
-  const emailMode = (s && s.activeClient && s.activeClient.outreachMode) === 'email';
-  const hasProspecting = NAV.some(n => n.id === 'prospecting');
-  if(emailMode && !hasProspecting){
-    const homeIdx = NAV.findIndex(n => n.id === 'home');
-    NAV.splice(homeIdx >= 0 ? homeIdx + 1 : NAV.length, 0, { id:'prospecting', label:'Prospecting', icon:'ti-building-store' });
-    changed = true;
-  } else if(!emailMode && hasProspecting){
-    const i = NAV.findIndex(n => n.id === 'prospecting');
-    if(i >= 0){ NAV.splice(i, 1); changed = true; }
-  }
-  // If a persisted currentPage is no longer reachable for this client
-  // (e.g. switched away from an email-mode client while on Prospecting),
-  // fall back to Home.
-  if(state.currentPage === 'prospecting' && !emailMode){ navigate('home'); return; }
-  if(changed) renderSidebar();
 }
 
 function renderClientSwitcher(s){
@@ -1629,7 +1611,6 @@ const CLIENT_FORM_SPEC = [
   { k:'name', label:'Client name', required:true, ph:'The Shed Guru', oninput:'refreshMarketingNote()' },
   { k:'slug', label:'Slug', hint:'URL-safe id. Leave blank to auto-generate from the name. Cannot be changed later.', ph:'the-shed-guru', oninput:'refreshMarketingNote()' },
   { k:'status', label:'Status', type:'select', options:['Active','Paused'] },
-  { k:'outreachMode', label:'Outreach mode', type:'select', options:['LinkedIn','Email'], hint:'LinkedIn = market-map grid + connection/message sequences. Email = Google business search + one-off cold emails.' },
   { section: 'Airtable' },
   { k:'baseId', label:'CRM base ID', required:true, hint:'In Airtable: duplicate the Twenty2 base (structure only), then paste its base id (app...) here.', ph:'appXXXXXXXXXXXXXX', validate:true },
   { section: 'Branding' },
@@ -1795,100 +1776,6 @@ async function loadAgencyOverview(force){
   if(h) h.innerHTML = renderAgencyOverviewGrid(window.__agencyOverview);
 }
 
-/* ===================== PROSPECTING (email-mode clients) ===================== */
-// Google business search -> tick results -> add as Companies. Shown only
-// for clients whose Outreach Mode is Email (The Shed Guru style).
-
-function renderProspectingPage(){
-  const s = window.__prospectSearch || {};
-  return `
-  <div class="card" style="margin-bottom:16px;">
-    <div class="section-title" style="margin-bottom:2px;"><i class="ti ti-building-store"></i> Find companies</div>
-    <div class="muted" style="font-size:12px;margin-bottom:12px;">Search Google for businesses to add to this workspace. Type it like you would in the search bar - e.g. <em>shed installers brisbane</em> or <em>shed kit suppliers australia</em>.</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-      <input id="prospectQuery" type="text" placeholder="shed installers brisbane" value="${esc(s.query||'')}" style="flex:1;min-width:240px;" onkeydown="if(event.key==='Enter')runProspectSearch()">
-      <label style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;white-space:nowrap;"><input type="checkbox" id="prospectFacebook" ${s.includeFacebook?'checked':''}> Include Facebook pages</label>
-      <button class="btn btn-primary btn-sm" onclick="runProspectSearch()"><i class="ti ti-search"></i> Search</button>
-    </div>
-  </div>
-  <div id="prospectResults">${renderProspectResults(window.__prospectResults)}</div>`;
-}
-
-function renderProspectResults(data){
-  if(data === undefined) return '';
-  if(data === 'loading') return '<div class="muted"><i class="ti ti-loader-2"></i> Searching...</div>';
-  if(data && data.error) return `<div class="muted">Search failed: ${esc(data.error)}</div>`;
-  const rows = (data && data.results) || [];
-  if(!rows.length) return '<div class="empty-state">No businesses found for that search. Try different words or a broader area.</div>';
-  return `
-  <div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
-      <div class="section-title" style="margin-bottom:0;">${rows.length} result${rows.length===1?'':'s'}</div>
-      <button class="btn btn-primary btn-sm" onclick="addSelectedProspects()"><i class="ti ti-plus"></i> Add selected</button>
-    </div>
-    <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
-      <thead><tr style="text-align:left;border-bottom:1px solid var(--border-light);">
-        <th style="padding:6px 8px;width:28px;"><input type="checkbox" onchange="toggleAllProspects(this.checked)" checked></th>
-        <th style="padding:6px 8px;">Business</th><th style="padding:6px 8px;">Site</th><th style="padding:6px 8px;">Notes</th>
-      </tr></thead>
-      <tbody>
-        ${rows.map((r,i) => `<tr style="border-bottom:1px solid var(--border-light);">
-          <td style="padding:6px 8px;"><input type="checkbox" class="prospect-check" data-i="${i}" checked></td>
-          <td style="padding:6px 8px;font-weight:600;">${esc(r.name)}${r.source==='facebook'?' <span class="muted" style="font-weight:400;">(FB)</span>':''}</td>
-          <td style="padding:6px 8px;"><a href="${esc(r.url)}" target="_blank" rel="noopener" style="color:var(--accent,#2A6B7C);">${esc(r.domain)}</a></td>
-          <td style="padding:6px 8px;color:var(--sidebar-muted);">${esc((r.snippet||'').slice(0,110))}${(r.snippet||'').length>110?'…':''}</td>
-        </tr>`).join('')}
-      </tbody>
-    </table>
-  </div>`;
-}
-
-async function runProspectSearch(){
-  const query = (document.getElementById('prospectQuery').value || '').trim();
-  const includeFacebook = !!document.getElementById('prospectFacebook').checked;
-  if(!query){ toast('Type a search first', 'warn'); return; }
-  window.__prospectSearch = { query, includeFacebook };
-  window.__prospectResults = 'loading';
-  const host = document.getElementById('prospectResults');
-  if(host) host.innerHTML = renderProspectResults('loading');
-  try {
-    const res = await fetch('/api/prospects/search', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ query, includeFacebook })
-    });
-    const data = await res.json();
-    window.__prospectResults = res.ok ? data : { error: data.error || 'Request failed' };
-  } catch(err){
-    window.__prospectResults = { error: err.message };
-  }
-  const h = document.getElementById('prospectResults');
-  if(h) h.innerHTML = renderProspectResults(window.__prospectResults);
-}
-
-function toggleAllProspects(checked){
-  document.querySelectorAll('.prospect-check').forEach(c => { c.checked = checked; });
-}
-
-async function addSelectedProspects(){
-  const results = (window.__prospectResults && window.__prospectResults.results) || [];
-  const picked = [...document.querySelectorAll('.prospect-check')]
-    .filter(c => c.checked)
-    .map(c => results[parseInt(c.dataset.i, 10)])
-    .filter(Boolean);
-  if(!picked.length){ toast('Nothing selected', 'warn'); return; }
-  try {
-    const res = await fetch('/api/prospects/add', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ companies: picked, createContactStub: true })
-    });
-    const data = await res.json();
-    if(!res.ok) throw new Error(data.error || 'Add failed');
-    toast(`Added ${data.addedCount} compan${data.addedCount===1?'y':'ies'}${data.failed && data.failed.length ? ` (${data.failed.length} failed)` : ''}`, 'success');
-    hydrateCompaniesFromAirtable && hydrateCompaniesFromAirtable();
-  } catch(err){
-    toast('Could not add companies: ' + err.message, 'warn');
-  }
-}
 
 function navigate(page){
   state.currentPage = page;
@@ -1902,7 +1789,7 @@ function navigate(page){
 
 function renderPage(){
   const el = document.getElementById('pageContent');
-  const renderers = { home: renderHome, logger: renderLoggerPage, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, contentcalendar: renderContentCalendarPage, research: renderResearch, settings: renderSettings, agency: renderAgencyPage, prospecting: renderProspectingPage };
+  const renderers = { home: renderHome, logger: renderLoggerPage, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, contentcalendar: renderContentCalendarPage, research: renderResearch, settings: renderSettings, agency: renderAgencyPage };
   el.innerHTML = renderers[state.currentPage]();
   afterRender(state.currentPage);
 }
@@ -5384,10 +5271,11 @@ const SPREADSHEET_COLUMNS = [
   { key:'touchPoints', label:'Touch Points', numeric:true },
   { key:'lastContact', label:'Last Contact', date:true },
   { key:'nextDraft', label:'Next Message Draft' },
+  { key:'emailAddress', label:'Email' },
   { key:'dms', label:'DMs Sent', numeric:true },
   { key:'calls', label:'Calls', numeric:true },
   { key:'coffee', label:'Coffee', numeric:true },
-  { key:'email', label:'Email', numeric:true }
+  { key:'email', label:'Emails Sent', numeric:true }
 ];
 
 function gridViewMode(gridId){
@@ -5625,6 +5513,7 @@ function spreadsheetRowData(c, gridId, seqMap){
     lastContactDisplay: last ? fmtDate(last) : '—',
     nextDraft: draft,
     nextDraftDisplay: draft ? (draft.length > 60 ? esc(draft.slice(0,60))+'…' : esc(draft)) : '—',
+    emailAddress: c.email || '',
     dms: counts.dms, calls: counts.calls, coffee: counts.coffee, email: counts.email
   };
 }
@@ -6040,8 +5929,22 @@ function openCsvColumnModal(rows){
       </select>
     </div>
     <div class="field">
-      <label>Which column contains the job title?</label>
+      <label>Which column contains the job title? <span class="muted" style="font-weight:400;">(optional)</span></label>
       <select id="csvContactColumn">
+        <option value="">— None —</option>
+        ${optionsHtml}
+      </select>
+    </div>
+    <div class="field">
+      <label>Which column contains the contact's name? <span class="muted" style="font-weight:400;">(optional — creates real contacts, not just a grid skeleton)</span></label>
+      <select id="csvNameColumn">
+        <option value="">— None —</option>
+        ${optionsHtml}
+      </select>
+    </div>
+    <div class="field">
+      <label>Which column contains the contact's email? <span class="muted" style="font-weight:400;">(optional)</span></label>
+      <select id="csvEmailColumn">
         <option value="">— None —</option>
         ${optionsHtml}
       </select>
@@ -6050,9 +5953,9 @@ function openCsvColumnModal(rows){
   `;
   const footer = `
     <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-    <button class="btn btn-primary" onclick="confirmCsvImport()"><i class="ti ti-check"></i> Import companies</button>
+    <button class="btn btn-primary" onclick="confirmCsvImport()"><i class="ti ti-check"></i> Import</button>
   `;
-  openModal('Import companies from CSV', body, footer);
+  openModal('Import from CSV', body, footer);
 }
 
 async function confirmCsvImport(){
@@ -6060,11 +5963,17 @@ async function confirmCsvImport(){
   const colIdx = parseInt(document.getElementById('csvCompanyColumn').value);
   const jobTitleColValue = document.getElementById('csvContactColumn').value;
   const jobTitleColIdx = jobTitleColValue !== '' ? parseInt(jobTitleColValue) : null;
+  const nameColValue = document.getElementById('csvNameColumn').value;
+  const nameColIdx = nameColValue !== '' ? parseInt(nameColValue) : null;
+  const emailColValue = document.getElementById('csvEmailColumn').value;
+  const emailColIdx = emailColValue !== '' ? parseInt(emailColValue) : null;
   const rows = window.__csvImportRows || [];
   const seen = new Set(grid.companies.map(c => c.toLowerCase()));
   const seenColumns = new Set(grid.columns.map(c => c.toLowerCase()));
+  const existingContactKeys = new Set(gridContacts(grid.id).map(c => (c.name+'|'+c.company).toLowerCase()));
   const newCompanies = [];
   const newColumns = [];
+  const newContacts = []; // {name, role, company, email}
   rows.forEach(r => {
     const val = (r[colIdx] || '').trim();
     if(val){
@@ -6076,24 +5985,44 @@ async function confirmCsvImport(){
       }
     }
 
-    if(jobTitleColIdx === null) return;
-    const jobTitle = (r[jobTitleColIdx] || '').trim();
-    if(!jobTitle) return;
-    const titleKey = jobTitle.toLowerCase();
-    if(seenColumns.has(titleKey)) return;
-    seenColumns.add(titleKey);
-    grid.columns.push(jobTitle);
-    newColumns.push(jobTitle);
+    const jobTitle = jobTitleColIdx !== null ? (r[jobTitleColIdx] || '').trim() : '';
+    if(jobTitle){
+      const titleKey = jobTitle.toLowerCase();
+      if(!seenColumns.has(titleKey)){
+        seenColumns.add(titleKey);
+        grid.columns.push(jobTitle);
+        newColumns.push(jobTitle);
+      }
+    }
+
+    if(nameColIdx !== null){
+      const contactName = (r[nameColIdx] || '').trim();
+      const email = emailColIdx !== null ? (r[emailColIdx] || '').trim() : '';
+      if(contactName && val){
+        const ckey = (contactName+'|'+val).toLowerCase();
+        if(!existingContactKeys.has(ckey)){
+          existingContactKeys.add(ckey);
+          newContacts.push({ name: contactName, role: jobTitle, company: val, email });
+        }
+      }
+    }
   });
+
+  for(const nc of newContacts){
+    createManualGridContact(nc.name, nc.role, nc.company, '', '', nc.email);
+    await sleep(150);
+  }
+
   const addedCount = newCompanies.length;
   const addedColumnsCount = newColumns.length;
-  if(addedCount || addedColumnsCount) touchGrid(grid.id);
+  if(addedCount || addedColumnsCount || newContacts.length) touchGrid(grid.id);
   closeModal();
-  if(addedCount || addedColumnsCount) renderPage();
+  renderPage();
   const parts = [];
+  if(newContacts.length) parts.push(newContacts.length + ' contact' + (newContacts.length===1?'':'s'));
   if(addedCount) parts.push(addedCount + ' compan' + (addedCount===1?'y':'ies'));
-  if(addedColumnsCount) parts.push(addedColumnsCount + ' job title column' + (addedColumnsCount===1?'':'s'));
-  toast(parts.length ? parts.join(' and ') + ' added from CSV' : 'Nothing new to add from CSV', parts.length ? 'success' : 'warn');
+  if(addedColumnsCount) parts.push(addedColumnsCount + ' column' + (addedColumnsCount===1?'':'s'));
+  toast(parts.length ? parts.join(', ') + ' added from CSV' : 'Nothing new to add from CSV', parts.length ? 'success' : 'warn');
 
   // Same Airtable write addGridCompany() does for a single manually-added
   // company (POST /api/airtable/company with Grid Name), just sequenced
@@ -6146,11 +6075,11 @@ function openAddContactModal(){
 // optional - only the Apollo import flow passes it (Apollo's own verbose
 // title, kept separate from `role`, which is the grid column/searched job
 // title written to the real Job Title field - see confirmApolloImport).
-function createManualGridContact(name, role, company, linkedinUrl, apolloTitle){
+function createManualGridContact(name, role, company, linkedinUrl, apolloTitle, email){
   const grid = currentGrid();
   const seqId = role === 'Digital and Tech' ? 'digitalTech' : 'seniorLeaders';
   const contact = {
-    id: uid('c'), gridId: grid.id, name, company, role, url: linkedinUrl,
+    id: uid('c'), gridId: grid.id, name, company, role, url: linkedinUrl, email: email || '',
     seqId, state:'found', foundDate: isoDate(TODAY), connReqDate:null, connDate:null, notes:'',
     thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[],
     apolloTitle: apolloTitle || ''
@@ -6878,6 +6807,7 @@ function syncContactToAirtable(contact) {
     company: contact.company,
     role: contact.role,
     linkedinUrl: contact.url,
+    email: contact.email || '',
     state: contact.state,
     icpRoleCategory: contact.role,
     notes: contact.notes || '',
@@ -7076,6 +7006,7 @@ async function hydrateContactsFromAirtable(){
         company: company,
         role: role,
         url: f['LinkedIn URL'] || '',
+        email: f['Email'] || '',
         seqId: role === 'Digital and Tech' ? 'digitalTech' : 'seniorLeaders',
         state: JOURNEY_STAGE_TO_STATE[f['Journey Stage']] || 'found',
         foundDate: isoDate(TODAY),
@@ -7258,6 +7189,7 @@ async function hydrateCampaignsFromAirtable(){
         successMetric: f['Success Metric'] || '',
         estimatedConversions: '',
         status: f['Status'] || 'Draft',
+        type: (f['Campaign Type'] || 'LinkedIn').toLowerCase() === 'email' ? 'email' : 'linkedin',
         ctas: f['CTAs'] || '',
         contentContext: f['Content Context'] || '',
         styleCorrections: parseCampaignStyleCorrections(f['Style Corrections']),
@@ -8559,6 +8491,29 @@ async function saveContactCompany(){
   }
 }
 
+async function saveContactEmail(){
+  const input = document.getElementById('contactEmailInput');
+  const profile = window.__drawerContactProfile;
+  if(!input || !profile) return;
+  const newEmail = input.value.trim();
+  if(newEmail === (profile.contact.email || '')) return;
+  try {
+    const res = await fetch(`/api/contacts/${encodeURIComponent(profile.contact.id)}/email`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: newEmail })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
+    profile.contact.email = data.email;
+    const localContact = state.contacts.find(x => x.id === profile.contact.id);
+    if(localContact) localContact.email = data.email;
+    toast('Email saved', 'success');
+  } catch(err){
+    input.value = profile.contact.email || '';
+    toast('Could not save email: ' + err.message, 'warn');
+  }
+}
+
 // Drawer's CAMPAIGN dropdown - treats a contact as belonging to at most one
 // campaign at a time (see PATCH /api/contacts/:id/campaign-membership for
 // why that's a deliberate simplification of the underlying Campaign
@@ -8666,9 +8621,12 @@ function renderContactDrawerContent(data, campaignName){
         <input id="contactCompanyInput" class="muted" value="${esc(c.companyName)}" placeholder="Company" title="Click to correct - useful if Serper/Apollo data is outdated or they've moved companies. Creates the company in the database if it does not exist yet." style="font-size:12.5px;border:1px dashed var(--border,#ccc);border-radius:4px;padding:1px 4px;background:transparent;min-width:0;flex:0 1 auto;" size="${Math.max(8, (c.companyName||'').length)}" onfocus="this.style.borderColor='var(--blue)';this.style.borderStyle='solid';" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}" onblur="this.style.borderColor='var(--border,#ccc)';this.style.borderStyle='dashed';saveContactCompany();" />
         <i class="ti ti-pencil" style="font-size:11px;color:var(--muted);flex-shrink:0;" title="Company is editable"></i>
       </div>
+      <div style="display:flex;align-items:center;gap:4px;margin-top:4px;">
+        <i class="ti ti-mail" style="font-size:12px;color:var(--muted);flex-shrink:0;"></i>
+        <input id="contactEmailInput" class="muted" value="${esc(c.email||'')}" placeholder="email address" title="Contact's email - used when drafting emails for an Email-type campaign" style="font-size:12px;border:1px dashed var(--border,#ccc);border-radius:4px;padding:1px 4px;background:transparent;min-width:0;flex:1 1 auto;" onfocus="this.style.borderColor='var(--blue)';this.style.borderStyle='solid';" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}" onblur="this.style.borderColor='var(--border,#ccc)';this.style.borderStyle='dashed';saveContactEmail();" />
+      </div>
       <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
         ${c.linkedinUrl ? `<a href="${esc(c.linkedinUrl)}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm"><i class="ti ti-brand-linkedin"></i></a>` : ''}
-        ${(activeClient() && activeClient().outreachMode === 'email') ? `<button class="btn btn-secondary btn-sm" onclick="openGenerateModal('${c.id}','email', ()=>renderPage())"><i class="ti ti-mail"></i> Draft email</button>` : ''}
         <button class="btn btn-secondary btn-sm" id="enrichContactBtn" onclick="enrichContactDrawer()"><i class="ti ti-sparkles"></i> Enrich</button>
       </div>
       <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
@@ -9207,10 +9165,13 @@ const STAGE_META = [
   { key:'connect', label:'Connection request', hint:'Sent on first outreach' },
   { key:'m1', label:'Message 1', hint:'After connection accepted' },
   { key:'m2', label:'Message 2', hint:'Follow-up, no reply yet' },
-  { key:'cta', label:'CTA', hint:'Invite to next step' },
-  // Email-mode clients: a one-off cold email, no fixed sequence position.
-  { key:'email', label:'Cold email', hint:'One-off outreach email' }
+  { key:'cta', label:'CTA', hint:'Invite to next step' }
 ];
+// For an Email-type campaign the roadmap stages are the same, just relabelled.
+const EMAIL_STAGE_LABEL = { connect:'Intro email', m1:'Follow-up 1', m2:'Follow-up 2', cta:'The ask' };
+function stageLabelFor(key, campaignType){
+  return (campaignType === 'email' && EMAIL_STAGE_LABEL[key]) || (STAGE_META.find(s => s.key === key) || {}).label || key;
+}
 
 function renderSequenceEditor(seq){
   return `
@@ -9562,19 +9523,34 @@ function openGenerateModal(cid, stageKey, onDone){
   const c = state.contacts.find(x=>x.id===cid);
   const seq = state.sequences.find(s=>s.id===c.seqId) || state.sequences[0];
   const st = STAGE_META.find(s=>s.key===stageKey);
-  const genModalCampaign = activeCampaignForContact(c) || null;
+  // Prefer the campaign whose roadmap/detail this was opened from (its type
+  // decides LinkedIn vs email drafting); fall back to a membership guess.
+  const genModalCampaign =
+    (window.__roadmapCampaignId && state.campaigns.find(cp => cp.id === window.__roadmapCampaignId))
+    || (window.__campaignDetailId && state.campaigns.find(cp => cp.id === window.__campaignDetailId))
+    || activeCampaignForContact(c)
+    || null;
+  const isEmailCamp = !!(genModalCampaign && genModalCampaign.type === 'email');
+  const stageLabel = isEmailCamp ? stageLabelFor(stageKey, 'email') : st.label;
   const body = `
     <div class="row">
       <div class="field">
         <label>Contact</label>
         <div style="display:flex;gap:6px;align-items:center;">
           <input value="${esc(c.name)}" disabled style="flex:1;min-width:0;">
-          ${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" title="Open on LinkedIn"><i class="ti ti-brand-linkedin"></i></a>` : ''}
+          ${!isEmailCamp && c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" title="Open on LinkedIn"><i class="ti ti-brand-linkedin"></i></a>` : ''}
         </div>
       </div>
       <div class="field"><label>Company</label><input value="${esc(c.company)}" disabled></div>
     </div>
-    <div class="field"><label>Role / Stage</label><input value="${esc(c.role)} — ${esc(st.label)}" disabled></div>
+    ${isEmailCamp ? `
+    <div class="field">
+      <label style="display:flex;justify-content:space-between;align-items:center;"><span>Email address</span>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="copyGenEmailAddress()"><i class="ti ti-copy"></i> Copy address</button>
+      </label>
+      <input id="genEmailAddress" value="${esc(c.email||'')}" placeholder="No email on file — add one on the contact's profile" ${c.email ? 'readonly' : 'disabled'}>
+    </div>` : ''}
+    <div class="field"><label>Role / Stage</label><input value="${esc(c.role ? c.role+' — ' : '')}${esc(stageLabel)}" disabled></div>
     <div class="field">
       <label style="display:flex;justify-content:space-between;align-items:center;">
         <span>Profile notes</span>
@@ -9583,27 +9559,35 @@ function openGenerateModal(cid, stageKey, onDone){
       <textarea id="genNotes" rows="2">${esc(c.notes)}</textarea>
       <div class="muted" style="font-size:11px;margin-top:4px;">Saves straight to this contact's Notes and feeds their profile summary, same as the profile drawer - so future message generation (here or anywhere else) reads it too.</div>
     </div>
+    ${isEmailCamp ? '' : `
     <div class="field">
       <label>Their profile</label>
       ${screenshotBoxHtml('profile', "Send screenshot/s of their profile — bio, posts, work history — and I'll use it to write a sharper message.")}
-    </div>
+    </div>`}
     <div class="field">
-      <label>Conversation history</label>
-      ${screenshotBoxHtml('convo', "Got a reply already? Send a screenshot of your conversation history and I'll generate a reply.")}
+      <label>${isEmailCamp ? 'Their reply so far' : 'Conversation history'}</label>
+      ${screenshotBoxHtml('convo', isEmailCamp ? "Got a reply already? Send a screenshot and I'll draft a response." : "Got a reply already? Send a screenshot of your conversation history and I'll generate a reply.")}
     </div>
-    <div class="field"><label>Generated message</label><textarea id="genOutput" rows="6">Generating...</textarea></div>
+    <div class="field"><label>Generated ${isEmailCamp ? 'email' : 'message'}</label><textarea id="genOutput" rows="${isEmailCamp ? 9 : 6}">Generating...</textarea></div>
     <div id="genCtaNote" style="display:none;font-size:12px;color:var(--warning,#b45309);background:var(--warning-bg,#fef3c7);border-radius:6px;padding:7px 10px;margin-top:-4px;"></div>
     ${steerBoxHtml(genModalCampaign, stageKey, 'gen')}
   `;
   const footer = `
     <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
     <button class="btn btn-secondary" id="regenBtn" onclick="regenerateMessage('${cid}','${stageKey}')"><i class="ti ti-refresh"></i> Regenerate</button>
-    <button class="btn btn-secondary" onclick="copyGeneratedMessage()"><i class="ti ti-copy"></i> Copy</button>
-    <button class="btn btn-primary" onclick="saveGeneratedMessage('${cid}','${stageKey}')"><i class="ti ti-check"></i> Save &amp; advance</button>
+    <button class="btn btn-secondary" onclick="copyGeneratedMessage()"><i class="ti ti-copy"></i> Copy ${isEmailCamp ? 'email' : ''}</button>
+    <button class="btn btn-primary" onclick="saveGeneratedMessage('${cid}','${stageKey}')"><i class="ti ti-check"></i> ${isEmailCamp ? 'Log &amp; advance' : 'Save &amp; advance'}</button>
   `;
-  window.__genCtx = { cid, stageKey, onDone, profileImages: [], convoImages: [], campaignId: genModalCampaign ? genModalCampaign.id : null };
-  openModal('Write message — '+st.label, body, footer);
+  window.__genCtx = { cid, stageKey, onDone, profileImages: [], convoImages: [], campaignId: genModalCampaign ? genModalCampaign.id : null, emailCampaign: isEmailCamp };
+  openModal((isEmailCamp ? 'Write email — ' : 'Write message — ')+stageLabel, body, footer);
   generateMessageForModal(cid, stageKey);
+}
+
+async function copyGenEmailAddress(){
+  const el = document.getElementById('genEmailAddress');
+  if(!el || !el.value){ toast('No email on file for this contact', 'warn'); return; }
+  try { await navigator.clipboard.writeText(el.value); toast('Email address copied', 'success'); }
+  catch(e){ toast('Could not copy', 'warn'); }
 }
 
 // "Save notes" (Profile notes field, Write & copy message modal) - this
@@ -9728,7 +9712,11 @@ async function generateMessageForModal(cid, stageKey){
   const st = STAGE_META.find(s=>s.key===stageKey);
   const notes = document.getElementById('genNotes') ? document.getElementById('genNotes').value : c.notes;
 
-  const campaign = activeCampaignForContact(c);
+  // Same campaign resolution as openGenerateModal - use the one the modal
+  // was opened against so the LinkedIn/email decision matches the UI.
+  const campaign =
+    (window.__genCtx && window.__genCtx.campaignId && state.campaigns.find(cp => cp.id === window.__genCtx.campaignId))
+    || activeCampaignForContact(c);
   const campaignStageMap = { m1:'message1', m2:'followUp1', cta:'followUp2' };
   const campaignStage = campaign && campaignStageMap[stageKey] ? campaign.sequence[campaignStageMap[stageKey]] : null;
   const template = (campaignStage && campaignStage.content) ? campaignStage.content : (seq.stages[stageKey] || '');
@@ -9753,7 +9741,7 @@ async function generateMessageForModal(cid, stageKey){
       body: JSON.stringify({
         contact: { id: c.id, name: c.name, role: c.role, company: c.company, notes: notes || '' },
         enrichment,
-        campaign: campaign ? { name: campaign.name, goal: campaign.goal, strategyBrief: campaign.strategyBrief || '' } : null,
+        campaign: campaign ? { name: campaign.name, goal: campaign.goal, strategyBrief: campaign.strategyBrief || '', type: campaign.type || 'linkedin' } : null,
         stage: { key: stageKey, label: st.label, messageNumber: messageNumberForStage(stageKey), template },
         voice: { tone: v.tone, connLength: v.connLength, cadence: v.cadence, voiceInstructions: v.voiceInstructions, messagesBeforeCta: v.messagesBeforeCta },
         images,
@@ -10067,6 +10055,13 @@ function renderCampaignChatTab(){
   return `
   <button class="btn btn-ghost btn-sm" style="margin-bottom:10px;" onclick="backToCampaignList()"><i class="ti ti-arrow-left"></i> Campaigns</button>
   <div class="card">
+    <div class="field" style="margin-bottom:14px;">
+      <label style="font-size:12px;font-weight:700;">Outreach type</label>
+      <select id="campaignChatType" onchange="window.__campaignChat.campaignType = this.value">
+        <option value="linkedin"${(chat.campaignType||'linkedin')!=='email'?' selected':''}>LinkedIn — connection request then DM sequence</option>
+        <option value="email"${chat.campaignType==='email'?' selected':''}>Email — the drafter writes cold emails at each stage</option>
+      </select>
+    </div>
     <div class="campaign-chat-progress">
       <div class="campaign-chat-progress-bar"><div class="campaign-chat-progress-fill" style="width:${chat.progressPercent}%;"></div></div>
       <div class="muted" style="font-size:11px;margin-top:4px;">${chat.progressPercent}% gathered</div>
@@ -10378,6 +10373,7 @@ function saveCampaignToDraft(){
     estimatedConversions: preview.estimatedConversions || '',
     conversationHistory: chat.messages.filter(m=>!m.pending),
     status: campaign.status || 'Draft',
+    type: chat.campaignType === 'email' ? 'email' : (campaign.type || 'linkedin'),
     updatedAt: isoDate(TODAY)
   });
 
@@ -11036,6 +11032,14 @@ function renderCampaignStrategyTab(campaign){
   return `
   <div class="card" style="margin-bottom:16px;">
     <div class="section-title"><i class="ti ti-target"></i> Campaign brief</div>
+    <div class="field">
+      <label>Outreach type</label>
+      <select id="stratCampaignType">
+        <option value="linkedin"${(campaign.type||'linkedin')!=='email'?' selected':''}>LinkedIn — connection request then DM sequence</option>
+        <option value="email"${(campaign.type)==='email'?' selected':''}>Email — the drafter writes cold emails at each stage</option>
+      </select>
+      <div class="muted" style="font-size:11px;margin-top:4px;">Changes what the message drafter produces for this campaign. Everything else — stages, tracking, analytics — works the same.</div>
+    </div>
     <div class="field"><label>Goal</label><textarea id="stratGoal" rows="2">${esc(campaign.goal||'')}</textarea></div>
     <div class="field"><label>Target ICP</label><textarea id="stratIcp" rows="2">${esc(campaign.targetSegmentSummary||'')}</textarea></div>
     <div class="field"><label>Product</label><input id="stratProduct" value="${esc(campaign.product||'')}"></div>
@@ -11125,6 +11129,8 @@ function saveCampaignStrategy(campaignId){
   campaign.objectionHandling = document.getElementById('stratObjections').value.trim();
   campaign.successMetric = document.getElementById('stratSuccessMetric').value.trim();
   campaign.ctas = document.getElementById('stratCtas').value.trim();
+  const typeEl = document.getElementById('stratCampaignType');
+  if(typeEl) campaign.type = typeEl.value === 'email' ? 'email' : 'linkedin';
   campaign.updatedAt = isoDate(TODAY);
   syncCampaignToAirtable(campaign);
   renderPage();
@@ -12464,7 +12470,8 @@ function syncCampaignToAirtable(campaign, onSynced){
       successMetric: campaign.successMetric || '',
       startDate: campaign.createdAt,
       status: campaign.status,
-      ctas: campaign.ctas || ''
+      ctas: campaign.ctas || '',
+      campaignType: campaign.type || 'linkedin'
     })
   })
     .then(res => res.json())

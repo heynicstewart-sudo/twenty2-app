@@ -163,110 +163,6 @@ app.get('/api/search-contact', async (req, res) => {
   }
 });
 
-// ---- Email-mode: find businesses via a plain Google search ----
-// Used by the Prospecting page for email-mode clients (The Shed Guru style
-// - shed companies / contractors rather than LinkedIn decision-makers).
-// The operator types the query; this runs it through Serper and returns
-// candidate businesses to tick and add as Companies.
-const PROSPECT_DIRECTORY_HOSTS = [
-  'yelp.', 'yellowpages.', 'truelocal.', 'hipages.', 'oneflare.', 'wikipedia.',
-  'reddit.', 'productreview.', 'localsearch.', 'wordofmouth.', 'startlocal.',
-  'linkedin.', 'indeed.', 'seek.', 'gumtree.', 'ebay.', 'amazon.', 'youtube.',
-];
-function hostOf(u) {
-  try { return new URL(u).hostname.replace(/^www\./, '').toLowerCase(); } catch { return ''; }
-}
-function businessNameFromTitle(title) {
-  return (title || '')
-    .split(/\s[|–—-]\s/)[0]   // drop " | tagline" / " - tagline"
-    .replace(/\s*\(.*?\)\s*$/, '')
-    .trim()
-    .slice(0, 120);
-}
-async function searchBusinessesViaSerper(query, { includeFacebook } = {}) {
-  if (!process.env.SERPER_API_KEY) {
-    const err = new Error('SERPER_API_KEY is not configured');
-    err.status = 500;
-    throw err;
-  }
-  const serperRes = await fetch(SERPER_URL, {
-    method: 'POST',
-    headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ q: query, gl: 'au', location: 'Australia', num: 20 })
-  });
-  if (!serperRes.ok) throw new Error(`Serper API error: ${serperRes.status}`);
-  const data = await serperRes.json();
-  const seen = new Set();
-  const results = [];
-  for (const r of (data.organic || [])) {
-    const host = hostOf(r.link);
-    if (!host) continue;
-    const isSocial = /(^|\.)(facebook|instagram|tiktok|twitter|x)\.com$/.test(host);
-    if (isSocial && !includeFacebook) continue;
-    if (!isSocial && PROSPECT_DIRECTORY_HOSTS.some(d => host.includes(d))) continue;
-    const dedupeKey = isSocial ? r.link.toLowerCase() : host;
-    if (seen.has(dedupeKey)) continue;
-    seen.add(dedupeKey);
-    results.push({
-      name: businessNameFromTitle(r.title) || host,
-      url: r.link,
-      domain: host,
-      snippet: (r.snippet || '').slice(0, 300),
-      source: isSocial ? 'facebook' : 'web',
-    });
-  }
-  return results;
-}
-
-app.post('/api/prospects/search', async (req, res) => {
-  const query = ((req.body && req.body.query) || '').trim();
-  const includeFacebook = !!(req.body && req.body.includeFacebook);
-  if (!query) return res.status(400).json({ error: 'query is required' });
-  try {
-    const results = await searchBusinessesViaSerper(query, { includeFacebook });
-    res.json({ query, results });
-  } catch (err) {
-    console.error('Prospect search error for', query, '-', err.message);
-    res.status(err.status || 500).json({ error: err.status ? err.message : 'search_failed' });
-  }
-});
-
-// Adds ticked search results to the active client's base as Company
-// records (+ an optional Contact stub so a campaign can target them).
-app.post('/api/prospects/add', async (req, res) => {
-  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
-  const companies = Array.isArray(req.body && req.body.companies) ? req.body.companies : [];
-  const gridName = ((req.body && req.body.gridName) || '').trim() || undefined;
-  const createContactStub = req.body && req.body.createContactStub !== false;
-  if (!companies.length) return res.status(400).json({ error: 'companies array is required' });
-  const added = [];
-  const failed = [];
-  for (const c of companies) {
-    const name = (c && c.name || '').trim();
-    if (!name) { failed.push({ name: c && c.name, error: 'missing name' }); continue; }
-    try {
-      const record = await findOrCreateCompanyRecord(name, gridName);
-      const patch = {};
-      if (c.domain) patch['Website Domain'] = c.domain;
-      const note = [c.snippet, c.url ? `Source: ${c.url}` : ''].filter(Boolean).join('\n');
-      if (note) patch['Notes'] = note;
-      if (Object.keys(patch).length) {
-        await airtableRequest('PATCH', 'Companies', { records: [{ id: record.id, fields: patch }], typecast: true });
-      }
-      if (createContactStub) {
-        try {
-          await createOrUpdateAirtableContact({ name, company: name, role: '', linkedinUrl: '', gridName });
-        } catch (stubErr) {
-          console.warn('Prospect contact stub failed for', name, '-', stubErr.message);
-        }
-      }
-      added.push({ name, id: record.id });
-    } catch (err) {
-      failed.push({ name, error: err.message });
-    }
-  }
-  res.json({ added, failed, addedCount: added.length });
-});
 
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 't2c-outreach-crm.html'));
@@ -311,7 +207,6 @@ function tenantFromEnv() {
       logoMark: 'T2',
       tagline: 'Your WA market intelligence engine.',
       leakServiceMap: '',
-      outreachMode: 'linkedin',
     },
     framer: {
       apiKey: process.env.FRAMER_API_KEY,
@@ -398,7 +293,6 @@ function tenantFromClientRecord(f) {
       logoMark: f['Logo Mark'] || '',
       tagline: f['Tagline'] || '',
       leakServiceMap: f['Leak Service Map'] || '',
-      outreachMode: (f['Outreach Mode'] || 'linkedin').toLowerCase(),
     },
     framer: {
       apiKey: conf('FRAMER_API_KEY', 'Framer API Key'),
@@ -488,17 +382,17 @@ function publicClient(t) {
     city: p.city || '',
     region: p.region || '',
     tagline: p.tagline || '',
-    outreachMode: p.outreachMode || 'linkedin',
     status: t.status || 'Active',
   };
 }
 
-// LinkedIn = Twenty2's model (market-map grid, connection/message
-// sequences). Email = Google business search + one-off cold emails. Every
-// email-mode behaviour is additionally never reached for the default
-// client, which is always 'linkedin'.
-function isEmailMode() {
-  return ((currentTenant().profile || {}).outreachMode || 'linkedin') === 'email';
+// Outreach type is per CAMPAIGN, not per client. A campaign whose
+// "Campaign Type" field is "Email" makes the roadmap-stage drafter write
+// cold emails instead of LinkedIn DMs. Twenty2's campaigns are all
+// LinkedIn, so this is false for them and their prompts are unchanged.
+function isEmailCampaign(campaignRecord) {
+  const t = campaignRecord && campaignRecord.fields && campaignRecord.fields['Campaign Type'];
+  return (t || '').toString().toLowerCase() === 'email';
 }
 
 // Base-scoped Airtable URLs, resolved per request from the active tenant.
@@ -891,7 +785,7 @@ app.get('/api/airtable/contact', async (req, res) => {
 // per instruction not to create missing fields. Grid membership is still
 // tracked locally in the app's own state; it just isn't mirrored to
 // Airtable right now.
-async function createOrUpdateAirtableContact({ name, company, role, linkedinUrl, state: contactState, icpRoleCategory, notes, companyLinkedinUrl, apolloTitle, gridName }) {
+async function createOrUpdateAirtableContact({ name, company, role, linkedinUrl, email, state: contactState, icpRoleCategory, notes, companyLinkedinUrl, apolloTitle, gridName }) {
   if (!name) {
     const err = new Error('name is required');
     err.status = 400;
@@ -931,6 +825,7 @@ async function createOrUpdateAirtableContact({ name, company, role, linkedinUrl,
     const patchFields = {};
     if (icpRoleCategory) patchFields['ICP Role Category'] = icpRoleCategory;
     if (companyRecord) patchFields['Company'] = [companyRecord.id];
+    if (email && !(existing.fields['Email'] || '').trim()) patchFields['Email'] = email;
     if (Object.keys(patchFields).length) {
       await airtableRequest('PATCH', 'Contacts', {
         records: [{ id: existing.id, fields: patchFields }],
@@ -979,6 +874,7 @@ async function createOrUpdateAirtableContact({ name, company, role, linkedinUrl,
     'Notes': notes || '',
     'ICP Role Category': icpRoleCategory || ''
   };
+  if (email) fields['Email'] = email;
   if (companyLinkedinUrl) fields['Company LinkedIn URL'] = companyLinkedinUrl;
   if (companyRecord) fields['Company'] = [companyRecord.id];
 
@@ -1771,8 +1667,9 @@ app.post('/api/airtable/campaign', async (req, res) => {
   // so they're folded into the existing "Strategy Notes" field as
   // labelled sections rather than dropped - that field already exists and
   // is semantically the right home for them.
-  const { name, goal, product, targetIcp, contactIds, gridIds, sequenceTemplates, strategyNotes, pitchAngle, objectionHandling, successMetric, startDate, status, ctas, contentContext } = req.body;
+  const { name, goal, product, targetIcp, contactIds, gridIds, sequenceTemplates, strategyNotes, pitchAngle, objectionHandling, successMetric, startDate, status, ctas, contentContext, campaignType } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
+  const normalizedType = (campaignType || '').toLowerCase() === 'email' ? 'Email' : ((campaignType || '').toLowerCase() === 'linkedin' ? 'LinkedIn' : '');
 
   try {
     const existing = await findCampaignRecordByName(name);
@@ -1809,6 +1706,7 @@ app.post('/api/airtable/campaign', async (req, res) => {
       if (status) patchFields['Status'] = status;
       if (ctas) patchFields['CTAs'] = ctas;
       if (contentContext) patchFields['Content Context'] = contentContext;
+      if (normalizedType) patchFields['Campaign Type'] = normalizedType;
 
       if (Object.keys(patchFields).length) {
         await airtableRequest('PATCH', 'Campaigns', { records: [{ id: existing.id, fields: patchFields }] });
@@ -1830,7 +1728,8 @@ app.post('/api/airtable/campaign', async (req, res) => {
       'Start Date': startDate || '',
       'Status': status || 'Draft',
       'CTAs': ctas || '',
-      'Content Context': contentContext || ''
+      'Content Context': contentContext || '',
+      'Campaign Type': normalizedType || 'LinkedIn'
     };
     const data = await airtableRequest('POST', 'Campaigns', { records: [{ fields }] });
     res.json({ success: true, updated: false, recordId: data.records[0].id });
@@ -7428,6 +7327,7 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
         companyName: company ? (company.fields['Company Name'] || '') : '',
         companyId,
         linkedinUrl: cf['LinkedIn URL'] || '',
+        email: cf['Email'] || '',
         journeyStage: cf['Journey Stage'] || '',
         aiSummary: cf['AI Summary'] || '',
         notes: cf['Notes'] || '',
@@ -7463,6 +7363,22 @@ app.patch('/api/contacts/:id/job-title', async (req, res) => {
     res.json({ success: true, jobTitle: trimmed });
   } catch (err) {
     console.error('Update job title error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Contact drawer's editable Email field - email-type campaigns need a
+// real address to send to. Empty string is allowed (clears it).
+app.patch('/api/contacts/:id/email', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const email = ((req.body || {}).email || '').trim();
+  try {
+    const contactRecord = await airtableGetRecord('Contacts', req.params.id);
+    if (!contactRecord) return res.status(404).json({ error: 'Contact not found' });
+    await airtableRequest('PATCH', 'Contacts', { records: [{ id: req.params.id, fields: { 'Email': email } }] });
+    res.json({ success: true, email });
+  } catch (err) {
+    console.error('Update contact email error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -8848,10 +8764,10 @@ function parseDraftEnvelope(raw) {
 }
 
 // Output-contract instruction appended to the end of both drafting prompts.
-// A function, not a const, because email-mode clients need the "message"
+// A function, not a const, because Email-type campaigns need the "message"
 // value formatted as a full email (Subject line + body).
-function draftJsonContract() {
-  const emailNote = isEmailMode()
+function draftJsonContract(email) {
+  const emailNote = email
     ? ' The "message" value must be the complete email: a "Subject: <specific subject line>" line, then a blank line, then the body.'
     : '';
   return `\n\nReturn ONLY valid JSON, no markdown fences, no commentary, in exactly this shape:\n{"message": "the message text with placeholders replaced", "ctaIncluded": true or false, "ctaReasoning": "one sentence"}${emailNote}\nSet "ctaIncluded" to true if the message asks for a meeting, call, coffee, demo or reply-to-book, or promotes/offers the lead magnet, course or workshop; false if it is purely relationship-building. In "ctaReasoning", say in one sentence - grounded in what the contact has actually said - why you did or didn't make that ask.`;
@@ -8867,11 +8783,11 @@ function ctaBroughtForwardEarly(messageNumber, messagesBeforeCta, ctaIncluded) {
 }
 
 // Mirrors the client's voiceRulesText() - ported here for the same reason.
-// Email-mode clients get email rules instead of the LinkedIn-DM ones
+// Email-type campaigns get email rules instead of the LinkedIn-DM ones
 // (clientize() still swaps names/descriptors on top of either).
-function voiceRulesPromptText(voice) {
+function voiceRulesPromptText(voice, email) {
   const v = voice || {};
-  if (isEmailMode()) {
+  if (email) {
     const p = (currentTenant().profile || {});
     const rep = p.repName || 'the sender';
     const co = currentTenant().name || 'the business';
@@ -9147,7 +9063,7 @@ async function buildCampaignOutreachPrompt({ campaignRecord, contactRecord, mess
   const enrichmentNote = buildEnrichmentNote(enrichmentProfile);
   const aiSummaryNarrative = stripContactEnrichmentBlock(cf['AI Summary']).trim();
 
-  const emailMode = isEmailMode();
+  const emailMode = isEmailCampaign(campaignRecord);
   const preamble = emailMode
     ? `You are drafting a cold outreach email to a business on behalf of T2C Outreach, Twenty2 Collective's outreach CRM.`
     : `You are drafting LinkedIn outreach message ${messageNumber} of 3 for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM.`;
@@ -9165,11 +9081,11 @@ ${offerNote}
 
 ${ctaStrategyNoteText(stageKey, messageNumber, voice.messagesBeforeCta)}${ctaOptionsPromptText(ctaOptions)}
 
-${voiceRulesPromptText(voice)}${styleCorrectionsPromptText(styleCorrections, stageKey)}${steerPromptText(steer)}
+${voiceRulesPromptText(voice, emailMode)}${styleCorrectionsPromptText(styleCorrections, stageKey)}${steerPromptText(steer)}
 
-${writeInstruction}${GROUND_IN_SPECIFICS_NOTE}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${examplesNote}${performanceNote}${draftJsonContract()}`;
+${writeInstruction}${GROUND_IN_SPECIFICS_NOTE}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${examplesNote}${performanceNote}${draftJsonContract(emailMode)}`;
 
-  return { promptText, stageKey, styleCorrections, voice };
+  return { promptText, stageKey, styleCorrections, voice, emailMode };
 }
 
 // Maps the client's stage keys (STAGE_META in t2c-outreach-crm.html) to a
@@ -9248,6 +9164,9 @@ app.post('/api/messages/generate', async (req, res) => {
         console.warn('Could not load campaign record for message generation (non-fatal):', lookupErr.message);
       }
     }
+    // Email-type campaign -> the drafter writes a cold email, not a DM.
+    // Fast path: the client can pass campaign.type; else read the record.
+    const emailMode = ((campaign && campaign.type) || '').toLowerCase() === 'email' || isEmailCampaign(campaignRecord);
 
     // When this contact is in a campaign and the stage maps to a sequence
     // message (m1/m2/cta), build the exact same prompt the Today's Actions fast
@@ -9271,10 +9190,10 @@ app.post('/api/messages/generate', async (req, res) => {
       styleCorrections = campaignRecord ? parseStyleCorrections(campaignRecord.fields['Style Corrections']) : emptyStyleCorrections();
       stageKey = stage.key;
       resolvedVoice = voice;
-      if (isEmailMode()) {
-        promptText = `You are drafting a cold outreach email to a business on behalf of T2C Outreach, Twenty2 Collective's outreach CRM.\n\nBusiness: ${contact.company || contact.name}. Contact: ${contact.name}${contact.role ? `, ${contact.role}` : ''}. Profile notes: ${contact.notes || 'none'}.${conversationNote}${stage.template ? `\n\nTemplate / angle to work from:\n${stage.template}` : ''}\n\n${voiceRulesPromptText(voice)}${imageNote}${campaignNote}${enrichmentNote}${styleCorrectionsPromptText(styleCorrections, stage.key)}${steerPromptText(steer)}\n\nWrite the cold email to this business now. If there is a prior reply in the conversation above, respond to what they actually said rather than reintroducing yourself.${GROUND_IN_SPECIFICS_NOTE}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${draftJsonContract()}`;
+      if (emailMode) {
+        promptText = `You are drafting a cold outreach email to a business on behalf of T2C Outreach, Twenty2 Collective's outreach CRM.\n\nBusiness: ${contact.company || contact.name}. Contact: ${contact.name}${contact.role ? `, ${contact.role}` : ''}. Profile notes: ${contact.notes || 'none'}.${conversationNote}${stage.template ? `\n\nTemplate / angle to work from:\n${stage.template}` : ''}\n\n${voiceRulesPromptText(voice, true)}${imageNote}${campaignNote}${enrichmentNote}${styleCorrectionsPromptText(styleCorrections, stage.key)}${steerPromptText(steer)}\n\nWrite the cold email to this business now. If there is a prior reply in the conversation above, respond to what they actually said rather than reintroducing yourself.${GROUND_IN_SPECIFICS_NOTE}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${draftJsonContract(true)}`;
       } else {
-        promptText = `Template for this stage:\n${stage.template || ''}\n\nContact: ${contact.name}, ${contact.role || ''} at ${contact.company || ''}. Sequence stage: ${stage.label || stage.key} (message ${stage.messageNumber || 'n/a'} in the sequence). Profile notes: ${contact.notes || 'none'}.${conversationNote}\n\n${ctaStrategyNoteText(stage.key, stage.messageNumber, voice && voice.messagesBeforeCta)}${ctaOptionsPromptText(ctaOptions)}\n\n${voiceRulesPromptText(voice)}${imageNote}${campaignNote}${enrichmentNote}${styleCorrectionsPromptText(styleCorrections, stage.key)}${steerPromptText(steer)}\n\nWrite the actual message for this specific contact, replacing placeholders naturally - if the conversation so far shows they've already replied, respond to what they actually said rather than reintroducing yourself.${GROUND_IN_SPECIFICS_NOTE}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${draftJsonContract()}`;
+        promptText = `Template for this stage:\n${stage.template || ''}\n\nContact: ${contact.name}, ${contact.role || ''} at ${contact.company || ''}. Sequence stage: ${stage.label || stage.key} (message ${stage.messageNumber || 'n/a'} in the sequence). Profile notes: ${contact.notes || 'none'}.${conversationNote}\n\n${ctaStrategyNoteText(stage.key, stage.messageNumber, voice && voice.messagesBeforeCta)}${ctaOptionsPromptText(ctaOptions)}\n\n${voiceRulesPromptText(voice, false)}${imageNote}${campaignNote}${enrichmentNote}${styleCorrectionsPromptText(styleCorrections, stage.key)}${steerPromptText(steer)}\n\nWrite the actual message for this specific contact, replacing placeholders naturally - if the conversation so far shows they've already replied, respond to what they actually said rather than reintroducing yourself.${GROUND_IN_SPECIFICS_NOTE}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${draftJsonContract(false)}`;
       }
     }
 
@@ -9283,7 +9202,7 @@ app.post('/api/messages/generate', async (req, res) => {
 
     const rawMessage = await callClaudeText(content, 800);
     const envelope = parseDraftEnvelope(rawMessage);
-    const message = await humanizeOutreachMessage(envelope.message);
+    const message = await humanizeOutreachMessage(envelope.message, emailMode);
     const ctaBroughtForward = ctaBroughtForwardEarly(messageNumber || stage.messageNumber, resolvedVoice && resolvedVoice.messagesBeforeCta, envelope.ctaIncluded);
     // Only surface/store the reasoning when the draft actually brought the
     // CTA forward - an on-cadence "I didn't pitch because..." line is noise.
@@ -9365,13 +9284,13 @@ app.post('/api/campaign/:id/contacts/:contactId/generate-message', async (req, r
     const camp = campaignRecord.fields || {};
     // Prompt assembly is shared with POST /api/messages/generate (the Write &
     // copy message modal) so the fast card and the modal produce the same draft.
-    const { promptText, stageKey, styleCorrections, voice } = await buildCampaignOutreachPrompt({
+    const { promptText, stageKey, styleCorrections, voice, emailMode } = await buildCampaignOutreachPrompt({
       campaignRecord, contactRecord, messageNumber, campaignName, steer, campaignContactsRows: rows
     });
 
     const rawMessage = await callClaudeText(promptText, 800);
     const envelope = parseDraftEnvelope(rawMessage);
-    const message = await humanizeOutreachMessage(envelope.message);
+    const message = await humanizeOutreachMessage(envelope.message, emailMode);
     const ctaBroughtForward = ctaBroughtForwardEarly(messageNumber, voice.messagesBeforeCta, envelope.ctaIncluded);
     const ctaReasoning = ctaBroughtForward ? envelope.ctaReasoning : '';
     await airtableWriteAllowingMissingCtaFields('PATCH', CAMPAIGN_CONTACTS_TABLE, {
@@ -11768,11 +11687,11 @@ Hard rules:
 - If the message already reads naturally, return it essentially unchanged.
 - Plain text only, no markdown, no preamble. Return only the edited message.`;
 
-async function humanizeOutreachMessage(text) {
+async function humanizeOutreachMessage(text, email) {
   if (!text || !text.trim()) return text;
   let out = text;
   try {
-    const sys = isEmailMode() ? OUTREACH_HUMANIZER_EMAIL_PROMPT : OUTREACH_HUMANIZER_SYSTEM_PROMPT;
+    const sys = email ? OUTREACH_HUMANIZER_EMAIL_PROMPT : OUTREACH_HUMANIZER_SYSTEM_PROMPT;
     const raw = await callClaudeMessages(`Message to edit:\n\n${text}`, 700, sys);
     const cleaned = stripCodeFences(raw).trim();
     if (cleaned) out = cleaned;
@@ -15564,7 +15483,6 @@ const CLIENT_FORM_FIELDS = {
   logoMark: 'Logo Mark',
   tagline: 'Tagline',
   leakServiceMap: 'Leak Service Map',
-  outreachMode: 'Outreach Mode',
   framerApiKey: 'Framer API Key',
   framerProjectUrl: 'Framer Project URL',
   framerSiteUrl: 'Framer Site URL',
@@ -15638,7 +15556,6 @@ app.get('/api/agency/clients/:slug', async (req, res) => {
       websiteUrl: p.websiteUrl || '', englishVariant: p.englishVariant || '',
       signoff: p.signoff || '', logoMark: p.logoMark || '', tagline: p.tagline || '',
       leakServiceMap: p.leakServiceMap || '',
-      outreachMode: p.outreachMode === 'email' ? 'Email' : 'LinkedIn',
       framerApiKey: (t.framer && t.framer.apiKey) || '', framerProjectUrl: (t.framer && t.framer.projectUrl) || '',
       framerSiteUrl: (t.framer && t.framer.siteUrl) || '', framerBlogCollection: (t.framer && t.framer.blogCollection) || '',
       framerBlogPathPrefix: (t.framer && t.framer.blogPathPrefix) || '', framerServiceCollection: (t.framer && t.framer.serviceCollection) || '',
