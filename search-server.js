@@ -163,6 +163,111 @@ app.get('/api/search-contact', async (req, res) => {
   }
 });
 
+// ---- Email-mode: find businesses via a plain Google search ----
+// Used by the Prospecting page for email-mode clients (The Shed Guru style
+// - shed companies / contractors rather than LinkedIn decision-makers).
+// The operator types the query; this runs it through Serper and returns
+// candidate businesses to tick and add as Companies.
+const PROSPECT_DIRECTORY_HOSTS = [
+  'yelp.', 'yellowpages.', 'truelocal.', 'hipages.', 'oneflare.', 'wikipedia.',
+  'reddit.', 'productreview.', 'localsearch.', 'wordofmouth.', 'startlocal.',
+  'linkedin.', 'indeed.', 'seek.', 'gumtree.', 'ebay.', 'amazon.', 'youtube.',
+];
+function hostOf(u) {
+  try { return new URL(u).hostname.replace(/^www\./, '').toLowerCase(); } catch { return ''; }
+}
+function businessNameFromTitle(title) {
+  return (title || '')
+    .split(/\s[|–—-]\s/)[0]   // drop " | tagline" / " - tagline"
+    .replace(/\s*\(.*?\)\s*$/, '')
+    .trim()
+    .slice(0, 120);
+}
+async function searchBusinessesViaSerper(query, { includeFacebook } = {}) {
+  if (!process.env.SERPER_API_KEY) {
+    const err = new Error('SERPER_API_KEY is not configured');
+    err.status = 500;
+    throw err;
+  }
+  const serperRes = await fetch(SERPER_URL, {
+    method: 'POST',
+    headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ q: query, gl: 'au', location: 'Australia', num: 20 })
+  });
+  if (!serperRes.ok) throw new Error(`Serper API error: ${serperRes.status}`);
+  const data = await serperRes.json();
+  const seen = new Set();
+  const results = [];
+  for (const r of (data.organic || [])) {
+    const host = hostOf(r.link);
+    if (!host) continue;
+    const isSocial = /(^|\.)(facebook|instagram|tiktok|twitter|x)\.com$/.test(host);
+    if (isSocial && !includeFacebook) continue;
+    if (!isSocial && PROSPECT_DIRECTORY_HOSTS.some(d => host.includes(d))) continue;
+    const dedupeKey = isSocial ? r.link.toLowerCase() : host;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    results.push({
+      name: businessNameFromTitle(r.title) || host,
+      url: r.link,
+      domain: host,
+      snippet: (r.snippet || '').slice(0, 300),
+      source: isSocial ? 'facebook' : 'web',
+    });
+  }
+  return results;
+}
+
+app.post('/api/prospects/search', async (req, res) => {
+  const query = ((req.body && req.body.query) || '').trim();
+  const includeFacebook = !!(req.body && req.body.includeFacebook);
+  if (!query) return res.status(400).json({ error: 'query is required' });
+  try {
+    const results = await searchBusinessesViaSerper(query, { includeFacebook });
+    res.json({ query, results });
+  } catch (err) {
+    console.error('Prospect search error for', query, '-', err.message);
+    res.status(err.status || 500).json({ error: err.status ? err.message : 'search_failed' });
+  }
+});
+
+// Adds ticked search results to the active client's base as Company
+// records (+ an optional Contact stub so a campaign can target them).
+app.post('/api/prospects/add', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const companies = Array.isArray(req.body && req.body.companies) ? req.body.companies : [];
+  const gridName = ((req.body && req.body.gridName) || '').trim() || undefined;
+  const createContactStub = req.body && req.body.createContactStub !== false;
+  if (!companies.length) return res.status(400).json({ error: 'companies array is required' });
+  const added = [];
+  const failed = [];
+  for (const c of companies) {
+    const name = (c && c.name || '').trim();
+    if (!name) { failed.push({ name: c && c.name, error: 'missing name' }); continue; }
+    try {
+      const record = await findOrCreateCompanyRecord(name, gridName);
+      const patch = {};
+      if (c.domain) patch['Website Domain'] = c.domain;
+      const note = [c.snippet, c.url ? `Source: ${c.url}` : ''].filter(Boolean).join('\n');
+      if (note) patch['Notes'] = note;
+      if (Object.keys(patch).length) {
+        await airtableRequest('PATCH', 'Companies', { records: [{ id: record.id, fields: patch }], typecast: true });
+      }
+      if (createContactStub) {
+        try {
+          await createOrUpdateAirtableContact({ name, company: name, role: '', linkedinUrl: '', gridName });
+        } catch (stubErr) {
+          console.warn('Prospect contact stub failed for', name, '-', stubErr.message);
+        }
+      }
+      added.push({ name, id: record.id });
+    } catch (err) {
+      failed.push({ name, error: err.message });
+    }
+  }
+  res.json({ added, failed, addedCount: added.length });
+});
+
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 't2c-outreach-crm.html'));
 });
@@ -206,6 +311,7 @@ function tenantFromEnv() {
       logoMark: 'T2',
       tagline: 'Your WA market intelligence engine.',
       leakServiceMap: '',
+      outreachMode: 'linkedin',
     },
     framer: {
       apiKey: process.env.FRAMER_API_KEY,
@@ -292,6 +398,7 @@ function tenantFromClientRecord(f) {
       logoMark: f['Logo Mark'] || '',
       tagline: f['Tagline'] || '',
       leakServiceMap: f['Leak Service Map'] || '',
+      outreachMode: (f['Outreach Mode'] || 'linkedin').toLowerCase(),
     },
     framer: {
       apiKey: conf('FRAMER_API_KEY', 'Framer API Key'),
@@ -381,8 +488,17 @@ function publicClient(t) {
     city: p.city || '',
     region: p.region || '',
     tagline: p.tagline || '',
+    outreachMode: p.outreachMode || 'linkedin',
     status: t.status || 'Active',
   };
+}
+
+// LinkedIn = Twenty2's model (market-map grid, connection/message
+// sequences). Email = Google business search + one-off cold emails. Every
+// email-mode behaviour is additionally never reached for the default
+// client, which is always 'linkedin'.
+function isEmailMode() {
+  return ((currentTenant().profile || {}).outreachMode || 'linkedin') === 'email';
 }
 
 // Base-scoped Airtable URLs, resolved per request from the active tenant.
@@ -633,9 +749,9 @@ function clientizeContent(content) {
 // array of content blocks (for vision/PDF document prompts). Every new
 // Claude-calling route added in the Context tab work uses this instead of
 // re-inlining the fetch/parse boilerplate that the older routes each have.
-async function callClaudeMessages(content, maxTokens, system) {
+async function callClaudeMessages(content, maxTokens, system, model) {
   const body = {
-    model: 'claude-opus-4-6',
+    model: model || 'claude-opus-4-6',
     max_tokens: maxTokens,
     messages: [{ role: 'user', content: clientizeContent(content) }]
   };
@@ -659,12 +775,12 @@ async function callClaudeMessages(content, maxTokens, system) {
   return block.text;
 }
 
-async function callClaudeText(content, maxTokens) {
-  return (await callClaudeMessages(content, maxTokens)).trim();
+async function callClaudeText(content, maxTokens, model) {
+  return (await callClaudeMessages(content, maxTokens, undefined, model)).trim();
 }
 
-async function callClaudeJson(content, maxTokens) {
-  const text = await callClaudeMessages(content, maxTokens);
+async function callClaudeJson(content, maxTokens, model) {
+  const text = await callClaudeMessages(content, maxTokens, undefined, model);
   const jsonMatch = text.match(/\{[\s\S]*\}/);
   try {
     return JSON.parse(jsonMatch ? jsonMatch[0] : text);
@@ -681,6 +797,43 @@ async function callClaudeJson(content, maxTokens) {
 function stripCodeFences(text) {
   return String(text || '').trim().replace(/^```[a-zA-Z]*\s*/, '').replace(/```\s*$/, '').trim();
 }
+
+// ---- Ambient AI-insight cache ----
+// The "insight" surfaces that used to run Claude on every page view
+// (Research market pulse, Sales insights, SEO keyword suggestions, and a
+// campaign's Analytics insights) now read through this cache. A plain GET
+// returns the last stored result - or an empty, not-generated-yet payload -
+// and only an explicit ?refresh=1 recomputes and re-stores. Navigating the
+// app costs nothing; Claude runs when the operator presses Refresh, not
+// when a tab happens to open. Stored per active client base, best-effort
+// persisted to disk so a redeploy doesn't force a recompute.
+const fs = require('fs');
+const AMBIENT_CACHE_FILE = path.join(__dirname, '.ambient-insights-cache.json');
+let ambientCache = {};
+try {
+  if (fs.existsSync(AMBIENT_CACHE_FILE)) ambientCache = JSON.parse(fs.readFileSync(AMBIENT_CACHE_FILE, 'utf8')) || {};
+} catch (e) { ambientCache = {}; }
+function ambientCacheKey(name) {
+  const t = currentTenant();
+  return `${t && t.baseId ? t.baseId : 'default'}::${name}`;
+}
+function getAmbientInsight(name) {
+  return ambientCache[ambientCacheKey(name)] || null;
+}
+function setAmbientInsight(name, data) {
+  const entry = { data, storedAt: new Date().toISOString() };
+  ambientCache[ambientCacheKey(name)] = entry;
+  try { fs.writeFileSync(AMBIENT_CACHE_FILE, JSON.stringify(ambientCache)); } catch (e) { /* best effort */ }
+  return entry;
+}
+function wantsRefresh(req) {
+  return req.query.refresh === '1' || req.query.refresh === 'true';
+}
+// Ambient/background summarisation surfaces run on Sonnet, not Opus - these
+// are "surface 3-5 insights from this data" tasks where Sonnet 5 is on par
+// and far cheaper. Opus stays on what the operator acts on directly
+// (message / campaign / offer / email generation).
+const AMBIENT_MODEL = 'claude-sonnet-5';
 
 // ===================== MIDDLEWARE =====================
 app.use(express.json());
@@ -1457,6 +1610,14 @@ app.get('/api/research/events', async (req, res) => {
 // what's recurring across the whole dataset, rather than any one event.
 app.get('/api/research/market-pulse', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  // Cheap path: opening the Research page just returns the last generated
+  // pulse. Claude only runs on an explicit Refresh (?refresh=1).
+  if (!wantsRefresh(req)) {
+    const cached = getAmbientInsight('market-pulse');
+    if (cached) return res.json({ ...cached.data, cached: true, storedAt: cached.storedAt });
+    return res.json({ topPainPoints: [], trendingTopics: [], contentOpportunities: [], eventCount: 0, notGenerated: true });
+  }
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
 
   try {
@@ -1485,15 +1646,17 @@ Look across ALL of these events together (not any single one) and return ONLY va
 
 Only surface things that genuinely recur across more than one event where possible - call out clearly if something is only from a single event but still notable.`;
 
-    const parsed = await callClaudeJson(prompt, 1800);
+    const parsed = await callClaudeJson(prompt, 1800, AMBIENT_MODEL);
 
-    res.json({
+    const payload = {
       topPainPoints: parsed.topPainPoints || [],
       trendingTopics: parsed.trendingTopics || [],
       contentOpportunities: parsed.contentOpportunities || [],
       eventCount: records.length,
       generatedAt: new Date().toISOString()
-    });
+    };
+    setAmbientInsight('market-pulse', payload);
+    res.json(payload);
   } catch (err) {
     console.error('Market pulse error:', err.message);
     res.status(500).json({ error: err.message });
@@ -3937,9 +4100,18 @@ app.get('/api/campaign/:id/analytics', async (req, res) => {
 
 app.get('/api/campaign/:id/insights', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
-  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
 
   const campaignIdOrName = decodeURIComponent(req.params.id);
+
+  // Opening a campaign's Analytics tab just returns the last generated
+  // insights for that campaign. Claude only runs on an explicit Refresh
+  // (?refresh=1).
+  if (!wantsRefresh(req)) {
+    const cached = getAmbientInsight('campaign-insights:' + campaignIdOrName);
+    if (cached) return res.json({ ...cached.data, cached: true, storedAt: cached.storedAt });
+    return res.json({ insights: [], notGenerated: true });
+  }
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
 
   try {
     const [contactRecords, touchPointRecords, conversions, campaigns, learningData, campaignRecord] = await Promise.all([
@@ -4018,7 +4190,7 @@ If there isn't enough data yet for a confident insight, return fewer than 5 rath
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'claude-opus-4-6',
+        model: AMBIENT_MODEL,
         max_tokens: 1200,
         messages: [{ role: 'user', content: clientize(prompt) }]
       })
@@ -4041,12 +4213,14 @@ If there isn't enough data yet for a confident insight, return fewer than 5 rath
       throw new Error('Could not parse Claude response as JSON');
     }
 
-    res.json({
+    const payload = {
       insights: parsed.insights || [],
       contactCount: campaignContacts.length,
       touchPointCount: campaignTouchPoints.length,
       generatedAt: new Date().toISOString()
-    });
+    };
+    setAmbientInsight('campaign-insights:' + campaignIdOrName, payload);
+    res.json(payload);
   } catch (err) {
     console.error('Campaign insights error:', err.message);
     res.status(500).json({ error: err.message });
@@ -4674,6 +4848,16 @@ app.get('/api/campaign/:id/funnel', async (req, res) => {
 
 app.get('/api/sales/insights', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  // Opening the Sales overview just returns the last generated insights.
+  // Claude only runs on an explicit Refresh (?refresh=1).
+  if (!wantsRefresh(req)) {
+    const cached = getAmbientInsight('sales-insights');
+    if (cached) return res.json({ ...cached.data, cached: true, storedAt: cached.storedAt });
+    return res.json({ insights: [], notGenerated: true });
+  }
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
   try {
     const [campaignRecords, ccRows, dealRecords, tpRecords] = await Promise.all([
       airtableFetchAllRecords('Campaigns'),
@@ -4718,12 +4902,14 @@ ${summary.map(s => `- ${s.name} (${s.status}): ${s.contacts} contacts, ${s.conne
 
 Write 3-5 bullet point insights a sales lead would find useful - call out standout campaigns (best/worst), pipeline risks, and any patterns worth acting on. Each bullet must be one plain sentence with no markdown formatting, one per line, no numbering or leading dashes.`;
 
-    const text = await callClaudeText(prompt, 700);
+    const text = await callClaudeText(prompt, 700, AMBIENT_MODEL);
     const insights = text.split('\n')
       .map(l => l.replace(/^[-*•]\s*/, '').replace(/^\d+[.)]\s*/, '').trim())
       .filter(Boolean);
 
-    res.json({ insights, generatedAt: new Date().toISOString() });
+    const payload = { insights, generatedAt: new Date().toISOString() };
+    setAmbientInsight('sales-insights', payload);
+    res.json(payload);
   } catch (err) {
     console.error('Sales insights error:', err.message);
     res.status(500).json({ error: err.message });
@@ -8662,7 +8848,14 @@ function parseDraftEnvelope(raw) {
 }
 
 // Output-contract instruction appended to the end of both drafting prompts.
-const DRAFT_JSON_CONTRACT = `\n\nReturn ONLY valid JSON, no markdown fences, no commentary, in exactly this shape:\n{"message": "the message text with placeholders replaced", "ctaIncluded": true or false, "ctaReasoning": "one sentence"}\nSet "ctaIncluded" to true if the message asks for a meeting, call, coffee, demo or reply-to-book, or promotes/offers the lead magnet, course or workshop; false if it is purely relationship-building. In "ctaReasoning", say in one sentence - grounded in what the contact has actually said - why you did or didn't make that ask.`;
+// A function, not a const, because email-mode clients need the "message"
+// value formatted as a full email (Subject line + body).
+function draftJsonContract() {
+  const emailNote = isEmailMode()
+    ? ' The "message" value must be the complete email: a "Subject: <specific subject line>" line, then a blank line, then the body.'
+    : '';
+  return `\n\nReturn ONLY valid JSON, no markdown fences, no commentary, in exactly this shape:\n{"message": "the message text with placeholders replaced", "ctaIncluded": true or false, "ctaReasoning": "one sentence"}${emailNote}\nSet "ctaIncluded" to true if the message asks for a meeting, call, coffee, demo or reply-to-book, or promotes/offers the lead magnet, course or workshop; false if it is purely relationship-building. In "ctaReasoning", say in one sentence - grounded in what the contact has actually said - why you did or didn't make that ask.`;
+}
 
 // True when a draft made an ask earlier than the campaign's configured
 // cadence (Settings > Outreach strategy > "Messages before CTA"). This is
@@ -8674,8 +8867,16 @@ function ctaBroughtForwardEarly(messageNumber, messagesBeforeCta, ctaIncluded) {
 }
 
 // Mirrors the client's voiceRulesText() - ported here for the same reason.
+// Email-mode clients get email rules instead of the LinkedIn-DM ones
+// (clientize() still swaps names/descriptors on top of either).
 function voiceRulesPromptText(voice) {
   const v = voice || {};
+  if (isEmailMode()) {
+    const p = (currentTenant().profile || {});
+    const rep = p.repName || 'the sender';
+    const co = currentTenant().name || 'the business';
+    return `Voice rules: ${p.englishVariant || 'UK English, no em dashes'}, ${(v.tone || 'warm and direct').toLowerCase()} tone. This is a cold outreach EMAIL to a business, not a LinkedIn message. Write a short specific subject line (no clickbait, no "Quick question"). Keep the body to one or two short paragraphs: a line that shows you know who they are and why you're writing, the offer or reason to talk in plain terms, then one clear low-friction ask. No hard sell, no fake familiarity, no "I hope this email finds you well". Sign off with just "${rep}" then "${co}" on the next line. ${v.voiceInstructions || ''}`;
+  }
   return `Voice rules: UK English, no em dashes, ${(v.tone || 'peer to peer').toLowerCase()} tone, one observation and one question per message, 3 to 4 sentences, signed off as "Marcus" (first name only, never the company name), conditional CTA framing (never pushy). Make the observation from your own vantage point (what you're seeing across similar leaders), never by telling the contact what they already know, what they'd "know well", or how their own role feels. Connection requests should be ${(v.connLength || 'short').toLowerCase()}. Follow-up cadence is ${(v.cadence || 'steady').toLowerCase()}. ${v.voiceInstructions || ''}`;
 }
 
@@ -8946,7 +9147,15 @@ async function buildCampaignOutreachPrompt({ campaignRecord, contactRecord, mess
   const enrichmentNote = buildEnrichmentNote(enrichmentProfile);
   const aiSummaryNarrative = stripContactEnrichmentBlock(cf['AI Summary']).trim();
 
-  const promptText = `You are drafting LinkedIn outreach message ${messageNumber} of 3 for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM.
+  const emailMode = isEmailMode();
+  const preamble = emailMode
+    ? `You are drafting a cold outreach email to a business on behalf of T2C Outreach, Twenty2 Collective's outreach CRM.`
+    : `You are drafting LinkedIn outreach message ${messageNumber} of 3 for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM.`;
+  const writeInstruction = emailMode
+    ? `Write the cold email to this business now. If there is a prior reply in the conversation above, respond to what they actually said rather than reintroducing yourself.`
+    : `Write only message ${messageNumber} in this contact's sequence for this specific campaign, following on naturally from the conversation so far (if any) - if the conversation shows they've already replied, respond to what they actually said rather than reintroducing yourself.`;
+
+  const promptText = `${preamble}
 
 Campaign: "${resolvedName}". Goal: ${camp['Goal'] || 'not recorded'}. Product: ${camp['Product'] || 'not recorded'}. Target ICP: ${camp['Target ICP'] || 'not recorded'}. Strategy notes: ${camp['Strategy Notes'] || 'none recorded'}.
 ${template ? `\nTemplate for this stage:\n${template}\n` : ''}
@@ -8958,7 +9167,7 @@ ${ctaStrategyNoteText(stageKey, messageNumber, voice.messagesBeforeCta)}${ctaOpt
 
 ${voiceRulesPromptText(voice)}${styleCorrectionsPromptText(styleCorrections, stageKey)}${steerPromptText(steer)}
 
-Write only message ${messageNumber} in this contact's sequence for this specific campaign, following on naturally from the conversation so far (if any) - if the conversation shows they've already replied, respond to what they actually said rather than reintroducing yourself.${GROUND_IN_SPECIFICS_NOTE}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${examplesNote}${performanceNote}${DRAFT_JSON_CONTRACT}`;
+${writeInstruction}${GROUND_IN_SPECIFICS_NOTE}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${examplesNote}${performanceNote}${draftJsonContract()}`;
 
   return { promptText, stageKey, styleCorrections, voice };
 }
@@ -9062,7 +9271,11 @@ app.post('/api/messages/generate', async (req, res) => {
       styleCorrections = campaignRecord ? parseStyleCorrections(campaignRecord.fields['Style Corrections']) : emptyStyleCorrections();
       stageKey = stage.key;
       resolvedVoice = voice;
-      promptText = `Template for this stage:\n${stage.template || ''}\n\nContact: ${contact.name}, ${contact.role || ''} at ${contact.company || ''}. Sequence stage: ${stage.label || stage.key} (message ${stage.messageNumber || 'n/a'} in the sequence). Profile notes: ${contact.notes || 'none'}.${conversationNote}\n\n${ctaStrategyNoteText(stage.key, stage.messageNumber, voice && voice.messagesBeforeCta)}${ctaOptionsPromptText(ctaOptions)}\n\n${voiceRulesPromptText(voice)}${imageNote}${campaignNote}${enrichmentNote}${styleCorrectionsPromptText(styleCorrections, stage.key)}${steerPromptText(steer)}\n\nWrite the actual message for this specific contact, replacing placeholders naturally - if the conversation so far shows they've already replied, respond to what they actually said rather than reintroducing yourself.${GROUND_IN_SPECIFICS_NOTE}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${DRAFT_JSON_CONTRACT}`;
+      if (isEmailMode()) {
+        promptText = `You are drafting a cold outreach email to a business on behalf of T2C Outreach, Twenty2 Collective's outreach CRM.\n\nBusiness: ${contact.company || contact.name}. Contact: ${contact.name}${contact.role ? `, ${contact.role}` : ''}. Profile notes: ${contact.notes || 'none'}.${conversationNote}${stage.template ? `\n\nTemplate / angle to work from:\n${stage.template}` : ''}\n\n${voiceRulesPromptText(voice)}${imageNote}${campaignNote}${enrichmentNote}${styleCorrectionsPromptText(styleCorrections, stage.key)}${steerPromptText(steer)}\n\nWrite the cold email to this business now. If there is a prior reply in the conversation above, respond to what they actually said rather than reintroducing yourself.${GROUND_IN_SPECIFICS_NOTE}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${draftJsonContract()}`;
+      } else {
+        promptText = `Template for this stage:\n${stage.template || ''}\n\nContact: ${contact.name}, ${contact.role || ''} at ${contact.company || ''}. Sequence stage: ${stage.label || stage.key} (message ${stage.messageNumber || 'n/a'} in the sequence). Profile notes: ${contact.notes || 'none'}.${conversationNote}\n\n${ctaStrategyNoteText(stage.key, stage.messageNumber, voice && voice.messagesBeforeCta)}${ctaOptionsPromptText(ctaOptions)}\n\n${voiceRulesPromptText(voice)}${imageNote}${campaignNote}${enrichmentNote}${styleCorrectionsPromptText(styleCorrections, stage.key)}${steerPromptText(steer)}\n\nWrite the actual message for this specific contact, replacing placeholders naturally - if the conversation so far shows they've already replied, respond to what they actually said rather than reintroducing yourself.${GROUND_IN_SPECIFICS_NOTE}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${draftJsonContract()}`;
+      }
     }
 
     const content = imgs.map(img => ({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.base64 } }));
@@ -11122,6 +11335,14 @@ app.post('/api/seo/keywords/add-single', async (req, res) => {
 
 app.get('/api/seo/suggest-keywords', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  // Opening the SEO tab just returns the last generated suggestions.
+  // Claude only runs on an explicit Refresh (?refresh=1).
+  if (!wantsRefresh(req)) {
+    const cached = getAmbientInsight('seo-suggest-keywords');
+    if (cached) return res.json({ ...cached.data, cached: true, storedAt: cached.storedAt });
+    return res.json({ suggestions: [], notGenerated: true });
+  }
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
   try {
     const [tpRecords, researchRecords, contactRecords] = await Promise.all([
@@ -11166,8 +11387,10 @@ Identify the language, pain points, and topics being discussed, and suggest 5-10
 Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 { "suggestions": [ { "keyword": string, "reason": string } ] }`;
 
-    const parsed = await callClaudeJson(prompt, 2000);
-    res.json({ suggestions: parsed.suggestions || [] });
+    const parsed = await callClaudeJson(prompt, 2000, AMBIENT_MODEL);
+    const payload = { suggestions: parsed.suggestions || [], generatedAt: new Date().toISOString() };
+    setAmbientInsight('seo-suggest-keywords', payload);
+    res.json(payload);
   } catch (err) {
     console.error('Suggest SEO keywords error:', err.message);
     res.status(500).json({ error: err.message });
@@ -11506,6 +11729,25 @@ async function runPlainTextHumanizerChain(text) {
 // sentences, hedges, caveats or new points, and must hold the message to the
 // voice rules' 3-to-4-sentence / one-question shape. Content routes keep
 // humanizePlainText unchanged.
+const OUTREACH_HUMANIZER_EMAIL_PROMPT = `You are lightly editing a short cold outreach EMAIL to a business so it does not read as AI-written.
+
+Fix only these, and only where they actually occur:
+- AI vocabulary: utilise -> use, leverage -> use, delve -> look into, foster -> build, demonstrate -> show, facilitate -> help, robust -> strong, comprehensive -> full, navigate -> work through, tapestry/landscape/realm -> plain words
+- Inflated or promotional language: drop puffery, superlatives and marketing speak
+- Em dashes and en dashes: replace with commas, full stops or a reworded sentence
+- Sentences that open with a present participle ("Looking at", "Navigating", "Drawing on")
+- Fake-candid hooks: "Honestly?", "The truth is", "Let's be real"
+- Filler and email cliches: "I hope this email finds you well", "In today's world", "at the end of the day", "it is worth noting", "reaching out", "circling back", "touch base"
+- Obvious AI parallelisms: "not just X, but Y"
+
+Hard rules:
+- Keep the "Subject:" line. Keep the email to one or two short paragraphs plus the sign-off. Do NOT add paragraphs, caveats, hedges, or new points.
+- Keep every name, company, link and the one clear ask exactly as they are.
+- Keep the sign-off exactly as written (the sender's first name, then the business name on its own line). Do not change it or collapse it to one name.
+- Keep every concrete, specific detail about the business. Do not generalise a specific into a vaguer phrase.
+- If the email already reads naturally, return it essentially unchanged.
+- Plain text only, no markdown, no preamble. Return only the edited email.`;
+
 const OUTREACH_HUMANIZER_SYSTEM_PROMPT = `You are lightly editing a short outbound LinkedIn outreach message so it does not read as AI-written. This is a peer-to-peer direct message, not an article.
 
 Fix only these, and only where they actually occur:
@@ -11530,7 +11772,8 @@ async function humanizeOutreachMessage(text) {
   if (!text || !text.trim()) return text;
   let out = text;
   try {
-    const raw = await callClaudeMessages(`Message to edit:\n\n${text}`, 700, OUTREACH_HUMANIZER_SYSTEM_PROMPT);
+    const sys = isEmailMode() ? OUTREACH_HUMANIZER_EMAIL_PROMPT : OUTREACH_HUMANIZER_SYSTEM_PROMPT;
+    const raw = await callClaudeMessages(`Message to edit:\n\n${text}`, 700, sys);
     const cleaned = stripCodeFences(raw).trim();
     if (cleaned) out = cleaned;
     else console.warn('Outreach humanizer returned nothing - keeping the original draft');
@@ -15321,6 +15564,7 @@ const CLIENT_FORM_FIELDS = {
   logoMark: 'Logo Mark',
   tagline: 'Tagline',
   leakServiceMap: 'Leak Service Map',
+  outreachMode: 'Outreach Mode',
   framerApiKey: 'Framer API Key',
   framerProjectUrl: 'Framer Project URL',
   framerSiteUrl: 'Framer Site URL',
@@ -15394,6 +15638,7 @@ app.get('/api/agency/clients/:slug', async (req, res) => {
       websiteUrl: p.websiteUrl || '', englishVariant: p.englishVariant || '',
       signoff: p.signoff || '', logoMark: p.logoMark || '', tagline: p.tagline || '',
       leakServiceMap: p.leakServiceMap || '',
+      outreachMode: p.outreachMode === 'email' ? 'Email' : 'LinkedIn',
       framerApiKey: (t.framer && t.framer.apiKey) || '', framerProjectUrl: (t.framer && t.framer.projectUrl) || '',
       framerSiteUrl: (t.framer && t.framer.siteUrl) || '', framerBlogCollection: (t.framer && t.framer.blogCollection) || '',
       framerBlogPathPrefix: (t.framer && t.framer.blogPathPrefix) || '', framerServiceCollection: (t.framer && t.framer.serviceCollection) || '',
