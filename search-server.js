@@ -5,6 +5,7 @@ const path = require('path');
 const cron = require('node-cron');
 const mammoth = require('mammoth');
 const crypto = require('crypto');
+const { AsyncLocalStorage } = require('node:async_hooks');
 
 const app = express();
 
@@ -29,6 +30,22 @@ if (BASIC_AUTH_USER && BASIC_AUTH_PASS) {
 
 app.use(cors());
 app.use(express.json());
+
+// ---- Multi-client (agency controller) tenant context ----
+// Every request runs inside tenantALS.run(tenant, ...) so the Airtable
+// helpers can resolve the *active client's* base without threading a
+// context argument through 200+ route handlers. Phase 1: there is no
+// client switcher or control-plane base yet, so this always runs with
+// DEFAULT_TENANT (built from this deployment's env vars further below) -
+// i.e. the original single-tenant Twenty2 behaviour, unchanged. Later
+// phases resolve the tenant from a signed cookie here instead.
+const tenantALS = new AsyncLocalStorage();
+function currentTenant() {
+  return tenantALS.getStore() || DEFAULT_TENANT;
+}
+app.use((req, res, next) => {
+  tenantALS.run(resolveTenantForRequest(req), () => next());
+});
 
 const SERPER_URL = 'https://google.serper.dev/search';
 
@@ -148,9 +165,39 @@ app.get('/', (req, res) => {
 });
 
 // ===================== AIRTABLE CONFIG =====================
-const AIRTABLE_BASE_ID = 'appKe5oopNpheq32n';
+// The Airtable Personal Access Token is agency-level: one token with
+// access to every client base. It stays a plain module constant.
 const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
-const AIRTABLE_URL = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}`;
+
+// DEFAULT_TENANT is this deployment's original single-client identity,
+// rebuilt from env vars. It is what currentTenant() returns whenever a
+// request has no active-client context (which, in Phase 1, is always).
+// Keeping the base id in AIRTABLE_BASE_ID as well preserves the old name
+// for anything that still reads it directly.
+const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID || 'appKe5oopNpheq32n';
+const DEFAULT_TENANT = {
+  slug: process.env.DEFAULT_CLIENT_SLUG || 'twenty2',
+  name: 'Twenty2 Collective',
+  baseId: AIRTABLE_BASE_ID,
+  apiKey: AIRTABLE_API_KEY,
+};
+
+// Phase 1 stub: no cookie parsing, no control-plane base - every request
+// resolves to the default client. Later phases read a signed cookie off
+// `req` and look the slug up in the clients cache here.
+function resolveTenantForRequest(req) {
+  return DEFAULT_TENANT;
+}
+
+// Base-scoped Airtable URLs, resolved per request from the active tenant.
+// The old `${AIRTABLE_URL}` / `${AIRTABLE_META_URL}` call sites were
+// mechanically rewritten to `${atUrl()}` / `${atMetaUrl()}`.
+function atUrl() {
+  return `https://api.airtable.com/v0/${currentTenant().baseId}`;
+}
+function atMetaUrl() {
+  return `https://api.airtable.com/v0/meta/bases/${currentTenant().baseId}`;
+}
 
 // Airtable enforces 5 requests/second per base. This app fires a lot of
 // independent reads in parallel on a single page load (grid, contact,
@@ -170,7 +217,7 @@ async function airtableFetchWithRetry(url, options, retries = 3, delayMs = 1000)
 }
 
 async function airtableRequest(method, table, body) {
-  const res = await airtableFetchWithRetry(`${AIRTABLE_URL}/${encodeURIComponent(table)}`, {
+  const res = await airtableFetchWithRetry(`${atUrl()}/${encodeURIComponent(table)}`, {
     method,
     headers: {
       'Authorization': `Bearer ${AIRTABLE_API_KEY}`,
@@ -222,7 +269,7 @@ async function airtableWriteAllowingMissingCtaFields(method, table, body) {
 
 // Fetch a single Airtable record by its record id (not a search-by-field lookup)
 async function airtableGetRecord(table, recordId) {
-  const res = await airtableFetchWithRetry(`${AIRTABLE_URL}/${encodeURIComponent(table)}/${recordId}`, {
+  const res = await airtableFetchWithRetry(`${atUrl()}/${encodeURIComponent(table)}/${recordId}`, {
     headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` }
   });
   if (!res.ok) return null;
@@ -235,7 +282,7 @@ async function airtableGetRecord(table, recordId) {
 async function findRecordByFieldName(table, fieldName, value) {
   if (!value) return null;
   const res = await airtableFetchWithRetry(
-    `${AIRTABLE_URL}/${encodeURIComponent(table)}?filterByFormula=${encodeURIComponent(`{${fieldName}}="${value}"`)}`,
+    `${atUrl()}/${encodeURIComponent(table)}?filterByFormula=${encodeURIComponent(`{${fieldName}}="${value}"`)}`,
     { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
   );
   const data = await res.json();
@@ -266,8 +313,8 @@ async function airtableFetchAllPaginated(table, extraQueryString) {
     const qs = new URLSearchParams({ pageSize: '100' });
     if (offset) qs.set('offset', offset);
     const url = extraQueryString
-      ? `${AIRTABLE_URL}/${encodeURIComponent(table)}?${extraQueryString}&${qs.toString()}`
-      : `${AIRTABLE_URL}/${encodeURIComponent(table)}?${qs.toString()}`;
+      ? `${atUrl()}/${encodeURIComponent(table)}?${extraQueryString}&${qs.toString()}`
+      : `${atUrl()}/${encodeURIComponent(table)}?${qs.toString()}`;
     const res = await airtableFetchWithRetry(url, { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } });
     if (!res.ok) { const err = await res.text(); throw new Error(`Airtable error ${res.status}: ${err}`); }
     const data = await res.json();
@@ -453,7 +500,7 @@ async function createOrUpdateAirtableContact({ name, company, role, linkedinUrl,
   let companyRecord = null;
   if (company) {
     const companySearchRes = await airtableFetchWithRetry(
-      `${AIRTABLE_URL}/Companies?filterByFormula=${encodeURIComponent(`{Company Name}="${company}"`)}`,
+      `${atUrl()}/Companies?filterByFormula=${encodeURIComponent(`{Company Name}="${company}"`)}`,
       { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
     );
     const companySearchData = await companySearchRes.json();
@@ -461,7 +508,7 @@ async function createOrUpdateAirtableContact({ name, company, role, linkedinUrl,
   }
 
   const searchRes = await airtableFetchWithRetry(
-    `${AIRTABLE_URL}/Contacts?filterByFormula=${encodeURIComponent(`{Full Name}="${name}"`)}`,
+    `${atUrl()}/Contacts?filterByFormula=${encodeURIComponent(`{Full Name}="${name}"`)}`,
     { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
   );
   const searchData = await searchRes.json();
@@ -640,7 +687,7 @@ async function linkGridContactToCampaign(contactId, contactName, campaignRecord,
 async function gridStillExistsInAirtable(gridId) {
   try {
     const res = await airtableFetchWithRetry(
-      `${AIRTABLE_URL}/Grids?filterByFormula=${encodeURIComponent(`{Grid ID}="${gridId}"`)}`,
+      `${atUrl()}/Grids?filterByFormula=${encodeURIComponent(`{Grid ID}="${gridId}"`)}`,
       { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
     );
     if (!res.ok) return true;
@@ -671,7 +718,7 @@ function parseGridNameList(raw) {
 // otherwise creates a fresh record.
 async function findOrCreateCompanyRecord(name, gridName) {
   const searchRes = await airtableFetchWithRetry(
-    `${AIRTABLE_URL}/Companies?filterByFormula=${encodeURIComponent(`{Company Name}="${name}"`)}`,
+    `${atUrl()}/Companies?filterByFormula=${encodeURIComponent(`{Company Name}="${name}"`)}`,
     { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
   );
   const searchData = await searchRes.json();
@@ -976,7 +1023,7 @@ app.post('/api/leads/website', async (req, res) => {
     if (email) fields['Email'] = email;
 
     const companySearchRes = await airtableFetchWithRetry(
-      `${AIRTABLE_URL}/Companies?filterByFormula=${encodeURIComponent(`{Company Name}="${client_company}"`)}`,
+      `${atUrl()}/Companies?filterByFormula=${encodeURIComponent(`{Company Name}="${client_company}"`)}`,
       { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
     );
     const companySearchData = await companySearchRes.json();
@@ -1263,7 +1310,7 @@ app.patch('/api/airtable/company/linkedin', async (req, res) => {
 
   try {
     const searchRes = await airtableFetchWithRetry(
-      `${AIRTABLE_URL}/Companies?filterByFormula=${encodeURIComponent(`{Company Name}="${companyName}"`)}`,
+      `${atUrl()}/Companies?filterByFormula=${encodeURIComponent(`{Company Name}="${companyName}"`)}`,
       { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
     );
     const searchData = await searchRes.json();
@@ -1418,7 +1465,7 @@ app.delete('/api/campaign/:id', async (req, res) => {
     const record = await findCampaignRecordByName(campaignName);
     if (!record) return res.json({ success: true, alreadyDeleted: true });
 
-    const url = `${AIRTABLE_URL}/Campaigns?records[]=${encodeURIComponent(record.id)}`;
+    const url = `${atUrl()}/Campaigns?records[]=${encodeURIComponent(record.id)}`;
     const resp = await airtableFetchWithRetry(url, { method: 'DELETE', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } });
     if (!resp.ok) { const err = await resp.text(); throw new Error(`Airtable error ${resp.status}: ${err}`); }
 
@@ -1503,7 +1550,7 @@ app.delete('/api/airtable/grid/:gridId', async (req, res) => {
     const existing = await findRecordByFieldName('Grids', 'Grid ID', gridId);
     if (!existing) return res.json({ success: true, alreadyDeleted: true });
 
-    const url = `${AIRTABLE_URL}/Grids?records[]=${encodeURIComponent(existing.id)}`;
+    const url = `${atUrl()}/Grids?records[]=${encodeURIComponent(existing.id)}`;
     const resp = await airtableFetchWithRetry(url, { method: 'DELETE', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } });
     if (!resp.ok) { const err = await resp.text(); throw new Error(`Airtable error ${resp.status}: ${err}`); }
 
@@ -2027,7 +2074,7 @@ app.patch('/api/airtable/contact/stage', async (req, res) => {
 
   try {
     const searchRes = await airtableFetchWithRetry(
-      `${AIRTABLE_URL}/Contacts?filterByFormula=${encodeURIComponent(`{Full Name}="${contactName}"`)}`,
+      `${atUrl()}/Contacts?filterByFormula=${encodeURIComponent(`{Full Name}="${contactName}"`)}`,
       { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
     );
     const searchData = await searchRes.json();
@@ -2099,7 +2146,7 @@ app.get('/api/search-company-linkedin', async (req, res) => {
     if (AIRTABLE_API_KEY) {
       try {
         const searchRes = await airtableFetchWithRetry(
-          `${AIRTABLE_URL}/Companies?filterByFormula=${encodeURIComponent(`{Company Name}="${company}"`)}`,
+          `${atUrl()}/Companies?filterByFormula=${encodeURIComponent(`{Company Name}="${company}"`)}`,
           { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
         );
         const searchData = await searchRes.json();
@@ -4862,7 +4909,7 @@ app.post('/api/reps', async (req, res) => {
 app.delete('/api/reps/:repId', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   try {
-    const url = `${AIRTABLE_URL}/Reps?records[]=${encodeURIComponent(req.params.repId)}`;
+    const url = `${atUrl()}/Reps?records[]=${encodeURIComponent(req.params.repId)}`;
     const resp = await airtableFetchWithRetry(url, { method: 'DELETE', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } });
     if (!resp.ok) { const err = await resp.text(); throw new Error(`Airtable error ${resp.status}: ${err}`); }
     res.json({ success: true });
@@ -7452,7 +7499,7 @@ Return an empty array if there are no time-based actions in the note - do not in
 app.delete('/api/reminders/:id', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   try {
-    const url = `${AIRTABLE_URL}/Reminders?records[]=${encodeURIComponent(req.params.id)}`;
+    const url = `${atUrl()}/Reminders?records[]=${encodeURIComponent(req.params.id)}`;
     const resp = await airtableFetchWithRetry(url, { method: 'DELETE', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } });
     if (!resp.ok) { const err = await resp.text(); throw new Error(`Airtable error ${resp.status}: ${err}`); }
     res.json({ success: true });
@@ -8103,7 +8150,7 @@ app.post('/api/campaign/:id/repair-contacts', async (req, res) => {
     for (let i = 0; i < toDelete.length; i += 10) {
       const batch = toDelete.slice(i, i + 10);
       const qs = batch.map(id => `records[]=${encodeURIComponent(id)}`).join('&');
-      const resp = await airtableFetchWithRetry(`${AIRTABLE_URL}/${encodeURIComponent(CAMPAIGN_CONTACTS_TABLE)}?${qs}`, {
+      const resp = await airtableFetchWithRetry(`${atUrl()}/${encodeURIComponent(CAMPAIGN_CONTACTS_TABLE)}?${qs}`, {
         method: 'DELETE', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` }
       });
       if (resp.ok) deleted += batch.length;
@@ -9947,7 +9994,7 @@ async function airtableFetchAllRecordIds(table) {
   do {
     const qs = new URLSearchParams({ pageSize: '100' });
     if (offset) qs.set('offset', offset);
-    const res = await airtableFetchWithRetry(`${AIRTABLE_URL}/${encodeURIComponent(table)}?${qs.toString()}`, {
+    const res = await airtableFetchWithRetry(`${atUrl()}/${encodeURIComponent(table)}?${qs.toString()}`, {
       headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` }
     });
     if (!res.ok) { const err = await res.text(); throw new Error(`Airtable error ${res.status}: ${err}`); }
@@ -9964,7 +10011,7 @@ async function airtableBatchDelete(table, recordIds) {
   for (let i = 0; i < recordIds.length; i += 10) {
     const batch = recordIds.slice(i, i + 10);
     const qs = batch.map(id => `records[]=${encodeURIComponent(id)}`).join('&');
-    const res = await airtableFetchWithRetry(`${AIRTABLE_URL}/${encodeURIComponent(table)}?${qs}`, {
+    const res = await airtableFetchWithRetry(`${atUrl()}/${encodeURIComponent(table)}?${qs}`, {
       method: 'DELETE',
       headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` }
     });
@@ -10150,7 +10197,7 @@ const DEFAULT_SEO_VOICE_PROFILE = `Twenty2 Collective (T2C) is a Perth, WA-based
 // to carry the schema.bases:write scope in addition to the data scopes
 // this file already relies on elsewhere - if it doesn't, these throw with
 // Airtable's own permission error text surfaced straight to the caller.
-const AIRTABLE_META_URL = `https://api.airtable.com/v0/meta/bases/${AIRTABLE_BASE_ID}`;
+// (Metadata API base URL is now atMetaUrl(), resolved per active tenant.)
 let airtableSchemaCache = null;
 // Remembers a Metadata API refusal (this base's token usually has no
 // schema.bases scope) so every SEO route's ensure* call doesn't re-fetch
@@ -10172,7 +10219,7 @@ async function fetchAirtableSchema(force) {
   if (force) { airtableSchemaCache = null; airtableSchemaFetchError = null; }
   if (airtableSchemaCache) return airtableSchemaCache;
   if (airtableSchemaFetchError) throw airtableSchemaFetchError;
-  const res = await airtableFetchWithRetry(`${AIRTABLE_META_URL}/tables`, {
+  const res = await airtableFetchWithRetry(`${atMetaUrl()}/tables`, {
     headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` }
   });
   if (!res.ok) {
@@ -10188,7 +10235,7 @@ async function ensureAirtableTable(tableName, fields) {
   const tables = await fetchAirtableSchema();
   let table = tables.find(t => t.name === tableName);
   if (table) return table;
-  const res = await airtableFetchWithRetry(`${AIRTABLE_META_URL}/tables`, {
+  const res = await airtableFetchWithRetry(`${atMetaUrl()}/tables`, {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: tableName, fields })
@@ -10204,7 +10251,7 @@ async function ensureAirtableField(tableName, fieldName, fieldDef) {
   const table = tables.find(t => t.name === tableName);
   if (!table) throw new Error(`Airtable table "${tableName}" not found`);
   if (table.fields.some(f => f.name === fieldName)) return;
-  const res = await airtableFetchWithRetry(`${AIRTABLE_META_URL}/tables/${table.id}/fields`, {
+  const res = await airtableFetchWithRetry(`${atMetaUrl()}/tables/${table.id}/fields`, {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: fieldName, ...fieldDef })
@@ -10747,7 +10794,7 @@ app.delete('/api/seo/keywords/:id/post', async (req, res) => {
 app.delete('/api/seo/keywords/:id', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   try {
-    const url = `${AIRTABLE_URL}/${encodeURIComponent(KEYWORDS_TABLE)}?records[]=${encodeURIComponent(req.params.id)}`;
+    const url = `${atUrl()}/${encodeURIComponent(KEYWORDS_TABLE)}?records[]=${encodeURIComponent(req.params.id)}`;
     const resp = await airtableFetchWithRetry(url, { method: 'DELETE', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } });
     if (!resp.ok) { const err = await resp.text(); throw new Error(`Airtable error ${resp.status}: ${err}`); }
     res.json({ success: true });
@@ -12406,7 +12453,7 @@ app.patch('/api/seo/service-queue/:id', async (req, res) => {
 app.delete('/api/seo/service-queue/:id', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   try {
-    const url = `${AIRTABLE_URL}/${encodeURIComponent(SERVICE_PAGE_QUEUE_TABLE)}?records[]=${encodeURIComponent(req.params.id)}`;
+    const url = `${atUrl()}/${encodeURIComponent(SERVICE_PAGE_QUEUE_TABLE)}?records[]=${encodeURIComponent(req.params.id)}`;
     const resp = await airtableFetchWithRetry(url, { method: 'DELETE', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } });
     if (!resp.ok) { const err = await resp.text(); throw new Error(`Airtable error ${resp.status}: ${err}`); }
     res.json({ success: true });
@@ -12580,7 +12627,7 @@ app.patch('/api/seo/campaigns/:id', async (req, res) => {
 app.delete('/api/seo/campaigns/:id', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   try {
-    const url = `${AIRTABLE_URL}/${encodeURIComponent(SEO_CAMPAIGNS_TABLE)}?records[]=${encodeURIComponent(req.params.id)}`;
+    const url = `${atUrl()}/${encodeURIComponent(SEO_CAMPAIGNS_TABLE)}?records[]=${encodeURIComponent(req.params.id)}`;
     const resp = await airtableFetchWithRetry(url, { method: 'DELETE', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } });
     if (!resp.ok) { const err = await resp.text(); throw new Error(`Airtable error ${resp.status}: ${err}`); }
     res.json({ success: true });
@@ -12899,7 +12946,7 @@ app.patch('/api/aeo/prompts/:id', async (req, res) => {
 app.delete('/api/aeo/prompts/:id', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   try {
-    const url = `${AIRTABLE_URL}/${encodeURIComponent(AEO_PROMPTS_TABLE)}?records[]=${encodeURIComponent(req.params.id)}`;
+    const url = `${atUrl()}/${encodeURIComponent(AEO_PROMPTS_TABLE)}?records[]=${encodeURIComponent(req.params.id)}`;
     const resp = await airtableFetchWithRetry(url, { method: 'DELETE', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } });
     if (!resp.ok) { const err = await resp.text(); throw new Error(`Airtable error ${resp.status}: ${err}`); }
     res.json({ success: true });
@@ -13129,7 +13176,7 @@ app.post('/api/aeo/recommendations', async (req, res) => {
 app.delete('/api/aeo/recommendations/:id', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   try {
-    const url = `${AIRTABLE_URL}/${encodeURIComponent(AEO_RECOMMENDATIONS_TABLE)}?records[]=${encodeURIComponent(req.params.id)}`;
+    const url = `${atUrl()}/${encodeURIComponent(AEO_RECOMMENDATIONS_TABLE)}?records[]=${encodeURIComponent(req.params.id)}`;
     const resp = await airtableFetchWithRetry(url, { method: 'DELETE', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } });
     if (!resp.ok) { const err = await resp.text(); throw new Error(`Airtable error ${resp.status}: ${err}`); }
     res.json({ success: true });
@@ -13244,7 +13291,7 @@ app.patch('/api/aeo/campaigns/:id', async (req, res) => {
 app.delete('/api/aeo/campaigns/:id', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   try {
-    const url = `${AIRTABLE_URL}/${encodeURIComponent(AEO_CAMPAIGNS_TABLE)}?records[]=${encodeURIComponent(req.params.id)}`;
+    const url = `${atUrl()}/${encodeURIComponent(AEO_CAMPAIGNS_TABLE)}?records[]=${encodeURIComponent(req.params.id)}`;
     const resp = await airtableFetchWithRetry(url, { method: 'DELETE', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } });
     if (!resp.ok) { const err = await resp.text(); throw new Error(`Airtable error ${resp.status}: ${err}`); }
     res.json({ success: true });
