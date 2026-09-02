@@ -1493,11 +1493,28 @@ function applyClientBranding(c){
 
 function ensureAgencyNav(s){
   const multi = s && (s.controlPlane || (s.clients && s.clients.length > 1));
-  const has = NAV.some(n => n.id === 'agency');
-  if(multi && !has){
+  let changed = false;
+  if(multi && !NAV.some(n => n.id === 'agency')){
     NAV.unshift({ id:'agency', label:'Agency', icon:'ti-building-community' });
-    renderSidebar();
+    changed = true;
   }
+  // Email-mode clients (Google business search + cold email, no LinkedIn
+  // market-map) get a Prospecting entry in place of the hidden Grid page.
+  const emailMode = (s && s.activeClient && s.activeClient.outreachMode) === 'email';
+  const hasProspecting = NAV.some(n => n.id === 'prospecting');
+  if(emailMode && !hasProspecting){
+    const homeIdx = NAV.findIndex(n => n.id === 'home');
+    NAV.splice(homeIdx >= 0 ? homeIdx + 1 : NAV.length, 0, { id:'prospecting', label:'Prospecting', icon:'ti-building-store' });
+    changed = true;
+  } else if(!emailMode && hasProspecting){
+    const i = NAV.findIndex(n => n.id === 'prospecting');
+    if(i >= 0){ NAV.splice(i, 1); changed = true; }
+  }
+  // If a persisted currentPage is no longer reachable for this client
+  // (e.g. switched away from an email-mode client while on Prospecting),
+  // fall back to Home.
+  if(state.currentPage === 'prospecting' && !emailMode){ navigate('home'); return; }
+  if(changed) renderSidebar();
 }
 
 function renderClientSwitcher(s){
@@ -1612,6 +1629,7 @@ const CLIENT_FORM_SPEC = [
   { k:'name', label:'Client name', required:true, ph:'The Shed Guru', oninput:'refreshMarketingNote()' },
   { k:'slug', label:'Slug', hint:'URL-safe id. Leave blank to auto-generate from the name. Cannot be changed later.', ph:'the-shed-guru', oninput:'refreshMarketingNote()' },
   { k:'status', label:'Status', type:'select', options:['Active','Paused'] },
+  { k:'outreachMode', label:'Outreach mode', type:'select', options:['LinkedIn','Email'], hint:'LinkedIn = market-map grid + connection/message sequences. Email = Google business search + one-off cold emails.' },
   { section: 'Airtable' },
   { k:'baseId', label:'CRM base ID', required:true, hint:'In Airtable: duplicate the Twenty2 base (structure only), then paste its base id (app...) here.', ph:'appXXXXXXXXXXXXXX', validate:true },
   { section: 'Branding' },
@@ -1777,6 +1795,101 @@ async function loadAgencyOverview(force){
   if(h) h.innerHTML = renderAgencyOverviewGrid(window.__agencyOverview);
 }
 
+/* ===================== PROSPECTING (email-mode clients) ===================== */
+// Google business search -> tick results -> add as Companies. Shown only
+// for clients whose Outreach Mode is Email (The Shed Guru style).
+
+function renderProspectingPage(){
+  const s = window.__prospectSearch || {};
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title" style="margin-bottom:2px;"><i class="ti ti-building-store"></i> Find companies</div>
+    <div class="muted" style="font-size:12px;margin-bottom:12px;">Search Google for businesses to add to this workspace. Type it like you would in the search bar - e.g. <em>shed installers brisbane</em> or <em>shed kit suppliers australia</em>.</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      <input id="prospectQuery" type="text" placeholder="shed installers brisbane" value="${esc(s.query||'')}" style="flex:1;min-width:240px;" onkeydown="if(event.key==='Enter')runProspectSearch()">
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;white-space:nowrap;"><input type="checkbox" id="prospectFacebook" ${s.includeFacebook?'checked':''}> Include Facebook pages</label>
+      <button class="btn btn-primary btn-sm" onclick="runProspectSearch()"><i class="ti ti-search"></i> Search</button>
+    </div>
+  </div>
+  <div id="prospectResults">${renderProspectResults(window.__prospectResults)}</div>`;
+}
+
+function renderProspectResults(data){
+  if(data === undefined) return '';
+  if(data === 'loading') return '<div class="muted"><i class="ti ti-loader-2"></i> Searching...</div>';
+  if(data && data.error) return `<div class="muted">Search failed: ${esc(data.error)}</div>`;
+  const rows = (data && data.results) || [];
+  if(!rows.length) return '<div class="empty-state">No businesses found for that search. Try different words or a broader area.</div>';
+  return `
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+      <div class="section-title" style="margin-bottom:0;">${rows.length} result${rows.length===1?'':'s'}</div>
+      <button class="btn btn-primary btn-sm" onclick="addSelectedProspects()"><i class="ti ti-plus"></i> Add selected</button>
+    </div>
+    <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+      <thead><tr style="text-align:left;border-bottom:1px solid var(--border-light);">
+        <th style="padding:6px 8px;width:28px;"><input type="checkbox" onchange="toggleAllProspects(this.checked)" checked></th>
+        <th style="padding:6px 8px;">Business</th><th style="padding:6px 8px;">Site</th><th style="padding:6px 8px;">Notes</th>
+      </tr></thead>
+      <tbody>
+        ${rows.map((r,i) => `<tr style="border-bottom:1px solid var(--border-light);">
+          <td style="padding:6px 8px;"><input type="checkbox" class="prospect-check" data-i="${i}" checked></td>
+          <td style="padding:6px 8px;font-weight:600;">${esc(r.name)}${r.source==='facebook'?' <span class="muted" style="font-weight:400;">(FB)</span>':''}</td>
+          <td style="padding:6px 8px;"><a href="${esc(r.url)}" target="_blank" rel="noopener" style="color:var(--accent,#2A6B7C);">${esc(r.domain)}</a></td>
+          <td style="padding:6px 8px;color:var(--sidebar-muted);">${esc((r.snippet||'').slice(0,110))}${(r.snippet||'').length>110?'…':''}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+  </div>`;
+}
+
+async function runProspectSearch(){
+  const query = (document.getElementById('prospectQuery').value || '').trim();
+  const includeFacebook = !!document.getElementById('prospectFacebook').checked;
+  if(!query){ toast('Type a search first', 'warn'); return; }
+  window.__prospectSearch = { query, includeFacebook };
+  window.__prospectResults = 'loading';
+  const host = document.getElementById('prospectResults');
+  if(host) host.innerHTML = renderProspectResults('loading');
+  try {
+    const res = await fetch('/api/prospects/search', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ query, includeFacebook })
+    });
+    const data = await res.json();
+    window.__prospectResults = res.ok ? data : { error: data.error || 'Request failed' };
+  } catch(err){
+    window.__prospectResults = { error: err.message };
+  }
+  const h = document.getElementById('prospectResults');
+  if(h) h.innerHTML = renderProspectResults(window.__prospectResults);
+}
+
+function toggleAllProspects(checked){
+  document.querySelectorAll('.prospect-check').forEach(c => { c.checked = checked; });
+}
+
+async function addSelectedProspects(){
+  const results = (window.__prospectResults && window.__prospectResults.results) || [];
+  const picked = [...document.querySelectorAll('.prospect-check')]
+    .filter(c => c.checked)
+    .map(c => results[parseInt(c.dataset.i, 10)])
+    .filter(Boolean);
+  if(!picked.length){ toast('Nothing selected', 'warn'); return; }
+  try {
+    const res = await fetch('/api/prospects/add', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ companies: picked, createContactStub: true })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Add failed');
+    toast(`Added ${data.addedCount} compan${data.addedCount===1?'y':'ies'}${data.failed && data.failed.length ? ` (${data.failed.length} failed)` : ''}`, 'success');
+    hydrateCompaniesFromAirtable && hydrateCompaniesFromAirtable();
+  } catch(err){
+    toast('Could not add companies: ' + err.message, 'warn');
+  }
+}
+
 function navigate(page){
   state.currentPage = page;
   const navEntry = NAV.find(n => n.id === page);
@@ -1789,7 +1902,7 @@ function navigate(page){
 
 function renderPage(){
   const el = document.getElementById('pageContent');
-  const renderers = { home: renderHome, logger: renderLoggerPage, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, contentcalendar: renderContentCalendarPage, research: renderResearch, settings: renderSettings, agency: renderAgencyPage };
+  const renderers = { home: renderHome, logger: renderLoggerPage, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, contentcalendar: renderContentCalendarPage, research: renderResearch, settings: renderSettings, agency: renderAgencyPage, prospecting: renderProspectingPage };
   el.innerHTML = renderers[state.currentPage]();
   afterRender(state.currentPage);
 }
@@ -8555,6 +8668,7 @@ function renderContactDrawerContent(data, campaignName){
       </div>
       <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
         ${c.linkedinUrl ? `<a href="${esc(c.linkedinUrl)}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm"><i class="ti ti-brand-linkedin"></i></a>` : ''}
+        ${(activeClient() && activeClient().outreachMode === 'email') ? `<button class="btn btn-secondary btn-sm" onclick="openGenerateModal('${c.id}','email', ()=>renderPage())"><i class="ti ti-mail"></i> Draft email</button>` : ''}
         <button class="btn btn-secondary btn-sm" id="enrichContactBtn" onclick="enrichContactDrawer()"><i class="ti ti-sparkles"></i> Enrich</button>
       </div>
       <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
@@ -9093,7 +9207,9 @@ const STAGE_META = [
   { key:'connect', label:'Connection request', hint:'Sent on first outreach' },
   { key:'m1', label:'Message 1', hint:'After connection accepted' },
   { key:'m2', label:'Message 2', hint:'Follow-up, no reply yet' },
-  { key:'cta', label:'CTA', hint:'Invite to next step' }
+  { key:'cta', label:'CTA', hint:'Invite to next step' },
+  // Email-mode clients: a one-off cold email, no fixed sequence position.
+  { key:'email', label:'Cold email', hint:'One-off outreach email' }
 ];
 
 function renderSequenceEditor(seq){
@@ -10342,6 +10458,7 @@ function openCampaignDetail(campaignId, tab){
   window.__campaignAnalytics = null;
   window.__campaignMessagePerf = null;
   window.__campaignInsights = null;
+  window.__campaignInsightsNotGenerated = false;
   window.__campaignInsightsError = null;
   window.__campaignContactsFilter = { search:'', status:'all' };
   window.__salesPeriod = window.__salesPeriod || 'thisWeek';
@@ -11143,14 +11260,18 @@ function renderCampaignMessagePerformance(){
   </div>`;
 }
 
-async function runCampaignInsights(){
+// force=true asks the server to regenerate with the Engine (costs tokens);
+// the default just returns the last generated insights for this campaign,
+// so opening the Analytics tab is free.
+async function runCampaignInsights(force){
   const campaign = state.campaigns.find(c => c.id === window.__campaignDetailId);
   if(!campaign) return;
   try {
-    const res = await fetch(`/api/campaign/${encodeURIComponent(campaignRouteKey(campaign))}/insights`);
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaignRouteKey(campaign))}/insights` + (force ? '?refresh=1' : ''));
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
     window.__campaignInsights = data.insights || [];
+    window.__campaignInsightsNotGenerated = !!data.notGenerated;
     window.__campaignInsightsError = null;
   } catch(err){
     window.__campaignInsights = null;
@@ -11163,7 +11284,7 @@ function refreshCampaignInsights(){
   window.__campaignInsights = null;
   window.__campaignInsightsError = null;
   renderPage();
-  runCampaignInsights();
+  runCampaignInsights(true);
 }
 
 function renderCampaignAnalyticsTab(campaign){
@@ -11218,6 +11339,7 @@ function renderCampaignAnalyticsTab(campaign){
     ${insights === null && !insightsErr ? '<div class="muted"><i class="ti ti-loader-2"></i> Loading insights...</div>' :
       insightsErr ? `<div class="muted">Could not load insights: ${esc(insightsErr)}</div>` :
       insights.length ? `<ul style="padding-left:18px;font-size:12.5px;line-height:1.7;">${insights.map(i=>`<li>${esc(i)}</li>`).join('')}</ul>` :
+      window.__campaignInsightsNotGenerated ? '<div class="muted" style="font-size:12.5px;">No insights generated yet. Press Refresh insights when you want the Engine to analyse this campaign.</div>' :
       '<div class="empty-state">No insights yet for this campaign.</div>'}
   </div>
   `;
@@ -12465,12 +12587,17 @@ function computeCampaignHealth(campaign, data){
   return { id: campaign.id, name: campaign.name, connections, messagesSent, meetingsBooked, won, lost, statusKey, statusLabel };
 }
 
-async function loadSalesInsights(){
+// force=true asks the server to regenerate with the Engine (costs tokens);
+// the default just returns the last generated set, so opening the tab is free.
+async function loadSalesInsights(force){
+  if(force){ window.__salesInsights = undefined; renderPage(); }
   try {
-    const res = await fetch('/api/sales/insights');
+    const res = await fetch('/api/sales/insights' + (force ? '?refresh=1' : ''));
     const json = await res.json();
     if(!res.ok) throw new Error(json.error || ('Request failed with status '+res.status));
     window.__salesInsights = json.insights || [];
+    window.__salesInsightsNotGenerated = !!json.notGenerated;
+    window.__salesInsightsStoredAt = json.storedAt || json.generatedAt || null;
   } catch(err){
     window.__salesInsights = { error: err.message };
   }
@@ -12533,12 +12660,21 @@ function renderPipelineSummaryBar(){
 
 function renderSalesInsightsPanel(){
   const insights = window.__salesInsights;
+  const empty = Array.isArray(insights) && !insights.length;
+  const storedAt = window.__salesInsightsStoredAt;
+  const btnLabel = (empty || window.__salesInsightsNotGenerated) ? 'Generate insights' : 'Refresh';
+  const btn = `<button class="btn btn-secondary btn-sm" ${insights === undefined ? 'disabled' : ''} onclick="loadSalesInsights(true)"><i class="ti ${insights === undefined ? 'ti-loader-2' : 'ti-bulb-filled'}"></i> ${insights === undefined ? 'Generating...' : btnLabel}</button>`;
   return `
   <div class="card" style="margin-bottom:16px;">
-    <div class="section-title"><i class="ti ti-bulb-filled"></i> Engine insights</div>
-    ${insights === undefined ? '<div class="muted"><i class="ti ti-loader-2"></i> Generating insights...</div>' : ''}
-    ${insights && insights.error ? `<div class="muted">Could not load insights: ${esc(insights.error)}</div>` : ''}
-    ${Array.isArray(insights) ? `<ul style="margin:0;padding-left:18px;font-size:12.5px;line-height:1.7;">${insights.map(i=>`<li>${esc(i)}</li>`).join('')}</ul>` : ''}
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+      <div class="section-title" style="margin:0;"><i class="ti ti-bulb-filled"></i> Engine insights</div>
+      ${btn}
+    </div>
+    ${insights === undefined ? '<div class="muted" style="margin-top:12px;"><i class="ti ti-loader-2"></i> Generating insights...</div>' : ''}
+    ${insights && insights.error ? `<div class="muted" style="margin-top:12px;">Could not load insights: ${esc(insights.error)}</div>` : ''}
+    ${empty ? '<div class="muted" style="margin-top:12px;font-size:12.5px;">No insights generated yet. Press Generate insights when you want the Engine to analyse the pipeline.</div>' : ''}
+    ${Array.isArray(insights) && insights.length ? `<ul style="margin:12px 0 0;padding-left:18px;font-size:12.5px;line-height:1.7;">${insights.map(i=>`<li>${esc(i)}</li>`).join('')}</ul>` : ''}
+    ${Array.isArray(insights) && insights.length && storedAt ? `<div class="muted" style="font-size:11px;margin-top:8px;">Generated ${esc(new Date(storedAt).toLocaleString('en-AU',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}))}</div>` : ''}
   </div>`;
 }
 
@@ -14382,15 +14518,18 @@ async function loadSeoKeywords(){
   if(state.currentPage === 'content' && window.__contentSubTab === 'seo') renderPage();
 }
 
+// force=true asks the server to regenerate with the Engine (costs tokens);
+// the default just returns the last generated set, so opening the tab is free.
 async function loadSeoSuggestions(force){
   if(window.__seoSuggestions !== undefined && !force) return;
   window.__seoSuggestionsLoading = true;
   if(force) renderPage();
   try {
-    const res = await fetch('/api/seo/suggest-keywords');
+    const res = await fetch('/api/seo/suggest-keywords' + (force ? '?refresh=1' : ''));
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
     window.__seoSuggestions = data.suggestions || [];
+    window.__seoSuggestionsNotGenerated = !!data.notGenerated;
   } catch(err){
     window.__seoSuggestions = { error: err.message };
   }
@@ -15634,6 +15773,7 @@ function renderSeoSuggestions(){
   if(window.__seoSuggestionsLoading) return '<div class="muted"><i class="ti ti-loader-2"></i> Analysing recent activity...</div>';
   if(!list) return '<div class="muted"><i class="ti ti-loader-2"></i> Loading suggestions...</div>';
   if(list.error) return `<div class="muted">Could not load suggestions: ${esc(list.error)}</div>`;
+  if(!list.length && window.__seoSuggestionsNotGenerated) return '<div class="muted" style="font-size:12.5px;">No suggestions generated yet. Press Refresh suggestions when you want the Engine to mine recent activity for keyword ideas.</div>';
   if(!list.length) return '<div class="empty-state">No suggestions yet - keep logging touch points and research events.</div>';
   return list.map((s,i) => `
     <div class="signal-card">
@@ -18430,10 +18570,13 @@ async function loadResearchEvents(){
   if(state.currentPage === 'research' && (window.__researchSubTab||'market') === 'market') renderPage();
 }
 
-async function loadMarketPulse(){
+// force=true asks the server to regenerate with the Engine (costs tokens);
+// the default just returns the last generated pulse, so opening the tab is free.
+async function loadMarketPulse(force){
   window.__marketPulse = 'loading';
+  if(force) renderPage();
   try {
-    const res = await fetch('/api/research/market-pulse');
+    const res = await fetch('/api/research/market-pulse' + (force ? '?refresh=1' : ''));
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
     window.__marketPulse = data;
@@ -18587,7 +18730,7 @@ function renderMarketPulseCard(){
   <div class="card" style="margin-top:16px;">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-activity"></i> Market Pulse</div>
-      <button class="btn btn-secondary btn-sm" onclick="loadMarketPulse()"><i class="ti ti-refresh"></i> Refresh</button>
+      <button class="btn btn-secondary btn-sm" onclick="loadMarketPulse(true)"><i class="ti ti-refresh"></i> Refresh</button>
     </div>
     ${renderMarketPulseBody(window.__marketPulse)}
   </div>
@@ -18597,9 +18740,10 @@ function renderMarketPulseCard(){
 function renderMarketPulseBody(pulse){
   if(pulse === undefined || pulse === 'loading') return '<div class="muted"><i class="ti ti-loader-2"></i> Analysing across all research events...</div>';
   if(pulse.error) return `<div class="muted">Could not load Market Pulse: ${esc(pulse.error)}</div>`;
-  if(!pulse.eventCount) return '<div class="empty-state">Upload a research event transcript above to start building Market Pulse.</div>';
+  if(!pulse.eventCount && !pulse.notGenerated) return '<div class="empty-state">Upload a research event transcript above to start building Market Pulse.</div>';
+  if(pulse.notGenerated) return '<div class="muted" style="font-size:12.5px;">No Market Pulse generated yet. Press Refresh when you want the Engine to analyse across all research events.</div>';
   return `
-  <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Aggregated across ${pulse.eventCount} research event${pulse.eventCount===1?'':'s'}.</div>
+  <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Aggregated across ${pulse.eventCount} research event${pulse.eventCount===1?'':'s'}.${pulse.storedAt || pulse.generatedAt ? ` Generated ${esc(new Date(pulse.storedAt||pulse.generatedAt).toLocaleString('en-AU',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}))}.` : ''}</div>
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;">
     <div>
       <h5>Top recurring pain points</h5>
