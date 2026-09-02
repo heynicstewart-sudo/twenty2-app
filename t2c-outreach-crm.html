@@ -1567,7 +1567,10 @@ function renderAgencyPage(){
         <div class="section-title" style="margin-bottom:2px;"><i class="ti ti-building-community"></i> Agency overview</div>
         <div class="muted" style="font-size:12px;">Every client you manage, at a glance. Click a card to switch into that workspace.</div>
       </div>
-      <button class="btn btn-secondary btn-sm" onclick="loadAgencyOverview(true)"><i class="ti ti-refresh"></i> Refresh</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-secondary btn-sm" onclick="loadAgencyOverview(true)"><i class="ti ti-refresh"></i> Refresh</button>
+        <button class="btn btn-primary btn-sm" onclick="openClientForm()"><i class="ti ti-plus"></i> New client</button>
+      </div>
     </div>
   </div>
   <div id="agencyOverviewGrid">${renderAgencyOverviewGrid(window.__agencyOverview)}</div>`;
@@ -1590,7 +1593,8 @@ function renderAgencyOverviewGrid(data){
               ${stat('Campaigns', c.activeCampaigns ?? '—')}
               ${stat('Touches / wk', c.touchPointsThisWeek ?? '—')}
             </div>`;
-      return `<div class="card" style="cursor:pointer;" onclick="switchClient('${esc(c.slug)}')">
+      return `<div class="card" style="cursor:pointer;position:relative;" onclick="switchClient('${esc(c.slug)}')">
+        <button class="btn btn-ghost btn-sm" title="Edit client" style="position:absolute;top:8px;right:8px;padding:4px 7px;" onclick="event.stopPropagation();openClientForm('${esc(c.slug)}')"><i class="ti ti-settings"></i></button>
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
           <span class="cs-badge" style="width:26px;height:26px;border-radius:7px;font-size:11px;">${esc(c.logoMark || (c.name||'?').slice(0,2).toUpperCase())}</span>
           <div style="font-weight:700;font-size:13.5px;">${esc(c.name || c.slug)}</div>
@@ -1599,6 +1603,141 @@ function renderAgencyOverviewGrid(data){
         ${body}
       </div>`;
     }).join('') + '</div>';
+}
+
+/* ---- New / Edit client form ---- */
+
+const CLIENT_FORM_SPEC = [
+  { section: 'Identity' },
+  { k:'name', label:'Client name', required:true, ph:'The Shed Guru' },
+  { k:'slug', label:'Slug', hint:'URL-safe id. Leave blank to auto-generate from the name. Cannot be changed later.', ph:'the-shed-guru' },
+  { k:'status', label:'Status', type:'select', options:['Active','Paused'] },
+  { section: 'Airtable' },
+  { k:'baseId', label:'CRM base ID', required:true, hint:'In Airtable: duplicate the Twenty2 base (structure only), then paste its base id (app...) here.', ph:'appXXXXXXXXXXXXXX', validate:true },
+  { k:'airtablePat', label:'Airtable token override', hint:'Optional. Leave blank to use the shared agency token.', ph:'pat...' },
+  { section: 'Branding' },
+  { k:'logoMark', label:'Logo badge', hint:'1-2 characters shown in the sidebar + switcher.', ph:'SG' },
+  { k:'shortName', label:'Short name', ph:'Shed Guru' },
+  { k:'tagline', label:'Home tagline', ph:'Your shed sales engine.' },
+  { k:'repInitials', label:'Avatar initials', ph:'NS' },
+  { section: 'Voice / outreach' },
+  { k:'city', label:'City', ph:'Perth' },
+  { k:'region', label:'Region / state', ph:'WA' },
+  { k:'repName', label:'Rep first name', hint:'Signs the outreach messages.', ph:'Nic' },
+  { k:'industry', label:'Industry', ph:'Shed and patio supplier' },
+  { k:'englishVariant', label:'Language note', ph:'UK English, no em dashes' },
+  { k:'signoff', label:'Message sign-off', ph:'Nic' },
+  { k:'positioning', label:'Positioning', type:'textarea', ph:'What they do, who for, what they believe.' },
+  { k:'services', label:'Services / offers', type:'textarea', ph:'One per line' },
+  { k:'websiteUrl', label:'Website URL', ph:'https://...' },
+  { k:'leakServiceMap', label:'Leak → service map', type:'textarea', hint:'Optional. Only used if they run Change Value Check style reports.' },
+  { section: 'Marketing (optional)' },
+  { k:'gscProperty', label:'Search Console property', ph:'https://www.example.com/' },
+  { k:'gscSitemapUrl', label:'Sitemap URL', ph:'https://www.example.com/sitemap.xml' },
+  { k:'omnisendApiKey', label:'Omnisend API key' },
+  { k:'googleAdsSheetId', label:'Google Ads sheet ID' },
+  { k:'framerApiKey', label:'Framer API key' },
+  { k:'framerProjectUrl', label:'Framer project URL' },
+  { k:'framerSiteUrl', label:'Framer site URL' },
+  { k:'framerBlogCollection', label:'Framer blog collection' },
+  { k:'framerBlogPathPrefix', label:'Framer blog path prefix' },
+  { k:'framerServiceCollection', label:'Framer service collection' },
+  { k:'framerServicePathPrefix', label:'Framer service path prefix' },
+  { section: 'Other' },
+  { k:'staleContactDays', label:'Stale contact threshold (days)', type:'number', ph:'14' },
+  { k:'notes', label:'Notes', type:'textarea' },
+];
+
+function clientFormFieldHtml(f, val){
+  const v = esc(val == null ? '' : String(val));
+  const hint = f.hint ? `<div class="muted" style="font-size:11px;margin-top:3px;">${esc(f.hint)}</div>` : '';
+  const req = f.required ? ' <span style="color:#c0392b;">*</span>' : '';
+  let input;
+  if(f.type === 'textarea'){
+    input = `<textarea id="cf_${f.k}" rows="3" placeholder="${esc(f.ph||'')}">${v}</textarea>`;
+  } else if(f.type === 'select'){
+    input = `<select id="cf_${f.k}">${(f.options||[]).map(o => `<option value="${esc(o)}"${o===val?' selected':''}>${esc(o)}</option>`).join('')}</select>`;
+  } else {
+    input = `<input id="cf_${f.k}" type="${f.type||'text'}" value="${v}" placeholder="${esc(f.ph||'')}">`;
+  }
+  const validateBtn = f.validate ? ` <button type="button" class="btn btn-ghost btn-sm" onclick="validateClientBase()"><i class="ti ti-plug-connected"></i> Test</button><span id="cf_baseCheck" class="muted" style="font-size:11px;margin-left:6px;"></span>` : '';
+  return `<div class="field" style="margin-bottom:12px;">
+    <label style="display:block;font-size:12px;font-weight:700;margin-bottom:4px;">${esc(f.label)}${req}${validateBtn}</label>
+    ${input}${hint}
+  </div>`;
+}
+
+async function openClientForm(slug){
+  let data = {};
+  if(slug){
+    try {
+      const res = await fetch('/api/agency/clients/' + encodeURIComponent(slug));
+      data = await res.json();
+      if(!res.ok) throw new Error(data.error || 'Load failed');
+    } catch(err){ toast('Could not load client: ' + err.message, 'warn'); return; }
+  }
+  const body = `
+    <div id="clientFormError" class="muted" style="color:#c0392b;font-size:12px;margin-bottom:10px;display:none;"></div>
+    ${CLIENT_FORM_SPEC.map(f => f.section
+      ? `<div class="section-title" style="font-size:12px;margin:16px 0 8px;text-transform:uppercase;letter-spacing:.06em;">${esc(f.section)}</div>`
+      : clientFormFieldHtml(f, data[f.k])).join('')}
+  `;
+  const footer = `
+    <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" id="clientFormSave" onclick="submitClientForm(${slug ? `'${esc(slug)}'` : 'null'})">
+      <i class="ti ti-device-floppy"></i> ${slug ? 'Save changes' : 'Create client'}
+    </button>`;
+  openModal(slug ? `Edit ${esc(data.name || slug)}` : 'New client', body, footer);
+  if(slug){ const sl = document.getElementById('cf_slug'); if(sl){ sl.value = slug; sl.disabled = true; } }
+}
+
+async function validateClientBase(){
+  const el = document.getElementById('cf_baseCheck');
+  const baseId = (document.getElementById('cf_baseId').value || '').trim();
+  if(!el) return;
+  el.textContent = 'Checking...';
+  try {
+    const res = await fetch('/api/agency/validate-base', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ baseId })
+    });
+    const d = await res.json();
+    if(d.ok){
+      el.style.color = '#1e7e34';
+      el.textContent = 'Reachable - Contacts' + (d.tables.Companies ? ', Companies' : '') + (d.tables.Campaigns ? ', Campaigns' : '') + ' found';
+    } else {
+      el.style.color = '#c0392b';
+      el.textContent = d.error || 'Not reachable';
+    }
+  } catch(err){ el.style.color = '#c0392b'; el.textContent = err.message; }
+}
+
+async function submitClientForm(slug){
+  const errEl = document.getElementById('clientFormError');
+  const saveBtn = document.getElementById('clientFormSave');
+  const payload = {};
+  CLIENT_FORM_SPEC.forEach(f => {
+    if(f.section) return;
+    const el = document.getElementById('cf_' + f.k);
+    if(el) payload[f.k] = el.value;
+  });
+  if(errEl) errEl.style.display = 'none';
+  if(saveBtn) saveBtn.disabled = true;
+  try {
+    const res = await fetch(slug ? '/api/agency/clients/' + encodeURIComponent(slug) : '/api/agency/clients', {
+      method: slug ? 'PATCH' : 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const d = await res.json();
+    if(!res.ok || !d.ok) throw new Error(d.error || 'Save failed');
+    toast(slug ? 'Client updated' : 'Client created', 'success');
+    closeModal();
+    setTimeout(() => location.reload(), 400);
+  } catch(err){
+    if(errEl){ errEl.textContent = err.message; errEl.style.display = 'block'; }
+    else toast(err.message, 'warn');
+    if(saveBtn) saveBtn.disabled = false;
+  }
 }
 
 async function loadAgencyOverview(force){
