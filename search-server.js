@@ -3313,6 +3313,59 @@ Based only on the above, return ONLY valid JSON, no markdown, no commentary, in 
   return profile;
 }
 
+// Business research for Email campaigns - the LinkedIn-profile research
+// above is the wrong tool for a shed contractor with no LinkedIn. Serper
+// is scoped to the location the operator typed so results are the right
+// business in the right town, plus the business's own site if given.
+async function researchBusinessEnrichment(company, location, website) {
+  const loc = (location || '').trim();
+  const site = (website || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '').trim();
+  const q = s => fetch(SERPER_URL, {
+    method: 'POST',
+    headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ q: s, gl: 'au', location: 'Australia' })
+  }).then(r => r.json()).catch(() => ({}));
+
+  const searches = [
+    q(`"${company}" ${loc}`.trim()),
+    q(`${company} ${loc} sheds OR builder OR construction OR patios`.trim()),
+  ];
+  if (site) searches.push(q(`site:${site}`));
+  const results = await Promise.all(searches);
+
+  const flat = results.flatMap(r => (r.organic || []).slice(0, 5))
+    .map(r => `${r.title || ''}\n${r.snippet || ''}\n${r.link || ''}`)
+    .join('\n\n');
+
+  const prompt = `You are researching a local trade business ahead of a cold outreach email.
+
+Business: ${company}${loc ? ` (${loc})` : ''}${site ? `\nWebsite: ${site}` : ''}
+
+Search results:
+${flat || 'No results found.'}
+
+Based only on the above, return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{
+  "kind": "business",
+  "businessSummary": string,
+  "servicesOffered": string,
+  "coverageArea": string,
+  "sizeAndScale": string,
+  "notableDetail": string,
+  "outreachAngle": string,
+  "website": string
+}
+
+Each value is one short line. "outreachAngle" is a starting point for the email, not a script. If the results don't give enough to fill a field confidently, say so plainly (e.g. "Not enough public information found") rather than inventing detail.`;
+
+  const profile = await callClaudeJson(prompt, 900);
+  profile.kind = 'business';
+  profile.location = loc;
+  if (site && !profile.website) profile.website = site;
+  profile.date = new Date().toISOString().slice(0, 10);
+  return profile;
+}
+
 // The enrichment profile is persisted as a single JSON block prepended to
 // Contacts.AI Summary (there's no dedicated enrichment field on the real
 // table, and past instruction was not to add one) - stripped and replaced
@@ -7328,6 +7381,8 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
         companyId,
         linkedinUrl: cf['LinkedIn URL'] || '',
         email: cf['Email'] || '',
+        businessLocation: cf['Business Location'] || '',
+        businessWebsite: cf['Business Website'] || '',
         journeyStage: cf['Journey Stage'] || '',
         aiSummary: cf['AI Summary'] || '',
         notes: cf['Notes'] || '',
@@ -7379,6 +7434,59 @@ app.patch('/api/contacts/:id/email', async (req, res) => {
     res.json({ success: true, email });
   } catch (err) {
     console.error('Update contact email error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Save the "Research business" inputs (location + website) onto the
+// contact without running the research - so they persist and pre-fill.
+app.patch('/api/contacts/:id/business-location', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const b = req.body || {};
+  const fields = {};
+  if (b.location !== undefined) fields['Business Location'] = (b.location || '').trim();
+  if (b.website !== undefined) fields['Business Website'] = (b.website || '').trim();
+  if (!Object.keys(fields).length) return res.status(400).json({ error: 'location or website is required' });
+  try {
+    const contactRecord = await airtableGetRecord('Contacts', req.params.id);
+    if (!contactRecord) return res.status(404).json({ error: 'Contact not found' });
+    await airtableRequest('PATCH', 'Contacts', { records: [{ id: req.params.id, fields }] });
+    res.json({ success: true, location: fields['Business Location'], website: fields['Business Website'] });
+  } catch (err) {
+    console.error('Update business location error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// "Research business" - location-scoped Serper research for Email-campaign
+// contacts, persisted the same way contact enrichment is (an ENRICHMENT_JSON
+// block on AI Summary), so the email drafter's enrichmentNote picks it up.
+app.post('/api/enrich/business', async (req, res) => {
+  if (!process.env.SERPER_API_KEY) return res.status(500).json({ error: 'SERPER_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { contactId, name, company, location, website } = req.body || {};
+  const businessName = (company || name || '').trim();
+  if (!businessName) return res.status(400).json({ error: 'company or name is required' });
+  try {
+    const contactRecord = contactId
+      ? await airtableGetRecord('Contacts', contactId)
+      : (name ? await findRecordByFieldName('Contacts', 'Full Name', name) : null);
+    const profile = await researchBusinessEnrichment(businessName, location, website);
+    if (contactRecord) {
+      try {
+        await persistContactEnrichment(contactRecord, profile);
+        const locFields = {};
+        if (location !== undefined) locFields['Business Location'] = (location || '').trim();
+        if (website !== undefined) locFields['Business Website'] = (website || '').trim();
+        if (Object.keys(locFields).length) await airtableRequest('PATCH', 'Contacts', { records: [{ id: contactRecord.id, fields: locFields }] });
+      } catch (airtableErr) {
+        console.warn('Could not store business research to Airtable:', airtableErr.message);
+      }
+    }
+    res.json({ success: true, profile });
+  } catch (err) {
+    console.error('Business research error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -8663,6 +8771,18 @@ const GROUND_IN_SPECIFICS_NOTE = `\n\nGround this message in this specific perso
 function buildEnrichmentNote(e) {
   if (!e) return '';
   const has = v => v && String(v).trim() && !/^not enough public info/i.test(String(v).trim());
+  if (e.kind === 'business') {
+    const bl = [];
+    if (has(e.businessSummary)) bl.push(`What they do: ${e.businessSummary}`);
+    if (has(e.servicesOffered)) bl.push(`Services: ${e.servicesOffered}`);
+    if (has(e.coverageArea)) bl.push(`Coverage area: ${e.coverageArea}`);
+    if (has(e.sizeAndScale)) bl.push(`Size / scale: ${e.sizeAndScale}`);
+    if (has(e.notableDetail)) bl.push(`Notable: ${e.notableDetail}`);
+    if (has(e.location)) bl.push(`Location: ${e.location}`);
+    if (has(e.outreachAngle)) bl.push(`Suggested outreach angle (a starting point, not a script): ${e.outreachAngle}`);
+    if (!bl.length) return '';
+    return `\n\nResearch on this business (weave the relevant parts in naturally, do not list them back):\n${bl.map(l => `- ${l}`).join('\n')}`;
+  }
   const lines = [];
   if (has(e.currentTitle) || has(e.company)) lines.push(`Current role: ${e.currentTitle || 'unknown'}${has(e.company) ? ` at ${e.company}` : ''}`);
   if (has(e.workHistory)) lines.push(`Work history: ${e.workHistory}`);
@@ -9276,7 +9396,9 @@ app.post('/api/campaign/:id/contacts/:contactId/generate-message', async (req, r
     const rows = await fetchCampaignContactsRows();
     const row = await getOrCreateCampaignContactRow(contactId, cf['Full Name'] || contactId, campaignRecord.id, campaignName, rows);
     const stage = normalizeSequenceStage(row.fields['Sequence Stage']);
-    const messageNumber = MESSAGE_NUMBER_FOR_STAGE[stage];
+    // Email campaigns have no "connection accepted" gate, so an early-stage
+    // contact (Found / Connection Pending) is just due their intro email.
+    const messageNumber = MESSAGE_NUMBER_FOR_STAGE[stage] || (isEmailCampaign(campaignRecord) ? 1 : 0);
     if (!messageNumber) {
       return res.status(400).json({ error: `Contact is at Sequence Stage "${stage}" - not a stage this card generates a message for.` });
     }

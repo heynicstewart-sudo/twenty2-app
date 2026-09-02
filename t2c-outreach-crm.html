@@ -4401,6 +4401,7 @@ function renderTodaysActions(){
 }
 
 function recommendedMethodForAction(a){
+  if(campaignTypeByName(a.campaignName) === 'email') return 'Email';
   const map = {
     'Send first message': 'LinkedIn message',
     'Follow up': 'Email or Call',
@@ -4435,7 +4436,7 @@ function renderTodaysActionItem(a){
       </div>
     </div>
     <div class="todo-item-actions">
-      <button class="btn btn-secondary btn-sm" onclick="openGenerateModal('${c.id}','${a.stage}', ()=>renderPage())"><i class="ti ti-copy"></i> Draft message</button>
+      <button class="btn btn-secondary btn-sm" onclick="openGenerateModal('${c.id}','${a.stage}', ()=>renderPage())"><i class="ti ti-copy"></i> Draft ${campaignTypeByName(a.campaignName) === 'email' ? 'email' : 'message'}</button>
       <button class="btn btn-ghost btn-sm" onclick="toggleQuickTouchPoint('${c.id}')"><i class="ti ti-target-arrow"></i> Log touch point</button>
       <button class="btn btn-accent btn-sm" id="briefBtn-${c.id}" onclick="generateContactBrief('${c.id}')"><i class="ti ti-sparkles"></i> Generate brief</button>
       <button class="btn btn-ghost btn-sm" onclick="handleMarkActionDone('${c.id}')"><i class="ti ti-check"></i> Mark as done</button>
@@ -4491,28 +4492,32 @@ function renderReminderActionCard(a){
 // "Copy & mark sent" button once clicked (handleGenerateFastMessage).
 function renderFastActionCard(a){
   const c = a.contact;
+  const email = campaignTypeByName(a.campaignName) === 'email';
   const isMessage = a.type !== 'Send connection';
   const enriched = !!(window.__enrichmentProfiles && window.__enrichmentProfiles[c.id]);
+  const stageLabel = email ? stageLabelFor(a.stage || 'connect', 'email') : a.stageLabel;
   return `
   <div class="todo-item" id="todaysAction-${c.id}">
     <div class="todo-item-main">
       <div>
         <div class="todo-item-name" style="cursor:pointer;" onclick="openContactDrawer('${esc(c.name)}', '${esc(a.campaignName)}')">${esc(c.name)}</div>
-        <div class="muted" style="font-size:12px;">${esc(c.role)} · ${esc(c.company)}</div>
+        <div class="muted" style="font-size:12px;">${email ? esc([ (c.role && c.role !== c.name) ? c.role : '', (c.company && c.company !== c.name) ? c.company : '' ].filter(Boolean).join(' · ') || c.email || '') : esc(c.role) + ' · ' + esc(c.company)}</div>
         <div style="margin-top:4px;"><span class="pill" style="background:var(--tint-blue-bg);color:var(--tint-blue-fg);"><i class="ti ti-rocket" style="font-size:11px;"></i> ${esc(a.campaignName)}</span></div>
       </div>
       <div style="text-align:right;">
-        <span class="pill" id="actionPill-${c.id}">${esc(a.stageLabel)}</span>
+        <span class="pill" id="actionPill-${c.id}">${esc(stageLabel)}</span>
       </div>
     </div>
     <div class="todo-item-actions">
       <div id="fastActionArea-${c.id}" style="display:contents;">
-        ${a.type === 'Send connection'
+        ${(!email && a.type === 'Send connection')
           ? `<a class="btn btn-primary btn-sm" href="${esc(c.url||'#')}" target="_blank" rel="noopener" onclick="handleContactLinkedInOpened('${c.id}')"><i class="ti ti-brand-linkedin"></i> Send connection</a>`
-          : `<button class="btn btn-primary btn-sm" onclick="handleGenerateFastMessage('${c.id}')"><i class="ti ti-sparkles"></i> Generate message</button>`}
+          : `<button class="btn btn-primary btn-sm" onclick="handleGenerateFastMessage('${c.id}')"><i class="ti ti-sparkles"></i> ${email ? 'Draft email' : 'Generate message'}</button>`}
       </div>
-      ${isMessage && c.url ? `<a class="btn btn-ghost btn-sm" href="${esc(c.url)}" target="_blank" rel="noopener"><i class="ti ti-brand-linkedin"></i> LinkedIn</a>` : ''}
-      ${isMessage ? `<button class="btn btn-ghost btn-sm" id="fastEnrichBtn-${c.id}" onclick="handleEnrichFastAction('${c.id}')"${c.url ? '' : ' disabled title="No LinkedIn URL on file"'}><i class="ti ti-search"></i> ${enriched ? 'Re-enrich' : 'Enrich'}</button>` : ''}
+      ${(!email && isMessage && c.url) ? `<a class="btn btn-ghost btn-sm" href="${esc(c.url)}" target="_blank" rel="noopener"><i class="ti ti-brand-linkedin"></i> LinkedIn</a>` : ''}
+      ${email
+        ? `<button class="btn btn-ghost btn-sm" onclick="openContactDrawer('${esc(c.name)}', '${esc(a.campaignName)}')"><i class="ti ti-search"></i> Research business</button>`
+        : (isMessage ? `<button class="btn btn-ghost btn-sm" id="fastEnrichBtn-${c.id}" onclick="handleEnrichFastAction('${c.id}')"${c.url ? '' : ' disabled title="No LinkedIn URL on file"'}><i class="ti ti-search"></i> ${enriched ? 'Re-enrich' : 'Enrich'}</button>` : '')}
       <button class="btn btn-ghost btn-sm" onclick="handleMarkActionDone('${c.id}')"><i class="ti ti-check"></i> Mark as done</button>
     </div>
   </div>`;
@@ -7012,6 +7017,8 @@ async function hydrateContactsFromAirtable(){
         role: role,
         url: f['LinkedIn URL'] || '',
         email: f['Email'] || '',
+        businessLocation: f['Business Location'] || '',
+        businessWebsite: f['Business Website'] || '',
         seqId: role === 'Digital and Tech' ? 'digitalTech' : 'seniorLeaders',
         state: JOURNEY_STAGE_TO_STATE[f['Journey Stage']] || 'found',
         foundDate: isoDate(TODAY),
@@ -7390,6 +7397,15 @@ const ROADMAP_COLS = [
   { key:'messaging', label:'Messaging' },
   { key:'booked', label:'Booked' }
 ];
+// Email campaigns keep the same four columns / underlying stages, just
+// relabelled so the board reads as email not LinkedIn.
+const ROADMAP_COLS_EMAIL = [
+  { key:'pending', label:'To contact' },
+  { key:'made', label:'Emailed' },
+  { key:'messaging', label:'In conversation' },
+  { key:'booked', label:'Booked' }
+];
+function roadmapCols(){ return isEmailRoadmap() ? ROADMAP_COLS_EMAIL : ROADMAP_COLS; }
 
 // contactsOverride scopes the board to a subset of contacts (used by the
 // campaign Roadmap tab, which shows only that campaign's contacts). The
@@ -7411,7 +7427,7 @@ function renderRoadmap(contactsOverride){
 
   return `
   <div class="kanban" id="kanbanBoard">
-    ${ROADMAP_COLS.map(col => `
+    ${roadmapCols().map(col => `
       <div class="kanban-col" data-col="${col.key}" ondragover="onColDragOver(event)" ondrop="onColDrop(event,'${col.key}')">
         <div class="kanban-col-header"><span>${col.label}</span><span class="count">${grouped[col.key].length}</span></div>
         <div class="kanban-cards">
@@ -7454,12 +7470,16 @@ function renderKCard(c, colKey){
   const days = isPending ? getPendingDays(c) : daysBetween(c.connDate);
   const flagged = isPending && days >= state.settings.timeoutDays;
   const seqStage = window.__roadmapCampaignId ? campaignSequenceStageFor(c.name) : '';
+  const email = isEmailRoadmap();
+  const subline = email
+    ? esc([ (c.role && c.role !== c.name) ? c.role : '', (c.company && c.company !== c.name) ? c.company : '' ].filter(Boolean).join(' · ') || c.email || '')
+    : esc(c.role) + ' · ' + esc(c.company);
   return `
   <div class="kcard" draggable="true" id="kcard-${c.id}" data-id="${c.id}" ondragstart="onCardDragStart(event,'${c.id}')" ondragend="onCardDragEnd(event)" oncontextmenu="showContextMenu(event,'${c.id}')">
     <div class="kcard-head" onclick="toggleThread('${c.id}')">
       <div>
         <div class="kcard-name">${esc(c.name)}</div>
-        <div class="kcard-role">${esc(c.role)} · ${esc(c.company)}</div>
+        <div class="kcard-role">${subline}</div>
         ${seqStage ? `<div style="margin-top:4px;"><span class="tp-badge" title="Sequence stage in this campaign"><i class="ti ti-route"></i> ${esc(seqStage)}</span></div>` : ''}
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
@@ -7531,6 +7551,108 @@ async function enrichContact(cid){
 // instead of leaving a stale pre-enrichment draft on screen.
 function regenerateOpenMessageModalIfNeeded(cid){
   if(window.__genCtx && window.__genCtx.cid === cid) regenerateMessage(cid, window.__genCtx.stageKey);
+}
+
+/* ---- Email-mode helpers + "Research business" ---- */
+
+function campaignForRoadmap(){
+  return state.campaigns.find(c => c.id === window.__roadmapCampaignId) || null;
+}
+function isEmailRoadmap(){
+  const c = campaignForRoadmap();
+  return !!(c && c.type === 'email');
+}
+function campaignTypeByName(name){
+  const c = name ? state.campaigns.find(x => x.name === name) : null;
+  return (c && c.type) || 'linkedin';
+}
+
+const BUSINESS_FIELDS = [
+  ['businessSummary','What they do'],
+  ['servicesOffered','Services'],
+  ['coverageArea','Coverage area'],
+  ['sizeAndScale','Size / scale'],
+  ['notableDetail','Notable'],
+  ['outreachAngle','Suggested angle']
+];
+
+function renderBusinessResearchSection(c){
+  const cached = window.__enrichmentProfiles && window.__enrichmentProfiles[c.id];
+  const biz = cached && cached.kind === 'business' ? cached : null;
+  return `
+  <div class="thread-step">
+    <div class="thread-step-head"><span>Business research</span></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
+      <input id="bizLoc-${c.id}" placeholder="Location (e.g. Hobart, TAS)" value="${esc(c.businessLocation||'')}" style="flex:1;min-width:150px;font-size:12px;" onblur="saveBusinessLocation('${c.id}')">
+      <input id="bizSite-${c.id}" placeholder="Website (optional)" value="${esc(c.businessWebsite||'')}" style="flex:1;min-width:150px;font-size:12px;" onblur="saveBusinessLocation('${c.id}')">
+    </div>
+    <button class="btn btn-secondary btn-sm" id="bizBtn-${c.id}" onclick="event.stopPropagation();researchBusiness('${c.id}')"><i class="ti ti-search"></i> Research business</button>
+    <div class="muted" style="font-size:11px;margin-top:4px;">Searches Google for this business in that location and saves a brief to their notes. Fill in anything it misses.</div>
+    <div id="bizPanel-${c.id}" style="${biz ? 'display:block;' : 'display:none;'}margin-top:10px;">
+      ${biz ? renderBusinessPanelHtml(biz) : ''}
+    </div>
+  </div>`;
+}
+
+function renderBusinessPanelHtml(profile){
+  return `
+    <div class="intel-draft">
+      <div class="intel-draft-head"><div class="intel-draft-name">Business brief (saved to notes)</div></div>
+      ${BUSINESS_FIELDS.map(([key,label]) => `
+        <div style="margin-top:8px;">
+          <div style="font-weight:700;font-size:11.5px;">${esc(label)}</div>
+          <div class="intel-draft-text" style="margin-top:2px;">${esc(profile[key] || '—')}</div>
+        </div>`).join('')}
+    </div>`;
+}
+
+async function saveBusinessLocation(cid){
+  const c = state.contacts.find(x => x.id === cid);
+  const locEl = document.getElementById('bizLoc-'+cid);
+  const siteEl = document.getElementById('bizSite-'+cid);
+  if(!c || !locEl) return;
+  const location = locEl.value.trim();
+  const website = siteEl ? siteEl.value.trim() : '';
+  if(location === (c.businessLocation||'') && website === (c.businessWebsite||'')) return;
+  try {
+    const res = await fetch(`/api/contacts/${encodeURIComponent(cid)}/business-location`, {
+      method:'PATCH', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ location, website })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
+    c.businessLocation = location; c.businessWebsite = website;
+  } catch(err){ toast('Could not save: ' + err.message, 'warn'); }
+}
+
+async function researchBusiness(cid){
+  const c = state.contacts.find(x => x.id === cid);
+  if(!c) return;
+  await saveBusinessLocation(cid);
+  const btn = document.getElementById('bizBtn-'+cid);
+  const panel = document.getElementById('bizPanel-'+cid);
+  const original = btn ? btn.innerHTML : '';
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Researching...'; }
+  if(panel){ panel.style.display = 'block'; panel.innerHTML = '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Searching...</div>'; }
+  try {
+    const res = await fetch('/api/enrich/business', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ contactId: cid, company: c.company || c.name, location: c.businessLocation || '', website: c.businessWebsite || '' })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || ('Request failed with status '+res.status));
+    window.__enrichmentProfiles = window.__enrichmentProfiles || {};
+    window.__enrichmentProfiles[cid] = data.profile;
+    c.enrichment = data.profile;
+    if(panel) panel.innerHTML = renderBusinessPanelHtml(data.profile);
+    toast('Business researched — brief saved to notes', 'success');
+    regenerateOpenMessageModalIfNeeded(cid);
+  } catch(err){
+    if(panel) panel.innerHTML = `<div class="muted" style="font-size:12.5px;">Could not research this business: ${esc(err.message)}</div>`;
+    toast('Could not research: ' + err.message, 'warn');
+  } finally {
+    if(btn){ btn.disabled = false; btn.innerHTML = original; }
+  }
 }
 
 const ENRICHMENT_FIELDS = [
@@ -7662,21 +7784,23 @@ async function copyEnrichmentProfile(cid){
 
 function renderThread(c){
   const t = c.thread;
+  const email = isEmailRoadmap();
   return `
   <div class="thread" onclick="event.stopPropagation()">
-    ${renderEnrichmentSection(c)}
+    ${email ? renderBusinessResearchSection(c) : renderEnrichmentSection(c)}
+    ${email ? '' : `
     <div class="thread-step">
       <div class="thread-step-head"><span><i class="ti ti-circle-check check-yes"></i> Connection sent</span><span class="muted">${t.connSent ? fmtDate(t.connSent) : 'Not sent'}</span></div>
-    </div>
-    ${renderMsgStep(c,'m1','Message 1')}
-    ${renderMsgStep(c,'m2','Message 2')}
-    ${renderMsgStep(c,'cta','CTA', `
-      <select onchange="setCta('${c.id}',this.value)" style="margin-top:8px;">
+    </div>`}
+    ${renderMsgStep(c,'m1', stageLabelFor('m1', email ? 'email' : 'linkedin'))}
+    ${renderMsgStep(c,'m2', stageLabelFor('m2', email ? 'email' : 'linkedin'))}
+    ${renderMsgStep(c,'cta', stageLabelFor('cta', email ? 'email' : 'linkedin'), `
+      ${email ? '' : `<select onchange="setCta('${c.id}',this.value)" style="margin-top:8px;">
         <option value="">Select CTA...</option>
         ${CTA_OPTIONS.map(o=>`<option value="${esc(o)}" ${t.ctaOption===o?'selected':''}>${esc(o)}</option>`).join('')}
-      </select>
+      </select>`}
       <button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="event.stopPropagation();openBookingModal('${c.id}')" ${t.booked?'disabled':''}>
-        <i class="ti ti-calendar-check"></i> ${t.booked ? 'Meeting booked' : 'Mark as meeting booked'}
+        <i class="ti ti-calendar-check"></i> ${t.booked ? (email ? 'Booked' : 'Meeting booked') : (email ? 'Mark as booked' : 'Mark as meeting booked')}
       </button>
     `)}
     ${renderTouchPoints(c)}
@@ -7707,7 +7831,7 @@ function renderMsgStep(c, key, label, extraBodyHtml){
           <button class="reply-btn ${!step.replied?'active-no':''}" onclick="setReply('${c.id}','${key}',false)">No</button>
         </div>
       ` : `
-        <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();openGenerateModal('${c.id}','${key}', ()=>renderPage())"><i class="ti ti-copy"></i> Write &amp; copy message</button>
+        <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();openGenerateModal('${c.id}','${key}', ()=>renderPage())"><i class="ti ti-copy"></i> Write &amp; copy ${isEmailRoadmap() ? 'email' : 'message'}</button>
         <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();markSent('${c.id}','${key}')">Already sent, mark done</button>
       `}
       ${extraBodyHtml || ''}
@@ -8647,7 +8771,9 @@ function renderContactDrawerContent(data, campaignName){
   </div>
 
   <div class="drawer-section" id="enrichmentSection">
-    ${renderContactEnrichmentSection(c)}
+    ${(campaignTypeByName(campaignName) === 'email' || (c.enrichment && c.enrichment.kind === 'business'))
+      ? renderBusinessResearchSection({ id: c.id, name: c.fullName, company: c.companyName, email: c.email, businessLocation: c.businessLocation, businessWebsite: c.businessWebsite })
+      : renderContactEnrichmentSection(c)}
   </div>
 
   <div class="drawer-section">
@@ -9172,8 +9298,9 @@ const STAGE_META = [
   { key:'m2', label:'Message 2', hint:'Follow-up, no reply yet' },
   { key:'cta', label:'CTA', hint:'Invite to next step' }
 ];
-// For an Email-type campaign the roadmap stages are the same, just relabelled.
-const EMAIL_STAGE_LABEL = { connect:'Intro email', m1:'Follow-up 1', m2:'Follow-up 2', cta:'The ask' };
+// For an Email-type campaign the roadmap stages are the same, just
+// relabelled. There's no connection step, so m1 is the intro email.
+const EMAIL_STAGE_LABEL = { connect:'Intro email', m1:'Intro email', m2:'Follow-up', cta:'The ask' };
 function stageLabelFor(key, campaignType){
   return (campaignType === 'email' && EMAIL_STAGE_LABEL[key]) || (STAGE_META.find(s => s.key === key) || {}).label || key;
 }
@@ -9566,7 +9693,7 @@ function openGenerateModal(cid, stageKey, onDone){
         <button type="button" class="btn btn-secondary btn-sm" onclick="saveGenModalNotes('${cid}')" id="saveGenNotesBtn"><i class="ti ti-device-floppy"></i> Save notes</button>
       </label>
       <textarea id="genNotes" rows="2">${esc(c.notes)}</textarea>
-      <div class="muted" style="font-size:11px;margin-top:4px;">Saves straight to this contact's Notes and feeds their profile summary, same as the profile drawer - so future message generation (here or anywhere else) reads it too.</div>
+      <div class="muted" style="font-size:11px;margin-top:4px;">Saves straight to this contact's Notes and feeds their profile summary, same as the profile drawer - so future message generation (here or anywhere else) reads it too.${isEmailCamp && !(c.notes||'').trim() ? ' <strong>Tip:</strong> run "Research business" from the roadmap card for a sharper draft.' : ''}</div>
     </div>
     ${isEmailCamp ? '' : `
     <div class="field">
