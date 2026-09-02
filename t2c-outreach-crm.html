@@ -9553,7 +9553,11 @@ function openGenerateModal(cid, stageKey, onDone){
       <label style="display:flex;justify-content:space-between;align-items:center;"><span>Email address</span>
         <button type="button" class="btn btn-secondary btn-sm" onclick="copyGenEmailAddress()"><i class="ti ti-copy"></i> Copy address</button>
       </label>
-      <input id="genEmailAddress" value="${esc(c.email||'')}" placeholder="No email on file — add one on the contact's profile" ${c.email ? 'readonly' : 'disabled'}>
+      <div style="display:flex;gap:6px;">
+        <input id="genEmailAddress" value="${esc(c.email||'')}" placeholder="paste their email here" style="flex:1;min-width:0;" onblur="saveGenEmailAddress('${cid}')" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}">
+        <button type="button" class="btn btn-secondary" id="genEmailSaveBtn" onclick="saveGenEmailAddress('${cid}')"><i class="ti ti-device-floppy"></i></button>
+      </div>
+      <div class="muted" style="font-size:11px;margin-top:3px;">Saved straight to this contact — same field as the profile drawer.</div>
     </div>` : ''}
     <div class="field"><label>Role / Stage</label><input value="${esc(c.role ? c.role+' — ' : '')}${esc(stageLabel)}" disabled></div>
     <div class="field">
@@ -9590,9 +9594,33 @@ function openGenerateModal(cid, stageKey, onDone){
 
 async function copyGenEmailAddress(){
   const el = document.getElementById('genEmailAddress');
-  if(!el || !el.value){ toast('No email on file for this contact', 'warn'); return; }
-  try { await navigator.clipboard.writeText(el.value); toast('Email address copied', 'success'); }
+  const v = el ? el.value.trim() : '';
+  if(!v){ toast('Add their email in the field first', 'warn'); if(el) el.focus(); return; }
+  try { await navigator.clipboard.writeText(v); toast('Email address copied', 'success'); }
   catch(e){ toast('Could not copy', 'warn'); }
+}
+
+// Save the address typed into the draft modal straight onto the contact
+// (Contacts.Email) so it's there next time and the profile drawer shows it.
+async function saveGenEmailAddress(cid){
+  const el = document.getElementById('genEmailAddress');
+  const c = state.contacts.find(x => x.id === cid);
+  if(!el || !c) return;
+  const v = el.value.trim();
+  if(v === (c.email || '')) return;
+  try {
+    const res = await fetch(`/api/contacts/${encodeURIComponent(cid)}/email`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: v })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
+    c.email = data.email;
+    if(window.__drawerContactProfile && window.__drawerContactProfile.contact.id === cid) window.__drawerContactProfile.contact.email = data.email;
+    toast(v ? 'Email saved to contact' : 'Email cleared', 'success');
+  } catch(err){
+    toast('Could not save email: ' + err.message, 'warn');
+  }
 }
 
 // "Save notes" (Profile notes field, Write & copy message modal) - this
