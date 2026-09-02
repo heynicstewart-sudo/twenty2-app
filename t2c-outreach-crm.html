@@ -5995,10 +5995,15 @@ async function confirmCsvImport(){
       }
     }
 
-    if(nameColIdx !== null){
-      const contactName = (r[nameColIdx] || '').trim();
+    if(nameColIdx !== null || emailColIdx !== null){
+      const rowName = nameColIdx !== null ? (r[nameColIdx] || '').trim() : '';
       const email = emailColIdx !== null ? (r[emailColIdx] || '').trim() : '';
-      if(contactName && val){
+      // Make a real contact whenever the row has a name OR an email - for a
+      // named-but-emailless row (Justin Wooley), for an email-only business
+      // (hello@... with no person), fall back to the company name. A row
+      // with neither just adds the company skeleton.
+      if((rowName || email) && val){
+        const contactName = rowName || val;
         const ckey = (contactName+'|'+val).toLowerCase();
         if(!existingContactKeys.has(ckey)){
           existingContactKeys.add(ckey);
