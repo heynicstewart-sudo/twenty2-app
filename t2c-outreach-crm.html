@@ -169,6 +169,22 @@ html.sidebar-collapsed .sidebar-logo{justify-content:center;padding-left:0;paddi
 .topbar-title{font-size:16px;font-weight:var(--header-weight);letter-spacing:-0.01em;}
 .topbar-user{display:flex;align-items:center;gap:14px;}
 .avatar{width:32px;height:32px;border-radius:50%;background:var(--text);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;}
+
+/* Agency client switcher */
+.client-switcher{position:relative;}
+.client-switcher-btn{display:inline-flex;align-items:center;gap:8px;padding:7px 12px;border-radius:var(--radius-input);border:1px solid var(--border-light);background:var(--card-bg);font-family:inherit;font-weight:600;font-size:12.5px;color:var(--text);cursor:pointer;transition:background .12s ease,border-color .12s ease;}
+.client-switcher-btn:hover{background:var(--sidebar-hover-bg);}
+.client-switcher-btn .cs-badge{width:20px;height:20px;border-radius:6px;background:var(--accent,#2A6B7C);color:#fff;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;flex-shrink:0;}
+.client-switcher-btn .ti{font-size:15px;color:var(--sidebar-muted);}
+.client-switcher-menu{position:absolute;top:calc(100% + 6px);right:0;min-width:220px;background:var(--card-bg);border:1px solid var(--border-light);border-radius:var(--radius-card);box-shadow:var(--shadow-md,0 12px 32px rgba(17,17,20,.16));padding:6px;z-index:60;}
+.client-switcher-menu[hidden]{display:none;}
+.client-switcher-item{display:flex;align-items:center;gap:9px;width:100%;padding:9px 10px;border:none;background:none;border-radius:9px;font-family:inherit;font-size:12.5px;font-weight:600;color:var(--text);text-align:left;cursor:pointer;}
+.client-switcher-item:hover{background:var(--sidebar-hover-bg);}
+.client-switcher-item.active{background:var(--sidebar-active-bg);color:var(--sidebar-active-text);}
+.client-switcher-item .cs-badge{width:20px;height:20px;border-radius:6px;background:var(--accent,#2A6B7C);color:#fff;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;flex-shrink:0;}
+.client-switcher-item.paused{opacity:.5;}
+.client-switcher-sep{height:1px;background:var(--border-light);margin:5px 2px;}
+.client-switcher-label{padding:7px 10px 4px;font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--sidebar-muted);}
 .page{padding:24px 28px 60px;max-width:1500px;}
 
 /* Cards / buttons */
@@ -736,21 +752,22 @@ html{scrollbar-width:thin;scrollbar-color:rgba(24,24,27,.22) transparent;}
 <div class="app">
   <aside class="sidebar">
     <div class="sidebar-logo">
-      <div class="logo-mark">T2</div>
+      <div class="logo-mark" id="sidebarLogoMark">T2</div>
       <div class="logo-text">
-        <div class="logo-name">Twenty2 Collective</div>
+        <div class="logo-name" id="sidebarLogoName">Twenty2 Collective</div>
         <div class="logo-sub">Outreach CRM</div>
       </div>
     </div>
     <nav class="sidebar-nav" id="sidebarNav"></nav>
     <button type="button" class="sidebar-collapse-btn" id="sidebarCollapseBtn" onclick="toggleSidebar()" title="Collapse sidebar"><i class="ti ti-layout-sidebar-left-collapse"></i><span>Collapse</span></button>
-    <div class="sidebar-footer">Twenty2 Collective<br>Perth, WA</div>
+    <div class="sidebar-footer" id="sidebarFooter">Twenty2 Collective<br>Perth, WA</div>
   </aside>
 
   <div class="main">
     <header class="topbar">
       <div class="topbar-title" id="topbarTitle">Home</div>
       <div class="topbar-user">
+        <div class="client-switcher" id="clientSwitcher" hidden></div>
         <div class="avatar" onclick="navigate('settings')" style="cursor:pointer;" title="Settings">MW</div>
       </div>
     </header>
@@ -1439,6 +1456,166 @@ function renderSidebar(){
   )).join('');
 }
 
+/* ===================== AGENCY CONTROLLER (client switcher) ===================== */
+// window.__session = { role, controlPlane, activeClient, clients[] } from
+// GET /api/session. Populated once on boot by hydrateSession(). When the
+// deployment has no control-plane base this stays single-client and the
+// switcher + Agency nav item never appear.
+
+async function hydrateSession(){
+  try {
+    const res = await fetch('/api/session');
+    if(!res.ok) return;
+    const s = await res.json();
+    window.__session = s;
+    applyClientBranding(s.activeClient);
+    ensureAgencyNav(s);
+    renderClientSwitcher(s);
+  } catch(e){ /* non-fatal - app still works single-client */ }
+}
+
+function activeClient(){
+  return (window.__session && window.__session.activeClient) || null;
+}
+
+function applyClientBranding(c){
+  if(!c) return;
+  const set = (id, val) => { const el = document.getElementById(id); if(el) el.textContent = val; };
+  set('sidebarLogoMark', c.logoMark || 'T2');
+  set('sidebarLogoName', c.name || 'Twenty2 Collective');
+  const footer = document.getElementById('sidebarFooter');
+  if(footer) footer.innerHTML = esc(c.name || 'Twenty2 Collective') + '<br>' + esc([c.city, c.region].filter(Boolean).join(', '));
+  const av = document.querySelector('.topbar-user .avatar');
+  if(av) av.textContent = c.repInitials || 'MW';
+  try { document.title = (c.shortName || c.name || 'Twenty2') + ' Outreach CRM'; } catch(e){}
+  if(state.currentPage === 'home') renderPage();
+}
+
+function ensureAgencyNav(s){
+  const multi = s && (s.controlPlane || (s.clients && s.clients.length > 1));
+  const has = NAV.some(n => n.id === 'agency');
+  if(multi && !has){
+    NAV.unshift({ id:'agency', label:'Agency', icon:'ti-building-community' });
+    renderSidebar();
+  }
+}
+
+function renderClientSwitcher(s){
+  const host = document.getElementById('clientSwitcher');
+  if(!host) return;
+  const multi = s && (s.controlPlane || (s.clients && s.clients.length > 1));
+  if(!multi){ host.hidden = true; return; }
+  host.hidden = false;
+  const active = s.activeClient || {};
+  const items = (s.clients || []).map(c => (
+    '<button class="client-switcher-item'+(c.slug===active.slug?' active':'')+(c.status==='Paused'?' paused':'')+'" '+
+      (c.status==='Paused'?'disabled':'onclick="switchClient(\''+c.slug+'\')"')+'>'+
+      '<span class="cs-badge">'+esc(c.logoMark || (c.name||'?').slice(0,2).toUpperCase())+'</span>'+
+      '<span>'+esc(c.name||c.slug)+(c.status==='Paused'?' (paused)':'')+'</span>'+
+    '</button>'
+  )).join('');
+  host.innerHTML =
+    '<button class="client-switcher-btn" onclick="toggleClientSwitcher(event)">'+
+      '<span class="cs-badge">'+esc(active.logoMark || 'T2')+'</span>'+
+      '<span>'+esc(active.name || 'Twenty2 Collective')+'</span>'+
+      '<i class="ti ti-chevron-down"></i>'+
+    '</button>'+
+    '<div class="client-switcher-menu" id="clientSwitcherMenu" hidden>'+
+      '<div class="client-switcher-label">Switch client</div>'+
+      items+
+    '</div>';
+}
+
+function toggleClientSwitcher(ev){
+  if(ev) ev.stopPropagation();
+  const menu = document.getElementById('clientSwitcherMenu');
+  if(!menu) return;
+  menu.hidden = !menu.hidden;
+  if(!menu.hidden){
+    setTimeout(() => document.addEventListener('click', closeClientSwitcherOnce, { once:true }), 0);
+  }
+}
+function closeClientSwitcherOnce(){
+  const menu = document.getElementById('clientSwitcherMenu');
+  if(menu) menu.hidden = true;
+}
+
+async function switchClient(slug){
+  const active = activeClient();
+  if(active && active.slug === slug){ closeClientSwitcherOnce(); return; }
+  try {
+    const res = await fetch('/api/session/switch', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ slug })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.ok) throw new Error(data.error || 'Switch failed');
+    toast('Switching workspace...', 'success');
+    setTimeout(() => location.reload(), 250);
+  } catch(err){
+    toast('Could not switch client: ' + err.message, 'warn');
+  }
+}
+
+/* ===================== AGENCY DASHBOARD ===================== */
+
+function renderAgencyPage(){
+  return `
+  <div class="card" style="margin-bottom:18px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+      <div>
+        <div class="section-title" style="margin-bottom:2px;"><i class="ti ti-building-community"></i> Agency overview</div>
+        <div class="muted" style="font-size:12px;">Every client you manage, at a glance. Click a card to switch into that workspace.</div>
+      </div>
+      <button class="btn btn-secondary btn-sm" onclick="loadAgencyOverview(true)"><i class="ti ti-refresh"></i> Refresh</button>
+    </div>
+  </div>
+  <div id="agencyOverviewGrid">${renderAgencyOverviewGrid(window.__agencyOverview)}</div>`;
+}
+
+function renderAgencyOverviewGrid(data){
+  if(data === undefined) return '<div class="muted"><i class="ti ti-loader-2"></i> Loading clients...</div>';
+  if(data && data.error) return `<div class="muted">Could not load overview: ${esc(data.error)}</div>`;
+  const rows = (data && data.clients) || [];
+  if(!rows.length) return '<div class="empty-state">No clients configured yet.</div>';
+  return '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;">' +
+    rows.map(c => {
+      const stat = (label, val) => `<div style="text-align:center;"><div style="font-size:20px;font-weight:800;">${val}</div><div class="muted" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;">${label}</div></div>`;
+      const body = c.paused
+        ? '<div class="muted" style="font-size:12px;padding:8px 0;">Paused</div>'
+        : c.error
+          ? `<div class="muted" style="font-size:11.5px;padding:8px 0;">${esc(c.error)}</div>`
+          : `<div style="display:flex;justify-content:space-around;padding:10px 0 4px;">
+              ${stat('Contacts', c.totalContacts ?? '—')}
+              ${stat('Campaigns', c.activeCampaigns ?? '—')}
+              ${stat('Touches / wk', c.touchPointsThisWeek ?? '—')}
+            </div>`;
+      return `<div class="card" style="cursor:pointer;" onclick="switchClient('${esc(c.slug)}')">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
+          <span class="cs-badge" style="width:26px;height:26px;border-radius:7px;font-size:11px;">${esc(c.logoMark || (c.name||'?').slice(0,2).toUpperCase())}</span>
+          <div style="font-weight:700;font-size:13.5px;">${esc(c.name || c.slug)}</div>
+        </div>
+        <div class="muted" style="font-size:11px;">${esc([c.city, c.region].filter(Boolean).join(', '))}</div>
+        ${body}
+      </div>`;
+    }).join('') + '</div>';
+}
+
+async function loadAgencyOverview(force){
+  if(force) window.__agencyOverview = undefined;
+  const host = document.getElementById('agencyOverviewGrid');
+  if(host && window.__agencyOverview === undefined) host.innerHTML = renderAgencyOverviewGrid(undefined);
+  try {
+    const res = await fetch('/api/agency/overview' + (force ? '?refresh=1' : ''));
+    const data = await res.json();
+    window.__agencyOverview = res.ok ? data : { error: data.error || 'Request failed' };
+  } catch(err){
+    window.__agencyOverview = { error: err.message };
+  }
+  const h = document.getElementById('agencyOverviewGrid');
+  if(h) h.innerHTML = renderAgencyOverviewGrid(window.__agencyOverview);
+}
+
 function navigate(page){
   state.currentPage = page;
   const navEntry = NAV.find(n => n.id === page);
@@ -1451,7 +1628,7 @@ function navigate(page){
 
 function renderPage(){
   const el = document.getElementById('pageContent');
-  const renderers = { home: renderHome, logger: renderLoggerPage, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, contentcalendar: renderContentCalendarPage, research: renderResearch, settings: renderSettings };
+  const renderers = { home: renderHome, logger: renderLoggerPage, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, contentcalendar: renderContentCalendarPage, research: renderResearch, settings: renderSettings, agency: renderAgencyPage };
   el.innerHTML = renderers[state.currentPage]();
   afterRender(state.currentPage);
 }
@@ -1477,6 +1654,7 @@ function ensureContextDataLoaded(){
 }
 
 function afterRender(page){
+  if(page === 'agency' && window.__agencyOverview === undefined) loadAgencyOverview();
   if(page === 'campaigns' && (window.__campaignView || 'list') === 'list'){
     loadAllCampaignFunnels();
   }
@@ -1558,9 +1736,12 @@ function afterRender(page){
 /* ===================== HOME ===================== */
 
 function renderHome(){
+  const __c = (typeof activeClient === 'function' && activeClient()) || {};
+  const __name = __c.name || 'Twenty2 Collective';
+  const __tagline = __c.tagline || 'Your WA market intelligence engine.';
   return `
-  <div class="section-title" style="font-size:24px;margin-bottom:2px;">Hey Twenty2 Collective, ready to get started?</div>
-  <div class="muted" style="margin-bottom:22px;">Your WA market intelligence engine.</div>
+  <div class="section-title" style="font-size:24px;margin-bottom:2px;">Hey ${esc(__name)}, ready to get started?</div>
+  <div class="muted" style="margin-bottom:22px;">${esc(__tagline)}</div>
 
   ${renderContactSignalsStrip()}
   ${renderTodaysActions()}
@@ -18726,6 +18907,10 @@ state = makeReactive(rawState, persistState);
 renderSidebar();
 syncSidebarCollapseBtn();
 renderPage();
+
+// Agency controller session: branding + client switcher + Agency nav.
+// Non-blocking; on a single-client deployment it's a no-op.
+hydrateSession();
 
 // Contacts, campaigns, companies, grids, sequences, settings, bookings,
 // dead contacts and last analysis are never restored from localStorage
