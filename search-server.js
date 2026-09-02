@@ -4747,10 +4747,23 @@ function buildFunnelContacts(ccRows, campaignRecordId, dealsByContactId) {
 
 // funnelContacts from buildFunnelContacts; deals = this campaign's Deal rows
 // [{outcome}]. Returns the step counts + step-to-step conversion the UI draws.
-function computeCampaignFunnel(funnelContacts, deals) {
+function computeCampaignFunnel(funnelContacts, deals, emailMode) {
   const active = funnelContacts.filter(c => !c.off);
   const reached = minRung => active.filter(c => c.furthestRung >= minRung).length;
-  const steps = [
+  // Rung a contact reaches only once they've replied (the gate clears to
+  // "Ready for Message 2"). Monotonic with the rest of the ladder.
+  const repliedRung = FUNNEL_LADDER.indexOf('Ready for Message 2');
+  const steps = emailMode ? [
+    // Email campaigns have no connection step and follow-ups go out
+    // regardless of reply, so the follow-up counts aren't funnel rungs -
+    // they'd break monotonicity. The real drop-off points are: emailed at
+    // all -> replied -> booked -> won.
+    { key: 'contacts', label: 'Contacts', count: funnelContacts.length },
+    { key: 'm1', label: 'Emailed', count: reached(RUNG.m1) },
+    { key: 'replied', label: 'Replied', count: reached(repliedRung) },
+    { key: 'meeting', label: 'Booked', count: funnelContacts.filter(c => c.booked).length },
+    { key: 'won', label: 'Won', count: (deals || []).filter(d => d.outcome === 'Won').length }
+  ] : [
     { key: 'contacts', label: 'Contacts', count: funnelContacts.length },
     { key: 'connectionSent', label: 'Connection sent', count: active.filter(c => c.connectionSentDate || c.furthestRung >= RUNG.connectionSent).length },
     { key: 'connected', label: 'Connected', count: reached(RUNG.connected) },
@@ -4797,8 +4810,9 @@ app.get('/api/campaign/:id/funnel', async (req, res) => {
     const dealsByContactId = {};
     myDeals.forEach(d => { if (d.contactId) (dealsByContactId[d.contactId] = dealsByContactId[d.contactId] || []).push(d); });
 
+    const emailMode = isEmailCampaign(campaignRecord);
     const funnelContacts = buildFunnelContacts(ccRows, campaignRecord.id, dealsByContactId);
-    const funnel = computeCampaignFunnel(funnelContacts, myDeals);
+    const funnel = computeCampaignFunnel(funnelContacts, myDeals, emailMode);
 
     // Reply + message-sent counts, campaign-scoped, deduped to distinct contacts.
     const myContactIds = new Set(funnelContacts.map(c => c.contactId));
@@ -4812,8 +4826,11 @@ app.get('/api/campaign/:id/funnel', async (req, res) => {
       if (touchPointIsReply(r.fields)) (r.fields['Contact'] || []).forEach(cid => repliedContactIds.add(cid));
     });
 
-    const connected = funnel.steps.find(s => s.key === 'connected').count;
-    const meetings = funnel.steps.find(s => s.key === 'meeting').count;
+    // Email funnels have no 'connected' step - the reply-rate denominator is
+    // "how many did we email" (the 'm1' step) instead.
+    const replyDenomKey = emailMode ? 'm1' : 'connected';
+    const connected = (funnel.steps.find(s => s.key === replyDenomKey) || {}).count || 0;
+    const meetings = (funnel.steps.find(s => s.key === 'meeting') || {}).count || 0;
 
     res.json({
       campaignName: campaignRecord.fields['Name'] || campaignRecord.fields['Campaign Name'] || '',
@@ -4853,7 +4870,7 @@ app.get('/api/sales/insights', async (req, res) => {
 
     const campaigns = campaignRecords
       .filter(r => (r.fields['Status'] || '') !== 'Draft')
-      .map(r => ({ id: r.id, name: r.fields['Name'] || '', status: r.fields['Status'] || '' }));
+      .map(r => ({ id: r.id, name: r.fields['Name'] || '', status: r.fields['Status'] || '', email: isEmailCampaign(r) }));
 
     if (!campaigns.length) {
       return res.json({ insights: ['No live or past campaigns yet — insights will appear once a campaign goes live.'], generatedAt: new Date().toISOString() });
@@ -4867,14 +4884,16 @@ app.get('/api/sales/insights', async (req, res) => {
       myDealRows.forEach(d => { if (d.contactId) (dealsByContactId[d.contactId] = dealsByContactId[d.contactId] || []).push(d); });
 
       const funnelContacts = buildFunnelContacts(ccRows, c.id, dealsByContactId);
-      const funnel = computeCampaignFunnel(funnelContacts, myDealRows);
+      const funnel = computeCampaignFunnel(funnelContacts, myDealRows, c.email);
       const contactIds = new Set(funnelContacts.map(x => x.contactId));
       const myTouchPoints = tpRecords.filter(r => (r.fields['Campaign'] || []).includes(c.id) || (r.fields['Contact'] || []).some(cid => contactIds.has(cid)));
 
-      const step = k => funnel.steps.find(s => s.key === k).count;
+      const step = k => (funnel.steps.find(s => s.key === k) || {}).count || 0;
       return {
         name: c.name, status: c.status, contacts: funnelContacts.length,
-        connections: step('connected'),
+        // Email funnels have no 'connected' step - "reached the point of being
+        // contacted" is the 'm1' (Emailed) count there.
+        connections: c.email ? step('m1') : step('connected'),
         messagesSent: myTouchPoints.filter(r => !touchPointIsReply(r.fields)).length,
         meetingsBooked: step('meeting'),
         won: step('won'), lost: funnel.lost, excluded: funnel.excluded
@@ -9506,7 +9525,15 @@ app.post('/api/campaign/:id/contacts/:contactId/mark-sent', async (req, res) => 
     const rows = await fetchCampaignContactsRows();
     const row = await getOrCreateCampaignContactRow(contactId, (contactRecord.fields || {})['Full Name'] || contactId, campaignRecord.id, campaignName, rows);
     const stage = normalizeSequenceStage(row.fields['Sequence Stage']);
-    const nextStage = SEQUENCE_STAGE_NEXT[stage];
+    // Email campaigns have no connection step, so an email contact sits at
+    // "Found" until their intro email goes out - there's no "Connected" rung
+    // in between for SEQUENCE_STAGE_NEXT to key off. Bridge Found/Connection
+    // Pending straight to "Message 1 Sent" for email so the first "mark sent"
+    // actually advances instead of 400ing with "already at the final stage".
+    const emailMode = isEmailCampaign(campaignRecord);
+    const nextStage = (emailMode && (stage === 'Found' || stage === 'Connection Pending'))
+      ? 'Message 1 Sent'
+      : SEQUENCE_STAGE_NEXT[stage];
     if (!nextStage) {
       return res.status(400).json({ error: `Contact is already at the final stage ("${stage}") - nothing further to advance to.` });
     }
@@ -9557,13 +9584,15 @@ app.post('/api/campaign/:id/contacts/:contactId/mark-sent', async (req, res) => 
     // which message in the sequence this was, at a glance in the Airtable
     // grid - messageNumber here is the one just sent (MESSAGE_NUMBER_FOR_STAGE
     // keyed off `stage`, the row's stage *before* the advance above).
-    const messageNumber = MESSAGE_NUMBER_FOR_STAGE[stage];
+    // "Found" (email's pre-send stage) isn't in MESSAGE_NUMBER_FOR_STAGE - the
+    // email that just went out from there is message 1.
+    const messageNumber = MESSAGE_NUMBER_FOR_STAGE[stage] || 1;
     await airtableWriteAllowingMissingCtaFields('POST', 'Touch Points', {
       records: [{
         fields: {
-          'Name': `${campaignName}_Message ${messageNumber}`,
+          'Name': `${campaignName}_${emailMode ? 'Email' : 'Message'} ${messageNumber}`,
           'Date': today,
-          'Type': 'LinkedIn Message',
+          'Type': emailMode ? 'Email' : 'LinkedIn Message',
           'Direction': 'Outbound',
           'Summary': message,
           'Contact': [contactId],

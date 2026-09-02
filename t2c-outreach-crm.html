@@ -1058,6 +1058,20 @@ function getRoadmapColumn(c){
   const liveStage = window.__roadmapCampaignId ? campaignSequenceStageFor(c.name) : '';
   if(ROADMAP_EXCLUDED_SEQUENCE_STAGES.includes(liveStage)) return null;
   if(c.thread.booked) return 'booked';
+
+  // Email campaigns: no connection step. The columns read "To contact /
+  // Emailed / In conversation / Booked", so:
+  //   made ("Emailed")        = at least one email sent, no reply yet
+  //   messaging ("In convo")  = they replied (gate cleared to "Ready for
+  //                             Message N", or a booked-meeting stage)
+  // Everything pre-send stays in "To contact".
+  if(isEmailRoadmap()){
+    if(/^Ready for Message/.test(liveStage) || liveStage === 'Meeting Booked') return 'messaging';
+    if(/^Message \d Sent$/.test(liveStage) || /^Pending Reply/.test(liveStage)) return 'made';
+    if(!liveStage && c.state === 'messaging') return (c.thread.m1 && c.thread.m1.replied) ? 'messaging' : 'made';
+    return 'pending';
+  }
+
   if(liveStage === 'Connected') return 'made';
   if(/^Message \d Sent$/.test(liveStage) || /^Pending Reply/.test(liveStage) || /^Ready for Message/.test(liveStage)) return 'messaging';
   // Found/Connection Requested/Connection Pending/Meeting Booked (not yet
@@ -7838,11 +7852,35 @@ const MSG_STEP_LABELS = { m1: 'Message 1', m2: 'Message 2', cta: 'CTA message' }
 // the same thread-step-body as the Write&copy/Already-sent buttons or the
 // Reply toggle, so the CTA-option select and "Mark as meeting booked"
 // button sit under whichever of those is currently showing.
+// Local c.thread is reset to nulls on every hydrate (it's session-only), so
+// after a reload an email contact who's already been emailed would show the
+// "Write & copy / mark sent" buttons again instead of the Reply toggle. For
+// email roadmaps, fall back to the campaign's live Sequence Stage so the
+// step UI matches where the card actually sits. LinkedIn roadmaps keep the
+// old session-only behaviour untouched.
+const EMAIL_STEP_SENT_AT   = { m1:'Message 1 Sent', m2:'Message 2 Sent', cta:'Message 3 Sent' };
+const EMAIL_STEP_REPLIED_AT = { m1:'Ready for Message 2', m2:'Ready for Message 3', cta:'Meeting Booked' };
+const EMAIL_STAGE_ORDER = ['Found','Connection Pending','Connected','Message 1 Sent','Pending Reply M1','Ready for Message 2','Message 2 Sent','Pending Reply M2','Ready for Message 3','Message 3 Sent','Pending Reply M3','Meeting Booked'];
+// Cold-email follow-ups go out to silence, so "Message 2 Sent" does NOT imply
+// a reply to message 1 - only these stages mean the contact actually replied.
+const EMAIL_REPLIED_STAGES = new Set(['Ready for Message 2','Ready for Message 3','Meeting Booked']);
+function emailThreadStepFromStage(key, stage){
+  const r = EMAIL_STAGE_ORDER.indexOf(stage);
+  if(r < 0) return null;
+  const sentAt = EMAIL_STAGE_ORDER.indexOf(EMAIL_STEP_SENT_AT[key]);
+  if(sentAt < 0 || r < sentAt) return null;
+  const repliedAt = EMAIL_STAGE_ORDER.indexOf(EMAIL_STEP_REPLIED_AT[key]);
+  return { sent:null, replied: EMAIL_REPLIED_STAGES.has(stage) && repliedAt >= 0 && r >= repliedAt };
+}
+
 function renderMsgStep(c, key, label, extraBodyHtml){
-  const step = c.thread[key];
+  let step = c.thread[key];
+  if(!step && isEmailRoadmap() && window.__roadmapCampaignId){
+    step = emailThreadStepFromStage(key, campaignSequenceStageFor(c.name));
+  }
   return `
   <div class="thread-step">
-    <div class="thread-step-head"><span>${label}</span>${step ? `<span class="muted">${fmtDate(step.sent)}</span>` : ''}</div>
+    <div class="thread-step-head"><span>${label}</span>${step ? `<span class="muted">${step.sent ? fmtDate(step.sent) : 'Sent'}</span>` : ''}</div>
     <div class="thread-step-body">
       ${step ? `
         <div class="reply-toggle">
@@ -8012,6 +8050,8 @@ function renderRecommendedProducts(c){
 
 async function markSent(cid, key){
   const c = state.contacts.find(x=>x.id===cid);
+  const prevThreadStep = c.thread[key];
+  const prevState = c.state;
   c.thread[key] = { sent: isoDate(TODAY), replied:false };
   if(c.state !== 'messaging') c.state = 'messaging';
   const activityEntry = { type:'message', text:`${MSG_STEP_LABELS[key] || key} sent to ${c.name} (${c.company})`, date: isoDate(TODAY) };
@@ -8042,7 +8082,14 @@ async function markSent(cid, key){
     if(window.__roadmapCampaignId === campaign.id) await loadCampaignSequenceStages(campaign);
   } catch(err){
     console.warn('Could not sync sent message to Airtable:', err.message);
-    toast('Marked as sent locally, but could not sync to the database: ' + err.message, 'warn');
+    // Roll the optimistic move back so the card doesn't sit in a stage the
+    // database never accepted (the old behaviour left it stranded there).
+    c.thread[key] = prevThreadStep;
+    c.state = prevState;
+    const ai = state.activity.indexOf(activityEntry);
+    if(ai !== -1) state.activity.splice(ai, 1);
+    toast('Could not log the send to the database: ' + err.message, 'error');
+    renderPage();
   }
 }
 // This used to only flip c.thread[key].replied in local memory and stop
