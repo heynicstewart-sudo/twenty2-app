@@ -1609,12 +1609,11 @@ function renderAgencyOverviewGrid(data){
 
 const CLIENT_FORM_SPEC = [
   { section: 'Identity' },
-  { k:'name', label:'Client name', required:true, ph:'The Shed Guru' },
-  { k:'slug', label:'Slug', hint:'URL-safe id. Leave blank to auto-generate from the name. Cannot be changed later.', ph:'the-shed-guru' },
+  { k:'name', label:'Client name', required:true, ph:'The Shed Guru', oninput:'refreshMarketingNote()' },
+  { k:'slug', label:'Slug', hint:'URL-safe id. Leave blank to auto-generate from the name. Cannot be changed later.', ph:'the-shed-guru', oninput:'refreshMarketingNote()' },
   { k:'status', label:'Status', type:'select', options:['Active','Paused'] },
   { section: 'Airtable' },
   { k:'baseId', label:'CRM base ID', required:true, hint:'In Airtable: duplicate the Twenty2 base (structure only), then paste its base id (app...) here.', ph:'appXXXXXXXXXXXXXX', validate:true },
-  { k:'airtablePat', label:'Airtable token override', hint:'Optional. Leave blank to use the shared agency token.', ph:'pat...' },
   { section: 'Branding' },
   { k:'logoMark', label:'Logo badge', hint:'1-2 characters shown in the sidebar + switcher.', ph:'SG' },
   { k:'shortName', label:'Short name', ph:'Shed Guru' },
@@ -1631,22 +1630,43 @@ const CLIENT_FORM_SPEC = [
   { k:'services', label:'Services / offers', type:'textarea', ph:'One per line' },
   { k:'websiteUrl', label:'Website URL', ph:'https://...' },
   { k:'leakServiceMap', label:'Leak → service map', type:'textarea', hint:'Optional. Only used if they run Change Value Check style reports.' },
-  { section: 'Marketing (optional)' },
-  { k:'gscProperty', label:'Search Console property', ph:'https://www.example.com/' },
-  { k:'gscSitemapUrl', label:'Sitemap URL', ph:'https://www.example.com/sitemap.xml' },
-  { k:'omnisendApiKey', label:'Omnisend API key' },
-  { k:'googleAdsSheetId', label:'Google Ads sheet ID' },
-  { k:'framerApiKey', label:'Framer API key' },
-  { k:'framerProjectUrl', label:'Framer project URL' },
-  { k:'framerSiteUrl', label:'Framer site URL' },
-  { k:'framerBlogCollection', label:'Framer blog collection' },
-  { k:'framerBlogPathPrefix', label:'Framer blog path prefix' },
-  { k:'framerServiceCollection', label:'Framer service collection' },
-  { k:'framerServicePathPrefix', label:'Framer service path prefix' },
+  { section: 'Marketing integrations' },
+  { marketingNote: true },
   { section: 'Other' },
   { k:'staleContactDays', label:'Stale contact threshold (days)', type:'number', ph:'14' },
   { k:'notes', label:'Notes', type:'textarea' },
 ];
+
+// Marketing integration keys are never stored in the app or the control
+// base - they're set per client as Railway environment variables, keyed by
+// the client's slug. This note in the form spells out the exact names.
+const CLIENT_ENV_VARS = [
+  'GSC_PROPERTY', 'GSC_SITEMAP_URL',
+  'OMNISEND_API_KEY',
+  'GOOGLE_ADS_SHEET_ID',
+  'FRAMER_API_KEY', 'FRAMER_PROJECT_URL', 'FRAMER_SITE_URL',
+  'FRAMER_BLOG_COLLECTION_NAME', 'FRAMER_BLOG_PATH_PREFIX',
+  'FRAMER_SERVICE_COLLECTION_NAME', 'FRAMER_SERVICE_PATH_PREFIX',
+];
+function marketingNoteHtml(slug){
+  const suffix = (slug || '<slug>').toUpperCase().replace(/[^A-Z0-9]+/g,'_').replace(/^_+|_+$/g,'');
+  return `<div class="muted" style="font-size:11.5px;line-height:1.6;margin-bottom:12px;">
+    Search Console, Omnisend, Google Ads and Framer are wired up per client with
+    <strong>Railway environment variables</strong> - no keys are stored here or in the database.
+    When you're ready to connect one, add it in Railway with this client's slug as a suffix, e.g.:
+    <div id="cf_envList" style="margin-top:6px;font-family:ui-monospace,Menlo,monospace;font-size:10.5px;background:var(--sidebar-hover-bg);padding:8px 10px;border-radius:8px;white-space:pre-wrap;">${CLIENT_ENV_VARS.map(v => esc(v + '_' + suffix)).join('\n')}</div>
+  </div>`;
+}
+
+function refreshMarketingNote(){
+  const list = document.getElementById('cf_envList');
+  const slugEl = document.getElementById('cf_slug');
+  const nameEl = document.getElementById('cf_name');
+  if(!list) return;
+  const raw = (slugEl && slugEl.value) || (nameEl && nameEl.value) || '<slug>';
+  const suffix = raw.toUpperCase().replace(/[^A-Z0-9]+/g,'_').replace(/^_+|_+$/g,'');
+  list.textContent = CLIENT_ENV_VARS.map(v => v + '_' + suffix).join('\n');
+}
 
 function clientFormFieldHtml(f, val){
   const v = esc(val == null ? '' : String(val));
@@ -1658,7 +1678,7 @@ function clientFormFieldHtml(f, val){
   } else if(f.type === 'select'){
     input = `<select id="cf_${f.k}">${(f.options||[]).map(o => `<option value="${esc(o)}"${o===val?' selected':''}>${esc(o)}</option>`).join('')}</select>`;
   } else {
-    input = `<input id="cf_${f.k}" type="${f.type||'text'}" value="${v}" placeholder="${esc(f.ph||'')}">`;
+    input = `<input id="cf_${f.k}" type="${f.type||'text'}" value="${v}" placeholder="${esc(f.ph||'')}"${f.oninput ? ` oninput="${f.oninput}"` : ''}>`;
   }
   const validateBtn = f.validate ? ` <button type="button" class="btn btn-ghost btn-sm" onclick="validateClientBase()"><i class="ti ti-plug-connected"></i> Test</button><span id="cf_baseCheck" class="muted" style="font-size:11px;margin-left:6px;"></span>` : '';
   return `<div class="field" style="margin-bottom:12px;">
@@ -1680,7 +1700,9 @@ async function openClientForm(slug){
     <div id="clientFormError" class="muted" style="color:#c0392b;font-size:12px;margin-bottom:10px;display:none;"></div>
     ${CLIENT_FORM_SPEC.map(f => f.section
       ? `<div class="section-title" style="font-size:12px;margin:16px 0 8px;text-transform:uppercase;letter-spacing:.06em;">${esc(f.section)}</div>`
-      : clientFormFieldHtml(f, data[f.k])).join('')}
+      : f.marketingNote
+        ? marketingNoteHtml(slug || data.slug)
+        : clientFormFieldHtml(f, data[f.k])).join('')}
   `;
   const footer = `
     <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
@@ -1716,7 +1738,7 @@ async function submitClientForm(slug){
   const saveBtn = document.getElementById('clientFormSave');
   const payload = {};
   CLIENT_FORM_SPEC.forEach(f => {
-    if(f.section) return;
+    if(f.section || f.marketingNote || !f.k) return;
     const el = document.getElementById('cf_' + f.k);
     if(el) payload[f.k] = el.value;
   });

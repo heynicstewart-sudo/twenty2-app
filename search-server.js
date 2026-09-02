@@ -240,23 +240,43 @@ let clientsCache = [DEFAULT_TENANT];
 let clientsCacheAt = 0;
 let clientsCacheLoading = null;
 
-function orEnv(v, envVal) {
-  const s = (v == null ? '' : String(v)).trim();
-  return s || envVal;
+// slug -> the suffix used for per-client env vars, e.g.
+// "the-shed-guru" -> "THE_SHED_GURU" (so OMNISEND_API_KEY_THE_SHED_GURU).
+function envKeyForSlug(slug) {
+  return (slug || '').toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 }
 
-// Maps one Clients-table record's fields onto a tenant object. Anything
-// left blank in the control base falls back to this deployment's env var,
-// so a partially-filled client row still works.
+// Resolves one piece of per-client config. Precedence, most secure first:
+//   1. a per-client Railway env var  (e.g. OMNISEND_API_KEY_THE_SHED_GURU)
+//   2. the value stored on the Clients row (if any)
+//   3. the plain env var (e.g. OMNISEND_API_KEY) - ONLY for the default
+//      client, so a new client never silently inherits Twenty2's keys.
+// This lets API keys live only in Railway, never in the control base or
+// the UI, while non-secret bits can still be typed into the form.
+function clientConf(slug, envBase, airtableVal) {
+  const perClient = process.env[`${envBase}_${envKeyForSlug(slug)}`];
+  if (perClient && perClient.trim()) return perClient.trim();
+  const at = (airtableVal == null ? '' : String(airtableVal)).trim();
+  if (at) return at;
+  if (slug === DEFAULT_CLIENT_SLUG) return process.env[envBase] || '';
+  return '';
+}
+
+// Maps one Clients-table record's fields onto a tenant object. Per-client
+// config resolves via clientConf() (Railway env var > control-base field >
+// plain env var for the default client only).
 function tenantFromClientRecord(f) {
   f = f || {};
   const slug = (f['Slug'] || '').trim();
+  const conf = (envBase, field) => clientConf(slug, envBase, f[field]);
   return {
     slug,
     name: f['Name'] || slug,
     status: f['Status'] || 'Active',
-    baseId: orEnv(f['Airtable Base ID'], AIRTABLE_BASE_ID),
-    apiKey: orEnv(f['Airtable PAT'], AIRTABLE_API_KEY),
+    baseId: (f['Airtable Base ID'] || '').trim() || AIRTABLE_BASE_ID,
+    // Airtable PAT is agency-wide (one token, all bases) so the plain
+    // AIRTABLE_API_KEY is always a safe fallback here.
+    apiKey: conf('AIRTABLE_PAT', 'Airtable PAT') || AIRTABLE_API_KEY,
     profile: {
       shortName: f['Short Name'] || f['Name'] || slug,
       city: f['City'] || '',
@@ -274,20 +294,20 @@ function tenantFromClientRecord(f) {
       leakServiceMap: f['Leak Service Map'] || '',
     },
     framer: {
-      apiKey: orEnv(f['Framer API Key'], process.env.FRAMER_API_KEY),
-      projectUrl: orEnv(f['Framer Project URL'], process.env.FRAMER_PROJECT_URL),
-      siteUrl: orEnv(f['Framer Site URL'], process.env.FRAMER_SITE_URL),
-      blogCollection: orEnv(f['Framer Blog Collection'], process.env.FRAMER_BLOG_COLLECTION_NAME),
-      blogPathPrefix: orEnv(f['Framer Blog Path Prefix'], process.env.FRAMER_BLOG_PATH_PREFIX),
-      serviceCollection: orEnv(f['Framer Service Collection'], process.env.FRAMER_SERVICE_COLLECTION_NAME),
-      servicePathPrefix: orEnv(f['Framer Service Path Prefix'], process.env.FRAMER_SERVICE_PATH_PREFIX),
+      apiKey: conf('FRAMER_API_KEY', 'Framer API Key'),
+      projectUrl: conf('FRAMER_PROJECT_URL', 'Framer Project URL'),
+      siteUrl: conf('FRAMER_SITE_URL', 'Framer Site URL'),
+      blogCollection: conf('FRAMER_BLOG_COLLECTION_NAME', 'Framer Blog Collection'),
+      blogPathPrefix: conf('FRAMER_BLOG_PATH_PREFIX', 'Framer Blog Path Prefix'),
+      serviceCollection: conf('FRAMER_SERVICE_COLLECTION_NAME', 'Framer Service Collection'),
+      servicePathPrefix: conf('FRAMER_SERVICE_PATH_PREFIX', 'Framer Service Path Prefix'),
     },
     gsc: {
-      property: orEnv(f['GSC Property'], process.env.GSC_PROPERTY),
-      sitemapUrl: orEnv(f['GSC Sitemap URL'], process.env.GSC_SITEMAP_URL),
+      property: conf('GSC_PROPERTY', 'GSC Property'),
+      sitemapUrl: conf('GSC_SITEMAP_URL', 'GSC Sitemap URL'),
     },
-    omnisendApiKey: orEnv(f['Omnisend API Key'], process.env.OMNISEND_API_KEY),
-    googleAdsSheetId: orEnv(f['Google Ads Sheet ID'], process.env.GOOGLE_ADS_SHEET_ID),
+    omnisendApiKey: conf('OMNISEND_API_KEY', 'Omnisend API Key'),
+    googleAdsSheetId: conf('GOOGLE_ADS_SHEET_ID', 'Google Ads Sheet ID'),
     thresholds: {
       staleContactDays: Number(f['Stale Contact Days']) || 14,
     },
