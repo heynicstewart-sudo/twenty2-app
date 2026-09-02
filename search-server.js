@@ -43,8 +43,11 @@ const tenantALS = new AsyncLocalStorage();
 function currentTenant() {
   return tenantALS.getStore() || DEFAULT_TENANT;
 }
-app.use((req, res, next) => {
-  tenantALS.run(resolveTenantForRequest(req), () => next());
+app.use(async (req, res, next) => {
+  let tenant;
+  try { tenant = await resolveTenantForRequest(req); }
+  catch (e) { tenant = DEFAULT_TENANT; }
+  tenantALS.run(tenant, () => next());
 });
 
 const SERPER_URL = 'https://google.serper.dev/search';
@@ -170,23 +173,196 @@ app.get('/', (req, res) => {
 const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
 
 // DEFAULT_TENANT is this deployment's original single-client identity,
-// rebuilt from env vars. It is what currentTenant() returns whenever a
-// request has no active-client context (which, in Phase 1, is always).
-// Keeping the base id in AIRTABLE_BASE_ID as well preserves the old name
-// for anything that still reads it directly.
+// rebuilt from env vars. It is the fallback whenever there is no
+// control-plane base configured, or a request carries no valid
+// active-client cookie. Keeping the base id in AIRTABLE_BASE_ID as well
+// preserves the old name for anything that still reads it directly.
 const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID || 'appKe5oopNpheq32n';
-const DEFAULT_TENANT = {
-  slug: process.env.DEFAULT_CLIENT_SLUG || 'twenty2',
-  name: 'Twenty2 Collective',
-  baseId: AIRTABLE_BASE_ID,
-  apiKey: AIRTABLE_API_KEY,
-};
+const DEFAULT_CLIENT_SLUG = process.env.DEFAULT_CLIENT_SLUG || 'twenty2';
 
-// Phase 1 stub: no cookie parsing, no control-plane base - every request
-// resolves to the default client. Later phases read a signed cookie off
-// `req` and look the slug up in the clients cache here.
-function resolveTenantForRequest(req) {
-  return DEFAULT_TENANT;
+// A tenant object built from this deployment's env vars. Marketing config
+// (Framer / GSC / Omnisend / Google Ads) still reads straight from
+// process.env elsewhere in this file - these fields are here so the shape
+// is ready for the later phase that migrates those reads.
+function tenantFromEnv() {
+  return {
+    slug: DEFAULT_CLIENT_SLUG,
+    name: 'Twenty2 Collective',
+    status: 'Active',
+    baseId: AIRTABLE_BASE_ID,
+    apiKey: AIRTABLE_API_KEY,
+    profile: {
+      shortName: 'Twenty2',
+      city: 'Perth',
+      region: 'WA',
+      repName: 'Marcus',
+      repInitials: 'MW',
+      industry: 'Agile and change consultancy',
+      positioning: '',
+      services: '',
+      websiteUrl: process.env.FRAMER_SITE_URL || '',
+      englishVariant: 'UK English, no em dashes',
+      signoff: 'Marcus',
+      logoMark: 'T2',
+      tagline: 'Your WA market intelligence engine.',
+      leakServiceMap: '',
+    },
+    framer: {
+      apiKey: process.env.FRAMER_API_KEY,
+      projectUrl: process.env.FRAMER_PROJECT_URL,
+      siteUrl: process.env.FRAMER_SITE_URL,
+      blogCollection: process.env.FRAMER_BLOG_COLLECTION_NAME,
+      blogPathPrefix: process.env.FRAMER_BLOG_PATH_PREFIX,
+      serviceCollection: process.env.FRAMER_SERVICE_COLLECTION_NAME,
+      servicePathPrefix: process.env.FRAMER_SERVICE_PATH_PREFIX,
+    },
+    gsc: {
+      property: process.env.GSC_PROPERTY,
+      sitemapUrl: process.env.GSC_SITEMAP_URL,
+    },
+    omnisendApiKey: process.env.OMNISEND_API_KEY,
+    googleAdsSheetId: process.env.GOOGLE_ADS_SHEET_ID,
+    thresholds: { staleContactDays: 14 },
+  };
+}
+const DEFAULT_TENANT = tenantFromEnv();
+
+// ---- Agency control plane ----
+// A separate "Agency Control" Airtable base with a Clients table, one row
+// per client the controller manages. When AGENCY_CONTROL_BASE_ID is unset
+// the whole thing collapses to the single DEFAULT_TENANT above, i.e. the
+// original single-client behaviour.
+const AGENCY_CONTROL_BASE_ID = process.env.AGENCY_CONTROL_BASE_ID || '';
+const CLIENTS_TABLE = 'Clients';
+const ACTIVE_CLIENT_COOKIE = 't2c_active_client';
+const CLIENTS_CACHE_TTL_MS = 5 * 60 * 1000;
+let clientsCache = [DEFAULT_TENANT];
+let clientsCacheAt = 0;
+let clientsCacheLoading = null;
+
+function orEnv(v, envVal) {
+  const s = (v == null ? '' : String(v)).trim();
+  return s || envVal;
+}
+
+// Maps one Clients-table record's fields onto a tenant object. Anything
+// left blank in the control base falls back to this deployment's env var,
+// so a partially-filled client row still works.
+function tenantFromClientRecord(f) {
+  f = f || {};
+  const slug = (f['Slug'] || '').trim();
+  return {
+    slug,
+    name: f['Name'] || slug,
+    status: f['Status'] || 'Active',
+    baseId: orEnv(f['Airtable Base ID'], AIRTABLE_BASE_ID),
+    apiKey: orEnv(f['Airtable PAT'], AIRTABLE_API_KEY),
+    profile: {
+      shortName: f['Short Name'] || f['Name'] || slug,
+      city: f['City'] || '',
+      region: f['Region'] || '',
+      repName: f['Rep Name'] || '',
+      repInitials: f['Rep Initials'] || '',
+      industry: f['Industry'] || '',
+      positioning: f['Positioning'] || '',
+      services: f['Services'] || '',
+      websiteUrl: f['Website URL'] || '',
+      englishVariant: f['English Variant'] || 'UK English, no em dashes',
+      signoff: f['Message Signoff'] || f['Rep Name'] || '',
+      logoMark: f['Logo Mark'] || '',
+      tagline: f['Tagline'] || '',
+      leakServiceMap: f['Leak Service Map'] || '',
+    },
+    framer: {
+      apiKey: orEnv(f['Framer API Key'], process.env.FRAMER_API_KEY),
+      projectUrl: orEnv(f['Framer Project URL'], process.env.FRAMER_PROJECT_URL),
+      siteUrl: orEnv(f['Framer Site URL'], process.env.FRAMER_SITE_URL),
+      blogCollection: orEnv(f['Framer Blog Collection'], process.env.FRAMER_BLOG_COLLECTION_NAME),
+      blogPathPrefix: orEnv(f['Framer Blog Path Prefix'], process.env.FRAMER_BLOG_PATH_PREFIX),
+      serviceCollection: orEnv(f['Framer Service Collection'], process.env.FRAMER_SERVICE_COLLECTION_NAME),
+      servicePathPrefix: orEnv(f['Framer Service Path Prefix'], process.env.FRAMER_SERVICE_PATH_PREFIX),
+    },
+    gsc: {
+      property: orEnv(f['GSC Property'], process.env.GSC_PROPERTY),
+      sitemapUrl: orEnv(f['GSC Sitemap URL'], process.env.GSC_SITEMAP_URL),
+    },
+    omnisendApiKey: orEnv(f['Omnisend API Key'], process.env.OMNISEND_API_KEY),
+    googleAdsSheetId: orEnv(f['Google Ads Sheet ID'], process.env.GOOGLE_ADS_SHEET_ID),
+    thresholds: {
+      staleContactDays: Number(f['Stale Contact Days']) || 14,
+    },
+  };
+}
+
+async function loadClientsFromControlBase() {
+  if (!AGENCY_CONTROL_BASE_ID) return [DEFAULT_TENANT];
+  const url = `https://api.airtable.com/v0/${AGENCY_CONTROL_BASE_ID}/${encodeURIComponent(CLIENTS_TABLE)}?pageSize=100`;
+  const res = await airtableFetchWithRetry(url, {
+    headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` }
+  });
+  if (!res.ok) throw new Error(`Clients load ${res.status}: ${await res.text()}`);
+  const data = await res.json();
+  const rows = (data.records || [])
+    .map(r => tenantFromClientRecord(r.fields))
+    .filter(t => t.slug);
+  return rows.length ? rows : [DEFAULT_TENANT];
+}
+
+// Returns the cached client list, refreshing it past the TTL. A failed
+// refresh keeps the previous list (never throws to the caller).
+async function getClients() {
+  const fresh = Date.now() - clientsCacheAt < CLIENTS_CACHE_TTL_MS;
+  if (fresh && clientsCache.length) return clientsCache;
+  if (!clientsCacheLoading) {
+    clientsCacheLoading = loadClientsFromControlBase()
+      .then(list => { clientsCache = list; clientsCacheAt = Date.now(); })
+      .catch(err => { console.warn('Clients cache refresh failed, keeping previous list:', err.message); })
+      .finally(() => { clientsCacheLoading = null; });
+  }
+  // On a cold cache, wait for the first load; otherwise serve stale now.
+  if (!clientsCacheAt) await clientsCacheLoading;
+  return clientsCache.length ? clientsCache : [DEFAULT_TENANT];
+}
+
+function readCookie(req, name) {
+  const raw = req && req.headers && req.headers.cookie;
+  if (!raw) return '';
+  for (const part of raw.split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0 && part.slice(0, i).trim() === name) {
+      try { return decodeURIComponent(part.slice(i + 1).trim()); } catch { return part.slice(i + 1).trim(); }
+    }
+  }
+  return '';
+}
+
+// Resolves the active client for a request: the cookie's slug if it names
+// a known, non-paused client; otherwise the configured default; otherwise
+// the first client; otherwise the env-built default tenant.
+async function resolveTenantForRequest(req) {
+  let clients;
+  try { clients = await getClients(); } catch { clients = [DEFAULT_TENANT]; }
+  const wanted = readCookie(req, ACTIVE_CLIENT_COOKIE);
+  return (wanted && clients.find(c => c.slug === wanted && c.status !== 'Paused'))
+    || clients.find(c => c.slug === DEFAULT_CLIENT_SLUG)
+    || clients[0]
+    || DEFAULT_TENANT;
+}
+
+// Trimmed client shape safe to hand to the browser (no API keys).
+function publicClient(t) {
+  const p = t.profile || {};
+  return {
+    slug: t.slug,
+    name: t.name,
+    shortName: p.shortName || t.name,
+    logoMark: p.logoMark || '',
+    repInitials: p.repInitials || '',
+    city: p.city || '',
+    region: p.region || '',
+    tagline: p.tagline || '',
+    status: t.status || 'Active',
+  };
 }
 
 // Base-scoped Airtable URLs, resolved per request from the active tenant.
@@ -14911,6 +15087,113 @@ app.post('/api/omnisend/fetch-pexels-image', async (req, res) => {
   }
 });
 
+// ===================== AGENCY CONTROLLER / SESSION =====================
+// Read-only surface for the client switcher and the agency dashboard.
+// Auth is still the app-wide basic-auth gate at the top of this file;
+// there is exactly one operator (admin) for now, hence the fixed role.
+
+app.get('/api/session', async (req, res) => {
+  try {
+    const clients = await getClients();
+    res.json({
+      role: 'admin',
+      controlPlane: !!AGENCY_CONTROL_BASE_ID,
+      activeClient: publicClient(currentTenant()),
+      clients: clients.map(publicClient),
+    });
+  } catch (err) {
+    console.error('Session error:', err.message);
+    res.status(500).json({ error: 'session_failed' });
+  }
+});
+
+// Sets the active-client cookie. A full page reload after this is what
+// actually swaps the workspace - every hydrate* call on boot re-fetches
+// against the newly active tenant.
+app.post('/api/session/switch', async (req, res) => {
+  const slug = ((req.body && req.body.slug) || '').trim();
+  try {
+    const clients = await getClients();
+    const target = clients.find(c => c.slug === slug);
+    if (!target) return res.status(400).json({ error: 'unknown_client' });
+    if (target.status === 'Paused') return res.status(400).json({ error: 'client_paused' });
+    res.setHeader('Set-Cookie',
+      `${ACTIVE_CLIENT_COOKIE}=${encodeURIComponent(slug)}; Path=/; Max-Age=31536000; SameSite=Lax; Secure`);
+    res.json({ ok: true, slug });
+  } catch (err) {
+    console.error('Switch error:', err.message);
+    res.status(500).json({ error: 'switch_failed' });
+  }
+});
+
+app.post('/api/agency/reload-clients', async (req, res) => {
+  clientsCacheAt = 0;
+  try {
+    const clients = await getClients();
+    res.json({ ok: true, count: clients.length, slugs: clients.map(c => c.slug) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Per-client rollup for the agency dashboard. Runs each client's reads
+// inside its own tenant context. Best-effort: one client failing does not
+// sink the whole response.
+let agencyOverviewCache = null;
+let agencyOverviewAt = 0;
+const AGENCY_OVERVIEW_TTL_MS = 3 * 60 * 1000;
+
+async function buildClientOverview(tenant) {
+  return tenantALS.run(tenant, async () => {
+    const [contacts, campaigns, touchPoints] = await Promise.all([
+      airtableFetchAllRecords('Contacts').catch(() => []),
+      airtableFetchAllRecords('Campaigns').catch(() => []),
+      airtableFetchAllRecords('Touch Points').catch(() => []),
+    ]);
+    const weekAgo = Date.now() - 7 * 864e5;
+    const tpThisWeek = touchPoints.filter(r => {
+      const d = r.fields && (r.fields['Date'] || r.fields['Created'] || r.fields['Logged At']);
+      const t = d ? Date.parse(d) : NaN;
+      return !isNaN(t) && t >= weekAgo;
+    }).length;
+    const activeCampaigns = campaigns.filter(r => {
+      const s = ((r.fields && (r.fields['Status'] || r.fields['State'])) || '').toString().toLowerCase();
+      return s === 'live' || s === 'active';
+    }).length;
+    return {
+      totalContacts: contacts.length,
+      activeCampaigns,
+      touchPointsThisWeek: tpThisWeek,
+    };
+  });
+}
+
+app.get('/api/agency/overview', async (req, res) => {
+  const force = req.query.refresh === '1';
+  if (!force && agencyOverviewCache && Date.now() - agencyOverviewAt < AGENCY_OVERVIEW_TTL_MS) {
+    return res.json(agencyOverviewCache);
+  }
+  try {
+    const clients = await getClients();
+    const rows = [];
+    for (const c of clients) {
+      const base = publicClient(c);
+      if (c.status === 'Paused') { rows.push({ ...base, paused: true }); continue; }
+      try {
+        rows.push({ ...base, ...(await buildClientOverview(c)) });
+      } catch (err) {
+        rows.push({ ...base, error: err.message });
+      }
+    }
+    agencyOverviewCache = { generatedAt: new Date().toISOString(), clients: rows };
+    agencyOverviewAt = Date.now();
+    res.json(agencyOverviewCache);
+  } catch (err) {
+    console.error('Agency overview error:', err.message);
+    res.status(500).json({ error: 'overview_failed' });
+  }
+});
+
 // ===================== SCHEDULED SYNC JOBS =====================
 // Both run silently in the background and never block the UI - failures
 // are logged, not thrown, same as every other cron-eligible job in this
@@ -14928,4 +15211,13 @@ cron.schedule('0 6 * * *', () => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Search server listening on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Search server listening on port ${PORT}`);
+  if (AGENCY_CONTROL_BASE_ID) {
+    getClients()
+      .then(c => console.log(`Agency control plane: ${c.length} client(s) loaded [${c.map(x => x.slug).join(', ')}]`))
+      .catch(err => console.warn('Agency control plane: initial client load failed -', err.message));
+  } else {
+    console.log('Agency control plane: not configured (AGENCY_CONTROL_BASE_ID unset) - single-client mode');
+  }
+});
