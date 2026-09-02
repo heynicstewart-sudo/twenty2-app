@@ -495,6 +495,21 @@ async function findRecordByFieldName(table, fieldName, value) {
   return (data.records && data.records[0]) || null;
 }
 
+// Like findRecordByFieldName but returns every matching record, not just the
+// first. Needed by the grid delete / reset routes: a grid that had the same
+// CSV imported twice holds duplicate Contact/Company names, and resolving
+// only the first record per name would leave the duplicates orphaned in
+// Airtable after the grid is gone.
+async function findAllRecordsByFieldName(table, fieldName, value) {
+  if (!value) return [];
+  const res = await airtableFetchWithRetry(
+    `${atUrl()}/${encodeURIComponent(table)}?filterByFormula=${encodeURIComponent(`{${fieldName}}="${value}"`)}`,
+    { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }
+  );
+  const data = await res.json();
+  return data.records || [];
+}
+
 // Fetches every full record (not just the first page) in a table, following
 // Airtable's `offset` pagination cursor. The plain airtableRequest('GET',
 // table) used elsewhere in this file only returns the first 100 records -
@@ -10547,8 +10562,13 @@ async function airtableFetchAllRecordIds(table) {
 // Airtable caps DELETE at 10 record ids per request, same limit as the
 // batch writes in airtableBatchPatch above.
 async function airtableBatchDelete(table, recordIds) {
-  for (let i = 0; i < recordIds.length; i += 10) {
-    const batch = recordIds.slice(i, i + 10);
+  // Airtable rejects a DELETE whose records[] list repeats an id ("The
+  // 'records' parameter cannot contain duplicates") - which is exactly what
+  // the grid delete route produced for a grid holding a twice-imported CSV.
+  // Dedupe (and drop falsy ids) here so every caller is covered.
+  const ids = [...new Set((recordIds || []).filter(Boolean))];
+  for (let i = 0; i < ids.length; i += 10) {
+    const batch = ids.slice(i, i + 10);
     const qs = batch.map(id => `records[]=${encodeURIComponent(id)}`).join('&');
     const res = await airtableFetchWithRetry(`${atUrl()}/${encodeURIComponent(table)}?${qs}`, {
       method: 'DELETE',
@@ -10632,13 +10652,30 @@ app.delete('/api/grid', async (req, res) => {
   const { contactNames = [], companyNames = [], sharedCompanyNames = [], gridName } = req.body || {};
 
   try {
-    const contactIds = (await Promise.all(
-      contactNames.map(name => findRecordByFieldName('Contacts', 'Full Name', name))
-    )).filter(Boolean).map(r => r.id);
+    // findAll... + Set: a grid that had the same CSV imported twice holds
+    // duplicate names, and resolving one record per name would both leave
+    // the duplicate records orphaned and feed a repeated id into the DELETE.
+    const contactIds = [...new Set((await Promise.all(
+      [...new Set(contactNames)].map(name => findAllRecordsByFieldName('Contacts', 'Full Name', name))
+    )).flat().map(r => r.id))];
 
-    const companyIds = (await Promise.all(
-      companyNames.map(name => findRecordByFieldName('Companies', 'Company Name', name))
-    )).filter(Boolean).map(r => r.id);
+    const companyIds = [...new Set((await Promise.all(
+      [...new Set(companyNames)].map(name => findAllRecordsByFieldName('Companies', 'Company Name', name))
+    )).flat().map(r => r.id))];
+
+    // Clear the deleted contacts' Campaign Contacts rows too - same approach
+    // as DELETE /api/grids/:gridId/contacts below (no per-grid field, so
+    // filter the whole junction table by the resolved contact ids). Without
+    // this, deleting a grid leaves orphan junction rows that surface as
+    // ghost contacts inside whatever campaign they were linked to.
+    if (contactIds.length) {
+      const contactIdSet = new Set(contactIds);
+      const ccRows = await airtableFetchAllRecords(CAMPAIGN_CONTACTS_TABLE);
+      const ccIdsToDelete = ccRows
+        .filter(r => (r.fields['Contact'] || []).some(cid => contactIdSet.has(cid)))
+        .map(r => r.id);
+      if (ccIdsToDelete.length) await airtableBatchDelete(CAMPAIGN_CONTACTS_TABLE, ccIdsToDelete);
+    }
 
     if (contactIds.length) await airtableBatchDelete('Contacts', contactIds);
     if (companyIds.length) await airtableBatchDelete('Companies', companyIds);
@@ -10669,13 +10706,13 @@ app.delete('/api/grids/:gridId/contacts', async (req, res) => {
   const { contactNames = [], companyNames = [], sharedCompanyNames = [], gridName } = req.body || {};
 
   try {
-    const contactIds = (await Promise.all(
-      contactNames.map(name => findRecordByFieldName('Contacts', 'Full Name', name))
-    )).filter(Boolean).map(r => r.id);
+    const contactIds = [...new Set((await Promise.all(
+      [...new Set(contactNames)].map(name => findAllRecordsByFieldName('Contacts', 'Full Name', name))
+    )).flat().map(r => r.id))];
 
-    const companyIds = (await Promise.all(
-      companyNames.map(name => findRecordByFieldName('Companies', 'Company Name', name))
-    )).filter(Boolean).map(r => r.id);
+    const companyIds = [...new Set((await Promise.all(
+      [...new Set(companyNames)].map(name => findAllRecordsByFieldName('Companies', 'Company Name', name))
+    )).flat().map(r => r.id))];
 
     // Campaign Contacts rows have no per-grid field either - found the same
     // way as every other place in this file that needs "every Campaign
