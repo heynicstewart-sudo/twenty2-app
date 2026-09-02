@@ -5941,7 +5941,7 @@ function openCsvColumnModal(rows){
       </select>
     </div>
     <div class="field">
-      <label>Which column contains the contact's name? <span class="muted" style="font-weight:400;">(optional — creates real contacts, not just a grid skeleton)</span></label>
+      <label>Which column contains the contact's name? <span class="muted" style="font-weight:400;">(optional — the business name is used if blank)</span></label>
       <select id="csvNameColumn">
         <option value="">— None —</option>
         ${optionsHtml}
@@ -5954,6 +5954,16 @@ function openCsvColumnModal(rows){
         ${optionsHtml}
       </select>
     </div>
+    <div class="field">
+      <label>Which column contains the business website? <span class="muted" style="font-weight:400;">(optional — "Research business" uses it to find a contact email)</span></label>
+      <select id="csvWebsiteColumn">
+        <option value="">— None —</option>
+        ${optionsHtml}
+      </select>
+    </div>
+    <label style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;margin-bottom:8px;">
+      <input type="checkbox" id="csvContactPerRow" checked> Create a contact for every row (use the business name when there's no person)
+    </label>
     <p class="muted" style="font-size:12px;">${dataRows.length} row${dataRows.length===1?'':'s'} found in this file.</p>
   `;
   const footer = `
@@ -5972,13 +5982,16 @@ async function confirmCsvImport(){
   const nameColIdx = nameColValue !== '' ? parseInt(nameColValue) : null;
   const emailColValue = document.getElementById('csvEmailColumn').value;
   const emailColIdx = emailColValue !== '' ? parseInt(emailColValue) : null;
+  const websiteColValue = document.getElementById('csvWebsiteColumn').value;
+  const websiteColIdx = websiteColValue !== '' ? parseInt(websiteColValue) : null;
+  const contactPerRow = !!(document.getElementById('csvContactPerRow') || {}).checked;
   const rows = window.__csvImportRows || [];
   const seen = new Set(grid.companies.map(c => c.toLowerCase()));
   const seenColumns = new Set(grid.columns.map(c => c.toLowerCase()));
   const existingContactKeys = new Set(gridContacts(grid.id).map(c => (c.name+'|'+c.company).toLowerCase()));
   const newCompanies = [];
   const newColumns = [];
-  const newContacts = []; // {name, role, company, email}
+  const newContacts = []; // {name, role, company, email, website}
   rows.forEach(r => {
     const val = (r[colIdx] || '').trim();
     if(val){
@@ -6000,26 +6013,25 @@ async function confirmCsvImport(){
       }
     }
 
-    if(nameColIdx !== null || emailColIdx !== null){
+    if((contactPerRow || nameColIdx !== null || emailColIdx !== null) && val){
       const rowName = nameColIdx !== null ? (r[nameColIdx] || '').trim() : '';
       const email = emailColIdx !== null ? (r[emailColIdx] || '').trim() : '';
-      // Make a real contact whenever the row has a name OR an email - for a
-      // named-but-emailless row (Justin Wooley), for an email-only business
-      // (hello@... with no person), fall back to the company name. A row
-      // with neither just adds the company skeleton.
-      if((rowName || email) && val){
+      const website = websiteColIdx !== null ? (r[websiteColIdx] || '').trim() : '';
+      // Create a contact for the row - the business name stands in when
+      // there's no person. A blank company row is skipped.
+      if(contactPerRow || rowName || email){
         const contactName = rowName || val;
         const ckey = (contactName+'|'+val).toLowerCase();
         if(!existingContactKeys.has(ckey)){
           existingContactKeys.add(ckey);
-          newContacts.push({ name: contactName, role: jobTitle, company: val, email });
+          newContacts.push({ name: contactName, role: jobTitle, company: val, email, website });
         }
       }
     }
   });
 
   for(const nc of newContacts){
-    createManualGridContact(nc.name, nc.role, nc.company, '', '', nc.email);
+    createManualGridContact(nc.name, nc.role, nc.company, '', '', nc.email, nc.website);
     await sleep(150);
   }
 
@@ -6085,11 +6097,12 @@ function openAddContactModal(){
 // optional - only the Apollo import flow passes it (Apollo's own verbose
 // title, kept separate from `role`, which is the grid column/searched job
 // title written to the real Job Title field - see confirmApolloImport).
-function createManualGridContact(name, role, company, linkedinUrl, apolloTitle, email){
+function createManualGridContact(name, role, company, linkedinUrl, apolloTitle, email, website){
   const grid = currentGrid();
   const seqId = role === 'Digital and Tech' ? 'digitalTech' : 'seniorLeaders';
   const contact = {
     id: uid('c'), gridId: grid.id, name, company, role, url: linkedinUrl, email: email || '',
+    businessWebsite: website || '', businessLocation: '',
     seqId, state:'found', foundDate: isoDate(TODAY), connReqDate:null, connDate:null, notes:'',
     thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[],
     apolloTitle: apolloTitle || ''
@@ -6818,6 +6831,8 @@ function syncContactToAirtable(contact) {
     role: contact.role,
     linkedinUrl: contact.url,
     email: contact.email || '',
+    businessWebsite: contact.businessWebsite || '',
+    businessLocation: contact.businessLocation || '',
     state: contact.state,
     icpRoleCategory: contact.role,
     notes: contact.notes || '',
@@ -7568,6 +7583,7 @@ function campaignTypeByName(name){
 }
 
 const BUSINESS_FIELDS = [
+  ['foundEmail','Contact email found'],
   ['businessSummary','What they do'],
   ['servicesOffered','Services'],
   ['coverageArea','Coverage area'],
@@ -7644,8 +7660,12 @@ async function researchBusiness(cid){
     window.__enrichmentProfiles = window.__enrichmentProfiles || {};
     window.__enrichmentProfiles[cid] = data.profile;
     c.enrichment = data.profile;
+    if(data.emailSaved){
+      c.email = data.emailSaved;
+      const gEl = document.getElementById('genEmailAddress'); if(gEl && !gEl.value) gEl.value = data.emailSaved;
+    }
     if(panel) panel.innerHTML = renderBusinessPanelHtml(data.profile);
-    toast('Business researched — brief saved to notes', 'success');
+    toast(data.emailSaved ? `Researched — found email ${data.emailSaved}` : 'Business researched — brief saved to notes', 'success');
     regenerateOpenMessageModalIfNeeded(cid);
   } catch(err){
     if(panel) panel.innerHTML = `<div class="muted" style="font-size:12.5px;">Could not research this business: ${esc(err.message)}</div>`;

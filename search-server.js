@@ -785,7 +785,7 @@ app.get('/api/airtable/contact', async (req, res) => {
 // per instruction not to create missing fields. Grid membership is still
 // tracked locally in the app's own state; it just isn't mirrored to
 // Airtable right now.
-async function createOrUpdateAirtableContact({ name, company, role, linkedinUrl, email, state: contactState, icpRoleCategory, notes, companyLinkedinUrl, apolloTitle, gridName }) {
+async function createOrUpdateAirtableContact({ name, company, role, linkedinUrl, email, businessWebsite, businessLocation, state: contactState, icpRoleCategory, notes, companyLinkedinUrl, apolloTitle, gridName }) {
   if (!name) {
     const err = new Error('name is required');
     err.status = 400;
@@ -826,6 +826,8 @@ async function createOrUpdateAirtableContact({ name, company, role, linkedinUrl,
     if (icpRoleCategory) patchFields['ICP Role Category'] = icpRoleCategory;
     if (companyRecord) patchFields['Company'] = [companyRecord.id];
     if (email && !(existing.fields['Email'] || '').trim()) patchFields['Email'] = email;
+    if (businessWebsite && !(existing.fields['Business Website'] || '').trim()) patchFields['Business Website'] = businessWebsite;
+    if (businessLocation && !(existing.fields['Business Location'] || '').trim()) patchFields['Business Location'] = businessLocation;
     if (Object.keys(patchFields).length) {
       await airtableRequest('PATCH', 'Contacts', {
         records: [{ id: existing.id, fields: patchFields }],
@@ -875,6 +877,8 @@ async function createOrUpdateAirtableContact({ name, company, role, linkedinUrl,
     'ICP Role Category': icpRoleCategory || ''
   };
   if (email) fields['Email'] = email;
+  if (businessWebsite) fields['Business Website'] = businessWebsite;
+  if (businessLocation) fields['Business Location'] = businessLocation;
   if (companyLinkedinUrl) fields['Company LinkedIn URL'] = companyLinkedinUrl;
   if (companyRecord) fields['Company'] = [companyRecord.id];
 
@@ -3329,13 +3333,20 @@ async function researchBusinessEnrichment(company, location, website) {
   const searches = [
     q(`"${company}" ${loc}`.trim()),
     q(`${company} ${loc} sheds OR builder OR construction OR patios`.trim()),
+    q(`${company} ${loc} contact email`.trim()),
   ];
-  if (site) searches.push(q(`site:${site}`));
+  if (site) { searches.push(q(`site:${site}`)); searches.push(q(`site:${site} contact OR email`)); }
   const results = await Promise.all(searches);
 
   const flat = results.flatMap(r => (r.organic || []).slice(0, 5))
     .map(r => `${r.title || ''}\n${r.snippet || ''}\n${r.link || ''}`)
     .join('\n\n');
+
+  // Pull any email addresses straight out of the raw snippets - Serper
+  // often surfaces "Contact us at info@..." in the description text.
+  const rawEmails = [...new Set((flat.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) || [])
+    .map(e => e.toLowerCase())
+    .filter(e => !/\.(png|jpg|jpeg|gif|webp)$/.test(e) && !/(example|sentry|wixpress|godaddy)\./.test(e)))];
 
   const prompt = `You are researching a local trade business ahead of a cold outreach email.
 
@@ -3343,6 +3354,8 @@ Business: ${company}${loc ? ` (${loc})` : ''}${site ? `\nWebsite: ${site}` : ''}
 
 Search results:
 ${flat || 'No results found.'}
+
+${rawEmails.length ? `Email addresses found in the results: ${rawEmails.join(', ')}` : ''}
 
 Based only on the above, return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 {
@@ -3353,15 +3366,20 @@ Based only on the above, return ONLY valid JSON, no markdown, no commentary, in 
   "sizeAndScale": string,
   "notableDetail": string,
   "outreachAngle": string,
-  "website": string
+  "website": string,
+  "foundEmail": string
 }
 
-Each value is one short line. "outreachAngle" is a starting point for the email, not a script. If the results don't give enough to fill a field confidently, say so plainly (e.g. "Not enough public information found") rather than inventing detail.`;
+Each value is one short line. "foundEmail" is the single best public contact email for this business from the results (prefer a role address like info@ or sales@ on the business's own domain), or "" if none is clearly theirs - never guess or construct one. "outreachAngle" is a starting point for the email, not a script. If the results don't give enough to fill a field confidently, say so plainly (e.g. "Not enough public information found") rather than inventing detail.`;
 
   const profile = await callClaudeJson(prompt, 900);
   profile.kind = 'business';
   profile.location = loc;
   if (site && !profile.website) profile.website = site;
+  // Trust a raw-snippet email over a model guess, but only keep an email
+  // that actually appeared in the results.
+  const foundEmail = (profile.foundEmail || '').toLowerCase().trim();
+  profile.foundEmail = (foundEmail && rawEmails.includes(foundEmail)) ? foundEmail : (rawEmails[0] || '');
   profile.date = new Date().toISOString().slice(0, 10);
   return profile;
 }
@@ -7473,18 +7491,24 @@ app.post('/api/enrich/business', async (req, res) => {
       ? await airtableGetRecord('Contacts', contactId)
       : (name ? await findRecordByFieldName('Contacts', 'Full Name', name) : null);
     const profile = await researchBusinessEnrichment(businessName, location, website);
+    let emailSaved = '';
     if (contactRecord) {
       try {
         await persistContactEnrichment(contactRecord, profile);
-        const locFields = {};
-        if (location !== undefined) locFields['Business Location'] = (location || '').trim();
-        if (website !== undefined) locFields['Business Website'] = (website || '').trim();
-        if (Object.keys(locFields).length) await airtableRequest('PATCH', 'Contacts', { records: [{ id: contactRecord.id, fields: locFields }] });
+        const fields = {};
+        if (location !== undefined) fields['Business Location'] = (location || '').trim();
+        if (website !== undefined) fields['Business Website'] = (website || '').trim();
+        // Fill in the contact email from the research only when it's blank.
+        if (profile.foundEmail && !(contactRecord.fields['Email'] || '').trim()) {
+          fields['Email'] = profile.foundEmail;
+          emailSaved = profile.foundEmail;
+        }
+        if (Object.keys(fields).length) await airtableRequest('PATCH', 'Contacts', { records: [{ id: contactRecord.id, fields }] });
       } catch (airtableErr) {
         console.warn('Could not store business research to Airtable:', airtableErr.message);
       }
     }
-    res.json({ success: true, profile });
+    res.json({ success: true, profile, emailSaved });
   } catch (err) {
     console.error('Business research error:', err.message);
     res.status(500).json({ error: err.message });
