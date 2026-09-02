@@ -4149,6 +4149,8 @@ function renderReminderActionCard(a){
 // "Copy & mark sent" button once clicked (handleGenerateFastMessage).
 function renderFastActionCard(a){
   const c = a.contact;
+  const isMessage = a.type !== 'Send connection';
+  const enriched = !!(window.__enrichmentProfiles && window.__enrichmentProfiles[c.id]);
   return `
   <div class="todo-item" id="todaysAction-${c.id}">
     <div class="todo-item-main">
@@ -4167,6 +4169,8 @@ function renderFastActionCard(a){
           ? `<a class="btn btn-primary btn-sm" href="${esc(c.url||'#')}" target="_blank" rel="noopener" onclick="handleContactLinkedInOpened('${c.id}')"><i class="ti ti-brand-linkedin"></i> Send connection</a>`
           : `<button class="btn btn-primary btn-sm" onclick="handleGenerateFastMessage('${c.id}')"><i class="ti ti-sparkles"></i> Generate message</button>`}
       </div>
+      ${isMessage && c.url ? `<a class="btn btn-ghost btn-sm" href="${esc(c.url)}" target="_blank" rel="noopener"><i class="ti ti-brand-linkedin"></i> LinkedIn</a>` : ''}
+      ${isMessage ? `<button class="btn btn-ghost btn-sm" id="fastEnrichBtn-${c.id}" onclick="handleEnrichFastAction('${c.id}')"${c.url ? '' : ' disabled title="No LinkedIn URL on file"'}><i class="ti ti-search"></i> ${enriched ? 'Re-enrich' : 'Enrich'}</button>` : ''}
       <button class="btn btn-ghost btn-sm" onclick="handleMarkActionDone('${c.id}')"><i class="ti ti-check"></i> Mark as done</button>
     </div>
   </div>`;
@@ -4526,6 +4530,49 @@ async function handleGenerateFastMessage(cid){
     console.warn('Could not generate message:', err.message);
     toast('Could not generate message: ' + err.message, 'warn');
     area.innerHTML = `<button class="btn btn-primary btn-sm" onclick="handleGenerateFastMessage('${cid}')"><i class="ti ti-sparkles"></i> Generate message</button>`;
+  }
+}
+
+// "Enrich" on a Send Message fast-action card - runs the same research
+// enrichment as the contact drawer's Enrich button (POST /api/enrich/contact,
+// which persists an ENRICHMENT_JSON block to the front of Contacts.AI Summary),
+// then regenerates the draft so it picks up the fresh profile. Parity with the
+// "Write & copy message" modal, where enriching auto-regenerates the open draft
+// (regenerateOpenMessageModalIfNeeded). Today's Actions previously had no way to
+// enrich a not-yet-researched contact, so its drafts stayed generic even though
+// the generate-message route already reads enrichment back out of AI Summary.
+async function handleEnrichFastAction(cid){
+  const action = (window.__todaysActions || {})[cid];
+  const c = action && action.contact;
+  if(!c) return;
+  if(!c.url){ toast('No LinkedIn URL on file for ' + c.name, 'warn'); return; }
+
+  const btn = document.getElementById('fastEnrichBtn-' + cid);
+  const original = btn ? btn.innerHTML : '';
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Enriching...'; }
+
+  try {
+    const res = await fetch('/api/enrich/contact', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ linkedinUrl: c.url, name: c.name, company: c.company })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+
+    window.__enrichmentProfiles = window.__enrichmentProfiles || {};
+    window.__enrichmentProfiles[cid] = data.profile;
+    c.enrichment = data.profile;
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-search"></i> Re-enrich'; }
+    toast(c.name + ' enriched - regenerating draft', 'success');
+    // The server persisted the profile to AI Summary synchronously, and
+    // generate-message reads it fresh from there, so a straight regenerate
+    // picks it up - no need to pass it through the client.
+    await handleGenerateFastMessage(cid);
+  } catch(err){
+    console.warn('Could not enrich contact:', err.message);
+    toast('Could not enrich ' + c.name + ': ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = original; }
   }
 }
 

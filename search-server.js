@@ -8570,6 +8570,96 @@ function campaignMessagePerformanceNote(touchPoints, campaignName, messageNumber
   return `\n\nHere's how message ${messageNumber} has actually landed with other contacts in this campaign so far - use this as a live feedback loop, leaning into whatever's getting replies and away from whatever isn't (learn the pattern, don't copy either verbatim):\n${section('Got a reply', replied)}\n${section('No reply after a few days', noReply)}${forwardNote}`;
 }
 
+// Single source of truth for what an in-campaign outreach draft (message 1, 2
+// or the CTA) is told - used by BOTH the Today's Actions fast-action card
+// (POST /api/campaign/:id/contacts/:contactId/generate-message) and the
+// Write & copy message modal (POST /api/messages/generate) so the two produce
+// the same draft for the same contact + campaign + stage. Everything the model
+// sees about the campaign is read fresh from Airtable here: the campaign's own
+// Sequence Templates, its offer, its per-stage style corrections, this
+// contact's recent posts / enrichment / conversation, the campaign's message-N
+// reply-rate feedback loop, and Marcus's recent edited examples in it.
+// `campaignContactsRows` is optional - pass it when the caller already fetched
+// the junction table (the fast card has), otherwise it's fetched here.
+// `imageNote` is an optional line about screenshots handed to the model
+// alongside this prompt (the modal supports profile/convo screenshots).
+async function buildCampaignOutreachPrompt({ campaignRecord, contactRecord, messageNumber, campaignName, steer, imageNote, campaignContactsRows }) {
+  const camp = campaignRecord.fields || {};
+  const cf = contactRecord.fields || {};
+  const resolvedName = campaignName || camp['Name'] || camp['Campaign Name'] || '';
+  const contactId = contactRecord.id;
+
+  const recentPosts = recentPostsPromptSnippet(cf['Recent Posts'], 30);
+  // Only weave the offer in from message 2 on - pitching on the first touch
+  // reads as a cold sales blast rather than a peer-to-peer opener.
+  const [offer, voice, touchPoints, rows] = await Promise.all([
+    messageNumber >= 2 ? getActiveOfferForCampaign(campaignRecord.id) : Promise.resolve(null),
+    getStrategyVoiceSettings(),
+    airtableFetchAllRecords('Touch Points'),
+    campaignContactsRows ? Promise.resolve(campaignContactsRows) : fetchCampaignContactsRows()
+  ]);
+
+  // Marcus's own edits are the best signal for what "good" looks like for
+  // *this* campaign - his 5 most recent "Sent edited" rows in it, AI draft
+  // paired with what he actually sent so the model learns the direction of
+  // the edit, not just the end result.
+  const recentEditedExamples = rows
+    .filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id) && r.fields['Draft Outcome'] === 'Sent edited' && r.fields['Final Message Sent'] && r.fields['Original Message Draft'])
+    .sort((a, b) => new Date(b.createdTime) - new Date(a.createdTime))
+    .slice(0, 5)
+    .map(r => ({ original: r.fields['Original Message Draft'], edited: r.fields['Final Message Sent'] }));
+  const examplesNote = recentEditedExamples.length
+    ? `\n\nHere are up to 5 examples of messages Marcus personally edited before sending in this campaign (most recent first) - each pairs the AI draft with what he actually sent, so you can learn the tone and style he prefers for this campaign:\n${recentEditedExamples.map((ex, i) => `${i + 1}. AI draft: ${ex.original}\n   Marcus sent: ${ex.edited}`).join('\n\n')}`
+    : '';
+
+  // Same reply-rate feedback loop as the Roadmap's Sequences view, scoped to
+  // this campaign and this message number.
+  const performanceNote = campaignMessagePerformanceNote(touchPoints, resolvedName, messageNumber, contactId);
+
+  const stageKey = STAGE_KEY_FOR_MESSAGE_NUMBER[messageNumber];
+  const template = extractStageTemplate(camp['Sequence Templates'], messageNumber);
+  const ctaOptions = stageKey === 'cta' ? parseCtaList(camp['CTAs']) : [];
+  const styleCorrections = parseStyleCorrections(camp['Style Corrections']);
+
+  // Earlier than the campaign's "Messages before CTA" cadence -> the offer is
+  // context only, not a pitch instruction (the model can still bring it
+  // forward if the conversation clearly calls for it, see ctaStrategyNoteText).
+  const cadenceN = parseInt(voice.messagesBeforeCta, 10) || 2;
+  const offerNote = offer && offer.summary
+    ? (messageNumber < cadenceN
+        ? `\nThis campaign's offer, for context only (do not pitch it unless the contact has clearly signalled they want something like it): ${offer.summary}`
+        : `\nThis campaign's offer: ${offer.summary}\nWeave the offer above into this message naturally, in your own words - do not paste it verbatim.`)
+    : '';
+
+  // Enrichment is stored as a JSON block prepended to AI Summary - pull it out
+  // and present it cleanly rather than dumping raw JSON, and hand the model
+  // only the narrative part of AI Summary.
+  const enrichmentProfile = parseContactEnrichment(cf['AI Summary']);
+  const enrichmentNote = buildEnrichmentNote(enrichmentProfile);
+  const aiSummaryNarrative = stripContactEnrichmentBlock(cf['AI Summary']).trim();
+
+  const promptText = `You are drafting LinkedIn outreach message ${messageNumber} of 3 for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM.
+
+Campaign: "${resolvedName}". Goal: ${camp['Goal'] || 'not recorded'}. Product: ${camp['Product'] || 'not recorded'}. Target ICP: ${camp['Target ICP'] || 'not recorded'}. Strategy notes: ${camp['Strategy Notes'] || 'none recorded'}.
+${template ? `\nTemplate for this stage:\n${template}\n` : ''}
+Contact: ${cf['Full Name'] || 'Unknown'}, ${cf['Job Title'] || ''}. Profile notes: ${cf['Notes'] || 'none'}. AI summary: ${aiSummaryNarrative || 'none yet'}. Conversation so far: ${cf['Conversation Context'] || 'none yet - this is the first message'}.
+Recent posts (last 30 days only): ${recentPosts}${enrichmentNote}${imageNote ? '\n' + imageNote : ''}
+${offerNote}
+
+${ctaStrategyNoteText(stageKey, messageNumber, voice.messagesBeforeCta)}${ctaOptionsPromptText(ctaOptions)}
+
+${voiceRulesPromptText(voice)}${styleCorrectionsPromptText(styleCorrections, stageKey)}${steerPromptText(steer)}
+
+Write only message ${messageNumber} in this contact's sequence for this specific campaign, following on naturally from the conversation so far (if any) - if the conversation shows they've already replied, respond to what they actually said rather than reintroducing yourself.${GROUND_IN_SPECIFICS_NOTE}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${examplesNote}${performanceNote}${DRAFT_JSON_CONTRACT}`;
+
+  return { promptText, stageKey, styleCorrections, voice };
+}
+
+// Maps the client's stage keys (STAGE_META in t2c-outreach-crm.html) to a
+// sequence message number - 'connect' has none, so a connect-stage draft
+// falls through to the account-level flow rather than buildCampaignOutreachPrompt.
+const STAGE_KEY_TO_MESSAGE_NUMBER = { m1: 1, m2: 2, cta: 3 };
+
 // Generates a message for the "Write & copy message" modal (openGenerateModal
 // in t2c-outreach-crm.html) - previously done client-side by calling
 // api.anthropic.com directly from the browser with no API key, which always
@@ -8594,8 +8684,6 @@ app.post('/api/messages/generate', async (req, res) => {
     if (profileImages.length) imageNote += ` You've been given ${profileImages.length} screenshot(s) of the contact's LinkedIn profile — read their bio, posts and work history and weave in anything relevant.`;
     if (convoImages.length) imageNote += ` You've also been given ${convoImages.length} screenshot(s) of the conversation so far — read what they actually said and write a reply that responds to it naturally, rather than restating the template.`;
 
-    const campaignNote = campaign ? `\n\nThis contact is part of the active campaign "${campaign.name}" (goal: ${campaign.goal || 'not recorded'}). Campaign strategy: ${campaign.strategyBrief || 'none recorded'}. Write in line with this strategy.` : '';
-
     // Prefer the enrichment the client sends; fall back to the block stored
     // on the Contact's AI Summary so a contact enriched elsewhere (or before
     // this client cached it) still gets the full profile into the draft.
@@ -8613,8 +8701,9 @@ app.post('/api/messages/generate', async (req, res) => {
     // action's generate-message does, falling back to a name lookup so an
     // older client that hasn't sent an id yet still gets best-effort context.
     let conversationNote = '';
+    let contactRecord = null;
     try {
-      const contactRecord = contact.id
+      contactRecord = contact.id
         ? await airtableGetRecord('Contacts', contact.id)
         : await findRecordByFieldName('Contacts', 'Full Name', contact.name);
       if (contactRecord) {
@@ -8631,9 +8720,9 @@ app.post('/api/messages/generate', async (req, res) => {
     }
     const enrichmentNote = buildEnrichmentNote(enrichmentProfile);
 
-    // The campaign record carries both this campaign's CTAs (Campaigns.CTAs)
-    // and its per-stage Style Corrections - resolve it once when the client
-    // says this contact is in a campaign, rather than only at the CTA stage.
+    // The campaign record carries this campaign's own Sequence Templates, offer,
+    // CTAs and per-stage Style Corrections - resolve it whenever the client says
+    // this contact is in a campaign.
     let campaignRecord = null;
     if (campaign && campaign.name) {
       try {
@@ -8642,10 +8731,31 @@ app.post('/api/messages/generate', async (req, res) => {
         console.warn('Could not load campaign record for message generation (non-fatal):', lookupErr.message);
       }
     }
-    const ctaOptions = (campaignRecord && stage.key === 'cta') ? parseCtaList(campaignRecord.fields['CTAs']) : [];
-    const styleCorrections = campaignRecord ? parseStyleCorrections(campaignRecord.fields['Style Corrections']) : emptyStyleCorrections();
 
-    const promptText = `Template for this stage:\n${stage.template || ''}\n\nContact: ${contact.name}, ${contact.role || ''} at ${contact.company || ''}. Sequence stage: ${stage.label || stage.key} (message ${stage.messageNumber || 'n/a'} in the sequence). Profile notes: ${contact.notes || 'none'}.${conversationNote}\n\n${ctaStrategyNoteText(stage.key, stage.messageNumber, voice && voice.messagesBeforeCta)}${ctaOptionsPromptText(ctaOptions)}\n\n${voiceRulesPromptText(voice)}${imageNote}${campaignNote}${enrichmentNote}${styleCorrectionsPromptText(styleCorrections, stage.key)}${steerPromptText(steer)}\n\nWrite the actual message for this specific contact, replacing placeholders naturally - if the conversation so far shows they've already replied, respond to what they actually said rather than reintroducing yourself.${GROUND_IN_SPECIFICS_NOTE}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${DRAFT_JSON_CONTRACT}`;
+    // When this contact is in a campaign and the stage maps to a sequence
+    // message (m1/m2/cta), build the exact same prompt the Today's Actions fast
+    // card uses (buildCampaignOutreachPrompt) so the two paths never diverge.
+    // The account-level fallback only runs for a connect-stage draft, a contact
+    // with no campaign, or when the contact record couldn't be resolved.
+    const messageNumber = STAGE_KEY_TO_MESSAGE_NUMBER[stage.key];
+    let promptText, stageKey, styleCorrections, resolvedVoice;
+    if (campaignRecord && messageNumber && contactRecord) {
+      const built = await buildCampaignOutreachPrompt({
+        campaignRecord, contactRecord, messageNumber,
+        campaignName: campaign.name, steer, imageNote
+      });
+      promptText = built.promptText;
+      stageKey = built.stageKey;
+      styleCorrections = built.styleCorrections;
+      resolvedVoice = built.voice;
+    } else {
+      const campaignNote = campaign ? `\n\nThis contact is part of the active campaign "${campaign.name}" (goal: ${campaign.goal || 'not recorded'}). Campaign strategy: ${campaign.strategyBrief || 'none recorded'}. Write in line with this strategy.` : '';
+      const ctaOptions = (campaignRecord && stage.key === 'cta') ? parseCtaList(campaignRecord.fields['CTAs']) : [];
+      styleCorrections = campaignRecord ? parseStyleCorrections(campaignRecord.fields['Style Corrections']) : emptyStyleCorrections();
+      stageKey = stage.key;
+      resolvedVoice = voice;
+      promptText = `Template for this stage:\n${stage.template || ''}\n\nContact: ${contact.name}, ${contact.role || ''} at ${contact.company || ''}. Sequence stage: ${stage.label || stage.key} (message ${stage.messageNumber || 'n/a'} in the sequence). Profile notes: ${contact.notes || 'none'}.${conversationNote}\n\n${ctaStrategyNoteText(stage.key, stage.messageNumber, voice && voice.messagesBeforeCta)}${ctaOptionsPromptText(ctaOptions)}\n\n${voiceRulesPromptText(voice)}${imageNote}${campaignNote}${enrichmentNote}${styleCorrectionsPromptText(styleCorrections, stage.key)}${steerPromptText(steer)}\n\nWrite the actual message for this specific contact, replacing placeholders naturally - if the conversation so far shows they've already replied, respond to what they actually said rather than reintroducing yourself.${GROUND_IN_SPECIFICS_NOTE}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${DRAFT_JSON_CONTRACT}`;
+    }
 
     const content = imgs.map(img => ({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.base64 } }));
     content.push({ type: 'text', text: promptText });
@@ -8653,7 +8763,7 @@ app.post('/api/messages/generate', async (req, res) => {
     const rawMessage = await callClaudeText(content, 800);
     const envelope = parseDraftEnvelope(rawMessage);
     const message = await humanizeOutreachMessage(envelope.message);
-    const ctaBroughtForward = ctaBroughtForwardEarly(stage.messageNumber, voice && voice.messagesBeforeCta, envelope.ctaIncluded);
+    const ctaBroughtForward = ctaBroughtForwardEarly(messageNumber || stage.messageNumber, resolvedVoice && resolvedVoice.messagesBeforeCta, envelope.ctaIncluded);
     // Only surface/store the reasoning when the draft actually brought the
     // CTA forward - an on-cadence "I didn't pitch because..." line is noise.
     const ctaReasoning = ctaBroughtForward ? envelope.ctaReasoning : '';
@@ -8664,7 +8774,7 @@ app.post('/api/messages/generate', async (req, res) => {
     let updatedCorrections = styleCorrections;
     if (steer && steer.trim() && rememberSteer && campaignRecord) {
       try {
-        const r = await appendStyleCorrection(campaignRecord.id, campaignRecord.fields['Style Corrections'], stage.key, steer);
+        const r = await appendStyleCorrection(campaignRecord.id, campaignRecord.fields['Style Corrections'], stageKey, steer);
         steerRemembered = r.saved;
         updatedCorrections = r.corrections;
       } catch (saveErr) {
@@ -8732,76 +8842,11 @@ app.post('/api/campaign/:id/contacts/:contactId/generate-message', async (req, r
     }
 
     const camp = campaignRecord.fields || {};
-    const recentPosts = recentPostsPromptSnippet(cf['Recent Posts'], 30);
-    // Only weave the offer in once the contact is past the first connection
-    // message (messageNumber 1) - pitching the offer on first touch reads
-    // as a cold sales blast rather than a peer-to-peer opener.
-    const [offer, voice, touchPoints] = await Promise.all([
-      messageNumber >= 2 ? getActiveOfferForCampaign(campaignRecord.id) : Promise.resolve(null),
-      getStrategyVoiceSettings(),
-      airtableFetchAllRecords('Touch Points')
-    ]);
-
-    // Marcus's own edits are the best signal for what "good" looks like for
-    // *this* campaign - pull his 5 most recently sent messages in this same
-    // campaign that he rewrote before sending (Draft Outcome "Sent edited"),
-    // most recent row first, and show the original AI draft next to what he
-    // actually sent so Claude can learn the direction of the edit, not just
-    // the end result.
-    const recentEditedExamples = rows
-      .filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id) && r.fields['Draft Outcome'] === 'Sent edited' && r.fields['Final Message Sent'] && r.fields['Original Message Draft'])
-      .sort((a, b) => new Date(b.createdTime) - new Date(a.createdTime))
-      .slice(0, 5)
-      .map(r => ({ original: r.fields['Original Message Draft'], edited: r.fields['Final Message Sent'] }));
-    const examplesNote = recentEditedExamples.length
-      ? `\n\nHere are up to 5 examples of messages Marcus personally edited before sending in this campaign (most recent first) - each pairs the AI draft with what he actually sent, so you can learn the tone and style he prefers for this campaign:\n${recentEditedExamples.map((ex, i) => `${i + 1}. AI draft: ${ex.original}\n   Marcus sent: ${ex.edited}`).join('\n\n')}`
-      : '';
-
-    // Same reply-rate feedback loop as the Roadmap's Sequences view, scoped
-    // to this campaign and this message number.
-    const performanceNote = campaignMessagePerformanceNote(touchPoints, campaignName, messageNumber, contactId);
-
-    const stageKey = STAGE_KEY_FOR_MESSAGE_NUMBER[messageNumber];
-    const template = extractStageTemplate(camp['Sequence Templates'], messageNumber);
-    let ctaOptions = [];
-    if (stageKey === 'cta') ctaOptions = parseCtaList(camp['CTAs']);
-    const styleCorrections = parseStyleCorrections(camp['Style Corrections']);
-
-    // The offer used to be handed over with an unconditional "weave this in
-    // naturally" for every message >= 2, which pushed the pitch into message
-    // 2 regardless of the campaign's "Messages before CTA" cadence. Now, if
-    // this message is earlier than the cadence, the offer is context only -
-    // the model still needs to know what's on the table so it can bring it
-    // forward if the conversation clearly calls for it (see ctaStrategyNoteText),
-    // but it isn't told to pitch.
-    const cadenceN = parseInt(voice.messagesBeforeCta, 10) || 2;
-    const offerNote = offer && offer.summary
-      ? (messageNumber < cadenceN
-          ? `\nThis campaign's offer, for context only (do not pitch it unless the contact has clearly signalled they want something like it): ${offer.summary}`
-          : `\nThis campaign's offer: ${offer.summary}\nWeave the offer above into this message naturally, in your own words - do not paste it verbatim.`)
-      : '';
-
-    // The enrichment profile is stored as a JSON block prepended to AI
-    // Summary - pull it out and present it cleanly (same buildEnrichmentNote
-    // the modal route uses) rather than dumping raw JSON into the prompt,
-    // and hand the model only the narrative part of AI Summary.
-    const enrichmentProfile = parseContactEnrichment(cf['AI Summary']);
-    const enrichmentNote = buildEnrichmentNote(enrichmentProfile);
-    const aiSummaryNarrative = stripContactEnrichmentBlock(cf['AI Summary']).trim();
-
-    const promptText = `You are drafting LinkedIn outreach message ${messageNumber} of 3 for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM.
-
-Campaign: "${campaignName}". Goal: ${camp['Goal'] || 'not recorded'}. Product: ${camp['Product'] || 'not recorded'}. Target ICP: ${camp['Target ICP'] || 'not recorded'}. Strategy notes: ${camp['Strategy Notes'] || 'none recorded'}.
-${template ? `\nTemplate for this stage:\n${template}\n` : ''}
-Contact: ${cf['Full Name'] || 'Unknown'}, ${cf['Job Title'] || ''}. Profile notes: ${cf['Notes'] || 'none'}. AI summary: ${aiSummaryNarrative || 'none yet'}. Conversation so far: ${cf['Conversation Context'] || 'none yet - this is the first message'}.
-Recent posts (last 30 days only): ${recentPosts}${enrichmentNote}
-${offerNote}
-
-${ctaStrategyNoteText(stageKey, messageNumber, voice.messagesBeforeCta)}${ctaOptionsPromptText(ctaOptions)}
-
-${voiceRulesPromptText(voice)}${styleCorrectionsPromptText(styleCorrections, stageKey)}${steerPromptText(steer)}
-
-Write only message ${messageNumber} in this contact's sequence for this specific campaign, following on naturally from the conversation so far (if any) - if the conversation shows they've already replied, respond to what they actually said rather than reintroducing yourself.${GROUND_IN_SPECIFICS_NOTE}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${examplesNote}${performanceNote}${DRAFT_JSON_CONTRACT}`;
+    // Prompt assembly is shared with POST /api/messages/generate (the Write &
+    // copy message modal) so the fast card and the modal produce the same draft.
+    const { promptText, stageKey, styleCorrections, voice } = await buildCampaignOutreachPrompt({
+      campaignRecord, contactRecord, messageNumber, campaignName, steer, campaignContactsRows: rows
+    });
 
     const rawMessage = await callClaudeText(promptText, 800);
     const envelope = parseDraftEnvelope(rawMessage);
