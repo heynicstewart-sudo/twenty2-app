@@ -15194,6 +15194,180 @@ app.get('/api/agency/overview', async (req, res) => {
   }
 });
 
+// ---- Client CRUD (the "New client" / "Edit client" form in the Agency view) ----
+// Writes rows to the Clients table in the control-plane base. Requires
+// AGENCY_CONTROL_BASE_ID and an Airtable token with data.records:write on
+// that base.
+
+// form key -> Clients-table field name
+const CLIENT_FORM_FIELDS = {
+  name: 'Name',
+  status: 'Status',
+  baseId: 'Airtable Base ID',
+  airtablePat: 'Airtable PAT',
+  shortName: 'Short Name',
+  city: 'City',
+  region: 'Region',
+  repName: 'Rep Name',
+  repInitials: 'Rep Initials',
+  industry: 'Industry',
+  positioning: 'Positioning',
+  services: 'Services',
+  websiteUrl: 'Website URL',
+  englishVariant: 'English Variant',
+  signoff: 'Message Signoff',
+  logoMark: 'Logo Mark',
+  tagline: 'Tagline',
+  leakServiceMap: 'Leak Service Map',
+  framerApiKey: 'Framer API Key',
+  framerProjectUrl: 'Framer Project URL',
+  framerSiteUrl: 'Framer Site URL',
+  framerBlogCollection: 'Framer Blog Collection',
+  framerBlogPathPrefix: 'Framer Blog Path Prefix',
+  framerServiceCollection: 'Framer Service Collection',
+  framerServicePathPrefix: 'Framer Service Path Prefix',
+  gscProperty: 'GSC Property',
+  gscSitemapUrl: 'GSC Sitemap URL',
+  omnisendApiKey: 'Omnisend API Key',
+  googleAdsSheetId: 'Google Ads Sheet ID',
+  notes: 'Notes',
+};
+
+function slugify(s) {
+  return (s || '').toString().toLowerCase().trim()
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+}
+
+function clientFieldsFromForm(body) {
+  const fields = {};
+  for (const [k, airtableName] of Object.entries(CLIENT_FORM_FIELDS)) {
+    if (body[k] !== undefined && body[k] !== null && String(body[k]).trim() !== '') {
+      fields[airtableName] = String(body[k]).trim();
+    }
+  }
+  if (body.staleContactDays !== undefined && body.staleContactDays !== '') {
+    const n = Number(body.staleContactDays);
+    if (!isNaN(n)) fields['Stale Contact Days'] = n;
+  }
+  return fields;
+}
+
+async function controlBaseRequest(method, pathSuffix, body) {
+  if (!AGENCY_CONTROL_BASE_ID) throw new Error('AGENCY_CONTROL_BASE_ID not configured');
+  const url = `https://api.airtable.com/v0/${AGENCY_CONTROL_BASE_ID}/${encodeURIComponent(CLIENTS_TABLE)}${pathSuffix || ''}`;
+  const res = await airtableFetchWithRetry(url, {
+    method,
+    headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}`, 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    const txt = await res.text();
+    const err = new Error(`Control base ${method} ${res.status}: ${txt}`);
+    err.status = res.status;
+    throw err;
+  }
+  return res.json();
+}
+
+async function findClientRecordId(slug) {
+  const data = await controlBaseRequest('GET',
+    `?filterByFormula=${encodeURIComponent(`{Slug}="${slug}"`)}&maxRecords=1`);
+  return (data.records && data.records[0] && data.records[0].id) || null;
+}
+
+// Full client detail (including secrets) for the edit form. Admin-only,
+// behind the app-wide basic-auth gate.
+app.get('/api/agency/clients/:slug', async (req, res) => {
+  try {
+    const clients = await getClients();
+    const t = clients.find(c => c.slug === req.params.slug);
+    if (!t) return res.status(404).json({ error: 'not_found' });
+    const p = t.profile || {};
+    res.json({
+      slug: t.slug, name: t.name, status: t.status || 'Active',
+      baseId: t.baseId || '', airtablePat: '',
+      shortName: p.shortName || '', city: p.city || '', region: p.region || '',
+      repName: p.repName || '', repInitials: p.repInitials || '',
+      industry: p.industry || '', positioning: p.positioning || '', services: p.services || '',
+      websiteUrl: p.websiteUrl || '', englishVariant: p.englishVariant || '',
+      signoff: p.signoff || '', logoMark: p.logoMark || '', tagline: p.tagline || '',
+      leakServiceMap: p.leakServiceMap || '',
+      framerApiKey: (t.framer && t.framer.apiKey) || '', framerProjectUrl: (t.framer && t.framer.projectUrl) || '',
+      framerSiteUrl: (t.framer && t.framer.siteUrl) || '', framerBlogCollection: (t.framer && t.framer.blogCollection) || '',
+      framerBlogPathPrefix: (t.framer && t.framer.blogPathPrefix) || '', framerServiceCollection: (t.framer && t.framer.serviceCollection) || '',
+      framerServicePathPrefix: (t.framer && t.framer.servicePathPrefix) || '',
+      gscProperty: (t.gsc && t.gsc.property) || '', gscSitemapUrl: (t.gsc && t.gsc.sitemapUrl) || '',
+      omnisendApiKey: t.omnisendApiKey || '', googleAdsSheetId: t.googleAdsSheetId || '',
+      staleContactDays: (t.thresholds && t.thresholds.staleContactDays) || 14,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Quick reachability check for a base id the operator is about to save.
+app.post('/api/agency/validate-base', async (req, res) => {
+  const baseId = ((req.body && req.body.baseId) || '').trim();
+  if (!/^app[A-Za-z0-9]{14}$/.test(baseId)) return res.status(400).json({ ok: false, error: 'That does not look like an Airtable base id (app...).' });
+  const check = async (table) => {
+    const r = await airtableFetchWithRetry(
+      `https://api.airtable.com/v0/${baseId}/${encodeURIComponent(table)}?maxRecords=1`,
+      { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } });
+    return r.ok;
+  };
+  try {
+    const contactsOk = await check('Contacts');
+    if (!contactsOk) return res.json({ ok: false, error: 'Reached Airtable but no "Contacts" table - is this a duplicate of the CRM base, and does the token have access to it?' });
+    const [companiesOk, campaignsOk] = await Promise.all([check('Companies'), check('Campaigns')]);
+    res.json({ ok: true, tables: { Contacts: true, Companies: companiesOk, Campaigns: campaignsOk } });
+  } catch (err) {
+    res.json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/api/agency/clients', async (req, res) => {
+  const body = req.body || {};
+  const name = (body.name || '').trim();
+  const slug = slugify(body.slug || name);
+  const baseId = (body.baseId || '').trim();
+  if (!name) return res.status(400).json({ error: 'Name is required.' });
+  if (!slug) return res.status(400).json({ error: 'Could not derive a slug from the name - set one explicitly.' });
+  if (!/^app[A-Za-z0-9]{14}$/.test(baseId)) return res.status(400).json({ error: 'A valid Airtable base id (app...) is required.' });
+  try {
+    const clients = await getClients();
+    if (clients.find(c => c.slug === slug)) return res.status(409).json({ error: `Slug "${slug}" is already taken.` });
+    const fields = { ...clientFieldsFromForm(body), Slug: slug };
+    if (!fields['Status']) fields['Status'] = 'Active';
+    const created = await controlBaseRequest('POST', '', { records: [{ fields }] });
+    clientsCacheAt = 0;
+    agencyOverviewAt = 0;
+    await getClients();
+    res.json({ ok: true, slug, id: created.records && created.records[0] && created.records[0].id });
+  } catch (err) {
+    console.error('Create client error:', err.message);
+    res.status(err.status === 403 ? 403 : 500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/agency/clients/:slug', async (req, res) => {
+  try {
+    const recId = await findClientRecordId(req.params.slug);
+    if (!recId) return res.status(404).json({ error: 'not_found' });
+    const fields = clientFieldsFromForm(req.body || {});
+    // Blank Airtable PAT in the form means "leave unchanged", not "clear".
+    if (req.body && (req.body.airtablePat === undefined || req.body.airtablePat === '')) delete fields['Airtable PAT'];
+    delete fields['Slug']; // slug is the stable key, not editable here
+    await controlBaseRequest('PATCH', `/${recId}`, { fields });
+    clientsCacheAt = 0;
+    agencyOverviewAt = 0;
+    await getClients();
+    res.json({ ok: true, slug: req.params.slug });
+  } catch (err) {
+    console.error('Update client error:', err.message);
+    res.status(err.status === 403 ? 403 : 500).json({ error: err.message });
+  }
+});
+
 // ===================== SCHEDULED SYNC JOBS =====================
 // Both run silently in the background and never block the UI - failures
 // are logged, not thrown, same as every other cron-eligible job in this
