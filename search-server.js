@@ -612,10 +612,12 @@ function clientize(text) {
   }
   let s = text;
   for (const [from, to] of pairs) s = s.split(from).join(to);
-  // Bare-token mop-up for anything the phrase list missed.
-  s = s.replace(/\bTwenty2 Collective\b/g, name);
-  s = s.replace(/\bT2C\b/g, name);
-  if (p.repName) s = s.replace(/\bMarcus\b/g, p.repName);
+  // Bare-token mop-up for anything the phrase list missed. Function
+  // replacements so a client name containing "$" can't trigger regex
+  // replacement-pattern behaviour.
+  s = s.replace(/\bTwenty2 Collective\b/g, () => name);
+  s = s.replace(/\bT2C\b/g, () => name);
+  if (p.repName) s = s.replace(/\bMarcus\b/g, () => p.repName);
   return s;
 }
 function clientizeContent(content) {
