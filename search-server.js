@@ -564,6 +564,69 @@ async function resolveCampaignRecord(idOrName) {
   return findCampaignRecordByName(idOrName);
 }
 
+// ---- Prompt parameterisation (Phase 2) ----
+// Every Claude prompt in this file was written with Twenty2 Collective's
+// identity baked in ("Twenty2 Collective, a Perth-based Agile and change
+// consultancy", "signed off as Marcus", "UK English, no em dashes", "T2C",
+// ...). Rather than hand-edit ~130 template literals, clientize() rewrites
+// those phrases to the ACTIVE client's profile at send time, applied once
+// at the two Claude entry points below.
+//
+// For the default client the function is a guaranteed no-op (returns the
+// string unchanged), so Twenty2's prompts - and therefore its generated
+// copy - are byte-identical to before. For any other client it is
+// best-effort: good enough to stop Shed Guru's outreach reading as a Perth
+// Agile consultancy, and safe to refine later.
+function descriptorPhrase() {
+  const p = currentTenant().profile || {};
+  const loc = p.city ? `a ${p.city}-based ` : 'a ';
+  return `${loc}${p.industry || 'business'}`;
+}
+function clientContext() {
+  return `${currentTenant().name || 'the client'}, ${descriptorPhrase()}`;
+}
+function clientize(text) {
+  if (typeof text !== 'string' || !text) return text;
+  const t = currentTenant();
+  if (t.slug === DEFAULT_CLIENT_SLUG) return text; // default client: prompts unchanged
+  const p = t.profile || {};
+  const name = p.shortName || t.name || 'the client';
+  const ctx = clientContext();
+  const desc = descriptorPhrase();
+  const pairs = [
+    ['Twenty2 Collective (T2C), a Perth-based Agile and change consultancy', ctx],
+    ['Twenty2 Collective, a Perth-based Agile and change management consultancy', ctx],
+    ['Twenty2 Collective, a Perth-based Agile and change consultancy', ctx],
+    ['Twenty2 Collective (T2C)', name],
+    ['Perth, WA-based Agile and change consultancy', desc.replace(/^a /, '')],
+    ['a Perth-based Agile and change management consultancy', desc],
+    ['a Perth-based Agile and change consultancy', desc],
+    ["Twenty2 Collective's", `${name}'s`],
+    ['T2C Outreach', 'the outreach CRM'],
+    ['T2C-wide', `${name}-wide`],
+    ["T2C's", `${name}'s`],
+  ];
+  if (p.englishVariant) {
+    pairs.push(['UK/AU English, no em dashes', p.englishVariant]);
+    pairs.push(['UK English, no em dashes', p.englishVariant]);
+  }
+  let s = text;
+  for (const [from, to] of pairs) s = s.split(from).join(to);
+  // Bare-token mop-up for anything the phrase list missed.
+  s = s.replace(/\bTwenty2 Collective\b/g, name);
+  s = s.replace(/\bT2C\b/g, name);
+  if (p.repName) s = s.replace(/\bMarcus\b/g, p.repName);
+  return s;
+}
+function clientizeContent(content) {
+  if (typeof content === 'string') return clientize(content);
+  if (Array.isArray(content)) {
+    return content.map(b =>
+      (b && b.type === 'text' && typeof b.text === 'string') ? { ...b, text: clientize(b.text) } : b);
+  }
+  return content;
+}
+
 // Shared Claude call - `content` is either a plain string (text-only) or an
 // array of content blocks (for vision/PDF document prompts). Every new
 // Claude-calling route added in the Context tab work uses this instead of
@@ -572,9 +635,9 @@ async function callClaudeMessages(content, maxTokens, system) {
   const body = {
     model: 'claude-opus-4-6',
     max_tokens: maxTokens,
-    messages: [{ role: 'user', content }]
+    messages: [{ role: 'user', content: clientizeContent(content) }]
   };
-  if (system) body.system = system;
+  if (system) body.system = clientize(system);
   const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -2903,7 +2966,7 @@ If there isn't enough data for a section, return an empty array for it rather th
       body: JSON.stringify({
         model: 'claude-opus-4-6',
         max_tokens: 2800,
-        messages: [{ role: 'user', content: prompt }]
+        messages: [{ role: 'user', content: clientize(prompt) }]
       })
     });
 
@@ -2991,7 +3054,7 @@ Ground every point in the actual data provided. If a column is missing or a patt
       body: JSON.stringify({
         model: 'claude-opus-4-6',
         max_tokens: 1500,
-        messages: [{ role: 'user', content: prompt }]
+        messages: [{ role: 'user', content: clientize(prompt) }]
       })
     });
 
@@ -3077,7 +3140,7 @@ Ground every point in the actual data provided. If a column is missing or a patt
       body: JSON.stringify({
         model: 'claude-opus-4-6',
         max_tokens: 1500,
-        messages: [{ role: 'user', content: prompt }]
+        messages: [{ role: 'user', content: clientize(prompt) }]
       })
     });
 
@@ -3452,7 +3515,7 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
       body: JSON.stringify({
         model: 'claude-opus-4-6',
         max_tokens: 600,
-        messages: [{ role: 'user', content: prompt }]
+        messages: [{ role: 'user', content: clientize(prompt) }]
       })
     });
 
@@ -3547,7 +3610,7 @@ Guidance:
       body: JSON.stringify({
         model: 'claude-opus-4-6',
         max_tokens: 2000,
-        messages: [{ role: 'user', content: prompt }]
+        messages: [{ role: 'user', content: clientize(prompt) }]
       })
     });
 
@@ -3955,7 +4018,7 @@ If there isn't enough data yet for a confident insight, return fewer than 5 rath
       body: JSON.stringify({
         model: 'claude-opus-4-6',
         max_tokens: 1200,
-        messages: [{ role: 'user', content: prompt }]
+        messages: [{ role: 'user', content: clientize(prompt) }]
       })
     });
 
