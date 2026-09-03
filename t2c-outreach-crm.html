@@ -14,6 +14,8 @@
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <script>
 /* Shared Chart.js theming - applied to every chart in the app */
 if(window.Chart){
@@ -1590,7 +1592,194 @@ function renderAgencyPage(){
       </div>
     </div>
   </div>
-  <div id="agencyOverviewGrid">${renderAgencyOverviewGrid(window.__agencyOverview)}</div>`;
+
+  <div class="card" style="margin-bottom:18px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+      <div>
+        <div class="section-title" style="margin-bottom:2px;"><i class="ti ti-file-text"></i> Weekly client report</div>
+        <div class="muted" style="font-size:12px;">A one-page PDF: what got done this week, and the live state of every campaign. The Engine reads the whole account before writing it.</div>
+      </div>
+      <button class="btn btn-primary btn-sm" id="weeklyReportBtn" onclick="generateWeeklyReport()"><i class="ti ti-download"></i> Export report (PDF)</button>
+    </div>
+    <div id="weeklyReportStatus" class="muted" style="font-size:12px;margin-top:10px;display:none;"></div>
+  </div>
+
+  <div id="agencyOverviewGrid">${renderAgencyOverviewGrid(window.__agencyOverview)}</div>
+  <div id="weeklyReportStage" style="position:fixed;left:-99999px;top:0;"></div>`;
+}
+
+// ---- Weekly report: fetch the whole-account rundown, render a one-page
+// sheet, rasterise it to a PDF. Visuals are CSS bars, not Chart.js, so the
+// html2canvas capture is deterministic. ----
+async function generateWeeklyReport(){
+  const btn = document.getElementById('weeklyReportBtn');
+  const status = document.getElementById('weeklyReportStatus');
+  const setStatus = (t) => { if(status){ status.style.display='block'; status.textContent = t; } };
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Reading the account...'; }
+  setStatus('Pulling contacts, campaigns, touch points, content and ads, then asking the Engine for the read. This takes ~20-40s.');
+  try {
+    const res = await fetch('/api/report/weekly');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+
+    setStatus('Building the page...');
+    const stage = document.getElementById('weeklyReportStage');
+    stage.innerHTML = buildWeeklyReportHTML(data);
+    const sheet = stage.querySelector('#weeklyReportSheet');
+    await new Promise(r => setTimeout(r, 120)); // let fonts/layout settle
+
+    setStatus('Rendering PDF...');
+    const canvas = await html2canvas(sheet, { scale: 2, backgroundColor:'#ffffff', useCORS:true, logging:false });
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF('p','mm','a4');
+    const pw = 210, ph = 297, margin = 10;
+    const iw = pw - margin*2;
+    const ih = canvas.height * (iw / canvas.width);
+    const img = canvas.toDataURL('image/jpeg', 0.94);
+    if(ih <= ph - margin*2){
+      pdf.addImage(img, 'JPEG', margin, margin, iw, ih);
+    } else {
+      // overflowed one page - paginate rather than crop
+      let y = 0;
+      const pageIh = ph - margin*2;
+      const pageCanvasH = canvas.width * (pageIh / iw);
+      while(y < canvas.height){
+        const slice = document.createElement('canvas');
+        slice.width = canvas.width;
+        slice.height = Math.min(pageCanvasH, canvas.height - y);
+        slice.getContext('2d').drawImage(canvas, 0, y, canvas.width, slice.height, 0, 0, canvas.width, slice.height);
+        if(y > 0) pdf.addPage();
+        pdf.addImage(slice.toDataURL('image/jpeg',0.94), 'JPEG', margin, margin, iw, slice.height * (iw/canvas.width));
+        y += slice.height;
+      }
+    }
+    pdf.save(`Twenty2-Weekly-Report-${data.weekEnd || isoDate(TODAY)}.pdf`);
+    stage.innerHTML = '';
+    setStatus('Done - check your downloads.');
+    setTimeout(() => { if(status) status.style.display='none'; }, 6000);
+  } catch(err){
+    console.warn('Weekly report failed:', err.message);
+    setStatus('Could not generate the report: ' + err.message);
+  } finally {
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-download"></i> Export report (PDF)'; }
+  }
+}
+
+function _wrPct(n){ return Math.max(0, Math.min(100, Math.round(n||0))); }
+function _wrBar(label, count, max, color){
+  const w = max ? Math.round((count/max)*100) : 0;
+  return `<div style="display:flex;align-items:center;gap:8px;margin:3px 0;font-size:9.5px;">
+    <div style="width:92px;color:#555;flex-shrink:0;">${_wrEsc(label)}</div>
+    <div style="flex:1;background:#eef0f2;border-radius:3px;height:14px;position:relative;">
+      <div style="width:${w}%;background:${color};height:100%;border-radius:3px;min-width:${count?'2px':'0'};"></div>
+    </div>
+    <div style="width:26px;text-align:right;font-weight:700;color:#222;flex-shrink:0;">${count}</div>
+  </div>`;
+}
+function _wrEsc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+function buildWeeklyReportHTML(d){
+  const tw = d.thisWeek || {};
+  const o = tw.outreach || {};
+  const ai = d.ai && !d.ai.error ? d.ai : {};
+  const content = tw.content || [];
+  const contentLines = Object.entries(tw.contentByType || {}).map(([t,n]) => `${n} ${t}${n>1?'s':''}`).join(', ') || 'nothing published';
+  const gads = tw.googleAds;
+  const gadsLine = gads && !gads.error
+    ? (typeof gads === 'object' ? Object.entries(gads).slice(0,4).map(([k,v]) => `${k}: ${v}`).join(' · ') : String(gads))
+    : (gads && gads.error ? gads.error : 'no data connected');
+
+  const campCards = (d.campaigns||[]).map(c => {
+    const f = c.funnel || [];
+    const maxF = Math.max(1, ...f.map(s => s.count));
+    const funnelBars = f.map(s => _wrBar(s.label, s.count, maxF, '#2A6B7C')).join('');
+    const msgBars = (c.byMessage||[]).filter(m => m.sent>0).map(m =>
+      `<div style="display:flex;align-items:center;gap:8px;margin:3px 0;font-size:9.5px;">
+        <div style="width:92px;color:#555;">Msg ${m.message} (${m.sent} sent)</div>
+        <div style="flex:1;background:#eef0f2;border-radius:3px;height:14px;"><div style="width:${_wrPct(m.replyRate)}%;background:#e0a44a;height:100%;border-radius:3px;"></div></div>
+        <div style="width:34px;text-align:right;font-weight:700;">${m.replyRate}%</div>
+      </div>`).join('') || '<div style="font-size:9.5px;color:#888;">No messages sent yet</div>';
+    const roles = Object.entries(c.replyByRole||{}).filter(([,v]) => v.messaged>=2).sort((a,b)=>b[1].replyRate-a[1].replyRate).slice(0,4);
+    const roleLines = roles.length
+      ? roles.map(([r,v]) => `<div style="font-size:9px;color:#555;">${_wrEsc(r)}: <b>${v.replyRate}%</b> <span style="color:#999;">(${v.replied}/${v.messaged})</span></div>`).join('')
+      : '<div style="font-size:9px;color:#999;">Not enough data by role yet</div>';
+    const drop = c.dropOff ? `Biggest drop-off: <b>${_wrEsc(c.dropOff.from)} → ${_wrEsc(c.dropOff.to)}</b>, lost ${c.dropOff.lost} (${c.dropOff.pct}%)` : 'No clear drop-off yet';
+    const read = (ai.campaignReads && ai.campaignReads[c.name]) || '';
+    return `<div style="border:1px solid #e3e6e9;border-radius:8px;padding:10px 12px;">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;">
+        <div style="font-weight:800;font-size:11.5px;color:#1a1a2e;">${_wrEsc(c.name)}</div>
+        <div style="font-size:10px;color:#555;">Reply rate <b style="color:#2A6B7C;font-size:12px;">${c.replyRate}%</b></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:6px;">
+        <div>
+          <div style="font-size:8.5px;text-transform:uppercase;letter-spacing:.05em;color:#999;margin-bottom:2px;">Funnel</div>
+          ${funnelBars}
+        </div>
+        <div>
+          <div style="font-size:8.5px;text-transform:uppercase;letter-spacing:.05em;color:#999;margin-bottom:2px;">Reply rate by message</div>
+          ${msgBars}
+          <div style="font-size:8.5px;text-transform:uppercase;letter-spacing:.05em;color:#999;margin:6px 0 2px;">Who replies</div>
+          ${roleLines}
+        </div>
+      </div>
+      <div style="font-size:9.5px;color:#444;margin-top:6px;">${drop}. Excluded: ${c.excluded}. ${c.deadAfterM3?`${c.deadAfterM3} went cold after all 3 messages.`:''}</div>
+      ${read ? `<div style="font-size:9.5px;color:#333;margin-top:5px;padding-top:5px;border-top:1px dashed #e3e6e9;font-style:italic;">${_wrEsc(read)}</div>` : ''}
+    </div>`;
+  }).join('');
+
+  const list = (arr, ord) => (arr||[]).map((x,i) => `<li style="margin:2px 0;">${ord?`<b>${i+1}.</b> `:''}${_wrEsc(x)}</li>`).join('');
+
+  return `<div id="weeklyReportSheet" style="width:800px;background:#fff;color:#1a1a2e;font-family:'Plus Jakarta Sans',system-ui,sans-serif;padding:26px 30px;box-sizing:border-box;">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #2A6B7C;padding-bottom:10px;">
+      <div>
+        <div style="font-size:17px;font-weight:800;letter-spacing:-.01em;">${_wrEsc(d.account||'Client')}</div>
+        <div style="font-size:10.5px;color:#666;">Outreach &amp; marketing — weekly progress</div>
+      </div>
+      <div style="text-align:right;">
+        <div style="font-size:12px;font-weight:700;color:#2A6B7C;">Week of ${_wrEsc(d.weekOf||'')}</div>
+        <div style="font-size:9.5px;color:#999;">Generated ${new Date(d.generatedAt||Date.now()).toLocaleDateString('en-AU')}</div>
+      </div>
+    </div>
+
+    <div style="margin-top:14px;">
+      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#2A6B7C;">This week</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:6px;">
+        <div style="background:#f5f7f8;border-radius:7px;padding:8px 10px;"><div style="font-size:19px;font-weight:800;">${o.messagesSent||0}</div><div style="font-size:9px;color:#777;text-transform:uppercase;letter-spacing:.04em;">LinkedIn messages sent</div></div>
+        <div style="background:#f5f7f8;border-radius:7px;padding:8px 10px;"><div style="font-size:19px;font-weight:800;">${o.repliesIn||0}</div><div style="font-size:9px;color:#777;text-transform:uppercase;letter-spacing:.04em;">Replies received</div></div>
+        <div style="background:#f5f7f8;border-radius:7px;padding:8px 10px;"><div style="font-size:19px;font-weight:800;">${content.length}</div><div style="font-size:9px;color:#777;text-transform:uppercase;letter-spacing:.04em;">Content pieces</div></div>
+      </div>
+      <div style="font-size:9.5px;color:#555;margin-top:6px;">
+        <b>Content:</b> ${_wrEsc(contentLines)}${content.length?` — ${content.slice(0,5).map(c=>_wrEsc(c.title)).join('; ')}`:''}.<br>
+        <b>Google Ads:</b> ${_wrEsc(gadsLine)}.${(tw.newCampaigns||[]).length?`<br><b>New campaigns:</b> ${(tw.newCampaigns||[]).map(_wrEsc).join(', ')}.`:''}
+      </div>
+      ${ai.weekSummary ? `<div style="font-size:10px;color:#222;margin-top:7px;background:#eef4f5;border-left:3px solid #2A6B7C;padding:7px 10px;border-radius:0 5px 5px 0;">${_wrEsc(ai.weekSummary)}</div>` : ''}
+    </div>
+
+    <div style="margin-top:14px;">
+      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#2A6B7C;">Campaigns</div>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:6px;">${campCards || '<div style="font-size:10px;color:#888;">No live campaigns.</div>'}</div>
+    </div>
+
+    <div style="margin-top:14px;display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+      <div>
+        <div style="font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:#1a7a3a;">What's working</div>
+        <ul style="font-size:9.5px;color:#333;margin:4px 0 0;padding-left:15px;">${list(ai.whatsWorking)||'<li style="color:#999;">Not enough data yet</li>'}</ul>
+      </div>
+      <div>
+        <div style="font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:#b4432a;">What's not</div>
+        <ul style="font-size:9.5px;color:#333;margin:4px 0 0;padding-left:15px;">${list(ai.whatsNot)||'<li style="color:#999;">Not enough data yet</li>'}</ul>
+      </div>
+    </div>
+
+    <div style="margin-top:12px;">
+      <div style="font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:#2A6B7C;">Recommendations</div>
+      <ol style="font-size:9.5px;color:#222;margin:4px 0 0;padding-left:0;list-style:none;">${list(ai.recommendations, true)||'<li style="color:#999;">—</li>'}</ol>
+    </div>
+
+    <div style="margin-top:14px;border-top:1px solid #e3e6e9;padding-top:6px;font-size:8px;color:#aaa;">
+      Reply rate = distinct contacts who replied ÷ contacts connected. Funnel counts read from each contact's stage history. Meetings booked are read from logged deals only.
+    </div>
+  </div>`;
 }
 
 function renderAgencyOverviewGrid(data){

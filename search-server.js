@@ -4854,6 +4854,224 @@ app.get('/api/campaign/:id/funnel', async (req, res) => {
   }
 });
 
+// ===================== WEEKLY REPORT (Agency tab -> Export PDF) =====================
+// One endpoint that reads the whole account and returns everything the
+// one-page weekly report needs: what was done this week (content, outreach,
+// ads), the live state of every campaign (funnel, reply-by-message,
+// drop-off, reply-by-role, CTA effect), and a Claude-written narrative +
+// key insights + recommendations grounded only in those numbers.
+const WEEKLY_REPORT_SYSTEM_PROMPT = `You write the weekly client progress report for Twenty2 Collective, a Perth-based Agile delivery and change-management consultancy. Audience: the client. Tone: plain, confident, specific. UK/AU English, no em dashes, no marketing fluff.
+
+You are given: a summary of what was done this week (content, SEO, LinkedIn outreach, Google Ads) and, for every live campaign, its funnel counts, per-message reply rates, the biggest drop-off point, which job titles are replying, and how early-CTA messages are landing.
+
+Return ONLY valid JSON in exactly this shape:
+{
+  "weekSummary": "2-3 sentences: what got done this week and the single most important takeaway.",
+  "campaignReads": { "<campaign name>": "2-4 sentences on where this campaign stands - reply rate vs what's normal for cold outreach (~5-15%), where people are dropping off, which message is or isn't landing, which roles respond." },
+  "whatsWorking": ["3-5 bullet strings, each citing a real number from the data"],
+  "whatsNot": ["2-4 bullet strings, each citing a real number - drop-off points, CTAs turning people away, roles that go quiet"],
+  "recommendations": ["3-5 concrete next steps, each tied to a number or pattern above"]
+}
+Every number you cite must come from the data given. If a campaign has too little data (under ~10 messages sent), say so plainly rather than over-reading it. Do not invent conversions - if no meetings are booked, say that directly.`;
+
+function _weekBounds() {
+  const end = new Date(); end.setHours(23, 59, 59, 999);
+  const start = new Date(end); start.setDate(start.getDate() - 6); start.setHours(0, 0, 0, 0);
+  return { start, end, startStr: start.toISOString().slice(0, 10), endStr: end.toISOString().slice(0, 10) };
+}
+function _inWeek(dateStr, start, end) {
+  if (!dateStr) return false;
+  const d = new Date(dateStr);
+  return !isNaN(d) && d >= start && d <= end;
+}
+
+app.get('/api/report/weekly', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const wk = _weekBounds();
+    const [campaignRecords, ccRows, tpRecords, contactRecords, contentRecords, dealRecords] = await Promise.all([
+      airtableFetchAllRecords('Campaigns'),
+      fetchCampaignContactsRows(),
+      airtableFetchAllRecords('Touch Points'),
+      airtableFetchAllRecords('Contacts'),
+      airtableFetchAllRecords(CONTENT_TABLE).catch(() => []),
+      airtableFetchAllRecords('Deals').catch(() => [])
+    ]);
+
+    const roleById = {};
+    contactRecords.forEach(r => { roleById[r.id] = (r.fields || {})['Job Title'] || ''; });
+
+    // ---- What was done this week ----
+    const tpThisWeek = tpRecords.filter(r => _inWeek(r.fields['Date'], wk.start, wk.end));
+    const outreach = {
+      messagesSent: tpThisWeek.filter(r => !touchPointIsReply(r.fields) && /message|linkedin/i.test(r.fields['Type'] || '')).length,
+      repliesIn: tpThisWeek.filter(r => touchPointIsReply(r.fields)).length,
+      touchPointsTotal: tpThisWeek.length,
+      byType: {}
+    };
+    tpThisWeek.forEach(r => { const t = r.fields['Type'] || 'Other'; outreach.byType[t] = (outreach.byType[t] || 0) + 1; });
+
+    const contentThisWeek = contentRecords.filter(r => {
+      const f = r.fields || {};
+      return _inWeek(f['Target Publish Date'], wk.start, wk.end) || _inWeek(f['Date Added'], wk.start, wk.end) || _inWeek(f['Scheduled Date'], wk.start, wk.end);
+    }).map(r => {
+      const f = r.fields || {};
+      return { title: f['Title'] || '(untitled)', type: normaliseContentType(f['Content Type'] || f['Format']), status: f['Status'] || '' };
+    });
+    const contentByType = {};
+    contentThisWeek.forEach(c => { contentByType[c.type || 'Other'] = (contentByType[c.type || 'Other'] || 0) + 1; });
+
+    let googleAds = null;
+    try {
+      if (process.env.GSC_SERVICE_ACCOUNT_JSON) {
+        const g = await fetchGoogleAdsData(false);
+        googleAds = g && g.summary ? g.summary : (g || null);
+      }
+    } catch (e) { googleAds = { error: 'Google Ads sheet not reachable' }; }
+
+    const newCampaignsThisWeek = campaignRecords
+      .filter(r => _inWeek(r.fields['Start Date'], wk.start, wk.end))
+      .map(r => r.fields['Name'] || r.fields['Campaign Name'] || '(unnamed)');
+
+    // ---- Per-campaign state ----
+    const dealsByContactId = {};
+    dealRecords.forEach(r => {
+      const cid = (r.fields['Contact'] || [])[0];
+      if (cid) (dealsByContactId[cid] = dealsByContactId[cid] || []).push({ outcome: r.fields['Outcome'] || 'Pending' });
+    });
+
+    const liveCampaigns = campaignRecords.filter(r => (r.fields['Status'] || '') === 'Live');
+    const campaigns = liveCampaigns.map(cr => {
+      const cname = cr.fields['Name'] || cr.fields['Campaign Name'] || '';
+      const emailMode = isEmailCampaign(cr);
+      const myDeals = dealRecords.filter(r => (r.fields['Campaign'] || []).includes(cr.id)).map(r => ({ outcome: r.fields['Outcome'] || 'Pending' }));
+      const fcs = buildFunnelContacts(ccRows, cr.id, dealsByContactId);
+      const funnel = computeCampaignFunnel(fcs, myDeals, emailMode);
+
+      const myIds = new Set(fcs.map(c => c.contactId));
+      const myTp = tpRecords.filter(r => (r.fields['Campaign'] || []).includes(cr.id) || (r.fields['Contact'] || []).some(id => myIds.has(id)));
+
+      // per-message: sent (stage history reached) vs replied
+      const flagIds = new Set(fcs.filter(c => c.replyReceived).map(c => c.contactId));
+      const byMessage = [1, 2, 3].map(n => {
+        const sentIds = new Set(fcs.filter(c => !c.off && c.furthestRung >= FUNNEL_LADDER.indexOf(`Message ${n} Sent`)).map(c => c.contactId));
+        const replyTpIds = new Set(myTp.filter(r => (r.fields['Name'] || '') === `${cname}_Reply to Message ${n}` && (r.fields['Contact'] || [])[0]).map(r => (r.fields['Contact'] || [])[0]));
+        // Reaching the *next* message means a reply to this one cleared the gate.
+        const nextRung = n < 3 ? FUNNEL_LADDER.indexOf(`Message ${n + 1} Sent`) : Infinity;
+        const nextIds = new Set(fcs.filter(c => !c.off && c.furthestRung >= nextRung).map(c => c.contactId));
+        let replied = 0;
+        sentIds.forEach(id => { if (replyTpIds.has(id) || nextIds.has(id) || flagIds.has(id)) replied++; });
+        return { message: n, sent: sentIds.size, replied, replyRate: sentIds.size ? Math.round((replied / sentIds.size) * 100) : 0 };
+      });
+
+      // biggest drop-off between consecutive funnel steps that both have volume
+      let dropOff = null;
+      for (let i = 1; i < funnel.steps.length; i++) {
+        const a = funnel.steps[i - 1], b = funnel.steps[i];
+        if (a.count >= 3 && b.count < a.count) {
+          const lost = a.count - b.count, pct = Math.round((lost / a.count) * 100);
+          if (!dropOff || pct > dropOff.pct) dropOff = { from: a.label, to: b.label, lost, pct };
+        }
+      }
+
+      // reply-by-role: roles of contacts who replied (any message), vs roles messaged
+      const repliedContactIds = new Set();
+      myTp.forEach(r => { if (touchPointIsReply(r.fields)) (r.fields['Contact'] || []).forEach(id => repliedContactIds.add(id)); });
+      fcs.forEach(c => { if (c.replyReceived) repliedContactIds.add(c.contactId); });
+      const messagedIds = new Set(fcs.filter(c => !c.off && c.furthestRung >= FUNNEL_LADDER.indexOf('Message 1 Sent')).map(c => c.contactId));
+      const roleGroup = raw => {
+        const s = (raw || '').toLowerCase();
+        if (/head of|gm |general manager|chief|director|cdo|cto|cio/.test(s)) return 'Head / Director / C-level';
+        if (/product owner|\bpo\b/.test(s)) return 'Product Owner';
+        if (/program|programme|portfolio/.test(s)) return 'Program / Portfolio Manager';
+        if (/project manager|\bpm\b/.test(s)) return 'Project Manager';
+        if (/change/.test(s)) return 'Change Manager / Lead';
+        if (/transformation/.test(s)) return 'Transformation Lead';
+        if (/agile|scrum|delivery lead|iteration/.test(s)) return 'Agile / Delivery Lead';
+        if (/analyst|\bba\b/.test(s)) return 'Business Analyst';
+        return raw ? 'Other' : 'Unknown';
+      };
+      const replyByRole = {};
+      messagedIds.forEach(id => {
+        const g = roleGroup(roleById[id]);
+        replyByRole[g] = replyByRole[g] || { messaged: 0, replied: 0 };
+        replyByRole[g].messaged++;
+        if (repliedContactIds.has(id)) replyByRole[g].replied++;
+      });
+      Object.values(replyByRole).forEach(v => { v.replyRate = v.messaged ? Math.round((v.replied / v.messaged) * 100) : 0; });
+
+      // early CTA effect
+      const earlyCtaTp = myTp.filter(r => r.fields['CTA Brought Forward']);
+      const earlyCtaContacts = new Set(earlyCtaTp.map(r => (r.fields['Contact'] || [])[0]).filter(Boolean));
+      let earlyCtaReplied = 0;
+      earlyCtaContacts.forEach(id => { if (repliedContactIds.has(id)) earlyCtaReplied++; });
+      const ctaNotes = [...new Set(myTp.filter(r => r.fields['CTA Judgement Note']).map(r => r.fields['CTA Judgement Note']))].slice(0, 4);
+
+      const connectedForRate = (funnel.steps.find(s => s.key === (emailMode ? 'm1' : 'connected')) || {}).count || 0;
+      return {
+        name: cname,
+        emailMode,
+        startDate: cr.fields['Start Date'] || '',
+        goal: cr.fields['Goal'] || '',
+        funnel: funnel.steps.map(s => ({ label: s.label, key: s.key, count: s.count, pctOfPrev: s.pctOfPrev })),
+        excluded: funnel.excluded,
+        deadAfterM3: funnel.noOutcomeAfterM3,
+        replies: repliedContactIds.size,
+        replyRate: connectedForRate ? Math.round((repliedContactIds.size / connectedForRate) * 100) : 0,
+        byMessage,
+        dropOff,
+        replyByRole,
+        earlyCta: { count: earlyCtaContacts.size, replied: earlyCtaReplied, notes: ctaNotes }
+      };
+    });
+
+    // ---- Claude narrative ----
+    let ai = null;
+    if (process.env.ANTHROPIC_API_KEY) {
+      try {
+        const payload = {
+          weekOf: `${wk.startStr} to ${wk.endStr}`,
+          thisWeek: {
+            content: contentThisWeek, contentByType,
+            outreach,
+            googleAds: googleAds,
+            newCampaigns: newCampaignsThisWeek
+          },
+          campaigns: campaigns.map(c => ({
+            name: c.name, emailMode: c.emailMode, goal: c.goal,
+            funnel: c.funnel, excluded: c.excluded, deadAfterM3: c.deadAfterM3,
+            replyRate: c.replyRate, replies: c.replies,
+            perMessageReplyRate: c.byMessage,
+            biggestDropOff: c.dropOff,
+            replyByRole: c.replyByRole,
+            earlyCtaEffect: c.earlyCta
+          }))
+        };
+        const raw = await callClaudeMessages(`DATA:\n${JSON.stringify(payload, null, 2)}`, 1800, WEEKLY_REPORT_SYSTEM_PROMPT);
+        const m = stripCodeFences(raw).match(/\{[\s\S]*\}/);
+        ai = m ? JSON.parse(m[0]) : null;
+      } catch (e) {
+        console.warn('Weekly report AI narrative failed (non-fatal):', e.message);
+        ai = { error: e.message };
+      }
+    }
+
+    res.json({
+      account: currentTenant().name || 'Client',
+      weekOf: `${wk.startStr} to ${wk.endStr}`,
+      weekStart: wk.startStr,
+      weekEnd: wk.endStr,
+      generatedAt: new Date().toISOString(),
+      thisWeek: { content: contentThisWeek, contentByType, outreach, googleAds, newCampaigns: newCampaignsThisWeek },
+      campaigns,
+      ai
+    });
+  } catch (err) {
+    console.error('Weekly report error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/sales/insights', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
