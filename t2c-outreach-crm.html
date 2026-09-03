@@ -1807,9 +1807,21 @@ function navigate(page){
 
 function renderPage(){
   const el = document.getElementById('pageContent');
+  // The grid's horizontal scroll container is torn down and rebuilt on every
+  // full render - without this, any action that re-renders (opening a LinkedIn
+  // profile from a cell, marking a stage) snaps a scrolled-across grid back to
+  // the first column. Snapshot its scroll offset and put it back afterwards.
+  const gs = document.getElementById('gridScroll');
+  const savedGridScroll = gs ? { left: gs.scrollLeft, top: gs.scrollTop } : null;
+
   const renderers = { home: renderHome, logger: renderLoggerPage, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, contentcalendar: renderContentCalendarPage, research: renderResearch, settings: renderSettings, agency: renderAgencyPage };
   el.innerHTML = renderers[state.currentPage]();
   afterRender(state.currentPage);
+
+  if(savedGridScroll){
+    const gs2 = document.getElementById('gridScroll');
+    if(gs2){ gs2.scrollLeft = savedGridScroll.left; gs2.scrollTop = savedGridScroll.top; }
+  }
 }
 
 // Context-tab data (window.__contextData) and its logger are shared by two
@@ -5420,7 +5432,7 @@ function renderGridViewArea(grid, cols){
   ensureGridCampaignDataLoaded(grid.id);
   if(gridViewMode(grid.id) === 'table') return renderContactSpreadsheet(grid);
   return `
-  <div class="grid-wrap">
+  <div class="grid-wrap" id="gridScroll">
     <table class="grid-table">
       <thead><tr><th>Company</th>${cols.map((c,i)=>'<th>'+esc(c)+(grid.virtual ? '' : ' <button type="button" class="grid-col-search" title="Run daily search for this column only" onclick="runDailySearchColumn('+i+')"'+(isGridSearchRunning(grid.id)?' disabled':'')+'><i class="ti ti-search"></i></button> <button type="button" class="grid-col-remove" title="Remove this column" onclick="removeGridColumn('+i+')">&times;</button>')+'</th>').join('')}</tr></thead>
       <tbody id="gridBody">
@@ -5578,7 +5590,7 @@ function renderContactSpreadsheet(grid){
   const campaignName = currentGridCampaignName();
 
   return `
-  <div class="spreadsheet-wrap">
+  <div class="spreadsheet-wrap" id="gridScroll">
     <table class="spreadsheet-table">
       <thead><tr>
         ${columns.map(c => {
