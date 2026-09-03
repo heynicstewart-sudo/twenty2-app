@@ -314,6 +314,10 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .grid-table tr:last-child td{border-bottom:none;}
 .grid-col-remove{margin-left:6px;border:none;background:transparent;color:var(--muted);cursor:pointer;font-size:13px;line-height:1;padding:2px 4px;border-radius:4px;vertical-align:middle;}
 .grid-col-remove:hover{background:var(--danger,#c0392b);color:#fff;}
+.grid-col-search{margin-left:4px;border:none;background:transparent;color:var(--muted);cursor:pointer;font-size:13px;line-height:1;padding:2px 4px;border-radius:4px;vertical-align:middle;}
+.grid-col-search:hover{background:var(--accent,#2A6B7C);color:#fff;}
+.grid-col-search:disabled{opacity:.4;cursor:default;}
+.grid-col-search:disabled:hover{background:transparent;color:var(--muted);}
 .company-cell{font-weight:700;white-space:nowrap;}
 .grid-cell{border-radius:var(--radius-badge);padding:10px;min-height:64px;}
 .cell-found{background:var(--tint-blue-bg);}
@@ -5418,7 +5422,7 @@ function renderGridViewArea(grid, cols){
   return `
   <div class="grid-wrap">
     <table class="grid-table">
-      <thead><tr><th>Company</th>${cols.map((c,i)=>'<th>'+esc(c)+(grid.virtual ? '' : ' <button type="button" class="grid-col-remove" title="Remove this column" onclick="removeGridColumn('+i+')">&times;</button>')+'</th>').join('')}</tr></thead>
+      <thead><tr><th>Company</th>${cols.map((c,i)=>'<th>'+esc(c)+(grid.virtual ? '' : ' <button type="button" class="grid-col-search" title="Run daily search for this column only" onclick="runDailySearchColumn('+i+')"'+(isGridSearchRunning(grid.id)?' disabled':'')+'><i class="ti ti-search"></i></button> <button type="button" class="grid-col-remove" title="Remove this column" onclick="removeGridColumn('+i+')">&times;</button>')+'</th>').join('')}</tr></thead>
       <tbody id="gridBody">
         ${renderUnassignedGridRow(grid, cols)}
         ${grid.companies.map(company => renderCompanyRows(company, cols)).join('')}
@@ -6373,10 +6377,22 @@ function incompleteGridContacts(gridId){
 // once a cell's search actually completes without erroring).
 function gridCellKey(company, role){ return `${company}|||${role}`; }
 
-async function runDailySearch(){
+// Per-column search button in the grid header - resolves the column index to
+// its job title and runs a scoped search for just that column.
+function runDailySearchColumn(colIndex){
+  const grid = currentGrid();
+  const role = grid && grid.columns && grid.columns[colIndex];
+  if(role) runDailySearch(role);
+}
+
+// roleFilter (optional) scopes the run to a single job-title column - passed
+// by the per-column search button in the grid header (runDailySearchColumn).
+// With no filter it searches every column, same as the toolbar button.
+async function runDailySearch(roleFilter){
   const grid = currentGrid();
   if(isGridSearchRunning(grid.id)) return;
-  const cols = grid.columns;
+  const cols = roleFilter ? grid.columns.filter(r => r === roleFilter) : grid.columns;
+  if(roleFilter && !cols.length){ toast(`No "${roleFilter}" column in this grid`, 'warn'); return; }
   const searchedSet = new Set(grid.searchedCells || []);
   const emptyCells = [];
   // Skips a cell that's already been searched at least once (found or not)
@@ -6388,7 +6404,9 @@ async function runDailySearch(){
     if(!findContact(company, role) && !searchedSet.has(gridCellKey(company, role))) emptyCells.push({ kind:'newContact', company, role });
   }));
 
-  const fillCells = incompleteGridContacts(grid.id).map(c => ({
+  const fillCells = incompleteGridContacts(grid.id)
+    .filter(c => !roleFilter || c.role === roleFilter)
+    .map(c => ({
     kind: 'fillMissing',
     contactId: c.id,
     name: c.name,
