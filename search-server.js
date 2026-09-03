@@ -975,8 +975,9 @@ const runningGridSearchJobs = new Set();
 // this), links a newly-found contact into that campaign's Campaign
 // Contacts table too: Contact, Campaign, Sequence Stage "Found" (Campaign
 // Contacts' actual stage field - "Journey Stage" only exists on the
-// Contacts table) and Connection Sent Date stamped to today, same as every
-// other place a contact enters a campaign.
+// Contacts table). NO Connection Sent Date - a grid-discovered contact
+// hasn't been sent a connection request yet, so stamping one here made the
+// "Connection sent" funnel step count everyone the grid ever found.
 //
 // Checks for an existing row for this (contact, campaign) pair first -
 // if one exists with Sequence Stage "Excluded", it's stayed there because
@@ -997,10 +998,7 @@ async function linkGridContactToCampaign(contactId, contactName, campaignRecord,
       }
       return;
     }
-    const today = new Date().toISOString().slice(0, 10);
-    await getOrCreateCampaignContactRow(contactId, contactName, campaignRecord.id, campaignRecord.fields['Name'], rows, {
-      'Connection Sent Date': today
-    });
+    await getOrCreateCampaignContactRow(contactId, contactName, campaignRecord.id, campaignRecord.fields['Name'], rows);
   } catch (err) {
     console.warn('Could not link grid-found contact to campaign:', err.message);
   }
@@ -4721,10 +4719,12 @@ function buildFunnelContacts(ccRows, campaignRecordId, dealsByContactId) {
         if (x > rung) rung = x;
       });
       const csd = r.fields['Connection Sent Date'] || null;
+      const replied = rowReplyReceived(r);
       const prev = byContact.get(contactId);
       if (!prev) {
         byContact.set(contactId, {
           contactId, current, furthestRung: rung, connectionSentDate: csd,
+          replyReceived: replied,
           off: OFF_LADDER_STAGES.has(current)
         });
         return;
@@ -4735,6 +4735,7 @@ function buildFunnelContacts(ccRows, campaignRecordId, dealsByContactId) {
       if (prev.off && !OFF_LADDER_STAGES.has(current)) { prev.current = current; prev.off = false; }
       else if (!prev.off && ladderRung(current) > ladderRung(prev.current)) prev.current = current;
       if (!prev.connectionSentDate && csd) prev.connectionSentDate = csd;
+      if (replied) prev.replyReceived = true;
     });
   for (const fc of byContact.values()) {
     const deals = dealsByContactId[fc.contactId] || [];
@@ -4825,6 +4826,11 @@ app.get('/api/campaign/:id/funnel', async (req, res) => {
     myTouchPoints.forEach(r => {
       if (touchPointIsReply(r.fields)) (r.fields['Contact'] || []).forEach(cid => repliedContactIds.add(cid));
     });
+    // Also count the "Reply Received" checkbox on the Campaign Contacts row -
+    // the clean boolean source of truth. A reply logged by pasting a
+    // transcript into "Save history" makes a Touch Point that reads as
+    // "No reply", so touch points alone under-count replies.
+    funnelContacts.forEach(fc => { if (fc.replyReceived && fc.contactId) repliedContactIds.add(fc.contactId); });
 
     // Email funnels have no 'connected' step - the reply-rate denominator is
     // "how many did we email" (the 'm1' step) instead.
