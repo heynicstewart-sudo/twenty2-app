@@ -7896,6 +7896,20 @@ function renderMsgStep(c, key, label, extraBodyHtml){
   if(!step && isEmailRoadmap() && window.__roadmapCampaignId){
     step = emailThreadStepFromStage(key, campaignSequenceStageFor(c.name));
   }
+  // A session-only "sent" step (c.thread[key], set by markSent /
+  // saveGeneratedMessage, wiped and rebuilt from Airtable on every reload) can
+  // outlive the send it recorded - e.g. the Campaign Contacts row was reset,
+  // or advanced then rolled back. When this roadmap is scoped to a campaign,
+  // reconcile against its live Sequence Stage (the source of truth): if that
+  // stage hasn't actually reached "Message N Sent", drop the stale local step
+  // so the card shows the pre-send buttons instead of a phantom Reply toggle.
+  // Email already derives the step from the stage above - this is the LinkedIn
+  // equivalent.
+  if(step && !isEmailRoadmap() && window.__roadmapCampaignId){
+    const liveIdx = EMAIL_STAGE_ORDER.indexOf(campaignSequenceStageFor(c.name));
+    const sentIdx = EMAIL_STAGE_ORDER.indexOf(EMAIL_STEP_SENT_AT[key]);
+    if(liveIdx >= 0 && sentIdx >= 0 && liveIdx < sentIdx) step = null;
+  }
   return `
   <div class="thread-step">
     <div class="thread-step-head"><span>${label}</span>${step ? `<span class="muted">${step.sent ? fmtDate(step.sent) : 'Sent'}</span>` : ''}</div>
