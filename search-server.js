@@ -11902,12 +11902,18 @@ Hard rules:
 async function humanizeOutreachMessage(text, email) {
   if (!text || !text.trim()) return text;
   let out = text;
+  const kind = email ? 'email' : 'linkedin';
+  console.log(`Outreach humanizer (${kind}) starting - ${text.length} chars in`);
   try {
     const sys = email ? OUTREACH_HUMANIZER_EMAIL_PROMPT : OUTREACH_HUMANIZER_SYSTEM_PROMPT;
     const raw = await callClaudeMessages(`Message to edit:\n\n${text}`, 700, sys);
     const cleaned = stripCodeFences(raw).trim();
-    if (cleaned) out = cleaned;
-    else console.warn('Outreach humanizer returned nothing - keeping the original draft');
+    if (cleaned) {
+      out = cleaned;
+      console.log(`Outreach humanizer (${kind}) done - ${out.length} chars out, ${out === text.trim() ? 'unchanged' : 'edited'}`);
+    } else {
+      console.warn('Outreach humanizer returned nothing - keeping the original draft');
+    }
   } catch (err) {
     console.warn('Outreach humanizer failed - keeping the original draft:', err.message);
   }
