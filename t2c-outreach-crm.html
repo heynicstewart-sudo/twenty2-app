@@ -9789,19 +9789,22 @@ function openGenerateModal(cid, stageKey, onDone){
       <label>${isEmailCamp ? 'Their reply so far' : 'Conversation history'}</label>
       ${screenshotBoxHtml('convo', isEmailCamp ? "Got a reply already? Send a screenshot and I'll draft a response." : "Got a reply already? Send a screenshot of your conversation history and I'll generate a reply.")}
     </div>
-    <div class="field"><label>Generated ${isEmailCamp ? 'email' : 'message'}</label><textarea id="genOutput" rows="${isEmailCamp ? 9 : 6}">Generating...</textarea></div>
+    <div class="field"><label>Generated ${isEmailCamp ? 'email' : 'message'}</label><textarea id="genOutput" rows="${isEmailCamp ? 9 : 6}" placeholder="Add profile notes or screenshots above first, then press Generate ${isEmailCamp ? 'email' : 'message'}."></textarea></div>
     <div id="genCtaNote" style="display:none;font-size:12px;color:var(--warning,#b45309);background:var(--warning-bg,#fef3c7);border-radius:6px;padding:7px 10px;margin-top:-4px;"></div>
     ${steerBoxHtml(genModalCampaign, stageKey, 'gen')}
   `;
   const footer = `
     <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-    <button class="btn btn-secondary" id="regenBtn" onclick="regenerateMessage('${cid}','${stageKey}')"><i class="ti ti-refresh"></i> Regenerate</button>
+    <button class="btn btn-primary" id="regenBtn" onclick="regenerateMessage('${cid}','${stageKey}')"><i class="ti ti-sparkles"></i> Generate ${isEmailCamp ? 'email' : 'message'}</button>
     <button class="btn btn-secondary" onclick="copyGeneratedMessage()"><i class="ti ti-copy"></i> Copy ${isEmailCamp ? 'email' : ''}</button>
-    <button class="btn btn-primary" onclick="saveGeneratedMessage('${cid}','${stageKey}')"><i class="ti ti-check"></i> ${isEmailCamp ? 'Log &amp; advance' : 'Save &amp; advance'}</button>
+    <button class="btn btn-secondary" onclick="saveGeneratedMessage('${cid}','${stageKey}')"><i class="ti ti-check"></i> ${isEmailCamp ? 'Log &amp; advance' : 'Save &amp; advance'}</button>
   `;
   window.__genCtx = { cid, stageKey, onDone, profileImages: [], convoImages: [], campaignId: genModalCampaign ? genModalCampaign.id : null, emailCampaign: isEmailCamp };
+  // Deliberately does NOT generate on open - a draft costs an Opus call and
+  // the notes/screenshots are usually added first, so generation is an
+  // explicit "Generate" click (regenerateMessage). The button relabels itself
+  // to "Regenerate" once a first draft exists.
   openModal((isEmailCamp ? 'Write email — ' : 'Write message — ')+stageLabel, body, footer);
-  generateMessageForModal(cid, stageKey);
 }
 
 async function copyGenEmailAddress(){
@@ -10042,10 +10045,17 @@ function fillTemplate(template, c, stageKey){
     .replace(/{{role}}/g, c.role);
   return appendCtaNudge(filled, stageKey);
 }
-function regenerateMessage(cid, stageKey){
+async function regenerateMessage(cid, stageKey){
   const out = document.getElementById('genOutput');
   if(out) out.value = 'Generating...';
-  generateMessageForModal(cid, stageKey);
+  const btn = document.getElementById('regenBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Generating...'; }
+  try {
+    await generateMessageForModal(cid, stageKey);
+  } finally {
+    // Once a draft exists on screen, every later click is a regeneration.
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-refresh"></i> Regenerate'; }
+  }
 }
 async function copyGeneratedMessage(){
   const out = document.getElementById('genOutput');
@@ -10062,6 +10072,10 @@ async function copyGeneratedMessage(){
 async function saveGeneratedMessage(cid, stageKey){
   const c = state.contacts.find(x=>x.id===cid);
   const output = document.getElementById('genOutput').value;
+  if(!output.trim() || output.trim() === 'Generating...'){
+    toast('Nothing to save yet - press Generate first', 'warn');
+    return;
+  }
   c.generated[stageKey] = output;
   c.notes = document.getElementById('genNotes').value;
   if(stageKey==='connect'){ c.connReqDate = c.connReqDate || isoDate(TODAY); }
