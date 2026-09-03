@@ -4195,47 +4195,53 @@ function getContactAction(c){
   return null;
 }
 
-// Stages where a connection request or message has gone out but there's
-// nothing to do yet - waiting on the other person, not on us. Includes the
-// richer reply-gated vocabulary the DM-screenshot flow writes
-// (SEQUENCE_STAGE_ADVANCE, search-server.js): "Pending Reply MN" while
-// waiting, "Ready for Message N+1" once a reply's been detected (handled
-// below, not here, since that IS an action due).
+// Collapses the retired reply-gated stages onto the send milestone they
+// followed - old Campaign Contacts rows may still carry them until every row
+// has been touched once. Mirrors collapseLegacyStage() in search-server.js.
+const LEGACY_STAGE_COLLAPSE = {
+  'Pending Reply M1': 'Message 1 Sent', 'Ready for Message 2': 'Message 1 Sent',
+  'Pending Reply M2': 'Message 2 Sent', 'Ready for Message 3': 'Message 2 Sent',
+  'Pending Reply M3': 'Message 3 Sent'
+};
+function collapseLegacyStage(stage){ return LEGACY_STAGE_COLLAPSE[stage] || stage || 'Found'; }
+
+// Stages where something has gone out and there's nothing for us to do -
+// waiting on the other person. "Message N Sent" is a waiting state UNTIL a
+// reply is logged (Reply Received), at which point the next message is due -
+// getFastActionForCampaignContact handles that transition, not this set.
 const WAITING_SEQUENCE_STAGES = new Set([
   'Connection Pending',
-  'Message 1 Sent', 'Pending Reply M1',
-  'Message 2 Sent', 'Pending Reply M2',
-  'Message 3 Sent', 'Pending Reply M3'
+  'Message 1 Sent', 'Message 2 Sent', 'Message 3 Sent'
 ]);
 
-// "Connected" (connection accepted - see the "Connected" branch of PATCH
-// /api/context/contact-fields) is the trigger for message 1; "Ready for
-// Message N" (a reply was detected to the previous message) triggers the
-// next one. Deliberately does not include "Connection Pending" or
-// "Message N Sent" - those are waiting states, listed above.
-const SEQUENCE_STAGE_MESSAGE_NUMBER = { 'Connected': 1, 'Ready for Message 2': 2, 'Ready for Message 3': 3 };
-
-// Today's Actions "fast action" card for a contact in a live campaign,
-// driven entirely by their per-campaign Sequence Stage (window.
-// __campaignSequenceStages, loaded by ensureTodaysActionsSequenceStagesLoaded).
-// Returns { waiting: true } for a genuine waiting state (never shown, and
-// never falls through to a natural action - see getContactAction), or null
-// if the stage map hasn't loaded yet or the sequence is exhausted (Meeting
-// Booked/Nurture/Timed Out/etc.), which does allow falling through.
+// Today's Actions "fast action" card for a contact in a live campaign, driven
+// by their per-campaign Sequence Stage (window.__campaignSequenceStages) plus
+// the Reply Received flag (window.__campaignReplyReceived). Returns
+// { waiting: true } for a genuine waiting state (never shown, never falls
+// through to a natural action - see getContactAction), or null if the stage
+// map hasn't loaded or the sequence is exhausted (Meeting Booked/Nurture/etc.).
 function getFastActionForCampaignContact(c, campaign){
   const stages = window.__campaignSequenceStages && window.__campaignSequenceStages[campaign.id];
   if(!stages) return null;
-  const stage = stages[c.name.trim().toLowerCase()] || 'Found';
+  const key = c.name.trim().toLowerCase();
+  const stage = collapseLegacyStage(stages[key] || 'Found');
+  const replied = !!(window.__campaignReplyReceived && window.__campaignReplyReceived[campaign.id] && window.__campaignReplyReceived[campaign.id][key]);
 
   if(stage === 'Found'){
     return { type:'Send connection', stageLabel: stage, campaignName: campaign.name, daysSinceTouch: null, isFastAction: true };
   }
+  if(stage === 'Connected'){
+    return { type:'Generate message', stageLabel: stage, messageNumber: 1, campaignName: campaign.name, daysSinceTouch: null, isFastAction: true };
+  }
+  // A follow-up (message 2 / 3) is due once a reply to the previous message
+  // has been logged. Until then, "Message N Sent" is a waiting state.
+  const sentMatch = stage.match(/^Message ([12]) Sent$/);
+  if(sentMatch){
+    if(!replied) return { waiting: true };
+    return { type:'Generate message', stageLabel: stage, messageNumber: Number(sentMatch[1]) + 1, campaignName: campaign.name, daysSinceTouch: null, isFastAction: true };
+  }
   if(WAITING_SEQUENCE_STAGES.has(stage)){
     return { waiting: true };
-  }
-  const messageNumber = SEQUENCE_STAGE_MESSAGE_NUMBER[stage];
-  if(messageNumber){
-    return { type:'Generate message', stageLabel: stage, messageNumber, campaignName: campaign.name, daysSinceTouch: null, isFastAction: true };
   }
   return null;
 }
@@ -5007,11 +5013,12 @@ async function handleCopyAndMarkSent(cid){
     ? ((window.__fastActionCtaMeta || {})[cid] || {})
     : {};
 
+  const stageKey = { 1:'m1', 2:'m2', 3:'cta' }[action.messageNumber] || 'm1';
   try {
     const res = await fetch(`/api/campaign/${encodeURIComponent(action.campaignName)}/contacts/${cid}/mark-sent`, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ message, draftOutcome, ...ctaMeta })
+      body: JSON.stringify({ message, draftOutcome, stageKey, ...ctaMeta })
     });
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
@@ -5019,6 +5026,9 @@ async function handleCopyAndMarkSent(cid){
     toast('Message copied and logged - moved to ' + data.newStage, 'success');
     const c = state.contacts.find(x => x.id === cid);
     const campaign = c ? activeCampaignForContact(c) : null;
+    if(campaign && window.__campaignReplyReceived && window.__campaignReplyReceived[campaign.id]){
+      window.__campaignReplyReceived[campaign.id][c.name.trim().toLowerCase()] = false;
+    }
     if(campaign) await loadCampaignSequenceStages(campaign);
     renderPage();
   } catch(err){
@@ -7903,39 +7913,60 @@ function emailThreadStepFromStage(key, stage){
   return { sent:null, replied: EMAIL_REPLIED_STAGES.has(stage) && repliedAt >= 0 && r >= repliedAt };
 }
 
+// LinkedIn Sequence Stage now only ever advances on a send. For a given step
+// (message 1/2/3), work out from the campaign's live Sequence Stage + Reply
+// Received flag whether it has been sent, is due next, or is still locked.
+const LINKEDIN_STAGE_ORDER = ['Found','Connection Pending','Connected','Message 1 Sent','Message 2 Sent','Message 3 Sent','Meeting Booked'];
+function linkedInStepInfo(n, liveStage, replied){
+  const order = LINKEDIN_STAGE_ORDER;
+  const cur = order.indexOf(collapseLegacyStage(liveStage || 'Found'));
+  const sentAt = order.indexOf(`Message ${n} Sent`);
+  const prevSentAt = n === 1 ? order.indexOf('Connected') : order.indexOf(`Message ${n-1} Sent`);
+  if(cur < 0 || sentAt < 0) return { state:'locked', reason:'' };
+  if(cur > sentAt) return { state:'sent', replied:true };            // a later message already went out
+  if(cur === sentAt) return { state:'sent', replied: !!replied };    // this is the latest send
+  if(cur < prevSentAt) return { state:'locked', reason: n === 1 ? 'Waiting for the connection to be accepted' : `Send message ${n-1} first` };
+  if(n === 1) return { state:'ready' };
+  return replied ? { state:'ready' } : { state:'locked', reason:`Log the reply to message ${n-1} first` };
+}
+
 function renderMsgStep(c, key, label, extraBodyHtml){
+  const n = { m1:1, m2:2, cta:3 }[key];
   let step = c.thread[key];
-  if(!step && isEmailRoadmap() && window.__roadmapCampaignId){
-    step = emailThreadStepFromStage(key, campaignSequenceStageFor(c.name));
+  let lockedReason = null;
+
+  if(window.__roadmapCampaignId && n){
+    const liveStage = campaignSequenceStageFor(c.name);
+    if(isEmailRoadmap()){
+      if(!step) step = emailThreadStepFromStage(key, liveStage);
+    } else if(liveStage){
+      // Campaign-scoped LinkedIn roadmap: the live Sequence Stage + Reply
+      // Received flag are the source of truth (c.thread is session-only and
+      // drifts). A follow-up is "ready" only once the previous message's
+      // reply has been logged; before that it's locked, not a free-for-all.
+      const info = linkedInStepInfo(n, liveStage, campaignReplyReceivedFor(c.name));
+      if(info.state === 'sent') step = { sent: (step && step.sent) || null, replied: info.replied };
+      else if(info.state === 'locked'){ step = null; lockedReason = info.reason; }
+      else step = null; // 'ready'
+    }
   }
-  // A session-only "sent" step (c.thread[key], set by markSent /
-  // saveGeneratedMessage, wiped and rebuilt from Airtable on every reload) can
-  // outlive the send it recorded - e.g. the Campaign Contacts row was reset,
-  // or advanced then rolled back. When this roadmap is scoped to a campaign,
-  // reconcile against its live Sequence Stage (the source of truth): if that
-  // stage hasn't actually reached "Message N Sent", drop the stale local step
-  // so the card shows the pre-send buttons instead of a phantom Reply toggle.
-  // Email already derives the step from the stage above - this is the LinkedIn
-  // equivalent.
-  if(step && !isEmailRoadmap() && window.__roadmapCampaignId){
-    const liveIdx = EMAIL_STAGE_ORDER.indexOf(campaignSequenceStageFor(c.name));
-    const sentIdx = EMAIL_STAGE_ORDER.indexOf(EMAIL_STEP_SENT_AT[key]);
-    if(liveIdx >= 0 && sentIdx >= 0 && liveIdx < sentIdx) step = null;
-  }
+
+  const bodyHtml = step
+    ? `<div class="reply-toggle">
+        <span class="muted" style="font-size:11.5px;">Reply?</span>
+        <button class="reply-btn ${step.replied?'active-yes':''}" onclick="setReply('${c.id}','${key}',true)">Yes</button>
+        <button class="reply-btn ${!step.replied?'active-no':''}" onclick="setReply('${c.id}','${key}',false)">No</button>
+      </div>`
+    : lockedReason
+      ? `<span class="muted" style="font-size:11.5px;"><i class="ti ti-lock" style="font-size:12px;"></i> ${esc(lockedReason)}</span>`
+      : `<button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();openGenerateModal('${c.id}','${key}', ()=>renderPage())"><i class="ti ti-copy"></i> Write &amp; copy ${isEmailRoadmap() ? 'email' : 'message'}</button>
+        <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();markSent('${c.id}','${key}')">Already sent, mark done</button>`;
+
   return `
   <div class="thread-step">
     <div class="thread-step-head"><span>${label}</span>${step ? `<span class="muted">${step.sent ? fmtDate(step.sent) : 'Sent'}</span>` : ''}</div>
     <div class="thread-step-body">
-      ${step ? `
-        <div class="reply-toggle">
-          <span class="muted" style="font-size:11.5px;">Reply?</span>
-          <button class="reply-btn ${step.replied?'active-yes':''}" onclick="setReply('${c.id}','${key}',true)">Yes</button>
-          <button class="reply-btn ${!step.replied?'active-no':''}" onclick="setReply('${c.id}','${key}',false)">No</button>
-        </div>
-      ` : `
-        <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();openGenerateModal('${c.id}','${key}', ()=>renderPage())"><i class="ti ti-copy"></i> Write &amp; copy ${isEmailRoadmap() ? 'email' : 'message'}</button>
-        <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();markSent('${c.id}','${key}')">Already sent, mark done</button>
-      `}
+      ${bodyHtml}
       ${extraBodyHtml || ''}
     </div>
   </div>`;
@@ -8119,10 +8150,16 @@ async function markSent(cid, key){
     const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/contacts/${cid}/mark-sent`, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ message })
+      // stageKey tells the server which message this is - so marking "message 1
+      // sent" always lands on "Message 1 Sent", never "current stage + 1".
+      body: JSON.stringify({ message, stageKey: key })
     });
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
+    // A send re-opens the reply gate for the next message.
+    if(window.__campaignReplyReceived && window.__campaignReplyReceived[campaign.id]){
+      window.__campaignReplyReceived[campaign.id][c.name.trim().toLowerCase()] = false;
+    }
     if(window.__roadmapCampaignId === campaign.id) await loadCampaignSequenceStages(campaign);
   } catch(err){
     console.warn('Could not sync sent message to Airtable:', err.message);
@@ -8136,18 +8173,22 @@ async function markSent(cid, key){
     renderPage();
   }
 }
-// This used to only flip c.thread[key].replied in local memory and stop
-// there - it never told Airtable anything, so Sequence Stage stayed on
-// "Message N Sent" forever and the toggle reset on every reload. Now syncs
-// to POST /api/campaign/:name/contacts/:id/reply, which advances Sequence
-// Stage using the same SEQUENCE_STAGE_ADVANCE table the DM-screenshot flow
-// uses, and logs a Touch Point when the answer is "Yes".
+// The Reply Yes/No toggle records HISTORY, not progression. It sets the
+// "Reply Received" checkbox on the Campaign Contacts row (POST .../reply) and
+// logs a "Reply to Message N" Touch Point on the first "yes" - it never moves
+// Sequence Stage, which only ever advances on a send. The reply flag is what
+// unlocks the next message's Write & copy button.
 async function setReply(cid, key, val){
   const c = state.contacts.find(x=>x.id===cid);
-  c.thread[key].replied = val;
-  renderPage();
+  if(!c.thread[key]) c.thread[key] = { sent: isoDate(TODAY), replied: val };
+  else c.thread[key].replied = val;
 
   const campaign = state.campaigns.find(x => x.id === window.__roadmapCampaignId) || activeCampaignForContact(c);
+  if(campaign && window.__campaignReplyReceived && window.__campaignReplyReceived[campaign.id]){
+    window.__campaignReplyReceived[campaign.id][c.name.trim().toLowerCase()] = val;
+  }
+  renderPage();
+
   if(!campaign) return;
   try {
     const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/contacts/${cid}/reply`, {
@@ -10148,10 +10189,13 @@ async function saveGeneratedMessage(cid, stageKey){
       const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/contacts/${cid}/mark-sent`, {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ message: output, draftOutcome, ...ctaMeta })
+        body: JSON.stringify({ message: output, draftOutcome, stageKey, ...ctaMeta })
       });
       const data = await res.json();
       if(!res.ok) throw new Error(data.error || 'Request failed');
+      if(window.__campaignReplyReceived && window.__campaignReplyReceived[campaign.id]){
+        window.__campaignReplyReceived[campaign.id][c.name.trim().toLowerCase()] = false;
+      }
       if(window.__roadmapCampaignId === campaign.id) await loadCampaignSequenceStages(campaign);
     } catch(err){
       console.warn('Could not log sent message to Airtable:', err.message);
@@ -11083,22 +11127,28 @@ async function loadCampaignSequenceStages(campaign){
     if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
     const map = {};
     const dateMap = {};
+    const replyMap = {};
     (data.rows||[]).forEach(r => {
       if(!r.contactName) return;
       const key = r.contactName.trim().toLowerCase();
       map[key] = r.sequenceStage;
       dateMap[key] = r.connectionSentDate || null;
+      replyMap[key] = !!r.replyReceived;
     });
     window.__campaignSequenceStages = window.__campaignSequenceStages || {};
     window.__campaignSequenceStages[campaign.id] = map;
     window.__campaignConnectionSentDates = window.__campaignConnectionSentDates || {};
     window.__campaignConnectionSentDates[campaign.id] = dateMap;
+    window.__campaignReplyReceived = window.__campaignReplyReceived || {};
+    window.__campaignReplyReceived[campaign.id] = replyMap;
   } catch(err){
     console.warn('Could not load campaign sequence stages:', err.message);
     window.__campaignSequenceStages = window.__campaignSequenceStages || {};
     window.__campaignSequenceStages[campaign.id] = {};
     window.__campaignConnectionSentDates = window.__campaignConnectionSentDates || {};
     window.__campaignConnectionSentDates[campaign.id] = {};
+    window.__campaignReplyReceived = window.__campaignReplyReceived || {};
+    window.__campaignReplyReceived[campaign.id] = {};
   }
   if(window.__campaignView === 'detail' && window.__campaignDetailId === campaign.id && window.__campaignDetailTab === 'roadmap') renderPage();
   // Both Grid view modes depend on this now - Table already did (sequence
@@ -11127,6 +11177,15 @@ function campaignSequenceStageFor(contactName){
 function campaignConnectionSentDateFor(contactName){
   const map = window.__roadmapCampaignId && window.__campaignConnectionSentDates && window.__campaignConnectionSentDates[window.__roadmapCampaignId];
   return map ? (map[contactName.trim().toLowerCase()] || null) : null;
+}
+
+// Whether this contact has replied to the most recently sent message in the
+// roadmap's scoped campaign (Campaign Contacts."Reply Received"). A reply is
+// what gates the next message becoming draftable - it never advances the
+// Sequence Stage, which only ever moves on a send.
+function campaignReplyReceivedFor(contactName){
+  const map = window.__roadmapCampaignId && window.__campaignReplyReceived && window.__campaignReplyReceived[window.__roadmapCampaignId];
+  return map ? !!map[contactName.trim().toLowerCase()] : false;
 }
 
 /* ---- Strategy tab: messaging templates (formerly the Sequence tab) ---- */

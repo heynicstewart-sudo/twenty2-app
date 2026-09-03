@@ -8480,6 +8480,30 @@ const MESSAGE_NUMBER_FOR_STAGE = {
   'Ready for Message 3': 3
 };
 
+// LinkedIn Sequence Stage now only ever advances on a SEND. Reply Yes/No sets
+// the "Reply Received" checkbox and never touches the stage. The reply-gated
+// stages ("Ready for Message N", "Pending Reply MN") are no longer written -
+// these helpers collapse any that still exist on old rows back to the send
+// milestone they followed, so read-paths stay correct during the transition.
+const LINKEDIN_STAGE_ORDER = ['Found', 'Connection Pending', 'Connected', 'Message 1 Sent', 'Message 2 Sent', 'Message 3 Sent', 'Meeting Booked'];
+const LEGACY_STAGE_COLLAPSE = {
+  'Pending Reply M1': 'Message 1 Sent', 'Ready for Message 2': 'Message 1 Sent',
+  'Pending Reply M2': 'Message 2 Sent', 'Ready for Message 3': 'Message 2 Sent',
+  'Pending Reply M3': 'Message 3 Sent'
+};
+function collapseLegacyStage(stage) {
+  return LEGACY_STAGE_COLLAPSE[stage] || stage || 'Found';
+}
+function linkedInStageRank(stage) {
+  return LINKEDIN_STAGE_ORDER.indexOf(collapseLegacyStage(stage));
+}
+// A legacy "Ready for Message N" row means a reply already cleared the gate, so
+// treat it as reply-received even before the checkbox exists on that row.
+function rowReplyReceived(row) {
+  const f = (row && row.fields) || {};
+  return !!f['Reply Received'] || /^Ready for Message/.test(f['Sequence Stage'] || '');
+}
+
 // Airtable caps batch writes at 10 records per request. typecast:true so a
 // Sequence Stage value from the app's simplified vocabulary (e.g.
 // "Connection Pending", "Timed Out") that isn't yet a configured choice on
@@ -8722,7 +8746,8 @@ app.get('/api/campaign/:id/campaign-contacts', async (req, res) => {
           campaignContactId: r.id,
           contactId,
           contactName: contactId ? (nameById[contactId] || '') : '',
-          sequenceStage: normalizeSequenceStage(r.fields['Sequence Stage']),
+          sequenceStage: collapseLegacyStage(normalizeSequenceStage(r.fields['Sequence Stage'])),
+          replyReceived: rowReplyReceived(r),
           nextMessageDraft: r.fields['Next Message Draft'] || '',
           connectionSentDate: r.fields['Connection Sent Date'] || null
         };
@@ -9453,12 +9478,18 @@ app.post('/api/campaign/:id/contacts/:contactId/generate-message', async (req, r
 
     const rows = await fetchCampaignContactsRows();
     const row = await getOrCreateCampaignContactRow(contactId, cf['Full Name'] || contactId, campaignRecord.id, campaignName, rows);
-    const stage = normalizeSequenceStage(row.fields['Sequence Stage']);
+    const stage = collapseLegacyStage(normalizeSequenceStage(row.fields['Sequence Stage']));
     // Email campaigns have no "connection accepted" gate, so an early-stage
     // contact (Found / Connection Pending) is just due their intro email.
     const messageNumber = MESSAGE_NUMBER_FOR_STAGE[stage] || (isEmailCampaign(campaignRecord) ? 1 : 0);
     if (!messageNumber) {
       return res.status(400).json({ error: `Contact is at Sequence Stage "${stage}" - not a stage this card generates a message for.` });
+    }
+    // LinkedIn: a follow-up (message 2 / 3) only becomes draftable once a reply
+    // to the message before it has been logged - the stage stays "Message N
+    // Sent" until the follow-up is actually sent, so the reply is the gate.
+    if (!isEmailCampaign(campaignRecord) && /^Message [12] Sent$/.test(stage) && !rowReplyReceived(row)) {
+      return res.status(400).json({ error: `Message ${messageNumber - 1} was sent but no reply is logged yet - mark the reply first.` });
     }
 
     const camp = campaignRecord.fields || {};
@@ -9524,18 +9555,33 @@ app.post('/api/campaign/:id/contacts/:contactId/mark-sent', async (req, res) => 
 
     const rows = await fetchCampaignContactsRows();
     const row = await getOrCreateCampaignContactRow(contactId, (contactRecord.fields || {})['Full Name'] || contactId, campaignRecord.id, campaignName, rows);
-    const stage = normalizeSequenceStage(row.fields['Sequence Stage']);
-    // Email campaigns have no connection step, so an email contact sits at
-    // "Found" until their intro email goes out - there's no "Connected" rung
-    // in between for SEQUENCE_STAGE_NEXT to key off. Bridge Found/Connection
-    // Pending straight to "Message 1 Sent" for email so the first "mark sent"
-    // actually advances instead of 400ing with "already at the final stage".
+    const rawStage = normalizeSequenceStage(row.fields['Sequence Stage']);
     const emailMode = isEmailCampaign(campaignRecord);
-    const nextStage = (emailMode && (stage === 'Found' || stage === 'Connection Pending'))
-      ? 'Message 1 Sent'
-      : SEQUENCE_STAGE_NEXT[stage];
-    if (!nextStage) {
-      return res.status(400).json({ error: `Contact is already at the final stage ("${stage}") - nothing further to advance to.` });
+
+    let nextStage, sentN, advanced;
+    if (emailMode) {
+      // Email campaigns have no connection step and cold follow-ups go out to
+      // silence, so keep the old linear advance: Found/Connection Pending ->
+      // Message 1 Sent, then straight through SEQUENCE_STAGE_NEXT.
+      nextStage = (rawStage === 'Found' || rawStage === 'Connection Pending')
+        ? 'Message 1 Sent'
+        : SEQUENCE_STAGE_NEXT[rawStage];
+      if (!nextStage) {
+        return res.status(400).json({ error: `Contact is already at the final stage ("${rawStage}") - nothing further to advance to.` });
+      }
+      sentN = MESSAGE_NUMBER_FOR_STAGE[rawStage] || 1;
+      advanced = true;
+    } else {
+      // LinkedIn: idempotent. The client passes stageKey (m1/m2/cta) for the
+      // message it just sent, so marking "message 1 sent" always targets
+      // "Message 1 Sent" - never "whatever the row is at + 1". A repeat click
+      // on an already-recorded message is a no-op stage-wise.
+      const stage = collapseLegacyStage(rawStage);
+      const KEY_TO_N = { m1: 1, m2: 2, cta: 3, connect: 1 };
+      sentN = KEY_TO_N[req.body.stageKey] || MESSAGE_NUMBER_FOR_STAGE[stage] || 1;
+      const targetStage = `Message ${sentN} Sent`;
+      advanced = linkedInStageRank(stage) < LINKEDIN_STAGE_ORDER.indexOf(targetStage);
+      nextStage = advanced ? targetStage : stage;
     }
 
     // The pre-edit AI draft this row held before this send - captured now
@@ -9545,11 +9591,13 @@ app.post('/api/campaign/:id/contacts/:contactId/mark-sent', async (req, res) => 
     const originalDraft = row.fields['Next Message Draft'] || '';
 
     const today = new Date().toISOString().slice(0, 10);
-    const stageFields = {
-      'Sequence Stage': nextStage,
-      'Stage History': appendStageHistory(row.fields['Stage History'], nextStage, today),
-      'Next Message Draft': ''
-    };
+    const stageFields = { 'Next Message Draft': '' };
+    if (advanced) {
+      stageFields['Sequence Stage'] = nextStage;
+      stageFields['Stage History'] = appendStageHistory(row.fields['Stage History'], nextStage, today);
+      // Every send re-opens the reply gate for the next message.
+      stageFields['Reply Received'] = false;
+    }
     // draftOutcome ('Sent verbatim'/'Sent edited') tells us whether Marcus sent
     // the AI draft as-is or rewrote it - feedback signal for how good the
     // draft actually was, diffed client-side against the draft this row held
@@ -9577,34 +9625,30 @@ app.post('/api/campaign/:id/contacts/:contactId/mark-sent', async (req, res) => 
       typecast: true
     });
 
-    // 'Name' isn't auto-generated by Airtable on this table (it's a plain
-    // text primary field) - this write skipped it entirely, which is why
-    // these rows were showing up as "Unnamed record" in the Airtable UI.
-    // "[Campaign]_Message [N]" so it's immediately clear which campaign and
-    // which message in the sequence this was, at a glance in the Airtable
-    // grid - messageNumber here is the one just sent (MESSAGE_NUMBER_FOR_STAGE
-    // keyed off `stage`, the row's stage *before* the advance above).
-    // "Found" (email's pre-send stage) isn't in MESSAGE_NUMBER_FOR_STAGE - the
-    // email that just went out from there is message 1.
-    const messageNumber = MESSAGE_NUMBER_FOR_STAGE[stage] || 1;
-    await airtableWriteAllowingMissingCtaFields('POST', 'Touch Points', {
-      records: [{
-        fields: {
-          'Name': `${campaignName}_${emailMode ? 'Email' : 'Message'} ${messageNumber}`,
-          'Date': today,
-          'Type': emailMode ? 'Email' : 'LinkedIn Message',
-          'Direction': 'Outbound',
-          'Summary': message,
-          'Contact': [contactId],
-          'Campaign': [campaignRecord.id],
-          'CTA Brought Forward': ctaFwd,
-          'CTA Judgement Note': ctaNote
-        }
-      }],
-      typecast: true
-    });
+    // Log the send as a Touch Point - "[Campaign]_Message [N]", named so the
+    // reply-rate feedback loop and funnel can match it. Only on a genuine
+    // advance: a repeat "mark sent" click on an already-recorded message must
+    // not double-log and skew the campaign's reply-rate denominator.
+    if (advanced) {
+      await airtableWriteAllowingMissingCtaFields('POST', 'Touch Points', {
+        records: [{
+          fields: {
+            'Name': `${campaignName}_${emailMode ? 'Email' : 'Message'} ${sentN}`,
+            'Date': today,
+            'Type': emailMode ? 'Email' : 'LinkedIn Message',
+            'Direction': 'Outbound',
+            'Summary': message,
+            'Contact': [contactId],
+            'Campaign': [campaignRecord.id],
+            'CTA Brought Forward': ctaFwd,
+            'CTA Judgement Note': ctaNote
+          }
+        }],
+        typecast: true
+      });
+    }
 
-    res.json({ success: true, newStage: nextStage });
+    res.json({ success: true, newStage: nextStage, advanced });
   } catch (err) {
     console.error('Mark sent error:', err.message);
     res.status(500).json({ error: err.message });
@@ -9612,14 +9656,11 @@ app.post('/api/campaign/:id/contacts/:contactId/mark-sent', async (req, res) => 
 });
 
 // "Reply?" Yes/No toggle on a Roadmap card's message step
-// (t2c-outreach-crm.html, setReply) - this used to be local-only (just
-// flipped c.thread[key].replied in memory, never synced), so it was lost on
-// every reload and Airtable's Sequence Stage never left "Message N Sent"
-// no matter what was clicked here. Reuses SEQUENCE_STAGE_ADVANCE - the same
-// table the DM-screenshot flow (POST /api/context/parse-screenshot above)
-// advances from - keyed off the row's actual current Sequence Stage rather
-// than whatever stage the client's local state believes it's in, so this
-// self-corrects even if that row had drifted out of sync.
+// (t2c-outreach-crm.html, setReply). A reply is HISTORY, not a progression -
+// it never moves Sequence Stage (the stage only ever advances on a send). It
+// sets the "Reply Received" checkbox, which is what gates whether the next
+// message becomes draftable, and logs a "Reply to Message N" Touch Point on
+// the first "yes" so the campaign reply-rate has ground truth.
 app.post('/api/campaign/:id/contacts/:contactId/reply', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
@@ -9637,28 +9678,21 @@ app.post('/api/campaign/:id/contacts/:contactId/reply', async (req, res) => {
 
     const rows = await fetchCampaignContactsRows();
     const row = await getOrCreateCampaignContactRow(contactId, (contactRecord.fields || {})['Full Name'] || contactId, campaignRecord.id, campaignName, rows);
-    const currentStage = normalizeSequenceStage(row.fields['Sequence Stage']);
-    const advance = SEQUENCE_STAGE_ADVANCE[currentStage];
-    if (!advance) {
-      return res.status(400).json({ error: `Contact is at Sequence Stage "${currentStage}" - not a stage a reply can advance from.` });
-    }
-
+    const currentStage = collapseLegacyStage(normalizeSequenceStage(row.fields['Sequence Stage']));
+    const wasReplied = rowReplyReceived(row);
     const today = new Date().toISOString().slice(0, 10);
-    const newStage = replied ? advance.replied : advance.noReply;
-    const stageFields = { 'Sequence Stage': newStage };
-    if (newStage !== currentStage) {
-      stageFields['Stage History'] = appendStageHistory(row.fields['Stage History'], newStage, today);
-    }
-    await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, { records: [{ id: row.id, fields: stageFields }], typecast: true });
 
-    // Only log a Touch Point on an actual "yes" - toggling "no reply yet"
-    // is a state check, not an event worth a row in the history.
-    if (replied) {
-      // currentStage here is always "Message N Sent" or "Pending Reply MN"
-      // (the only keys SEQUENCE_STAGE_ADVANCE has), so it always has a
-      // digit to pull the message number from for the Name below.
-      const messageNumberMatch = currentStage.match(/(\d)/);
-      const messageLabel = messageNumberMatch ? `Message ${messageNumberMatch[1]}` : currentStage;
+    await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, {
+      records: [{ id: row.id, fields: { 'Reply Received': replied } }],
+      typecast: true
+    });
+
+    // Log a "Reply to Message N" Touch Point only on the first false -> true
+    // transition, so toggling the answer back and forth doesn't pile up rows
+    // or double-count in the reply-rate.
+    if (replied && !wasReplied) {
+      const m = currentStage.match(/Message (\d) Sent/) || currentStage.match(/(\d)/);
+      const messageLabel = m ? `Message ${m[1]}` : currentStage;
       await airtableRequest('POST', 'Touch Points', {
         records: [{
           fields: {
@@ -9675,7 +9709,7 @@ app.post('/api/campaign/:id/contacts/:contactId/reply', async (req, res) => {
       });
     }
 
-    res.json({ success: true, previousStage: currentStage, newStage });
+    res.json({ success: true, replyReceived: replied, stage: currentStage });
   } catch (err) {
     console.error('Reply toggle error:', err.message);
     res.status(500).json({ error: err.message });
@@ -10206,26 +10240,12 @@ Rewrite the AI Summary as a concise account-level intelligence brief: who's enga
   }
 });
 
-// Advancing FROM "Pending Reply M1"/"M2" isn't explicitly in the brief
-// (which only describes advancing from "Message 1/2 Sent"), but leaving no
-// forward path once a contact is already waiting on a reply would be a
-// clear gap - a reply landing while a contact sits in "Pending Reply M1"
-// should still advance them the same way "Message 1 Sent" would. Keys here
-// match the Sequence Stage single select's real option names exactly (no
-// parentheses).
-const SEQUENCE_STAGE_ADVANCE = {
-  'Message 1 Sent': { replied: 'Ready for Message 2', noReply: 'Pending Reply M1' },
-  'Pending Reply M1': { replied: 'Ready for Message 2', noReply: 'Pending Reply M1' },
-  'Message 2 Sent': { replied: 'Ready for Message 3', noReply: 'Pending Reply M2' },
-  'Pending Reply M2': { replied: 'Ready for Message 3', noReply: 'Pending Reply M2' },
-  // No "Ready for Message 4" - the sequence stops at 3 messages, so a reply
-  // at M3 goes straight to the terminal positive state instead of another
-  // "Ready for..." draft step. "Message 3 Sent"/"Pending Reply M3" are new
-  // Sequence Stage choices (auto-created by Airtable via typecast:true on
-  // first write, same as every other new single-select value in this file).
-  'Message 3 Sent': { replied: 'Meeting Booked', noReply: 'Pending Reply M3' },
-  'Pending Reply M3': { replied: 'Meeting Booked', noReply: 'Pending Reply M3' }
-};
+// REMOVED: SEQUENCE_STAGE_ADVANCE. A reply no longer advances Sequence Stage -
+// it only sets the "Reply Received" checkbox (see the /reply route and the
+// parse-screenshot flow). The stage advances solely on a send, via
+// SEQUENCE_STAGE_NEXT (email) / the message-number target in /mark-sent
+// (LinkedIn). Old rows still carrying "Ready for Message N" / "Pending Reply
+// MN" are collapsed to the send milestone by collapseLegacyStage().
 
 // Appends one line to a Campaign Contacts row's Stage History log (creating
 // the field's first line if empty) - the dated record of every stage
@@ -10313,22 +10333,23 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
         const rows = await fetchCampaignContactsRows();
         const row = await getOrCreateCampaignContactRow(contactRecord.id, contactName, campaignRecord.id, campaignName, rows);
 
-        currentStage = row.fields['Sequence Stage'] || '';
-        const advance = SEQUENCE_STAGE_ADVANCE[currentStage];
-        newStage = advance ? (parsed.replied ? advance.replied : advance.noReply) : currentStage;
+        currentStage = collapseLegacyStage(row.fields['Sequence Stage'] || '');
+        newStage = currentStage; // a reply never moves the stage - only a send does
 
         const rowUpdateFields = {};
-        if (newStage && newStage !== currentStage) {
-          rowUpdateFields['Sequence Stage'] = newStage;
-          rowUpdateFields['Stage History'] = appendStageHistory(row.fields['Stage History'], newStage, dateLabel);
-        }
+        // Reading a conversation screenshot implies the contact replied to
+        // whatever Marcus last sent - record that (the reply gate for the next
+        // message), without touching Sequence Stage.
+        if (parsed.replied) rowUpdateFields['Reply Received'] = true;
         // Written unconditionally (not just on a stage change) since a
         // reply's sentiment is meaningful even when it doesn't move the
         // contact to a new stage - this is what the Section 3 sentiment
         // breakdown chart reads for contacts that don't have a Deal yet.
         if (parsed.sentiment) rowUpdateFields['Sentiment'] = parsed.sentiment;
 
-        if (newStage.startsWith('Ready for Message')) {
+        // Draft the follow-up when a reply just landed on a sent message that
+        // still has a follow-up left (message 1 or 2, not the final CTA).
+        if (parsed.replied && /^Message [12] Sent$/.test(currentStage)) {
           const recentPosts = recentPostsPromptSnippet(f['Recent Posts'], 30);
           // A "Ready for Message N" stage is always message 2+ (message 1
           // is sent straight through Today's Actions, never reply-gated),
