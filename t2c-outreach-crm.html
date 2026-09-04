@@ -1744,16 +1744,15 @@ function _wrCampaignFunnel(c){
   const rows = [];
   if(c.emailMode){
     const emailed = byKey.m1||0, replied = byKey.replied||0, booked = byKey.meeting||0;
-    rows.push({ label:'Emails sent', count: emailed, note:'' });
-    rows.push({ label:'Messages sent', count: c.messagesSent||emailed, note:'incl. follow-ups' });
+    rows.push({ label:'People emailed', count: emailed, note:'' });
     rows.push({ label:'Replied', count: replied, note: emailed? `${Math.round(replied/emailed*100)}% of contacts`:'' });
     rows.push({ label:'Meetings booked', count: booked, note: replied? `${Math.round(booked/replied*100)}% of replies`:'' });
   } else {
-    const sent = byKey.connectionSent||0, made = byKey.connected||0, replied = c.replies||0, booked = byKey.meeting||0;
+    const sent = byKey.connectionSent||0, made = byKey.connected||0, messaged = byKey.m1||0, replied = c.replies||0, booked = byKey.meeting||0;
     rows.push({ label:'Connections sent', count: sent, note:'' });
     rows.push({ label:'Connections made', count: made, note: sent? `${Math.round(made/sent*100)}% accepted`:'' });
-    rows.push({ label:'Messages sent', count: c.messagesSent||0, note:'msg 1-3' });
-    rows.push({ label:'Replied', count: replied, note: made? `${Math.round(replied/made*100)}% of connections`:'' });
+    rows.push({ label:'People messaged', count: messaged, note: made? `${Math.round(messaged/made*100)}% of connections`:'' });
+    rows.push({ label:'Replied', count: replied, note: messaged? `${Math.round(replied/messaged*100)}% of those messaged`:'' });
     rows.push({ label:'Meetings booked', count: booked, note: replied? `${Math.round(booked/replied*100)}% of replies`:'' });
   }
   const max = Math.max(1, ...rows.map(r => r.count));
@@ -1851,13 +1850,13 @@ function buildWeeklyReportHTML(d){
   const anyEmail = (d.campaigns||[]).some(c => c.emailMode);
   const allEmail = (d.campaigns||[]).length && (d.campaigns||[]).every(c => c.emailMode);
 
-  // ---- combined totals across every live campaign ----
-  const totals = { sent:0, made:0, messages:0, replied:0, booked:0 };
+  // ---- combined totals across every live campaign (campaign-to-date) ----
+  const totals = { sent:0, made:0, messaged:0, replied:0, booked:0 };
   (d.campaigns||[]).forEach(c => {
     const k = {}; (c.funnel||[]).forEach(s => { k[s.key] = s.count; });
     totals.sent     += c.emailMode ? (k.m1||0) : (k.connectionSent||0);
-    totals.made      += c.emailMode ? (k.m1||0) : (k.connected||0);
-    totals.messages += c.messagesSent || 0;
+    totals.made     += c.emailMode ? (k.m1||0) : (k.connected||0);
+    totals.messaged += k.m1 || 0;
     totals.replied  += c.replies || 0;
     totals.booked   += k.meeting || 0;
   });
@@ -1883,11 +1882,11 @@ function buildWeeklyReportHTML(d){
 
   const statsBlock = sec.stats ? `
     <div style="margin-top:16px;">
-      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#2A6B7C;">This week at a glance</div>
+      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#2A6B7C;">This week (${_wrEsc(d.weekOf||'')})</div>
       <div style="display:grid;grid-template-columns:repeat(${sec.content?3:2},1fr);gap:10px;margin-top:6px;">
-        ${_wrTile(o.messagesSent||0, 'LinkedIn messages sent')}
-        ${_wrTile(o.repliesIn||0, 'Replies received')}
-        ${sec.content ? _wrTile(content.length, 'Content pieces published') : ''}
+        ${_wrTile(o.messagesSent||0, 'Messages sent this week')}
+        ${_wrTile(o.repliesIn||0, 'Replies in this week')}
+        ${sec.content ? _wrTile(content.length, 'Content published this week') : ''}
       </div>
       ${(tw.newCampaigns||[]).length ? `<div style="font-size:9.5px;color:#555;margin-top:6px;"><b>New campaigns this week:</b> ${(tw.newCampaigns||[]).map(_wrEsc).join(', ')}.</div>` : ''}
     </div>` : '';
@@ -1928,14 +1927,20 @@ function buildWeeklyReportHTML(d){
     </div>
 
     <div style="margin-top:20px;">
-      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#2A6B7C;">Totals &mdash; all campaigns</div>
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:8px;">
-        ${_wrTile(totals.sent, allEmail ? 'Emails sent' : 'Connections sent')}
-        ${_wrTile(totals.made, allEmail ? 'Contacts reached' : 'Connections made')}
-        ${_wrTile(totals.messages, 'Messages sent')}
-        ${_wrTile(totals.replied, 'Replied')}
+      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#2A6B7C;">All campaigns &mdash; to date</div>
+      <div style="display:grid;grid-template-columns:repeat(${allEmail?3:4},1fr);gap:10px;margin-top:8px;">
+        ${allEmail ? `
+          ${_wrTile(totals.sent, 'People emailed')}
+          ${_wrTile(totals.replied, 'Replied')}
+          ${_wrTile(totals.booked, 'Meetings booked')}
+        ` : `
+          ${_wrTile(totals.sent, 'Connections sent')}
+          ${_wrTile(totals.made, 'Connections made')}
+          ${_wrTile(totals.messaged, 'People messaged')}
+          ${_wrTile(totals.replied, 'Replied')}
+        `}
       </div>
-      <div style="font-size:9.5px;color:#777;margin-top:6px;">Meetings booked: <b style="color:#1a1a2e;">${totals.booked}</b>${anyEmail && !allEmail ? '. Mixed LinkedIn and email campaigns.' : ''}</div>
+      <div style="font-size:9.5px;color:#777;margin-top:6px;">${allEmail?'':`Meetings booked: <b style="color:#1a1a2e;">${totals.booked}</b>. `}Every count is one person, cumulative since each campaign started${anyEmail && !allEmail ? '. Mixed LinkedIn and email campaigns' : ''}.</div>
     </div>
 
     ${statsBlock}
@@ -1948,7 +1953,7 @@ function buildWeeklyReportHTML(d){
     </div>
 
     <div style="margin-top:20px;border-top:1px solid #e3e6e9;padding-top:7px;font-size:8px;color:#aaa;line-height:1.5;">
-      Connections made = connection requests accepted. Messages sent counts message 1 to 3 touches. Replied = distinct people who answered any message. Most likely to connect / respond needs at least four people approached in that group. Meetings booked come from logged deals only.
+      Connections made = connection requests accepted. People messaged = reached message 1 or later. Replied = distinct people who answered any message. The message-sequence block counts each message send. "Most likely to connect / respond" needs at least four people approached in that group. Meetings booked come from logged deals only.
     </div>
   </div>`;
 }
