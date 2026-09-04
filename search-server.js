@@ -458,7 +458,15 @@ const OPTIONAL_LATE_ADDED_FIELDS = [
   // Connection-note A/B: which arm this contact's request belongs to.
   'Connection Arm',
   // Campaigns table — hand-added on some bases only.
-  'Connection Note Mode', 'Sequence Length', 'CTA Message'
+  'Connection Note Mode', 'Sequence Length', 'CTA Message',
+  // Deal Autopsy (Campaign Contacts).
+  'Autopsy Note', 'Autopsy Milestone', 'Autopsy Run At',
+  // Segmentation / Mad-Libs personalization.
+  'ICP Size Band', 'ICP Momentum', 'ICP Workload Type', 'ICP Scored At', 'Angle Library',
+  // Draft trust / generalized variant A/B.
+  'Message Variant',
+  // Risk-vs-upside framing.
+  'Framing Used', 'Framing Reasoning', 'Framing Mode'
 ];
 const optionalFieldsMissing = new Set();
 function stripMissingOptionalFields(body) {
@@ -10947,6 +10955,196 @@ app.post('/api/campaign/:id/contacts/:contactId/regenerate-reply', async (req, r
     res.json({ success: true, message, needsAttention, attentionReason, steerRemembered });
   } catch (err) {
     console.error('Regenerate reply error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===================== DEAL AUTOPSY ("dealbot") =====================
+// From the Jeanne DeWitt Grosser / Vercel GTM podcast: instead of trusting
+// the one-line Outcome a rep logs on a lost/stalled deal, read the FULL
+// interaction history and let the Engine diagnose what actually happened -
+// often not what got recorded (e.g. "lost on price" when the real story is
+// "never reached the decision-maker"). On-demand only (a button, like
+// Refresh Insights) - no cron - per the account's existing ambient-AI cost
+// discipline (see the 6am job comment on SCHEDULED SYNC JOBS below).
+
+const AUTOPSY_MILESTONES = ['Not started', 'Decision-maker engaged', 'Pricing discussed', 'Objection surfaced', 'Ready to close'];
+
+function buildAutopsyPrompt({ campaignRecord, contactRecord, row, touchPoints }) {
+  const camp = campaignRecord.fields || {};
+  const cf = contactRecord.fields || {};
+  const stage = collapseLegacyStage(normalizeSequenceStage(row.fields['Sequence Stage']));
+  const tpText = (touchPoints || [])
+    .slice()
+    .sort((a, b) => new Date(a.fields['Date'] || 0) - new Date(b.fields['Date'] || 0))
+    .map(tp => `[${tp.fields['Date'] || '?'}] ${tp.fields['Direction'] || ''} ${tp.fields['Type'] || ''}: ${tp.fields['Summary'] || ''}`)
+    .join('\n') || '(no touch points logged)';
+
+  return `You are reviewing one contact's outreach history for T2C Outreach, Twenty2 Collective's CRM, to diagnose what actually happened - not what a rep might have assumed.
+
+Campaign: "${camp['Name'] || camp['Campaign Name'] || ''}". Goal: ${camp['Goal'] || 'not recorded'}. Strategy notes (may include pitch angle / objection handling): ${camp['Strategy Notes'] || 'none recorded'}.
+
+Contact: ${cf['Full Name'] || 'Unknown'}, ${cf['Job Title'] || ''}. Current Sequence Stage: ${stage}.
+
+Full conversation thread: ${cf['Conversation Context'] || '(none captured)'}
+
+Chronological touch points:
+${tpText}
+
+Read all of this closely and diagnose:
+1. What's the REAL reason this stalled or went cold - grounded in what's actually in the thread, not a generic guess. If they simply haven't reached a natural checkpoint yet (e.g. still early, nothing wrong), say so plainly rather than inventing a problem.
+2. Which milestone did this contact actually reach? Exactly one of: ${AUTOPSY_MILESTONES.join(', ')}.
+3. One short quote (a few words, verbatim) from the thread that best evidences your diagnosis - empty string if nothing in the thread supports it (e.g. no thread at all).
+4. If there's a concrete, generalizable fix - a way to handle this objection or situation better next time - state it as one instruction a message-drafting AI could follow going forward. Empty string if there's nothing generalizable (e.g. this is just normal early-stage silence).
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{"realReason": "string", "milestone": "one of the exact milestone names above", "evidenceQuote": "string", "suggestedStyleCorrection": "string"}`;
+}
+
+async function runAutopsyForRow(campaignRecord, contactRecord, row, touchPoints) {
+  const prompt = buildAutopsyPrompt({ campaignRecord, contactRecord, row, touchPoints });
+  const parsed = await callClaudeJson(prompt, 500);
+  const milestone = AUTOPSY_MILESTONES.includes(parsed.milestone) ? parsed.milestone : 'Not started';
+  const today = new Date().toISOString().slice(0, 10);
+  const result = {
+    realReason: (parsed.realReason || '').trim(),
+    milestone,
+    evidenceQuote: (parsed.evidenceQuote || '').trim(),
+    suggestedStyleCorrection: (parsed.suggestedStyleCorrection || '').trim()
+  };
+  await airtableWriteAllowingMissingCtaFields('PATCH', CAMPAIGN_CONTACTS_TABLE, {
+    records: [{ id: row.id, fields: {
+      'Autopsy Note': result.realReason,
+      'Autopsy Milestone': result.milestone,
+      'Autopsy Run At': today
+    } }],
+    typecast: true
+  });
+  return result;
+}
+
+// Best-effort Slack post for a digest run - a single rolled-up message, not
+// one per contact. No-ops (with a console.warn) if SLACK_WEBHOOK_URL isn't
+// configured, same graceful-degradation contract as every optional
+// integration in this file (Trigify, Serper, etc). Add an Incoming Webhook
+// URL as a Railway env var to turn this on; nothing else depends on it.
+async function postSlackNudge(text) {
+  const url = process.env.SLACK_WEBHOOK_URL;
+  if (!url) { console.warn('postSlackNudge: SLACK_WEBHOOK_URL not configured - skipping (non-fatal)'); return false; }
+  try {
+    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
+    return res.ok;
+  } catch (err) {
+    console.warn('postSlackNudge failed (non-fatal):', err.message);
+    return false;
+  }
+}
+
+// A contact is "fair game" for autopsy once they're Connected or later and
+// the sequence isn't a clean win - i.e. there's an actual story to diagnose,
+// not just "found, nothing sent yet".
+function isStalledForAutopsy(row) {
+  const stage = collapseLegacyStage(normalizeSequenceStage(row.fields['Sequence Stage']));
+  if (stage === 'Meeting Booked') return false;
+  return linkedInStageRank(stage) >= LINKEDIN_STAGE_ORDER.indexOf('Connected');
+}
+
+app.post('/api/campaign/:id/contacts/:contactId/autopsy', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  const campaignName = decodeURIComponent(req.params.id);
+  const contactId = req.params.contactId;
+  try {
+    const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
+    if (!campaignRecord) return res.status(404).json({ error: `Campaign "${campaignName}" not found` });
+    const contactRecord = await airtableGetRecord('Contacts', contactId);
+    if (!contactRecord) return res.status(404).json({ error: 'Contact not found' });
+
+    const rows = await fetchCampaignContactsRows();
+    const row = await getOrCreateCampaignContactRow(contactId, (contactRecord.fields || {})['Full Name'] || contactId, campaignRecord.id, campaignName, rows);
+    const allTps = await airtableFetchAllRecords('Touch Points');
+    const myTps = allTps.filter(tp => (tp.fields['Contact'] || []).includes(contactId) && (tp.fields['Campaign'] || []).includes(campaignRecord.id));
+
+    const result = await runAutopsyForRow(campaignRecord, contactRecord, row, myTps);
+    res.json({ success: true, contactId, contactName: (contactRecord.fields || {})['Full Name'] || '', ...result });
+  } catch (err) {
+    console.error('Autopsy error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Batch digest across every stalled contact in a campaign, skipped if
+// autopsied in the last 7 days (same "don't re-spend on the same input"
+// contract as the Replies queue's Reply Draft At guard). Capped so one click
+// can't fire an unbounded number of Claude calls.
+const AUTOPSY_DIGEST_CAP = 15;
+app.post('/api/campaign/:id/autopsy-digest', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  const campaignName = decodeURIComponent(req.params.id);
+  try {
+    const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
+    if (!campaignRecord) return res.status(404).json({ error: `Campaign "${campaignName}" not found` });
+
+    const [rows, contactRecords, allTps] = await Promise.all([
+      fetchCampaignContactsRows(), airtableFetchAllRecords('Contacts'), airtableFetchAllRecords('Touch Points')
+    ]);
+    const contactById = {};
+    contactRecords.forEach(r => { contactById[r.id] = r; });
+
+    const today = new Date().toISOString().slice(0, 10);
+    const cutoff = addDaysIso(today, -7);
+    const candidates = rows.filter(r => {
+      if (!(r.fields['Campaign'] || []).includes(campaignRecord.id)) return false;
+      if (!isStalledForAutopsy(r)) return false;
+      const lastRun = r.fields['Autopsy Run At'];
+      if (lastRun && lastRun >= cutoff) return false;
+      const contactId = (r.fields['Contact'] || [])[0];
+      if (!contactId || !contactById[contactId]) return false;
+      const hasHistory = !!(contactById[contactId].fields || {})['Conversation Context'] || allTps.some(tp => (tp.fields['Contact'] || []).includes(contactId));
+      return hasHistory;
+    }).slice(0, AUTOPSY_DIGEST_CAP);
+
+    const results = [];
+    for (const row of candidates) {
+      const contactId = (row.fields['Contact'] || [])[0];
+      const contactRecord = contactById[contactId];
+      const myTps = allTps.filter(tp => (tp.fields['Contact'] || []).includes(contactId) && (tp.fields['Campaign'] || []).includes(campaignRecord.id));
+      try {
+        const result = await runAutopsyForRow(campaignRecord, contactRecord, row, myTps);
+        results.push({ campaignContactId: row.id, contactId, contactName: (contactRecord.fields || {})['Full Name'] || '', ...result });
+      } catch (err) {
+        console.warn(`Autopsy failed for ${contactId} (non-fatal):`, err.message);
+      }
+    }
+
+    if (results.length) {
+      const lines = results.map(r => `• ${r.contactName}: ${r.realReason || '(no clear diagnosis)'}`).join('\n');
+      await postSlackNudge(`*GTM review — ${campaignRecord.fields['Name'] || campaignName}*\n${results.length} contact(s) reviewed:\n${lines}`);
+    }
+
+    res.json({ success: true, reviewed: results.length, results });
+  } catch (err) {
+    console.error('Autopsy digest error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// "Turn into Style Correction" on an autopsy result - a thin wrapper over
+// appendStyleCorrection so the frontend doesn't need generate-message's/
+// regenerate-reply's full request shape just to save a steer.
+app.post('/api/campaign/:id/style-correction', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const campaignName = decodeURIComponent(req.params.id);
+  const { stageKey, text } = req.body || {};
+  if (!text || !text.trim()) return res.status(400).json({ error: 'text is required' });
+  try {
+    const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
+    if (!campaignRecord) return res.status(404).json({ error: `Campaign "${campaignName}" not found` });
+    const r = await appendStyleCorrection(campaignRecord.id, campaignRecord.fields['Style Corrections'], stageKey || 'followup', text);
+    res.json({ success: true, saved: r.saved, corrections: r.corrections });
+  } catch (err) {
+    console.error('Style correction save error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

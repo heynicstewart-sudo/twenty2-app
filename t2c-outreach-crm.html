@@ -12474,6 +12474,95 @@ function renderConnectionAbCard(ab){
   </div>`;
 }
 
+// ---- Deal Autopsy ("This week's GTM review") ----
+// On-demand only (never auto-fires) - GET/POST .../autopsy-digest reads each
+// stalled contact's full thread + touch points and diagnoses the real reason
+// they went cold, same "human reviews, human decides" contract as every
+// other Engine surface here: nothing here sends anything, it only proposes a
+// diagnosis and, optionally, a Style Correction the operator explicitly saves.
+const AUTOPSY_MILESTONE_STYLE = {
+  'Not started': { bg:'#f1f5f9', fg:'#475569' },
+  'Decision-maker engaged': { bg:'#dbeafe', fg:'#1e40af' },
+  'Pricing discussed': { bg:'#ede9fe', fg:'#5b21b6' },
+  'Objection surfaced': { bg:'#fef3c7', fg:'#92400e' },
+  'Ready to close': { bg:'#dcfce7', fg:'#166534' }
+};
+
+async function runAutopsyDigest(campaignId){
+  const campaign = state.campaigns.find(c => c.id === campaignId);
+  if(!campaign) return;
+  window.__autopsyDigest = window.__autopsyDigest || {};
+  window.__autopsyDigestLoading = window.__autopsyDigestLoading || {};
+  window.__autopsyDigestLoading[campaignId] = true;
+  renderPage();
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaignRouteKey(campaign))}/autopsy-digest`, { method:'POST' });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__autopsyDigest[campaignId] = data.results || [];
+    if(!data.results || !data.results.length) toast('No stalled contacts to review right now', 'success');
+  } catch(err){
+    toast('Could not run the GTM review: ' + err.message, 'warn');
+    window.__autopsyDigest[campaignId] = window.__autopsyDigest[campaignId] || [];
+  }
+  window.__autopsyDigestLoading[campaignId] = false;
+  renderPage();
+}
+
+async function turnAutopsyIntoStyleCorrection(campaignId, idx){
+  const campaign = state.campaigns.find(c => c.id === campaignId);
+  const list = window.__autopsyDigest && window.__autopsyDigest[campaignId];
+  const item = list && list[idx];
+  if(!campaign || !item || !item.suggestedStyleCorrection) return;
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaignRouteKey(campaign))}/style-correction`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ stageKey:'followup', text: item.suggestedStyleCorrection })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    item.savedAsCorrection = true;
+    toast(data.saved ? 'Saved as a standing style correction' : 'Applied to this draft only (could not save)', 'success');
+    renderPage();
+  } catch(err){
+    toast('Could not save: ' + err.message, 'warn');
+  }
+}
+
+function renderAutopsyDigestCard(campaign){
+  const list = window.__autopsyDigest && window.__autopsyDigest[campaign.id];
+  const loading = window.__autopsyDigestLoading && window.__autopsyDigestLoading[campaign.id];
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-stethoscope"></i> This week's GTM review</div>
+      <button class="btn btn-secondary btn-sm" ${loading?'disabled':''} onclick="runAutopsyDigest('${campaign.id}')"><i class="ti ${loading?'ti-loader-2':'ti-refresh'}"></i> ${loading?'Reviewing…':(list?'Run again':'Run autopsy digest')}</button>
+    </div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Reads every stalled contact's full thread and diagnoses the real reason - not just the logged outcome. Costs Engine tokens per run; nothing here sends anything.</div>
+    ${!list ? '<div class="muted" style="font-size:12.5px;">Not run yet this session.</div>' :
+      !list.length ? '<div class="empty-state">Nothing stalled to review right now.</div>' :
+      list.map((r,idx) => {
+        const ms = AUTOPSY_MILESTONE_STYLE[r.milestone] || AUTOPSY_MILESTONE_STYLE['Not started'];
+        return `
+        <div style="padding:10px 0;border-bottom:1px solid var(--border-light);">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <strong style="font-size:12.5px;">${esc(r.contactName)}</strong>
+            <span style="font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:999px;background:${ms.bg};color:${ms.fg};">${esc(r.milestone)}</span>
+          </div>
+          <div style="font-size:12.5px;margin-top:4px;">${esc(r.realReason || 'No clear diagnosis.')}</div>
+          ${r.evidenceQuote ? `<div class="muted" style="font-size:11.5px;margin-top:3px;font-style:italic;">"${esc(r.evidenceQuote)}"</div>` : ''}
+          ${r.suggestedStyleCorrection ? `
+            <div style="margin-top:6px;font-size:11.5px;">
+              <span class="muted">Suggested fix:</span> ${esc(r.suggestedStyleCorrection)}
+              ${r.savedAsCorrection
+                ? ' <span style="color:var(--success,#166534);"><i class="ti ti-check"></i> Saved</span>'
+                : ` <button class="btn btn-ghost btn-sm" style="padding:2px 8px;" onclick="turnAutopsyIntoStyleCorrection('${campaign.id}',${idx})">Turn into Style Correction</button>`}
+            </div>` : ''}
+        </div>`;
+      }).join('')}
+  </div>`;
+}
+
 function renderCampaignAnalyticsTab(campaign){
   const period = window.__campaignAnalyticsPeriod || 'thisWeek';
   const data = window.__campaignAnalytics;
@@ -12520,6 +12609,8 @@ function renderCampaignAnalyticsTab(campaign){
   </div>
 
   ${renderCampaignMessagePerformance()}
+
+  ${renderAutopsyDigestCard(campaign)}
 
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
