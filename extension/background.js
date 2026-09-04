@@ -152,6 +152,9 @@ async function scrapeProfileDeep(url, s) {
     if (s.deepScrape !== false && !profile.error) {
       const base = url.split('?')[0].replace(/\/+$/, '') + '/';
       for (const kind of ['experience', 'education']) {
+        // Some layouts render this inline on the profile - scrapeProfile already
+        // grabbed it, so there's nothing to visit.
+        if (((kind === 'experience' ? profile.experience : profile.education) || []).length) continue;
         try {
           await navigateTab(tab.id, base + 'details/' + kind + '/', s.tabLoadTimeoutMs);
           const key = kind === 'education' ? 'Education' : 'Experience';

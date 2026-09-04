@@ -69,13 +69,28 @@ const isBareDuration = (s) => {
 };
 // A standalone "Full-time" / "Contract" row - metadata, never a title or company.
 const isEmploymentType = (s) => new RegExp('^(' + EMP_TYPE + ')$', 'i').test(String(s || '').trim());
+// "RAC WA · Full-time" -> "RAC WA"
+const stripEmpSuffix = (s) => String(s || '').replace(new RegExp('\\s*·\\s*(' + EMP_TYPE + ')\\s*$', 'i'), '').trim();
 // "Perth, Western Australia, Australia" / "Joondalup, WA" - a place, not a title.
+// Deliberately strict: 2-4 short capitalised comma parts, no dashes, no
+// sentence words, so a comma-heavy job title isn't mistaken for a location.
 const isPlaceLine = (s) => {
   const t = String(s || '').trim();
-  return t.split(',').length >= 2 && /^[A-Z][A-Za-z.'\- ]+,\s*[A-Z]/.test(t) && !/\d/.test(t);
+  if (!t || t.length > 44 || /\d/.test(t) || /\s[-–—]\s/.test(t) || /\b(and|of|the|for|to|with|at)\b/i.test(t)) return false;
+  const parts = t.split(',').map((x) => x.trim());
+  return parts.length >= 2 && parts.length <= 4 &&
+    parts.every((p) => /^[A-Z]/.test(p) && p.split(/\s+/).length <= 4);
 };
+// Words that mark a string as a job title rather than a company name.
+const looksLikeRole = (s) => /\b(manager|mgr|director|lead|consultant|engineer|analyst|officer|head|coordinator|champion|specialist|advis[eo]r|architect|partner|president|chief|vp|intern|associate|executive|administrator|supervisor|founder|owner|principal)\b/i.test(String(s || ''));
+// "Business Analytics, Communication and +5 skills" - a skills chip on a role row.
+const isSkillTag = (s) => / and \+\d+ skills?$/i.test(String(s || '')) || /^skills?:/i.test(String(s || ''));
+// "Hybrid" / "Remote" / "On-site" - a work-arrangement chip.
+const isWorkArrangement = (s) => /^(remote|hybrid|on[- ]?site)$/i.test(String(s || '').trim());
 const isLongProse = (s) => s.length > 55 || (/[.!?]$/.test(s) && s.split(/\s+/).length > 4);
 const isControl = (s) => /^(load more|show all|show \d+ more|see more|see less|…?\s*see more|experience|education|skills|licenses & certifications)$/i.test(s.trim());
+// Everything the parsers should never see as a title / company / date.
+const isNoise = (s) => !s || isControl(s) || isSkillTag(s) || isWorkArrangement(s) || /^chevron[- ]?(right|down|left|up)$/i.test(s);
 
 // ---------- profile (main /in/<slug>/ page) ----------
 function scrapeProfile() {
@@ -126,7 +141,7 @@ function scrapeProfile() {
   const canonical = (document.querySelector('link[rel="canonical"]') || {}).href
     || window.location.href.split('?')[0];
   const complete = !!(name && (about || headline));
-  return {
+  const out = {
     url: canonical,
     name,
     headline,
@@ -137,11 +152,22 @@ function scrapeProfile() {
     capturedAt: new Date().toISOString(),
     complete
   };
+
+  // Some accounts render Experience/Education inline on the main page. Grab
+  // them here so the background worker can skip the /details/ sub-page visit.
+  const exp = inlineHistory('experience');
+  if (exp) { out.experience = exp.entries; out.experienceRaw = exp.raw; }
+  const edu = inlineHistory('education');
+  if (edu) { out.education = edu.entries; out.educationRaw = edu.raw; }
+
+  return out;
 }
 
-// ---------- experience / education (the /details/<kind>/ sub-pages) ----------
+// ---------- experience / education ----------
+// Present inline on the main profile ([id*="ExperienceTopLevelSection"]) for
+// some accounts; on /in/<slug>/details/<kind>/ for the rest.
 function parseExperience(seq) {
-  const a = seq.filter((t) => t && !isControl(t));
+  const a = seq.filter((t) => t && !isNoise(t));
   const entries = [];
   let company = null; // inherited from the current grouped-employer header
   let i = 0;
@@ -155,7 +181,7 @@ function parseExperience(seq) {
     let guard = 0;
     while (i < a.length && guard++ < 5) {
       const l = a[i];
-      if (!l || isControl(l) || isEmploymentType(l) || structural(i)) break;
+      if (!l || isNoise(l) || isEmploymentType(l) || structural(i)) break;
       if (!e.location && isPlaceLine(l)) { e.location = l; i++; continue; }
       if (leadsToStructure(i)) break;
       if (!e.location && !isLongProse(l)) e.location = l;
@@ -166,20 +192,26 @@ function parseExperience(seq) {
 
   while (i < a.length) {
     const line = a[i];
-    if (!line || isControl(line) || isEmploymentType(line)) { i++; continue; }
+    if (!line || isNoise(line) || isEmploymentType(line)) { i++; continue; }
 
-    // A stray blurb/description or a leaked location line from the previous entry.
-    if ((isLongProse(line) || isPlaceLine(line)) && !isDateRange(a[i + 1]) && !isBareDuration(a[i + 1])) { i++; continue; }
+    // Not the start of an entry: a leaked location line, or a description blurb
+    // that consumeTail didn't absorb (ends in sentence punctuation, or is long
+    // and the "company" slot after it is really the next role's title).
+    if (isPlaceLine(line) && !isDateRange(a[i + 1]) && !isBareDuration(a[i + 1])) { i++; continue; }
+    if (line.split(/\s+/).length > 3 && !isDateRange(a[i + 1]) && !isBareDuration(a[i + 1]) &&
+        (/[.!?]$/.test(line) || (isLongProse(line) && looksLikeRole(a[i + 1])))) { i++; continue; }
 
     // Grouped-employer header: [group title?] <company> <bare duration> [location...]
     let groupJustSet = false;
-    if (isBareDuration(a[i + 1])) { company = line; i += 2; groupJustSet = true; }
-    else if (isBareDuration(a[i + 2]) && !isDateRange(a[i + 1])) { company = a[i + 1]; i += 3; groupJustSet = true; }
+    if (isBareDuration(a[i + 1])) { company = stripEmpSuffix(line); i += 2; groupJustSet = true; }
+    else if (isBareDuration(a[i + 2]) && !isDateRange(a[i + 1])) { company = stripEmpSuffix(a[i + 1]); i += 3; groupJustSet = true; }
     if (groupJustSet) {
-      // skip the header's own location line(s) - a sub-role title is always
-      // followed immediately by a date range, a location line is not.
+      // the header may carry its own location / work-mode line(s); the first
+      // sub-role begins at the next line whose follower is a date (optionally
+      // via an employment-type line). Skip everything before that.
       while (i < a.length && a[i] && !structural(i) && !isControl(a[i]) &&
-             !isDateRange(a[i + 1]) && !isBareDuration(a[i + 1])) i++;
+             !isDateRange(a[i + 1]) && !isBareDuration(a[i + 1]) &&
+             !(isEmploymentType(a[i + 1]) && isDateRange(a[i + 2]))) i++;
       continue;
     }
 
@@ -193,7 +225,7 @@ function parseExperience(seq) {
     }
     // Flat entry: <title> <company> <date range>
     if (isDateRange(a[i + 2]) && !isDateRange(a[i + 1]) && !isBareDuration(a[i + 1])) {
-      const e = { title: line, company: a[i + 1], dates: a[i + 2] };
+      const e = { title: line, company: stripEmpSuffix(a[i + 1]), dates: a[i + 2] };
       company = e.company;
       i += 3;
       consumeTail(e);
@@ -214,7 +246,7 @@ function parseExperience(seq) {
 }
 
 function parseEducation(seq) {
-  const a = seq.filter((t) => t && !isControl(t));
+  const a = seq.filter((t) => t && !isNoise(t));
   const out = [];
   for (let i = 0; i < a.length && out.length < 10; i++) {
     if (structuralEdu(a[i])) continue;
@@ -228,19 +260,35 @@ function parseEducation(seq) {
   function structuralEdu(s) { return isDateRange(s) || isBareDuration(s) || (!!s && /^\s*(19|20)\d{2}\s*(–|-|to)?\s*((19|20)\d{2})?\s*$/.test(s)); }
 }
 
+// Read a rendered experience/education card (inline on the profile, or the
+// whole card on a /details/ page) into { entries, raw }.
+function readHistoryCard(card, kind) {
+  const seq = orderedText(card);
+  const raw = seq.filter((t) => !isNoise(t)).join('\n').slice(0, 4000);
+  const entries = kind === 'education' ? parseEducation(seq) : parseExperience(seq);
+  return { entries, raw };
+}
+
+// Inline card on the main profile page, if this account's layout has one.
+function inlineHistory(kind) {
+  const label = kind === 'education' ? 'Education' : 'Experience';
+  const card = cardById(label + 'TopLevelSection', label + 'DetailsSection', label + 'Card')
+    || sectionByHeading(label);
+  if (!card || card === document.querySelector('main')) return null;
+  const r = readHistoryCard(card, kind);
+  return r.entries.length ? r : null;
+}
+
 function scrapeDetails(kind) {
   const ch = detectChallenge();
   if (ch.challenged) return { error: 'challenge', why: ch.why };
-  const isEdu = kind === 'education';
-  const card = cardById(isEdu ? 'EducationDetailsSection' : 'ExperienceDetailsSection')
-    || sectionByHeading(isEdu ? 'Education' : 'Experience')
+  const label = kind === 'education' ? 'Education' : 'Experience';
+  const card = cardById(label + 'DetailsSection', label + 'TopLevelSection', label + 'Card')
+    || sectionByHeading(label)
     || document.querySelector('main');
   if (!card) return { error: kind + ' section not found' };
-
-  const seq = orderedText(card).filter((t) => !/^chevron[- ]?(right|down|left|up)$/i.test(t));
-  const raw = seq.filter((t) => !isControl(t)).join('\n').slice(0, 4000);
-  const entries = isEdu ? parseEducation(seq) : parseExperience(seq);
-  return { kind, entries, raw, count: entries.length };
+  const r = readHistoryCard(card, kind);
+  return { kind, entries: r.entries, raw: r.raw, count: r.entries.length };
 }
 
 // ---------- messaging thread (unchanged - class names here still live) ----------

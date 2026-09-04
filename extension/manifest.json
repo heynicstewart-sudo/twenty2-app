@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "T2C Outreach — LinkedIn capture",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Reads (never sends) LinkedIn profiles, threads and your connections list, and syncs them to the T2C Outreach CRM. Read-only, paced, capped.",
   "permissions": ["storage", "tabs", "alarms", "scripting"],
   "host_permissions": [

@@ -25,11 +25,12 @@ adjustable in Options (lower = safer, don't raise them):
 
 - **32–65s randomised gap** between profile loads, plus a **2–5 min break every 8**.
 - **18/hour and 45/day** hard caps (shared across passive + batch). Passive
-  captures count too. A deep batch capture visits 3 pages for one contact
-  (profile → experience → education) in a single ~20s tab session — that reads
-  like a normal "view profile, click Show all" and counts as **one** contact
-  against the caps. Set `deepScrape: false` in Options-stored settings to skip
-  the sub-pages and capture the main card only.
+  captures count too. Where LinkedIn renders Experience/Education inline on the
+  profile (most accounts) the batch reads it there — one page load per contact,
+  same as before. Only the stripped-down profile layout, which hides those
+  sections, makes the batch open `/details/experience/` + `/details/education/`
+  in the same tab (up to 3 loads, still one contact against the caps). Set
+  `deepScrape: false` in Options-stored settings to never open the sub-pages.
 - Batches only run **7am–9pm local**.
 - If any LinkedIn page shows a "browsing too fast" / security-check screen, the
   **batch aborts for the rest of the day** and tells you.
