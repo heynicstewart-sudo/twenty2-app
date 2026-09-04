@@ -9963,6 +9963,83 @@ app.post('/api/campaign/:id/withdraw-connections', async (req, res) => {
   }
 });
 
+// ===================== SIGNAL RE-ENGAGEMENT =====================
+// Jeanne DeWitt Grosser: add value at every touchpoint and stay in reach,
+// because a no today can be a yes a few years later once something changes
+// for them. Dead Contacts is a flat text log with no linked record
+// (Name/Company/Role/Days/Removed - see POST /api/airtable/dead-contact), so
+// matching a fresh signal back to it would mean fragile name/company text
+// matching. This instead uses Campaign Contacts rows at Excluded/Timed Out/
+// Withdrawn - which DO link to a real Contact - whose linked contact has a
+// Job Change Signal on file (only ever populated by the on-demand
+// "Scan for signals" button, never a background job).
+const COLD_STAGES = ['Excluded', 'Timed Out', 'Withdrawn'];
+app.get('/api/campaign/:id/reengagement-candidates', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const campaignName = decodeURIComponent(req.params.id);
+  try {
+    const campaignRecord = await resolveCampaignRecord(campaignName);
+    if (!campaignRecord) return res.status(404).json({ error: 'Campaign not found' });
+    const [rows, contactRecords] = await Promise.all([fetchCampaignContactsRows(), airtableFetchAllRecords('Contacts')]);
+    const byId = {};
+    contactRecords.forEach(r => { byId[r.id] = r.fields || {}; });
+
+    const candidates = rows
+      .filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id))
+      .filter(r => COLD_STAGES.includes(collapseLegacyStage(normalizeSequenceStage(r.fields['Sequence Stage']))))
+      .map(r => {
+        const cid = (r.fields['Contact'] || [])[0] || null;
+        const cf = cid ? (byId[cid] || {}) : {};
+        return { row: r, cid, cf };
+      })
+      .filter(x => x.cid && x.cf['Job Change Signal'])
+      .map(x => ({
+        campaignContactId: x.row.id,
+        contactId: x.cid,
+        contactName: x.cf['Full Name'] || '',
+        linkedInUrl: x.cf['LinkedIn URL'] || '',
+        jobTitle: x.cf['Job Title'] || '',
+        wentColdStage: collapseLegacyStage(normalizeSequenceStage(x.row.fields['Sequence Stage'])),
+        signal: x.cf['Job Change Signal'],
+        signalDate: x.cf['Job Change Signal Date'] || null
+      }))
+      .filter(c => c.contactName)
+      .sort((a, b) => String(b.signalDate || '').localeCompare(String(a.signalDate || '')));
+
+    res.json({ candidates });
+  } catch (err) {
+    console.error('Reengagement candidates error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// One-click "re-engage" - resets the row back to Found so it re-enters the
+// normal Today's Actions flow (Send connection). Never sends anything itself.
+app.post('/api/campaign/:id/contacts/:contactId/reengage', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const campaignName = decodeURIComponent(req.params.id);
+  const contactId = req.params.contactId;
+  try {
+    const campaignRecord = await resolveCampaignRecord(campaignName);
+    if (!campaignRecord) return res.status(404).json({ error: 'Campaign not found' });
+    const rows = await fetchCampaignContactsRows();
+    const row = rows.find(r => (r.fields['Campaign'] || []).includes(campaignRecord.id) && (r.fields['Contact'] || [])[0] === contactId);
+    if (!row) return res.status(404).json({ error: 'Campaign Contacts row not found for this contact' });
+    const today = isoDay(new Date());
+    await airtableWriteAllowingMissingCtaFields('PATCH', CAMPAIGN_CONTACTS_TABLE, {
+      records: [{ id: row.id, fields: {
+        'Sequence Stage': 'Found',
+        'Stage History': appendStageHistory(row.fields['Stage History'], 'Found (re-engaged on signal)', today)
+      } }],
+      typecast: true
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Reengage error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Same "message ${n} in this contact's sequence" CTA-timing logic as the
 // client's ctaStrategyNote() (t2c-outreach-crm.html) - ported here so
 // POST /api/messages/generate can build the identical prompt server-side.
@@ -10089,6 +10166,10 @@ function parseDraftEnvelope(raw) {
           // the reply needs a human/client call - absent on outbound drafts.
           needsAttention: j.needsAttention === true,
           attentionReason: (j.attentionReason || '').trim(),
+          // Risk-vs-upside framing (both drafting prompts, when the contract
+          // asks for it - see FRAMING_JSON_CONTRACT_ADDENDUM).
+          framingUsed: (j.framingUsed === 'Risk' || j.framingUsed === 'Upside') ? j.framingUsed : null,
+          framingReasoning: (j.framingReasoning || '').trim(),
           parsed: true
         };
       }
@@ -10117,7 +10198,18 @@ function draftJsonContract(email) {
   const emailNote = email
     ? ' The "message" value must be the complete email: a "Subject: <specific subject line>" line, then a blank line, then the body.'
     : '';
-  return `\n\nReturn ONLY valid JSON, no markdown fences, no commentary, in exactly this shape:\n{"message": "the message text with placeholders replaced", "ctaIncluded": true or false, "ctaReasoning": "one sentence"}${emailNote}\nSet "ctaIncluded" to true if the message asks for a meeting, call, coffee, demo or reply-to-book, or promotes/offers the lead magnet, course or workshop; false if it is purely relationship-building. In "ctaReasoning", say in one sentence - grounded in what the contact has actually said - why you did or didn't make that ask.`;
+  return `\n\nReturn ONLY valid JSON, no markdown fences, no commentary, in exactly this shape:\n{"message": "the message text with placeholders replaced", "ctaIncluded": true or false, "ctaReasoning": "one sentence", "framingUsed": "Risk or Upside", "framingReasoning": "one sentence"}${emailNote}\nSet "ctaIncluded" to true if the message asks for a meeting, call, coffee, demo or reply-to-book, or promotes/offers the lead magnet, course or workshop; false if it is purely relationship-building. In "ctaReasoning", say in one sentence - grounded in what the contact has actually said - why you did or didn't make that ask.`;
+}
+
+// Risk-vs-upside framing instruction (Jeanne DeWitt Grosser: ~80% of B2B
+// buying is risk-avoidance, not upside-chasing - the founders who respond to
+// "the art of the possible" are the minority). Campaigns.Framing Mode can
+// force one; Auto (the default) lets the model read the contact.
+function framingInstructionText(campaignRecord) {
+  const mode = (campaignRecord.fields || {})['Framing Mode'] || 'Auto';
+  if (mode === 'Always Risk') return `\n\nFraming: frame this around risk-avoidance - what falling behind, delaying, or getting this wrong costs them - not the upside. Set "framingUsed" to "Risk".`;
+  if (mode === 'Always Upside') return `\n\nFraming: frame this around the upside/opportunity - what becomes possible - not risk-avoidance. Set "framingUsed" to "Upside".`;
+  return `\n\nFraming: decide whether this message should lead with risk-avoidance (what falling behind or getting this wrong costs them - right for a risk-averse or enterprise-minded contact) or upside/opportunity (what becomes possible - right for a founder or entrepreneurial visionary who responds to the art of the possible). About 80% of B2B buying is risk-avoidance rather than upside-chasing, so default to Risk unless the contact's seniority or role clearly reads as a founder/visionary. Set "framingUsed" to whichever you used and "framingReasoning" to one sentence why.`;
 }
 
 // True when a draft made an ask earlier than the campaign's configured
@@ -10486,7 +10578,7 @@ ${ctaStrategyNoteText(stageKey, messageNumber, ctaMessage)}${ctaOptionsPromptTex
 
 ${voiceRulesPromptText(voice, emailMode)}${styleCorrectionsPromptText(styleCorrections, stageKey)}${steerPromptText(steer)}
 
-${writeInstruction}${GROUND_IN_SPECIFICS_NOTE}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${examplesNote}${performanceNote}${draftJsonContract(emailMode)}`;
+${writeInstruction}${GROUND_IN_SPECIFICS_NOTE}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${examplesNote}${performanceNote}${framingInstructionText(campaignRecord)}${draftJsonContract(emailMode)}`;
 
   return { promptText, stageKey, styleCorrections, voice, emailMode };
 }
@@ -10554,9 +10646,10 @@ Your job: reply to what they actually said in their most recent message. Move th
 ${voiceRulesPromptText(voice, false)}${styleCorrectionsPromptText(styleCorrections, 'reply')}${steerPromptText(steer)}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${examplesNote}
 
 Also decide whether this reply needs a human at Twenty2 to weigh in before it can be sent - true only if answering properly needs something you can't know: custom pricing or a quote, a technical/scoping question about deliverables, contract or legal terms, or the contact is upset and it needs a careful human touch. A normal question you can answer from the campaign context above is NOT one of these.
+${framingInstructionText(campaignRecord)}
 
 Return ONLY valid JSON, no markdown fences, no commentary, in exactly this shape:
-{"message": "your reply", "ctaIncluded": true or false, "ctaReasoning": "one sentence on why you did or didn't make an ask, grounded in what they said", "needsAttention": true or false, "attentionReason": "if true, one sentence on what a human needs to supply; else empty string"}`;
+{"message": "your reply", "ctaIncluded": true or false, "ctaReasoning": "one sentence on why you did or didn't make an ask, grounded in what they said", "needsAttention": true or false, "attentionReason": "if true, one sentence on what a human needs to supply; else empty string", "framingUsed": "Risk or Upside", "framingReasoning": "one sentence"}`;
 
   return { promptText, stageKey: 'reply', styleCorrections, voice };
 }
@@ -10579,12 +10672,14 @@ async function generateReplyDraftForRow(campaignRecord, contactRecord, row, { st
       'Next Message Draft': message,
       'Reply Draft At': today,
       'Reply Needs Attention': needsAttention,
-      'Reply Attention Note': attentionReason
+      'Reply Attention Note': attentionReason,
+      'Framing Used': envelope.framingUsed,
+      'Framing Reasoning': envelope.framingReasoning
     } }],
     typecast: true
   });
 
-  return { message, needsAttention, attentionReason };
+  return { message, needsAttention, attentionReason, framingUsed: envelope.framingUsed, framingReasoning: envelope.framingReasoning };
 }
 
 // Cheap sentiment tag for a captured reply thread - one of the four the
@@ -10821,7 +10916,9 @@ app.post('/api/campaign/:id/contacts/:contactId/generate-message', async (req, r
       records: [{ id: row.id, fields: {
         'Next Message Draft': message,
         'CTA Brought Forward': ctaBroughtForward,
-        'CTA Judgement Note': ctaReasoning
+        'CTA Judgement Note': ctaReasoning,
+        'Framing Used': envelope.framingUsed,
+        'Framing Reasoning': envelope.framingReasoning
       } }],
       typecast: true
     });
@@ -10838,7 +10935,7 @@ app.post('/api/campaign/:id/contacts/:contactId/generate-message', async (req, r
       }
     }
 
-    res.json({ success: true, message, messageNumber, stage, stageKey, ctaBroughtForward, ctaReasoning, steerRemembered, styleCorrections: updatedCorrections });
+    res.json({ success: true, message, messageNumber, stage, stageKey, ctaBroughtForward, ctaReasoning, framingUsed: envelope.framingUsed, framingReasoning: envelope.framingReasoning, steerRemembered, styleCorrections: updatedCorrections });
   } catch (err) {
     console.error('Generate message error:', err.message);
     res.status(500).json({ error: err.message });
@@ -11165,7 +11262,9 @@ app.get('/api/replies/queue', async (req, res) => {
         draft,
         draftStale: !draft || (!!lastReplyAt && !!draftAt && draftAt < lastReplyAt) || (!!lastReplyAt && !draftAt),
         needsAttention: !!row.fields['Reply Needs Attention'],
-        attentionNote: row.fields['Reply Attention Note'] || ''
+        attentionNote: row.fields['Reply Attention Note'] || '',
+        framingUsed: row.fields['Framing Used'] || null,
+        framingReasoning: row.fields['Framing Reasoning'] || ''
       });
     }
 
@@ -11188,6 +11287,46 @@ app.get('/api/replies/queue', async (req, res) => {
 // generateReplyDraftForRow; an optional steer, when "remember" is ticked, is
 // appended to the campaign's Style Corrections under the 'reply' bucket -
 // identical contract to generate-message's steer handling.
+// "Send an artifact" - Jeanne DeWitt Grosser's "add value at every
+// touchpoint, whether or not they buy" (Vercel's own example: an unsolicited
+// performance/SEO benchmark). Generates a short, genuinely useful signal
+// snapshot about the contact/their company from what's already on file -
+// something they'd keep regardless of whether they ever reply - as an
+// alternative to another straight ask. Not persisted; returned for the
+// operator to paste in manually, same human-approves contract as every
+// other draft in this app.
+app.post('/api/campaign/:id/contacts/:contactId/generate-artifact', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  const contactId = req.params.contactId;
+  try {
+    const contactRecord = await airtableGetRecord('Contacts', contactId);
+    if (!contactRecord) return res.status(404).json({ error: 'Contact not found' });
+    const cf = contactRecord.fields || {};
+    let company = null;
+    const companyId = (cf['Company'] || [])[0];
+    if (companyId) company = await airtableGetRecord('Companies', companyId).catch(() => null);
+    const cofields = (company && company.fields) || {};
+
+    const prompt = `You are writing a short, genuinely useful "signal snapshot" about a LinkedIn contact and their company for T2C Outreach, Twenty2 Collective's outreach CRM - something worth sharing whether or not they ever reply, not a sales pitch.
+
+Contact: ${cf['Full Name'] || 'Unknown'}, ${cf['Job Title'] || ''}.
+Recent posts (last 30 days): ${recentPostsPromptSnippet(cf['Recent Posts'], 30)}
+AI summary: ${stripContactEnrichmentBlock(cf['AI Summary']).trim() || 'none'}
+Company: ${cofields['Company Name'] || 'unknown'}. Overview: ${cofields['Company Overview (AI)'] || cofields['AI Summary'] || 'none on file'}. Latest signal: ${cofields['Latest Signal'] || 'none'}.
+
+Write 3-5 short lines: one genuine, specific observation about them or their company drawn from the above (not generic flattery), framed as something interesting you noticed - not a pitch, no CTA, no mention of any product or service. If there is genuinely nothing specific enough to say, say so plainly instead of inventing detail.
+
+Return ONLY the snapshot text, no preamble, no markdown, no quotation marks around it.`;
+
+    const artifact = await callClaudeText(prompt, 400);
+    res.json({ success: true, artifact: stripEnEmDashes(artifact) });
+  } catch (err) {
+    console.error('Generate artifact error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/campaign/:id/contacts/:contactId/regenerate-reply', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
@@ -11205,7 +11344,7 @@ app.post('/api/campaign/:id/contacts/:contactId/regenerate-reply', async (req, r
     const rows = await fetchCampaignContactsRows();
     const row = await getOrCreateCampaignContactRow(contactId, (contactRecord.fields || {})['Full Name'] || contactId, campaignRecord.id, campaignName, rows);
 
-    const { message, needsAttention, attentionReason } = await generateReplyDraftForRow(campaignRecord, contactRecord, row, { steer });
+    const { message, needsAttention, attentionReason, framingUsed, framingReasoning } = await generateReplyDraftForRow(campaignRecord, contactRecord, row, { steer });
 
     let steerRemembered = false;
     if (steer && steer.trim() && rememberSteer) {
@@ -11217,7 +11356,7 @@ app.post('/api/campaign/:id/contacts/:contactId/regenerate-reply', async (req, r
       }
     }
 
-    res.json({ success: true, message, needsAttention, attentionReason, steerRemembered });
+    res.json({ success: true, message, needsAttention, attentionReason, framingUsed, framingReasoning, steerRemembered });
   } catch (err) {
     console.error('Regenerate reply error:', err.message);
     res.status(500).json({ error: err.message });

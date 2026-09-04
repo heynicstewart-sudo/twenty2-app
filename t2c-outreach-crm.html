@@ -2436,8 +2436,12 @@ function renderReplyCard(r){
 
 function renderReplyDraftArea(r){
   const id = r.campaignContactId;
+  const framingNoteHtml = r.framingUsed
+    ? `<div class="muted" style="font-size:11px;margin-bottom:6px;"><i class="ti ti-scale"></i> Framed around <strong>${esc(r.framingUsed)}</strong>${r.framingReasoning ? ' - ' + esc(r.framingReasoning) : ''}</div>`
+    : '';
   return `
     <textarea id="replyDraft-${id}" rows="5" style="width:100%;margin-bottom:8px;">${esc(r.draft||'')}</textarea>
+    ${framingNoteHtml}
     <div style="width:100%;margin-bottom:8px;padding:8px;border:1px dashed var(--border);border-radius:6px;">
       <div class="muted" style="font-size:11px;margin-bottom:4px;"><i class="ti ti-message-2-cog"></i> Not right? Steer it — ${esc(r.campaignName)} · reply</div>
       <textarea id="reply-${id}-steer" rows="2" style="width:100%;" placeholder="e.g. shorter, drop the second question, don't pitch yet"></textarea>
@@ -2446,10 +2450,37 @@ function renderReplyDraftArea(r){
       </label>
       <button class="btn btn-secondary btn-sm" style="margin-top:6px;" onclick="replyRegenerate('${id}')"><i class="ti ti-refresh"></i> Regenerate</button>
     </div>
-    <div style="display:flex;gap:8px;">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
       <button class="btn btn-primary btn-sm" onclick="replyApprove('${id}')"><i class="ti ti-check"></i> Approve &amp; copy</button>
       <button class="btn btn-secondary btn-sm" onclick="replySkip('${id}')">Skip for now</button>
-    </div>`;
+      <button class="btn btn-ghost btn-sm" onclick="generateReplyArtifact('${id}')" title="Generate a short, genuinely useful observation to share instead of another ask"><i class="ti ti-gift"></i> Send an artifact instead</button>
+    </div>
+    <div id="replyArtifact-${id}" style="margin-top:8px;"></div>`;
+}
+
+async function generateReplyArtifact(id){
+  const r = (window.__repliesById || {})[id];
+  const el = document.getElementById('replyArtifact-'+id);
+  if(!r || !el) return;
+  el.innerHTML = '<span class="muted" style="font-size:11.5px;"><i class="ti ti-loader-2"></i> Generating…</span>';
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(r.campaignName)}/contacts/${r.contactId}/generate-artifact`, { method:'POST' });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    el.innerHTML = `
+      <div class="muted" style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;">Shareable insight - not a pitch</div>
+      <textarea id="replyArtifactText-${id}" rows="4" style="width:100%;">${esc(data.artifact)}</textarea>
+      <button class="btn btn-secondary btn-sm" style="margin-top:6px;" onclick="copyReplyArtifact('${id}')"><i class="ti ti-copy"></i> Copy</button>`;
+  } catch(err){
+    el.innerHTML = `<span class="muted" style="font-size:11.5px;">Could not generate: ${esc(err.message)}</span>`;
+  }
+}
+
+async function copyReplyArtifact(id){
+  const ta = document.getElementById('replyArtifactText-'+id);
+  if(!ta) return;
+  try { await navigator.clipboard.writeText(ta.value); toast('Copied', 'success'); }
+  catch(e){ ta.focus(); ta.select(); document.execCommand('copy'); toast('Copied', 'success'); }
 }
 
 function toggleReplyThread(id){
@@ -2482,6 +2513,8 @@ async function replyRegenerate(id){
     r.draftStale = false;
     r.needsAttention = !!data.needsAttention;
     r.attentionNote = data.attentionReason || '';
+    r.framingUsed = data.framingUsed || null;
+    r.framingReasoning = data.framingReasoning || '';
     r.__original = data.message;
     if(steer) toast(data.steerRemembered ? 'Steer applied and saved as a standing rule' : 'Steer applied to this draft', 'success');
     area.innerHTML = renderReplyDraftArea(r);
@@ -5546,11 +5579,14 @@ async function handleGenerateFastMessage(cid){
     const ctaNoteHtml = data.ctaBroughtForward
       ? `<div style="font-size:11.5px;color:var(--warning,#b45309);background:var(--warning-bg,#fef3c7);border-radius:6px;padding:6px 9px;margin-bottom:8px;">CTA brought forward early - ${esc(data.ctaReasoning || 'based on the conversation so far')}</div>`
       : '';
+    const framingNoteHtml = data.framingUsed
+      ? `<div class="muted" style="font-size:11px;margin-bottom:8px;"><i class="ti ti-scale"></i> Framed around <strong>${esc(data.framingUsed)}</strong>${data.framingReasoning ? ' - ' + esc(data.framingReasoning) : ''}</div>`
+      : '';
     const ruleCount = campaign ? campaignStyleRules(campaign, stageKey).length : 0;
     const stageLabel = { connect:'Connection request', m1:'Message 1', m2:'Message 2', cta:'CTA' }[stageKey] || stageKey;
     area.innerHTML = `
       <textarea id="fastActionDraft-${cid}" rows="4" style="width:100%;margin-bottom:8px;">${esc(data.message)}</textarea>
-      ${ctaNoteHtml}
+      ${ctaNoteHtml}${framingNoteHtml}
       <div style="width:100%;margin-bottom:8px;padding:8px;border:1px dashed var(--border);border-radius:6px;">
         <div class="muted" style="font-size:11px;margin-bottom:4px;"><i class="ti ti-message-2-cog"></i> Not right? Steer it — ${esc(action.campaignName)} · ${esc(stageLabel)}${ruleCount ? ` · ${ruleCount} standing rule${ruleCount===1?'':'s'}` : ''}</div>
         <textarea id="fast-${cid}-steer" rows="2" style="width:100%;" placeholder="e.g. too long and too hedgy, 3 sentences, no 'I might be wrong' caveats"></textarea>
@@ -12113,6 +12149,8 @@ function renderCampaignStrategyTab(campaign){
 
   ${renderConnectionTimeoutSection(campaign)}
 
+  ${renderReengagementSection(campaign)}
+
   ${renderAngleLibrarySection(campaign)}
 
   ${renderCampaignMessagingSection(campaign)}
@@ -12248,6 +12286,65 @@ function renderSegmentationGrid(campaign){
           <tr><td class="perf-name">${esc(c.companyName)}</td><td>${esc(c.sizeBand||'—')}</td><td>${esc(c.momentum||'—')}</td><td>${esc(c.workloadType||'—')}</td></tr>
         `).join('')}</tbody>
       </table></div>`}
+  </div>`;
+}
+
+// ---- Signal re-engagement ----
+// Jeanne DeWitt Grosser: add value at every touch and stay in reach - a no
+// today can become a yes years later once something changes for them. Reads
+// Campaign Contacts rows that went cold (Excluded/Timed Out/Withdrawn) whose
+// linked contact has a Job Change Signal on file (only ever populated by the
+// existing on-demand "Scan for signals" button on Home, never automatically).
+async function loadReengagementCandidates(campaign){
+  window.__reengagement = window.__reengagement || {};
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaignRouteKey(campaign))}/reengagement-candidates`);
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__reengagement[campaign.id] = data.candidates || [];
+  } catch(err){
+    window.__reengagement[campaign.id] = { error: err.message };
+  }
+  if(window.__campaignDetailId === campaign.id && window.__campaignDetailTab === 'strategy') renderPage();
+}
+
+async function reengageContact(campaignId, contactId){
+  const campaign = state.campaigns.find(c => c.id === campaignId);
+  if(!campaign) return;
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaignRouteKey(campaign))}/contacts/${contactId}/reengage`, { method:'POST' });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    toast('Back in the funnel - will show up in Today\'s Actions to send a fresh connection request', 'success');
+    const list = window.__reengagement && window.__reengagement[campaignId];
+    if(Array.isArray(list)) window.__reengagement[campaignId] = list.filter(c => c.contactId !== contactId);
+    if(window.__campaignSequenceStages) delete window.__campaignSequenceStages[campaignId];
+    renderPage();
+  } catch(err){
+    toast('Could not re-engage: ' + err.message, 'warn');
+  }
+}
+
+function renderReengagementSection(campaign){
+  const data = window.__reengagement && window.__reengagement[campaign.id];
+  if(data === undefined) loadReengagementCandidates(campaign);
+  const list = Array.isArray(data) ? data : null;
+  if(list && !list.length) return '';
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title" style="font-size:13px;"><i class="ti ti-refresh-alert"></i> Worth re-engaging</div>
+    <div class="muted" style="font-size:12px;margin-bottom:8px;">Contacts who went cold in this campaign but have a signal on file since - a job change, a new role. Re-engaging just puts them back at "Found" so they get a fresh connection request; nothing sends automatically.</div>
+    ${!data ? '<span class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Checking…</span>' :
+      data.error ? `<span class="muted" style="font-size:12.5px;">Could not load: ${esc(data.error)}</span>` :
+      list.map(c => `
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--border-light);">
+          <div style="font-size:12.5px;">
+            <strong>${esc(c.contactName)}</strong> <span class="muted">— ${esc(c.jobTitle||'')}${c.linkedInUrl?` · <a href="${esc(c.linkedInUrl)}" target="_blank" rel="noopener">LinkedIn</a>`:''}</span>
+            <div class="muted" style="font-size:11px;margin-top:2px;">${esc(c.signal)}</div>
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="reengageContact('${campaign.id}','${c.contactId}')">Re-engage</button>
+        </div>
+      `).join('')}
   </div>`;
 }
 
