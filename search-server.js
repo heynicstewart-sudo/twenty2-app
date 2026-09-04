@@ -4860,7 +4860,10 @@ app.get('/api/campaign/:id/funnel', async (req, res) => {
 // ads), the live state of every campaign (funnel, reply-by-message,
 // drop-off, reply-by-role, CTA effect), and a Claude-written narrative +
 // key insights + recommendations grounded only in those numbers.
-const WEEKLY_REPORT_SYSTEM_PROMPT = `You write the weekly client progress report for Twenty2 Collective, a Perth-based Agile delivery and change-management consultancy. Audience: the client. Tone: plain, confident, specific. UK/AU English, no em dashes, no marketing fluff.
+function weeklyReportSystemPrompt() {
+  const t = currentTenant();
+  const who = t && t.name ? `${t.name}${(t.profile && t.profile.descriptor) ? `, ${t.profile.descriptor}` : ''}` : 'this client';
+  return `You write the weekly client progress report for ${who}. Audience: the client. Tone: plain, confident, specific. UK/AU English, no em dashes, no marketing fluff.
 
 You are given: a summary of what was done this week (content, SEO, LinkedIn outreach, Google Ads) and, for every live campaign, its funnel counts, per-message reply rates, the biggest drop-off point, which job titles are replying, and how early-CTA messages are landing.
 
@@ -4873,6 +4876,7 @@ Return ONLY valid JSON in exactly this shape:
   "recommendations": ["3-5 concrete next steps, each tied to a number or pattern above"]
 }
 Every number you cite must come from the data given. If a campaign has too little data (under ~10 messages sent), say so plainly rather than over-reading it. Do not invent conversions - if no meetings are booked, say that directly.`;
+}
 
 function _weekBounds() {
   const end = new Date(); end.setHours(23, 59, 59, 999);
@@ -4885,9 +4889,31 @@ function _inWeek(dateStr, start, end) {
   return !isNaN(d) && d >= start && d <= end;
 }
 
+// Reports run per client - the caller passes ?client=<slug> and the whole
+// read + narrative runs inside that client's tenant context (its own base,
+// its own keys), same pattern as /api/agency/overview. No slug -> the
+// request's own active client (the cookie-resolved tenant).
 app.get('/api/report/weekly', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   try {
+    const slug = (req.query.client || '').trim();
+    let tenant = currentTenant();
+    if (slug) {
+      const clients = await getClients();
+      const found = clients.find(c => c.slug === slug && c.status !== 'Paused');
+      if (!found) return res.status(404).json({ error: `Client "${slug}" not found or paused` });
+      tenant = found;
+    }
+    const out = await tenantALS.run(tenant, () => buildWeeklyReport());
+    res.json(out);
+  } catch (err) {
+    console.error('Weekly report error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+async function buildWeeklyReport() {
+  {
     const wk = _weekBounds();
     const [campaignRecords, ccRows, tpRecords, contactRecords, contentRecords, dealRecords] = await Promise.all([
       airtableFetchAllRecords('Campaigns'),
@@ -5047,7 +5073,7 @@ app.get('/api/report/weekly', async (req, res) => {
             earlyCtaEffect: c.earlyCta
           }))
         };
-        const raw = await callClaudeMessages(`DATA:\n${JSON.stringify(payload, null, 2)}`, 1800, WEEKLY_REPORT_SYSTEM_PROMPT);
+        const raw = await callClaudeMessages(`DATA:\n${JSON.stringify(payload, null, 2)}`, 1800, weeklyReportSystemPrompt());
         const m = stripCodeFences(raw).match(/\{[\s\S]*\}/);
         ai = m ? JSON.parse(m[0]) : null;
       } catch (e) {
@@ -5056,7 +5082,7 @@ app.get('/api/report/weekly', async (req, res) => {
       }
     }
 
-    res.json({
+    return {
       account: currentTenant().name || 'Client',
       weekOf: `${wk.startStr} to ${wk.endStr}`,
       weekStart: wk.startStr,
@@ -5065,12 +5091,9 @@ app.get('/api/report/weekly', async (req, res) => {
       thisWeek: { content: contentThisWeek, contentByType, outreach, googleAds, newCampaigns: newCampaignsThisWeek },
       campaigns,
       ai
-    });
-  } catch (err) {
-    console.error('Weekly report error:', err.message);
-    res.status(500).json({ error: err.message });
+    };
   }
-});
+}
 
 app.get('/api/sales/insights', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });

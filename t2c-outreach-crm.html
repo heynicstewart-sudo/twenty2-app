@@ -1594,13 +1594,8 @@ function renderAgencyPage(){
   </div>
 
   <div class="card" style="margin-bottom:18px;">
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
-      <div>
-        <div class="section-title" style="margin-bottom:2px;"><i class="ti ti-file-text"></i> Weekly client report</div>
-        <div class="muted" style="font-size:12px;">A one-page PDF: what got done this week, and the live state of every campaign. The Engine reads the whole account before writing it.</div>
-      </div>
-      <button class="btn btn-primary btn-sm" id="weeklyReportBtn" onclick="generateWeeklyReport()"><i class="ti ti-download"></i> Export report (PDF)</button>
-    </div>
+    <div class="section-title" style="margin-bottom:2px;"><i class="ti ti-file-text"></i> Weekly client report</div>
+    <div class="muted" style="font-size:12px;">Each client card below has an <strong>Export report</strong> button - a one-page PDF for that client only, covering what got done this week and the live state of every campaign. The Engine reads that client's whole account before writing it.</div>
     <div id="weeklyReportStatus" class="muted" style="font-size:12px;margin-top:10px;display:none;"></div>
   </div>
 
@@ -1611,14 +1606,16 @@ function renderAgencyPage(){
 // ---- Weekly report: fetch the whole-account rundown, render a one-page
 // sheet, rasterise it to a PDF. Visuals are CSS bars, not Chart.js, so the
 // html2canvas capture is deterministic. ----
-async function generateWeeklyReport(){
-  const btn = document.getElementById('weeklyReportBtn');
+async function generateWeeklyReport(slug){
+  const btn = slug ? document.getElementById('weeklyReportBtn-' + slug) : null;
   const status = document.getElementById('weeklyReportStatus');
+  const clientName = (((window.__agencyOverview || {}).clients || []).find(x => x.slug === slug) || {}).name || '';
+  const label = clientName || 'this client';
   const setStatus = (t) => { if(status){ status.style.display='block'; status.textContent = t; } };
   if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Reading the account...'; }
-  setStatus('Pulling contacts, campaigns, touch points, content and ads, then asking the Engine for the read. This takes ~20-40s.');
+  setStatus(`${label}: pulling contacts, campaigns, touch points, content and ads, then asking the Engine for the read. This takes ~20-40s.`);
   try {
-    const res = await fetch('/api/report/weekly');
+    const res = await fetch('/api/report/weekly' + (slug ? '?client=' + encodeURIComponent(slug) : ''));
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
 
@@ -1653,7 +1650,8 @@ async function generateWeeklyReport(){
         y += slice.height;
       }
     }
-    pdf.save(`Twenty2-Weekly-Report-${data.weekEnd || isoDate(TODAY)}.pdf`);
+    const fnameClient = (data.account || clientName || 'Weekly').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    pdf.save(`${fnameClient}-Weekly-Report-${data.weekEnd || isoDate(TODAY)}.pdf`);
     stage.innerHTML = '';
     setStatus('Done - check your downloads.');
     setTimeout(() => { if(status) status.style.display='none'; }, 6000);
@@ -1799,6 +1797,7 @@ function renderAgencyOverviewGrid(data){
               ${stat('Campaigns', c.activeCampaigns ?? '—')}
               ${stat('Touches / wk', c.touchPointsThisWeek ?? '—')}
             </div>`;
+      const reportBtn = c.paused ? '' : `<button class="btn btn-secondary btn-sm" style="width:100%;margin-top:8px;" id="weeklyReportBtn-${esc(c.slug)}" onclick="event.stopPropagation();generateWeeklyReport('${esc(c.slug)}')"><i class="ti ti-download"></i> Export report (PDF)</button>`;
       return `<div class="card" style="cursor:pointer;position:relative;" onclick="switchClient('${esc(c.slug)}')">
         <button class="btn btn-ghost btn-sm" title="Edit client" style="position:absolute;top:8px;right:8px;padding:4px 7px;" onclick="event.stopPropagation();openClientForm('${esc(c.slug)}')"><i class="ti ti-settings"></i></button>
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
@@ -1807,6 +1806,7 @@ function renderAgencyOverviewGrid(data){
         </div>
         <div class="muted" style="font-size:11px;">${esc([c.city, c.region].filter(Boolean).join(', '))}</div>
         ${body}
+        ${reportBtn}
       </div>`;
     }).join('') + '</div>';
 }
