@@ -5193,7 +5193,6 @@ async function extensionCaptureQueue() {
   const liveIds = new Set(campaignRecords.filter(r => (r.fields['Status'] || '') === 'Live').map(r => r.id));
   const campNameById = {}; campaignRecords.forEach(r => { campNameById[r.id] = r.fields['Name'] || r.fields['Campaign Name'] || ''; });
   const cById = {}; contactRecords.forEach(r => { cById[r.id] = r; });
-  const thirtyAgo = Date.now() - 30 * 864e5;
   const seen = new Set();
   const items = [];
   for (const row of ccRows) {
@@ -5207,8 +5206,14 @@ async function extensionCaptureQueue() {
     const c = cById[cid]; if (!c) continue;
     const url = c.fields['LinkedIn URL'] || '';
     if (!normLinkedInUrl(url)) continue;
+    // Skip anyone who already has profile enrichment from ANY source. The
+    // Serper-era contacts already had their real profile details hand-pasted
+    // into Notes, so re-scraping them just burns a daily slot. Only brand-new
+    // connections with no enrichment yet go in the queue.
     const enr = parseContactEnrichment(c.fields['AI Summary']);
-    if (enr && enr.source === 'linkedin' && enr.date && new Date(enr.date).getTime() > thirtyAgo) continue;
+    if (enr) continue;
+    // ...also skip if a prior LinkedIn capture already left its notes block.
+    if (/===== FROM LINKEDIN =====/.test(c.fields['Notes'] || '')) continue;
     seen.add(cid);
     items.push({
       contactId: cid, name: c.fields['Full Name'] || '', url,
