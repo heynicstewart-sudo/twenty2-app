@@ -1710,7 +1710,7 @@ app.post('/api/airtable/campaign', async (req, res) => {
   // so they're folded into the existing "Strategy Notes" field as
   // labelled sections rather than dropped - that field already exists and
   // is semantically the right home for them.
-  const { name, goal, product, targetIcp, contactIds, gridIds, sequenceTemplates, strategyNotes, pitchAngle, objectionHandling, successMetric, startDate, status, ctas, contentContext, campaignType, connectionNoteMode, sequenceLength, ctaMessage } = req.body;
+  const { name, goal, product, targetIcp, contactIds, gridIds, sequenceTemplates, strategyNotes, pitchAngle, objectionHandling, successMetric, startDate, status, ctas, contentContext, campaignType, connectionNoteMode, sequenceLength, ctaMessage, angleLibrary, framingMode } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
   const normalizedType = (campaignType || '').toLowerCase() === 'email' ? 'Email' : ((campaignType || '').toLowerCase() === 'linkedin' ? 'LinkedIn' : '');
   const normalizedNoteMode = ['Note', 'No note', 'Split test'].includes(connectionNoteMode) ? connectionNoteMode : '';
@@ -1756,6 +1756,8 @@ app.post('/api/airtable/campaign', async (req, res) => {
       if (normalizedNoteMode) patchFields['Connection Note Mode'] = normalizedNoteMode;
       if (seqLen !== null) patchFields['Sequence Length'] = seqLen;
       if (ctaMsg !== null) patchFields['CTA Message'] = ctaMsg;
+      if (Array.isArray(angleLibrary) && angleLibrary.length) patchFields['Angle Library'] = JSON.stringify(angleLibrary);
+      if (['Auto', 'Always Risk', 'Always Upside'].includes(framingMode)) patchFields['Framing Mode'] = framingMode;
 
       if (Object.keys(patchFields).length) {
         await airtableWriteAllowingMissingCtaFields('PATCH', 'Campaigns', { records: [{ id: existing.id, fields: patchFields }] });
@@ -1783,6 +1785,8 @@ app.post('/api/airtable/campaign', async (req, res) => {
     if (normalizedNoteMode) fields['Connection Note Mode'] = normalizedNoteMode;
     if (seqLen !== null) fields['Sequence Length'] = seqLen;
     if (ctaMsg !== null) fields['CTA Message'] = ctaMsg;
+    if (Array.isArray(angleLibrary) && angleLibrary.length) fields['Angle Library'] = JSON.stringify(angleLibrary);
+    if (['Auto', 'Always Risk', 'Always Upside'].includes(framingMode)) fields['Framing Mode'] = framingMode;
     const data = await airtableWriteAllowingMissingCtaFields('POST', 'Campaigns', { records: [{ fields }] });
     res.json({ success: true, updated: false, recordId: data.records[0].id });
   } catch (err) {
@@ -9058,6 +9062,165 @@ If a field can't be determined from the results, say "Not enough public informat
   }
 });
 
+// ===================== ICP SEGMENTATION ("company universe") =====================
+// From the Jeanne DeWitt Grosser podcast: one row per company, a small set
+// of attributes (she caps it at 3) that predict fit AND pick the message
+// angle - not five loose tags. Reads what's already on file (AI Summary /
+// Company Overview / Industry) rather than running new external research, so
+// this needs no extra API key beyond ANTHROPIC_API_KEY. On-demand only.
+
+const ICP_SIZE_BANDS = ['Micro', 'Small', 'Mid', 'Large'];
+const ICP_MOMENTUM = ['Hiring', 'Funded', 'Leadership Change', 'Flat'];
+
+function buildIcpScoringPrompt(companyRecord) {
+  const f = companyRecord.fields || {};
+  return `You are scoring one company for T2C Outreach, Twenty2 Collective's outreach CRM, against a 3-attribute segmentation model.
+
+Company: ${f['Company Name'] || 'Unknown'}
+Industry: ${f['Industry'] || 'not recorded'}. Sector: ${f['Sector'] || 'not recorded'}.
+Overview: ${f['Company Overview (AI)'] || f['AI Summary'] || 'none on file'}
+Latest signal: ${f['Latest Signal'] || 'none'}${f['Signal Date'] ? ` (${f['Signal Date']})` : ''}
+
+Score exactly these 3 attributes from what's above - do not invent detail that isn't supported by it:
+1. sizeBand - one of: ${ICP_SIZE_BANDS.join(', ')}. If genuinely unclear, use "Small" as the conservative default.
+2. momentum - one of: ${ICP_MOMENTUM.join(', ')}. Only pick Hiring/Funded/Leadership Change if the overview or latest signal actually supports it; otherwise "Flat".
+3. workloadType - a short 1-3 word label for this company's business model or vertical (e.g. "Professional Services", "Trades", "SaaS", "Manufacturing") - your own judgement, not a fixed list.
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{"sizeBand": "string", "momentum": "string", "workloadType": "string"}`;
+}
+
+async function scoreIcpForCompany(companyRecord) {
+  const parsed = await callClaudeJson(buildIcpScoringPrompt(companyRecord), 300);
+  const sizeBand = ICP_SIZE_BANDS.includes(parsed.sizeBand) ? parsed.sizeBand : 'Small';
+  const momentum = ICP_MOMENTUM.includes(parsed.momentum) ? parsed.momentum : 'Flat';
+  const workloadType = (parsed.workloadType || 'Other').trim().slice(0, 60) || 'Other';
+  const today = new Date().toISOString().slice(0, 10);
+  await airtableWriteAllowingMissingCtaFields('PATCH', 'Companies', {
+    records: [{ id: companyRecord.id, fields: {
+      'ICP Size Band': sizeBand, 'ICP Momentum': momentum, 'ICP Workload Type': workloadType, 'ICP Scored At': today
+    } }],
+    typecast: true
+  });
+  return { sizeBand, momentum, workloadType };
+}
+
+// Explicit clear - POST /api/airtable/campaign only ever writes Angle
+// Library when the array is non-empty (same "never blank a real field"
+// convention as CTAs/Content Context), so removing the last entry needs its
+// own route rather than an empty-array PATCH that would be silently skipped.
+app.post('/api/campaign/:id/clear-angle-library', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const campaignName = decodeURIComponent(req.params.id);
+  try {
+    const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
+    if (!campaignRecord) return res.status(404).json({ error: `Campaign "${campaignName}" not found` });
+    await airtableWriteAllowingMissingCtaFields('PATCH', 'Campaigns', { records: [{ id: campaignRecord.id, fields: { 'Angle Library': '' } }] });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Clear angle library error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/companies/:id/score-icp', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  try {
+    const companyRecord = await airtableGetRecord('Companies', req.params.id);
+    if (!companyRecord) return res.status(404).json({ error: 'Company not found' });
+    const result = await scoreIcpForCompany(companyRecord);
+    res.json({ success: true, companyId: companyRecord.id, companyName: companyRecord.fields['Company Name'] || '', ...result });
+  } catch (err) {
+    console.error('Score ICP error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Bulk-scores every company reachable from this campaign's Campaign Contacts
+// rows (via each contact's linked Company) that hasn't been scored yet.
+// Capped per call so one click can't fire an unbounded number of Claude calls.
+const ICP_BULK_CAP = 30;
+app.post('/api/campaign/:id/score-icp-bulk', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  const campaignName = decodeURIComponent(req.params.id);
+  try {
+    const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
+    if (!campaignRecord) return res.status(404).json({ error: `Campaign "${campaignName}" not found` });
+
+    const [rows, contactRecords, companyRecords] = await Promise.all([
+      fetchCampaignContactsRows(), airtableFetchAllRecords('Contacts'), airtableFetchAllRecords('Companies')
+    ]);
+    const contactById = {}; contactRecords.forEach(r => { contactById[r.id] = r; });
+    const companyById = {}; companyRecords.forEach(r => { companyById[r.id] = r; });
+
+    const companyIds = new Set();
+    rows.filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id)).forEach(r => {
+      const contactId = (r.fields['Contact'] || [])[0];
+      const contact = contactId ? contactById[contactId] : null;
+      const companyId = contact ? (contact.fields['Company'] || [])[0] : null;
+      if (companyId) companyIds.add(companyId);
+    });
+
+    const toScore = [...companyIds]
+      .map(id => companyById[id])
+      .filter(c => c && !c.fields['ICP Scored At'])
+      .slice(0, ICP_BULK_CAP);
+
+    const results = [];
+    for (const company of toScore) {
+      try {
+        const r = await scoreIcpForCompany(company);
+        results.push({ companyId: company.id, companyName: company.fields['Company Name'] || '', ...r });
+      } catch (err) {
+        console.warn(`ICP scoring failed for ${company.fields['Company Name'] || company.id} (non-fatal):`, err.message);
+      }
+    }
+    res.json({ success: true, totalCompanies: companyIds.size, alreadyScored: companyIds.size - toScore.length, scored: results.length, results });
+  } catch (err) {
+    console.error('Bulk score ICP error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Companies bucketed by Size x Momentum for the campaign's segmentation grid.
+app.get('/api/campaign/:id/segmentation', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const campaignName = decodeURIComponent(req.params.id);
+  try {
+    const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
+    if (!campaignRecord) return res.status(404).json({ error: `Campaign "${campaignName}" not found` });
+
+    const [rows, contactRecords, companyRecords] = await Promise.all([
+      fetchCampaignContactsRows(), airtableFetchAllRecords('Contacts'), airtableFetchAllRecords('Companies')
+    ]);
+    const contactById = {}; contactRecords.forEach(r => { contactById[r.id] = r; });
+    const companyById = {}; companyRecords.forEach(r => { companyById[r.id] = r; });
+
+    const companyIds = new Set();
+    rows.filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id)).forEach(r => {
+      const contactId = (r.fields['Contact'] || [])[0];
+      const contact = contactId ? contactById[contactId] : null;
+      const companyId = contact ? (contact.fields['Company'] || [])[0] : null;
+      if (companyId) companyIds.add(companyId);
+    });
+
+    const companies = [...companyIds].map(id => companyById[id]).filter(Boolean).map(c => ({
+      companyId: c.id,
+      companyName: c.fields['Company Name'] || '',
+      sizeBand: c.fields['ICP Size Band'] || null,
+      momentum: c.fields['ICP Momentum'] || null,
+      workloadType: c.fields['ICP Workload Type'] || null,
+      scored: !!c.fields['ICP Scored At']
+    }));
+    res.json({ companies, totalCompanies: companies.length, scoredCount: companies.filter(c => c.scored).length });
+  } catch (err) {
+    console.error('Segmentation error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/companies/notes', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   const { name, noteText } = req.body;
@@ -10136,6 +10299,35 @@ function campaignMessagePerformanceNote(touchPoints, campaignName, messageNumber
   return `\n\nHere's how message ${messageNumber} has actually landed with other contacts in this campaign so far - use this as a live feedback loop, leaning into whatever's getting replies and away from whatever isn't (learn the pattern, don't copy either verbatim):\n${section('Got a reply', replied)}\n${section('No reply after a few days', noReply)}${forwardNote}`;
 }
 
+// Mad-Libs personalization (Jeanne DeWitt Grosser / Project Roseland): if the
+// campaign has an Angle Library and this contact's company has been ICP-
+// scored, and one entry's attributes match, hand the drafter that pre-
+// approved angle as the preferred hook. Empty library or unscored company ->
+// empty string, i.e. zero behaviour change from before this feature existed.
+// One extra Airtable read per draft, but only when the library is non-empty.
+async function angleLibraryNote(campaignRecord, contactRecord) {
+  const raw = (campaignRecord.fields || {})['Angle Library'];
+  if (!raw || !raw.trim()) return '';
+  let entries;
+  try { entries = JSON.parse(raw); } catch (e) { return ''; }
+  if (!Array.isArray(entries) || !entries.length) return '';
+
+  const companyId = ((contactRecord.fields || {})['Company'] || [])[0];
+  if (!companyId) return '';
+  let company;
+  try { company = await airtableGetRecord('Companies', companyId); } catch (e) { return ''; }
+  if (!company || !company.fields['ICP Scored At']) return '';
+
+  const cf = company.fields;
+  const entry = entries.find(e =>
+    (!e.sizeBand || e.sizeBand === 'any' || e.sizeBand === cf['ICP Size Band']) &&
+    (!e.momentum || e.momentum === 'any' || e.momentum === cf['ICP Momentum']) &&
+    (!e.workloadType || e.workloadType === 'any' || e.workloadType.toLowerCase() === (cf['ICP Workload Type'] || '').toLowerCase())
+  );
+  if (!entry || !entry.angle) return '';
+  return `\n\nPreferred angle for this profile (${cf['ICP Size Band'] || '?'} / ${cf['ICP Momentum'] || '?'} / ${cf['ICP Workload Type'] || '?'}): ${entry.angle}\nUse this as the primary hook unless the conversation has clearly moved past it - don't paste it verbatim, weave it in naturally.`;
+}
+
 // Single source of truth for what an in-campaign outreach draft (message 1, 2
 // or the CTA) is told - used by BOTH the Today's Actions fast-action card
 // (POST /api/campaign/:id/contacts/:contactId/generate-message) and the
@@ -10220,7 +10412,7 @@ Campaign: "${resolvedName}". Goal: ${camp['Goal'] || 'not recorded'}. Product: $
 ${template ? `\nTemplate for this stage:\n${template}\n` : ''}
 Contact: ${cf['Full Name'] || 'Unknown'}, ${cf['Job Title'] || ''}. Profile notes: ${cf['Notes'] || 'none'}. AI summary: ${aiSummaryNarrative || 'none yet'}. Conversation so far: ${cf['Conversation Context'] || 'none yet - this is the first message'}.
 Recent posts (last 30 days only): ${recentPosts}${enrichmentNote}${imageNote ? '\n' + imageNote : ''}
-${offerNote}
+${offerNote}${await angleLibraryNote(campaignRecord, contactRecord)}
 
 ${ctaStrategyNoteText(stageKey, messageNumber, ctaMessage)}${ctaOptionsPromptText(ctaOptions)}
 
@@ -10284,7 +10476,7 @@ async function buildCampaignReplyPrompt({ campaignRecord, contactRecord, steer }
 Campaign: "${resolvedName}". Goal: ${camp['Goal'] || 'not recorded'}. Product: ${camp['Product'] || 'not recorded'}. Target ICP: ${camp['Target ICP'] || 'not recorded'}. Strategy notes: ${camp['Strategy Notes'] || 'none recorded'}.
 
 Contact: ${cf['Full Name'] || 'Unknown'}, ${cf['Job Title'] || ''}. Profile notes: ${cf['Notes'] || 'none'}. AI summary: ${aiSummaryNarrative || 'none yet'}.${enrichmentNote}
-${offerNote}
+${offerNote}${await angleLibraryNote(campaignRecord, contactRecord)}
 
 Full conversation so far (most recent entry first if dated; "Marcus:" is you, the other name is them):
 ${cf['Conversation Context'] || '(no thread captured - treat their most recent message as a short positive reply and move things forward)'}

@@ -7929,6 +7929,8 @@ async function hydrateCampaignsFromAirtable(){
         connectionNoteMode: ['Note','No note','Split test'].includes(f['Connection Note Mode']) ? f['Connection Note Mode'] : 'Note',
         sequenceLength: (Number.isFinite(+f['Sequence Length']) && +f['Sequence Length'] >= 1 && +f['Sequence Length'] <= 8) ? Math.round(+f['Sequence Length']) : 3,
         ctaMessage: (Number.isFinite(+f['CTA Message']) && +f['CTA Message'] >= 1 && +f['CTA Message'] <= 8) ? Math.round(+f['CTA Message']) : 3,
+        angleLibrary: (() => { try { const j = JSON.parse(f['Angle Library']||'[]'); return Array.isArray(j) ? j : []; } catch(e){ return []; } })(),
+        framingMode: ['Auto','Always Risk','Always Upside'].includes(f['Framing Mode']) ? f['Framing Mode'] : 'Auto',
         contentContext: f['Content Context'] || '',
         styleCorrections: parseCampaignStyleCorrections(f['Style Corrections']),
         conversationHistory: []
@@ -11580,7 +11582,9 @@ function campaignsForGrid(gridId){
 
 function renderCampaignGridTab(campaign){
   const grids = (campaign.gridIds||[]).map(id => state.grids.find(g=>g.id===id)).filter(Boolean);
+  if(!(window.__campaignSegmentation && window.__campaignSegmentation[campaign.id])) loadCampaignSegmentation(campaign);
   return `
+  ${renderSegmentationGrid(campaign)}
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-grid-dots"></i> Contact grids</div>
@@ -12105,6 +12109,8 @@ function renderCampaignStrategyTab(campaign){
 
   ${renderConnectionTimeoutSection(campaign)}
 
+  ${renderAngleLibrarySection(campaign)}
+
   ${renderCampaignMessagingSection(campaign)}
 
   <div class="card">
@@ -12122,6 +12128,125 @@ function renderCampaignStrategyTab(campaign){
 // their Connection Sent Date is older than the account-level Settings
 // "Days until flagged" value. On-demand via the button below rather than
 // automatic, same pattern as Engine redraft / Run Engine elsewhere.
+// ---- ICP segmentation + Angle Library (Mad-Libs personalization) ----
+// From the Jeanne DeWitt Grosser podcast: 3 attributes per company (size,
+// momentum, workload type) that predict fit AND select a pre-approved
+// message angle, rather than the drafter improvising a fresh hook every
+// time. Empty library = zero change to existing drafting behaviour.
+const ICP_SIZE_BANDS = ['any', 'Micro', 'Small', 'Mid', 'Large'];
+const ICP_MOMENTUM_OPTIONS = ['any', 'Hiring', 'Funded', 'Leadership Change', 'Flat'];
+
+function renderAngleLibrarySection(campaign){
+  if((campaign.type||'linkedin')==='email') return '';
+  const entries = campaign.angleLibrary || [];
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title"><i class="ti ti-target-arrow"></i> Angle Library</div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px;">Pre-approved hooks for specific company profiles - when a company's scored ICP attributes match an entry, the drafter uses it as the primary angle instead of improvising. Leave empty to keep drafting exactly as it works today.</div>
+    ${entries.length ? entries.map((e,i) => `
+      <div style="display:flex;gap:8px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--border-light);">
+        <div style="flex:1;">
+          <div style="font-size:11px;" class="muted">${esc(e.sizeBand||'any')} / ${esc(e.momentum||'any')} / ${esc(e.workloadType||'any')}</div>
+          <div style="font-size:12.5px;margin-top:2px;">${esc(e.angle||'')}</div>
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="removeAngleLibraryEntry('${campaign.id}',${i})" title="Remove"><i class="ti ti-trash"></i></button>
+      </div>
+    `).join('') : '<div class="muted" style="font-size:12px;margin-bottom:8px;">No angles saved yet.</div>'}
+    <div style="margin-top:12px;padding:10px;border:1px dashed var(--border);border-radius:8px;">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+        <select id="angleSizeBand-${campaign.id}" style="flex:1;min-width:100px;">${ICP_SIZE_BANDS.map(v=>`<option value="${v}">${v==='any'?'Any size':v}</option>`).join('')}</select>
+        <select id="angleMomentum-${campaign.id}" style="flex:1;min-width:100px;">${ICP_MOMENTUM_OPTIONS.map(v=>`<option value="${v}">${v==='any'?'Any momentum':v}</option>`).join('')}</select>
+        <input id="angleWorkload-${campaign.id}" placeholder="Workload type (or blank = any)" style="flex:1;min-width:140px;">
+      </div>
+      <textarea id="angleText-${campaign.id}" rows="2" placeholder="e.g. Open with the fact they're hiring right now - ask what's driving the growth."></textarea>
+      <button class="btn btn-secondary btn-sm" style="margin-top:6px;" onclick="addAngleLibraryEntry('${campaign.id}')"><i class="ti ti-plus"></i> Add angle</button>
+    </div>
+  </div>`;
+}
+
+function addAngleLibraryEntry(campaignId){
+  const campaign = state.campaigns.find(c => c.id === campaignId);
+  if(!campaign) return;
+  const angle = (document.getElementById('angleText-'+campaignId).value || '').trim();
+  if(!angle){ toast('Write the angle text first', 'warn'); return; }
+  const sizeBand = document.getElementById('angleSizeBand-'+campaignId).value;
+  const momentum = document.getElementById('angleMomentum-'+campaignId).value;
+  const workloadType = (document.getElementById('angleWorkload-'+campaignId).value || '').trim() || 'any';
+  campaign.angleLibrary = campaign.angleLibrary || [];
+  campaign.angleLibrary.push({ sizeBand, momentum, workloadType, angle });
+  syncCampaignToAirtable(campaign);
+  renderPage();
+  toast('Angle saved', 'success');
+}
+
+function removeAngleLibraryEntry(campaignId, idx){
+  const campaign = state.campaigns.find(c => c.id === campaignId);
+  if(!campaign || !campaign.angleLibrary) return;
+  campaign.angleLibrary.splice(idx, 1);
+  // The server only overwrites Angle Library when the array is non-empty
+  // (same "never blank a real field" convention as CTAs/Content Context) -
+  // removing the last entry needs an explicit clear via the dedicated route.
+  if(!campaign.angleLibrary.length){
+    fetch(`/api/campaign/${encodeURIComponent(campaignRouteKey(campaign))}/clear-angle-library`, { method:'POST' }).catch(()=>{});
+  } else {
+    syncCampaignToAirtable(campaign);
+  }
+  renderPage();
+}
+
+// ---- Segmentation grid (Grid tab) ----
+async function loadCampaignSegmentation(campaign){
+  window.__campaignSegmentation = window.__campaignSegmentation || {};
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaignRouteKey(campaign))}/segmentation`);
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__campaignSegmentation[campaign.id] = data;
+  } catch(err){
+    window.__campaignSegmentation[campaign.id] = { error: err.message };
+  }
+  if(window.__campaignDetailId === campaign.id && window.__campaignDetailTab === 'grid') renderPage();
+}
+
+async function scoreIcpBulk(campaignId){
+  const campaign = state.campaigns.find(c => c.id === campaignId);
+  if(!campaign) return;
+  const btn = document.getElementById('scoreIcpBtn-'+campaignId);
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Scoring…'; }
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaignRouteKey(campaign))}/score-icp-bulk`, { method:'POST' });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    toast(`Scored ${data.scored} compan${data.scored===1?'y':'ies'} (${data.alreadyScored} already scored)`, 'success');
+    loadCampaignSegmentation(campaign);
+  } catch(err){
+    toast('Could not score companies: ' + err.message, 'warn');
+  }
+  if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-sparkles"></i> Score ICP'; }
+}
+
+function renderSegmentationGrid(campaign){
+  const data = window.__campaignSegmentation && window.__campaignSegmentation[campaign.id];
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-grid-dots"></i> ICP segmentation</div>
+      <button class="btn btn-secondary btn-sm" id="scoreIcpBtn-${campaign.id}" onclick="scoreIcpBulk('${campaign.id}')"><i class="ti ti-sparkles"></i> Score ICP</button>
+    </div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every company reachable from this campaign, scored on 3 attributes (size, momentum, workload type). Costs Engine tokens; already-scored companies are skipped automatically.</div>
+    ${!data ? '<div class="muted" style="font-size:12.5px;">Not loaded yet.</div>' :
+      data.error ? `<div class="muted">Could not load: ${esc(data.error)}</div>` :
+      !data.companies.length ? '<div class="empty-state">No companies linked to this campaign yet.</div>' : `
+      <div class="muted" style="font-size:11.5px;margin-bottom:8px;">${data.scoredCount} of ${data.totalCompanies} scored.</div>
+      <div class="perf-table-wrap"><table class="perf-table">
+        <thead><tr><th>Company</th><th>Size</th><th>Momentum</th><th>Workload type</th></tr></thead>
+        <tbody>${data.companies.map(c => `
+          <tr><td class="perf-name">${esc(c.companyName)}</td><td>${esc(c.sizeBand||'—')}</td><td>${esc(c.momentum||'—')}</td><td>${esc(c.workloadType||'—')}</td></tr>
+        `).join('')}</tbody>
+      </table></div>`}
+  </div>`;
+}
+
 function renderConnectionTimeoutSection(campaign){
   const cached = window.__timeoutCheckResults && window.__timeoutCheckResults[campaign.id];
   const stale = window.__staleConnections && window.__staleConnections[campaign.id];
@@ -13751,7 +13876,9 @@ function syncCampaignToAirtable(campaign, onSynced){
       campaignType: campaign.type || 'linkedin',
       connectionNoteMode: campaign.connectionNoteMode || 'Note',
       sequenceLength: campaign.sequenceLength || 3,
-      ctaMessage: campaign.ctaMessage || (campaign.sequenceLength || 3)
+      ctaMessage: campaign.ctaMessage || (campaign.sequenceLength || 3),
+      angleLibrary: campaign.angleLibrary || [],
+      framingMode: campaign.framingMode || 'Auto'
     })
   })
     .then(res => res.json())
