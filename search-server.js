@@ -4942,8 +4942,16 @@ async function buildWeeklyReport(opts) {
 
     // ---- What was done this week ----
     const tpThisWeek = tpRecords.filter(r => _inWeek(r.fields['Date'], wk.start, wk.end));
+    // Genuine outbound message sends this week: exclude replies and exclude
+    // "LinkedIn Conversation" transcript-saves (those log an existing thread,
+    // they aren't a new message going out - and usually duplicate a real
+    // "_Message N" touch point on the same day).
+    const isOutboundMessage = f => {
+      const t = f['Type'] || '';
+      return !touchPointIsReply(f) && /message|email/i.test(t) && !/conversation/i.test(t);
+    };
     const outreach = {
-      messagesSent: tpThisWeek.filter(r => !touchPointIsReply(r.fields) && /message|linkedin/i.test(r.fields['Type'] || '')).length,
+      messagesSent: tpThisWeek.filter(r => isOutboundMessage(r.fields)).length,
       repliesIn: tpThisWeek.filter(r => touchPointIsReply(r.fields)).length,
       touchPointsTotal: tpThisWeek.length,
       byType: {}
