@@ -450,7 +450,12 @@ async function airtableRequest(method, table, body) {
 // UNKNOWN_FIELD_NAME. This wrapper drops the named field on that error and
 // retries once, then latches per-process so later writes skip it cleanly.
 // The gated feature just no-ops for that base until the field is added.
-const OPTIONAL_LATE_ADDED_FIELDS = ['CTA Brought Forward', 'CTA Judgement Note', 'Reply Received'];
+const OPTIONAL_LATE_ADDED_FIELDS = [
+  'CTA Brought Forward', 'CTA Judgement Note', 'Reply Received',
+  // Reply-queue fields - added by hand to Campaign Contacts after the
+  // reply-triage feature ships, same graceful-degradation contract as above.
+  'Reply Sentiment', 'Last Reply At', 'Reply Draft At', 'Reply Needs Attention', 'Reply Attention Note'
+];
 const optionalFieldsMissing = new Set();
 function stripMissingOptionalFields(body) {
   if (!body || !Array.isArray(body.records) || !optionalFieldsMissing.size) return body;
@@ -5366,20 +5371,52 @@ app.post('/api/extension/conversation', async (req, res) => {
       const transcript = msgs.map(m => `${m.from === 'me' ? 'Marcus' : them}${m.time ? ' (' + m.time + ')' : ''}: ${m.text}`).join('\n');
       const today = new Date().toISOString().slice(0, 10);
       const existing = match.fields['Conversation Context'] || '';
-      await airtableRequest('PATCH', 'Contacts', { records: [{ id: match.id, fields: { 'Conversation Context': `[${today}] Full thread (from LinkedIn):\n${transcript}${existing ? '\n\n' + existing : ''}` } }] });
+      const newContext = `[${today}] Full thread (from LinkedIn):\n${transcript}${existing ? '\n\n' + existing : ''}`;
+      await airtableRequest('PATCH', 'Contacts', { records: [{ id: match.id, fields: { 'Conversation Context': newContext } }] });
+      match.fields['Conversation Context'] = newContext;
 
       const theyReplied = msgs[msgs.length - 1].from === 'them';
-      let flagged = 0;
+      let flagged = 0, drafted = 0;
       if (theyReplied) {
-        const ccRows = await fetchCampaignContactsRows();
-        for (const row of ccRows) {
-          if ((row.fields['Contact'] || [])[0] !== match.id) continue;
-          if (!/^Message [123] Sent$/.test(collapseLegacyStage(normalizeSequenceStage(row.fields['Sequence Stage'])))) continue;
-          await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, { records: [{ id: row.id, fields: { 'Reply Received': true } }], typecast: true }).catch(() => {});
+        const [ccRows, campaignRecords] = await Promise.all([
+          fetchCampaignContactsRows(),
+          airtableFetchAllRecords('Campaigns')
+        ]);
+        const campById = {};
+        campaignRecords.forEach(r => { campById[r.id] = r; });
+        // One sentiment classify per capture, shared across every campaign row
+        // for this contact.
+        let sentiment = null;
+        const rowsToHandle = ccRows.filter(row => {
+          if ((row.fields['Contact'] || [])[0] !== match.id) return false;
+          const camp = campById[(row.fields['Campaign'] || [])[0]];
+          if (!camp || (camp.fields['Status'] || '') !== 'Live' || isEmailCampaign(camp)) return false;
+          const stage = collapseLegacyStage(normalizeSequenceStage(row.fields['Sequence Stage']));
+          // Connected or later, and still in play - not connection-pending,
+          // excluded, timed out or already booked.
+          return linkedInStageRank(stage) >= LINKEDIN_STAGE_ORDER.indexOf('Connected')
+            && stage !== 'Excluded' && stage !== 'Timed Out' && stage !== 'Meeting Booked';
+        });
+        if (rowsToHandle.length) sentiment = await classifyReplySentiment(transcript);
+        for (const row of rowsToHandle) {
+          const fields = { 'Reply Received': true, 'Last Reply At': today };
+          if (sentiment) fields['Reply Sentiment'] = sentiment;
+          await airtableWriteAllowingMissingCtaFields('PATCH', CAMPAIGN_CONTACTS_TABLE, {
+            records: [{ id: row.id, fields }], typecast: true
+          }).catch(() => {});
           flagged++;
+          // Auto-draft the reply, once per new reply: skip if this row already
+          // got a draft today (a same-day re-scrape of the same thread).
+          if (row.fields['Reply Draft At'] === today) continue;
+          try {
+            await generateReplyDraftForRow(campById[(row.fields['Campaign'] || [])[0]], match, row);
+            drafted++;
+          } catch (draftErr) {
+            console.warn('extension/conversation auto-draft failed (non-fatal):', draftErr.message);
+          }
         }
       }
-      return { matched: true, contactId: match.id, name: them, replyLogged: theyReplied, rowsFlagged: flagged };
+      return { matched: true, contactId: match.id, name: them, replyLogged: theyReplied, rowsFlagged: flagged, draftsGenerated: drafted };
     });
     res.json({ ok: true, ...out });
   } catch (e) { console.error('extension/conversation:', e.message); res.status(500).json({ error: e.message }); }
@@ -9329,7 +9366,10 @@ app.get('/api/campaign/:id/campaign-contacts', async (req, res) => {
           sequenceStage: collapseLegacyStage(normalizeSequenceStage(r.fields['Sequence Stage'])),
           replyReceived: rowReplyReceived(r),
           nextMessageDraft: r.fields['Next Message Draft'] || '',
-          connectionSentDate: r.fields['Connection Sent Date'] || null
+          connectionSentDate: r.fields['Connection Sent Date'] || null,
+          replySentiment: r.fields['Reply Sentiment'] || null,
+          lastReplyAt: r.fields['Last Reply At'] || null,
+          replyNeedsAttention: !!r.fields['Reply Needs Attention']
         };
       })
       .filter(r => r.contactName);
@@ -9525,6 +9565,10 @@ function parseDraftEnvelope(raw) {
           message: j.message.trim(),
           ctaIncluded: typeof j.ctaIncluded === 'boolean' ? j.ctaIncluded : null,
           ctaReasoning: (j.ctaReasoning || '').trim(),
+          // Reply drafts (buildCampaignReplyPrompt) also ask for a flag when
+          // the reply needs a human/client call - absent on outbound drafts.
+          needsAttention: j.needsAttention === true,
+          attentionReason: (j.attentionReason || '').trim(),
           parsed: true
         };
       }
@@ -9638,14 +9682,14 @@ const STAGE_KEY_FOR_MESSAGE_NUMBER = { 1: 'm1', 2: 'm2', 3: 'cta' };
 // every future draft for that same campaign + stage as a hard rule. Scoped
 // per campaign so one campaign's voice tuning never leaks into another's,
 // and per stage so an M1 correction doesn't reshape the CTA message.
-const STYLE_CORRECTION_STAGES = ['connect', 'm1', 'm2', 'cta'];
+const STYLE_CORRECTION_STAGES = ['connect', 'm1', 'm2', 'cta', 'reply'];
 const STYLE_CORRECTIONS_PER_STAGE_CAP = 12;
 // Campaign sequence-editor stage keys (CAMPAIGN_STAGE_META in the client)
 // map onto the canonical bucket keys used everywhere else.
 const SEQ_EDITOR_STAGE_TO_BUCKET = { message1: 'm1', followUp1: 'm2', followUp2: 'cta', connect: 'connect' };
 
 function emptyStyleCorrections() {
-  return { connect: [], m1: [], m2: [], cta: [] };
+  return { connect: [], m1: [], m2: [], cta: [], reply: [] };
 }
 
 function parseStyleCorrections(fieldValue) {
@@ -9668,6 +9712,7 @@ function styleCorrectionBucketKey(stageKeyOrLabel) {
   if (STYLE_CORRECTION_STAGES.includes(raw)) return raw;
   if (SEQ_EDITOR_STAGE_TO_BUCKET[raw]) return SEQ_EDITOR_STAGE_TO_BUCKET[raw];
   const lc = raw.toLowerCase();
+  if (/\breply\b|reply back|responding/.test(lc)) return 'reply';
   if (/connect|connection/.test(lc)) return 'connect';
   if (/message\s*1\b|\bm1\b|^1$/.test(lc)) return 'm1';
   if (/message\s*2\b|\bm2\b|follow\s*up\s*1|^2$/.test(lc)) return 'm2';
@@ -9875,6 +9920,115 @@ ${writeInstruction}${GROUND_IN_SPECIFICS_NOTE}${RESPECT_SUMMARY_INSTRUCTIONS_NOT
 // sequence message number - 'connect' has none, so a connect-stage draft
 // falls through to the account-level flow rather than buildCampaignOutreachPrompt.
 const STAGE_KEY_TO_MESSAGE_NUMBER = { m1: 1, m2: 2, cta: 3 };
+
+// ---- Reply-queue drafting ----
+// buildCampaignOutreachPrompt only ever drafts a numbered sequence step (1/2/3)
+// and generate-message hard-refuses any stage past "Message 3 Sent". Once a
+// contact has replied and is mid-conversation - especially the turns between a
+// warm reply and a booked call - there's no sequence slot to draft into. This
+// builder drafts an open-ended reply to whatever they last said, aimed at the
+// campaign's CTA, and is not tied to a message number. Shares every context
+// source (offer, CTAs, voice, style corrections, edited examples) with the
+// outreach builder so a campaign's tuning carries over.
+async function buildCampaignReplyPrompt({ campaignRecord, contactRecord, steer }) {
+  const camp = campaignRecord.fields || {};
+  const cf = contactRecord.fields || {};
+  const resolvedName = camp['Name'] || camp['Campaign Name'] || '';
+
+  const [offer, voice, rows] = await Promise.all([
+    getActiveOfferForCampaign(campaignRecord.id),
+    getStrategyVoiceSettings(),
+    fetchCampaignContactsRows()
+  ]);
+
+  // Marcus's own edits in this campaign - the strongest available signal for
+  // the tone he wants. Not stage-scoped here (a reply has no message number),
+  // so any recent "Sent edited" row in the campaign counts.
+  const recentEditedExamples = rows
+    .filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id) && r.fields['Draft Outcome'] === 'Sent edited' && r.fields['Final Message Sent'] && r.fields['Original Message Draft'])
+    .sort((a, b) => new Date(b.createdTime) - new Date(a.createdTime))
+    .slice(0, 5)
+    .map(r => ({ original: r.fields['Original Message Draft'], edited: r.fields['Final Message Sent'] }));
+  const examplesNote = recentEditedExamples.length
+    ? `\n\nHere are up to 5 messages Marcus personally edited before sending in this campaign (most recent first) - each pairs the AI draft with what he actually sent, so you can match the tone and style he prefers:\n${recentEditedExamples.map((ex, i) => `${i + 1}. AI draft: ${ex.original}\n   Marcus sent: ${ex.edited}`).join('\n\n')}`
+    : '';
+
+  const ctaOptions = parseCtaList(camp['CTAs']);
+  const styleCorrections = parseStyleCorrections(camp['Style Corrections']);
+
+  const enrichmentProfile = parseContactEnrichment(cf['AI Summary']);
+  const enrichmentNote = buildEnrichmentNote(enrichmentProfile);
+  const aiSummaryNarrative = stripContactEnrichmentBlock(cf['AI Summary']).trim();
+
+  const offerNote = offer && offer.summary
+    ? `\nThis campaign's offer, for context: ${offer.summary}\nOnly bring the offer up if what they've said calls for it - don't force a pitch into a reply that isn't ready for one.`
+    : '';
+
+  const promptText = `You are Marcus, writing the next LinkedIn message in an ongoing conversation for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM. The contact has replied and it's your turn to respond.
+
+Campaign: "${resolvedName}". Goal: ${camp['Goal'] || 'not recorded'}. Product: ${camp['Product'] || 'not recorded'}. Target ICP: ${camp['Target ICP'] || 'not recorded'}. Strategy notes: ${camp['Strategy Notes'] || 'none recorded'}.
+
+Contact: ${cf['Full Name'] || 'Unknown'}, ${cf['Job Title'] || ''}. Profile notes: ${cf['Notes'] || 'none'}. AI summary: ${aiSummaryNarrative || 'none yet'}.${enrichmentNote}
+${offerNote}
+
+Full conversation so far (most recent entry first if dated; "Marcus:" is you, the other name is them):
+${cf['Conversation Context'] || '(no thread captured - treat their most recent message as a short positive reply and move things forward)'}
+
+Your job: reply to what they actually said in their most recent message. Move the conversation one concrete step toward ${ctaOptions.length ? 'one of this campaign\'s CTAs' : 'a short call or coffee'}, but only as hard as their reply has earned - if they asked a question, answer it plainly first; if they're warm and it's time, make the ask; if they raised an objection, address it without being defensive. Never reintroduce yourself or repeat an earlier message.${ctaOptionsPromptText(ctaOptions)}
+
+${voiceRulesPromptText(voice, false)}${styleCorrectionsPromptText(styleCorrections, 'reply')}${steerPromptText(steer)}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${examplesNote}
+
+Also decide whether this reply needs a human at Twenty2 to weigh in before it can be sent - true only if answering properly needs something you can't know: custom pricing or a quote, a technical/scoping question about deliverables, contract or legal terms, or the contact is upset and it needs a careful human touch. A normal question you can answer from the campaign context above is NOT one of these.
+
+Return ONLY valid JSON, no markdown fences, no commentary, in exactly this shape:
+{"message": "your reply", "ctaIncluded": true or false, "ctaReasoning": "one sentence on why you did or didn't make an ask, grounded in what they said", "needsAttention": true or false, "attentionReason": "if true, one sentence on what a human needs to supply; else empty string"}`;
+
+  return { promptText, stageKey: 'reply', styleCorrections, voice };
+}
+
+// Drafts an open-ended reply for one Campaign Contacts row and persists it to
+// Next Message Draft (+ the reply-queue metadata fields). Shared by the
+// auto-draft-on-capture path and the manual regenerate route. Best-effort:
+// callers that use it as a side effect (extension capture) should catch.
+async function generateReplyDraftForRow(campaignRecord, contactRecord, row, { steer } = {}) {
+  const { promptText } = await buildCampaignReplyPrompt({ campaignRecord, contactRecord, steer });
+  const rawMessage = await callClaudeText(promptText, 800);
+  const envelope = parseDraftEnvelope(rawMessage);
+  const message = await humanizeOutreachMessage(envelope.message, false);
+  const needsAttention = envelope.needsAttention === true;
+  const attentionReason = needsAttention ? (envelope.attentionReason || '') : '';
+  const today = new Date().toISOString().slice(0, 10);
+
+  await airtableWriteAllowingMissingCtaFields('PATCH', CAMPAIGN_CONTACTS_TABLE, {
+    records: [{ id: row.id, fields: {
+      'Next Message Draft': message,
+      'Reply Draft At': today,
+      'Reply Needs Attention': needsAttention,
+      'Reply Attention Note': attentionReason
+    } }],
+    typecast: true
+  });
+
+  return { message, needsAttention, attentionReason };
+}
+
+// Cheap sentiment tag for a captured reply thread - one of the four the
+// reply queue sorts by. Best-effort; returns null on any failure so callers
+// can skip the write.
+async function classifyReplySentiment(transcript) {
+  if (!transcript || !transcript.trim() || !process.env.ANTHROPIC_API_KEY) return null;
+  try {
+    const parsed = await callClaudeJson(
+      `This is a LinkedIn outreach conversation. Classify the sentiment of the OTHER person's side (not Marcus's) as exactly one of "Positive", "Neutral", "Cold", "Negative". Positive = interested, asking questions, agreeing to talk. Neutral = polite but non-committal. Cold = brush-off, "not right now", low engagement. Negative = annoyed, "stop messaging me", unsubscribe.\n\nConversation:\n${transcript}\n\nReturn ONLY JSON: {"sentiment": "Positive|Neutral|Cold|Negative"}`,
+      120
+    );
+    const s = parsed && parsed.sentiment;
+    return ['Positive', 'Neutral', 'Cold', 'Negative'].includes(s) ? s : null;
+  } catch (e) {
+    console.warn('classifyReplySentiment failed (non-fatal):', e.message);
+    return null;
+  }
+}
 
 // Generates a message for the "Write & copy message" modal (openGenerateModal
 // in t2c-outreach-crm.html) - previously done client-side by calling
@@ -10138,6 +10292,41 @@ app.post('/api/campaign/:id/contacts/:contactId/mark-sent', async (req, res) => 
     const rawStage = normalizeSequenceStage(row.fields['Sequence Stage']);
     const emailMode = isEmailCampaign(campaignRecord);
 
+    // Reply-queue send (Replies page "Approve & copy"). An open-ended reply in
+    // an ongoing conversation - it does NOT advance Sequence Stage or touch
+    // Stage History. It clears the reply gate + draft so the row drops out of
+    // the queue, keeps the edited-example learning loop, and logs one Outbound
+    // Touch Point so reply-rate / funnel stay consistent.
+    if (req.body.stageKey === 'reply') {
+      const today = new Date().toISOString().slice(0, 10);
+      const originalDraft = row.fields['Next Message Draft'] || '';
+      await airtableWriteAllowingMissingCtaFields('PATCH', CAMPAIGN_CONTACTS_TABLE, {
+        records: [{ id: row.id, fields: {
+          'Reply Received': false,
+          'Next Message Draft': '',
+          'Reply Needs Attention': false,
+          'Reply Attention Note': '',
+          'Final Message Sent': message,
+          'Original Message Draft': originalDraft,
+          ...(draftOutcome ? { 'Draft Outcome': draftOutcome } : {})
+        } }],
+        typecast: true
+      });
+      await airtableWriteAllowingMissingCtaFields('POST', 'Touch Points', {
+        records: [{ fields: {
+          'Name': `${campaignName}_Reply`,
+          'Date': today,
+          'Type': 'LinkedIn Message',
+          'Direction': 'Outbound',
+          'Summary': message,
+          'Contact': [contactId],
+          'Campaign': [campaignRecord.id]
+        } }],
+        typecast: true
+      }).catch(err => console.warn('Reply Touch Point log failed (non-fatal):', err.message));
+      return res.json({ success: true, replySent: true, advanced: false });
+    }
+
     let nextStage, sentN, advanced;
     if (emailMode) {
       // Email campaigns have no connection step and cold follow-ups go out to
@@ -10262,8 +10451,13 @@ app.post('/api/campaign/:id/contacts/:contactId/reply', async (req, res) => {
     const wasReplied = rowReplyReceived(row);
     const today = new Date().toISOString().slice(0, 10);
 
-    await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, {
-      records: [{ id: row.id, fields: { 'Reply Received': replied } }],
+    await airtableWriteAllowingMissingCtaFields('PATCH', CAMPAIGN_CONTACTS_TABLE, {
+      records: [{ id: row.id, fields: {
+        'Reply Received': replied,
+        // Stamp the reply time on the first yes so the Replies queue ages and
+        // sorts it correctly; the queue's card generates the draft on open.
+        ...(replied && !wasReplied ? { 'Last Reply At': today } : {})
+      } }],
       typecast: true
     });
 
@@ -10292,6 +10486,147 @@ app.post('/api/campaign/:id/contacts/:contactId/reply', async (req, res) => {
     res.json({ success: true, replyReceived: replied, stage: currentStage });
   } catch (err) {
     console.error('Reply toggle error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Reply queue (Replies sidebar page) ----
+
+// Best-effort pull of the contact's most recent inbound line out of the
+// running Conversation Context blob. The extension writes "Name (time): text"
+// / "Marcus: text" lines; screenshot parses write "[date] summary". Returns
+// the last line that reads as theirs, or a trimmed tail of the blob.
+function lastInboundSnippet(context, contactName) {
+  const raw = String(context || '').trim();
+  if (!raw) return '';
+  const first = (contactName || '').trim().split(/\s+/)[0] || '';
+  const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i];
+    if (/^\[?\d{4}-\d{2}-\d{2}/.test(l)) continue;            // date header
+    if (/^Full thread/i.test(l)) continue;
+    if (/^Marcus\b/i.test(l)) continue;                        // our side
+    const m = l.match(/^(?:[A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*)*)\s*(?:\([^)]*\))?\s*:\s*(.+)$/);
+    if (m) return m[1].trim().slice(0, 400);
+    if (first && l.toLowerCase().startsWith(first.toLowerCase())) return l.slice(0, 400);
+    return l.slice(0, 400);
+  }
+  return raw.slice(-400);
+}
+
+const REPLY_SENTIMENT_RANK = { Positive: 0, Neutral: 1, Cold: 2, Negative: 3 };
+
+// Whole days between two YYYY-MM-DD strings (>= 0), or null if either is unset.
+function daysBetweenDates(fromIso, toIso) {
+  if (!fromIso || !toIso) return null;
+  const ms = Date.parse(toIso) - Date.parse(fromIso);
+  if (Number.isNaN(ms)) return null;
+  return Math.max(0, Math.round(ms / 86400000));
+}
+
+app.get('/api/replies/queue', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const [ccRows, campaignRecords, contactRecords] = await Promise.all([
+      fetchCampaignContactsRows(),
+      airtableFetchAllRecords('Campaigns'),
+      airtableFetchAllRecords('Contacts')
+    ]);
+    const campById = {};
+    campaignRecords.forEach(r => { campById[r.id] = r; });
+    const contactById = {};
+    contactRecords.forEach(r => { contactById[r.id] = r; });
+    const today = new Date().toISOString().slice(0, 10);
+
+    const rows = [];
+    for (const row of ccRows) {
+      if (!rowReplyReceived(row)) continue;
+      const camp = campById[(row.fields['Campaign'] || [])[0]];
+      if (!camp || (camp.fields['Status'] || '') !== 'Live' || isEmailCampaign(camp)) continue;
+      const stage = collapseLegacyStage(normalizeSequenceStage(row.fields['Sequence Stage']));
+      if (linkedInStageRank(stage) < LINKEDIN_STAGE_ORDER.indexOf('Connected')) continue;
+      if (['Excluded', 'Timed Out'].includes(stage)) continue;
+
+      const contactId = (row.fields['Contact'] || [])[0] || null;
+      const contact = contactId ? contactById[contactId] : null;
+      const cf = (contact && contact.fields) || {};
+      const contactName = cf['Full Name'] || row.fields['Name'] || '';
+      if (!contactName) continue;
+
+      const lastReplyAt = row.fields['Last Reply At'] || null;
+      const draftAt = row.fields['Reply Draft At'] || null;
+      const draft = row.fields['Next Message Draft'] || '';
+      rows.push({
+        campaignContactId: row.id,
+        contactId,
+        contactName,
+        linkedInUrl: cf['LinkedIn URL'] || '',
+        jobTitle: cf['Job Title'] || '',
+        campaignName: camp.fields['Name'] || camp.fields['Campaign Name'] || '',
+        sequenceStage: stage,
+        sentiment: row.fields['Reply Sentiment'] || null,
+        lastReplyAt,
+        daysWaiting: lastReplyAt ? daysBetweenDates(lastReplyAt, today) : null,
+        lastInbound: lastInboundSnippet(cf['Conversation Context'], contactName),
+        thread: cf['Conversation Context'] || '',
+        draft,
+        draftStale: !draft || (!!lastReplyAt && !!draftAt && draftAt < lastReplyAt) || (!!lastReplyAt && !draftAt),
+        needsAttention: !!row.fields['Reply Needs Attention'],
+        attentionNote: row.fields['Reply Attention Note'] || ''
+      });
+    }
+
+    rows.sort((a, b) => {
+      if (a.needsAttention !== b.needsAttention) return a.needsAttention ? -1 : 1;
+      const ra = a.sentiment in REPLY_SENTIMENT_RANK ? REPLY_SENTIMENT_RANK[a.sentiment] : 1.5;
+      const rb = b.sentiment in REPLY_SENTIMENT_RANK ? REPLY_SENTIMENT_RANK[b.sentiment] : 1.5;
+      if (ra !== rb) return ra - rb;
+      return String(a.lastReplyAt || '').localeCompare(String(b.lastReplyAt || ''));
+    });
+
+    res.json({ rows });
+  } catch (err) {
+    console.error('Replies queue error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Manual "Regenerate" on a reply-queue card. Thin wrapper over
+// generateReplyDraftForRow; an optional steer, when "remember" is ticked, is
+// appended to the campaign's Style Corrections under the 'reply' bucket -
+// identical contract to generate-message's steer handling.
+app.post('/api/campaign/:id/contacts/:contactId/regenerate-reply', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  const campaignName = decodeURIComponent(req.params.id);
+  const contactId = req.params.contactId;
+  const { steer, rememberSteer } = req.body || {};
+
+  try {
+    const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
+    if (!campaignRecord) return res.status(404).json({ error: `Campaign "${campaignName}" not found` });
+    const contactRecord = await airtableGetRecord('Contacts', contactId);
+    if (!contactRecord) return res.status(404).json({ error: 'Contact not found' });
+
+    const rows = await fetchCampaignContactsRows();
+    const row = await getOrCreateCampaignContactRow(contactId, (contactRecord.fields || {})['Full Name'] || contactId, campaignRecord.id, campaignName, rows);
+
+    const { message, needsAttention, attentionReason } = await generateReplyDraftForRow(campaignRecord, contactRecord, row, { steer });
+
+    let steerRemembered = false;
+    if (steer && steer.trim() && rememberSteer) {
+      try {
+        const r = await appendStyleCorrection(campaignRecord.id, (campaignRecord.fields || {})['Style Corrections'], 'reply', steer);
+        steerRemembered = r.saved;
+      } catch (saveErr) {
+        console.warn('Could not save reply style correction (non-fatal):', saveErr.message);
+      }
+    }
+
+    res.json({ success: true, message, needsAttention, attentionReason, steerRemembered });
+  } catch (err) {
+    console.error('Regenerate reply error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -10915,40 +11250,45 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 
         currentStage = collapseLegacyStage(row.fields['Sequence Stage'] || '');
         newStage = currentStage; // a reply never moves the stage - only a send does
+        f['Conversation Context'] = newContext; // so the reply draft sees the fresh thread
 
+        const today = new Date().toISOString().slice(0, 10);
         const rowUpdateFields = {};
         // Reading a conversation screenshot implies the contact replied to
         // whatever Marcus last sent - record that (the reply gate for the next
         // message), without touching Sequence Stage.
-        if (parsed.replied) rowUpdateFields['Reply Received'] = true;
+        if (parsed.replied) {
+          rowUpdateFields['Reply Received'] = true;
+          rowUpdateFields['Last Reply At'] = today;
+          if (parsed.sentiment) rowUpdateFields['Reply Sentiment'] = parsed.sentiment;
+        }
         // Written unconditionally (not just on a stage change) since a
         // reply's sentiment is meaningful even when it doesn't move the
         // contact to a new stage - this is what the Section 3 sentiment
         // breakdown chart reads for contacts that don't have a Deal yet.
         if (parsed.sentiment) rowUpdateFields['Sentiment'] = parsed.sentiment;
 
-        // Draft the follow-up when a reply just landed on a sent message that
-        // still has a follow-up left (message 1 or 2, not the final CTA).
-        if (parsed.replied && /^Message [12] Sent$/.test(currentStage)) {
-          const recentPosts = recentPostsPromptSnippet(f['Recent Posts'], 30);
-          // A "Ready for Message N" stage is always message 2+ (message 1
-          // is sent straight through Today's Actions, never reply-gated),
-          // so the offer is always in scope here once the campaign has one.
-          const offer = await getActiveOfferForCampaign(campaignRecord.id);
-          const draftPrompt = `You are drafting the next LinkedIn message for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM. This is for the "${campaignName}" campaign.
-
-Contact: ${contactName}, ${f['Job Title'] || ''}.
-AI Summary: ${f['AI Summary'] || 'none yet'}
-Recent posts (last 30 days only): ${recentPosts}
-${offer && offer.summary ? `This campaign's offer: ${offer.summary}\nWeave the offer above into this message naturally, in your own words - do not paste it verbatim.\n` : ''}Conversation so far: ${newContext}
-
-Write the next message in the conversation, following on naturally from what they just said. UK English, no em dashes, peer to peer tone, 3-4 sentences, one observation and one question, signed off as "Marcus" (first name only, never the company name).${RESPECT_SUMMARY_INSTRUCTIONS_NOTE} Return only the message text.`;
-          draft = await callClaudeText(draftPrompt, 400);
-          rowUpdateFields['Next Message Draft'] = draft;
+        // Auto-draft the reply for any live LinkedIn contact that's Connected
+        // or later and still in play - the reply queue then shows it ready to
+        // approve. Guarded to one draft per day per row (a same-day re-parse
+        // of the same thread doesn't re-spend). Superseded generate-message's
+        // old inline "Message [12] Sent" follow-up prompt with the richer
+        // buildCampaignReplyPrompt (offer, CTAs, voice, style corrections).
+        const inPlay = linkedInStageRank(currentStage) >= LINKEDIN_STAGE_ORDER.indexOf('Connected')
+          && !['Excluded', 'Timed Out', 'Meeting Booked'].includes(currentStage);
+        if (parsed.replied && inPlay && !isEmailCampaign(campaignRecord)
+            && (campaignRecord.fields['Status'] || '') === 'Live'
+            && row.fields['Reply Draft At'] !== today) {
+          try {
+            const r = await generateReplyDraftForRow(campaignRecord, contactRecord, row);
+            draft = r.message;
+          } catch (draftErr) {
+            console.warn('parse-screenshot auto-draft failed (non-fatal):', draftErr.message);
+          }
         }
 
         if (Object.keys(rowUpdateFields).length) {
-          await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, { records: [{ id: row.id, fields: rowUpdateFields }], typecast: true });
+          await airtableWriteAllowingMissingCtaFields('PATCH', CAMPAIGN_CONTACTS_TABLE, { records: [{ id: row.id, fields: rowUpdateFields }], typecast: true });
         }
       }
     }

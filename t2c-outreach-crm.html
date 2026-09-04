@@ -1458,6 +1458,7 @@ function goToRunIntelligence(){
 // `grid` stay in NAV as hidden entries so page dispatch still resolves them.
 const NAV = [
   { id:'home', label:'Home', icon:'ti-home' },
+  { id:'replies', label:'Replies', icon:'ti-message-reply' },
   { id:'logger', label:'Logger', icon:'ti-clipboard-text' },
   { id:'campaigns', label:'Campaigns', icon:'ti-rocket' },
   { id:'calendar', label:'Sales', icon:'ti-calendar' },
@@ -1471,9 +1472,13 @@ const NAV = [
 
 function renderSidebar(){
   const nav = document.getElementById('sidebarNav');
-  nav.innerHTML = NAV.filter(n => !n.hidden).map(n => (
-    '<button class="nav-item '+(state.currentPage===n.id?'active':'')+'" onclick="navigate(\''+n.id+'\')"><i class="ti '+n.icon+'"></i><span>'+n.label+'</span></button>'
-  )).join('');
+  const repliesCount = window.__repliesQueue ? window.__repliesQueue.length : null;
+  nav.innerHTML = NAV.filter(n => !n.hidden).map(n => {
+    const badge = (n.id === 'replies' && repliesCount)
+      ? ' <span class="count-pill has" style="margin-left:auto;">'+repliesCount+'</span>'
+      : '';
+    return '<button class="nav-item '+(state.currentPage===n.id?'active':'')+'" onclick="navigate(\''+n.id+'\')"><i class="ti '+n.icon+'"></i><span>'+n.label+badge+'</span></button>';
+  }).join('');
 }
 
 /* ===================== AGENCY CONTROLLER (client switcher) ===================== */
@@ -2208,7 +2213,7 @@ function renderPage(){
   const gs = document.getElementById('gridScroll');
   const savedGridScroll = gs ? { left: gs.scrollLeft, top: gs.scrollTop } : null;
 
-  const renderers = { home: renderHome, logger: renderLoggerPage, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, contentcalendar: renderContentCalendarPage, research: renderResearch, settings: renderSettings, agency: renderAgencyPage };
+  const renderers = { home: renderHome, replies: renderReplies, logger: renderLoggerPage, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, contentcalendar: renderContentCalendarPage, research: renderResearch, settings: renderSettings, agency: renderAgencyPage };
   el.innerHTML = renderers[state.currentPage]();
   afterRender(state.currentPage);
 
@@ -2262,6 +2267,7 @@ function afterRender(page){
     }
   }
   if(page === 'intelligence' && (window.__intelSubTab||'intelligence') === 'context') ensureContextDataLoaded();
+  if(page === 'replies' && window.__repliesQueue === undefined && !window.__repliesLoading) loadRepliesQueue();
   if(page === 'home') ensureTodaysActionsSequenceStagesLoaded();
   if(page === 'home' && window.__dueReminders === undefined) loadDueReminders();
   if(page === 'logger' && window.__repsCache === undefined) loadRepsCache();
@@ -2316,6 +2322,197 @@ function afterRender(page){
       if(window.__marketPulse === undefined) loadMarketPulse();
     }
     if(tab === 'profiles' && window.__websiteLeads === undefined) loadWebsiteLeads();
+  }
+}
+
+/* ===================== REPLIES QUEUE ===================== */
+// A standing worklist of every LinkedIn contact who has replied and is waiting
+// on a response. Each row arrives from GET /api/replies/queue with an AI draft
+// already written (auto-generated when the reply was captured - see
+// generateReplyDraftForRow on the server). The operator reviews, optionally
+// steers a regenerate, then "Approve & copy" which copies the text and marks
+// the reply sent (POST .../mark-sent with stageKey:'reply' - no stage advance).
+
+const REPLY_SENTIMENT_STYLE = {
+  Positive: { bg:'#dcfce7', fg:'#166534', label:'Positive' },
+  Neutral:  { bg:'#f1f5f9', fg:'#475569', label:'Neutral' },
+  Cold:     { bg:'#e0f2fe', fg:'#075985', label:'Cold' },
+  Negative: { bg:'#fee2e2', fg:'#991b1b', label:'Negative' }
+};
+
+async function loadRepliesQueue(){
+  window.__repliesLoading = true;
+  if(state.currentPage === 'replies') renderPage();
+  try {
+    const res = await fetch('/api/replies/queue');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__repliesError = null;
+    window.__repliesQueue = Array.isArray(data.rows) ? data.rows : [];
+    window.__repliesById = {};
+    window.__repliesQueue.forEach(r => { r.__original = r.draft; window.__repliesById[r.campaignContactId] = r; });
+  } catch(err){
+    console.warn('Could not load replies queue:', err.message);
+    window.__repliesQueue = window.__repliesQueue || [];
+    window.__repliesError = err.message;
+  }
+  window.__repliesLoading = false;
+  renderSidebar();
+  if(state.currentPage === 'replies') renderPage();
+}
+
+function renderReplies(){
+  const rows = window.__repliesQueue;
+  const loading = window.__repliesLoading && rows === undefined;
+  let body;
+  if(loading){
+    body = '<p class="muted"><i class="ti ti-loader-2"></i> Loading replies…</p>';
+  } else if(window.__repliesError && (!rows || !rows.length)){
+    body = '<p class="muted">Could not load the reply queue: '+esc(window.__repliesError)+'</p>';
+  } else if(!rows || !rows.length){
+    body = '<div style="text-align:center;padding:48px 16px;color:var(--muted);"><i class="ti ti-inbox-off" style="font-size:32px;"></i><p style="margin-top:8px;">No replies waiting. When a contact replies, their draft response lands here ready to approve.</p></div>';
+  } else {
+    body = rows.map(renderReplyCard).join('');
+  }
+  return `
+    <div style="max-width:760px;margin:0 auto;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+        <h2 style="margin:0;">Replies${rows && rows.length ? ` <span class="count-pill has">${rows.length}</span>` : ''}</h2>
+        <button class="btn btn-secondary btn-sm" onclick="loadRepliesQueue()"><i class="ti ti-refresh"></i> Refresh</button>
+      </div>
+      <p class="muted" style="margin-top:0;font-size:12.5px;">Every contact who has replied and is waiting on us, most useful first. The draft is already written — review it, steer it if needed, then approve and paste.</p>
+      ${body}
+    </div>`;
+}
+
+function renderReplyCard(r){
+  const id = r.campaignContactId;
+  const s = REPLY_SENTIMENT_STYLE[r.sentiment] || null;
+  const badge = s ? `<span style="font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:999px;background:${s.bg};color:${s.fg};">${s.label}</span>` : '';
+  const waiting = r.daysWaiting === null ? '' : (r.daysWaiting === 0 ? 'replied today' : `replied ${r.daysWaiting}d ago`);
+  const attn = r.needsAttention
+    ? `<div style="font-size:11.5px;color:#92400e;background:#fef3c7;border:1px solid #fde68a;border-radius:8px;padding:7px 10px;margin-bottom:8px;"><i class="ti ti-alert-triangle"></i> <strong>Needs your input</strong>${r.attentionNote ? ' — '+esc(r.attentionNote) : ''}</div>`
+    : '';
+  const nameHtml = r.linkedInUrl
+    ? `<a href="${esc(r.linkedInUrl)}" target="_blank" rel="noopener" style="font-weight:700;">${esc(r.contactName)}</a>`
+    : `<span style="font-weight:700;">${esc(r.contactName)}</span>`;
+  const staleNote = r.draftStale && r.draft
+    ? '<div class="muted" style="font-size:11px;margin-bottom:4px;"><i class="ti ti-alert-circle"></i> A newer reply came in after this draft — regenerate to refresh it.</div>'
+    : '';
+  return `
+    <div class="card" id="replyCard-${id}" style="padding:14px 16px;margin-bottom:12px;">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:2px;">
+        ${nameHtml}
+        ${badge}
+        <span class="muted" style="font-size:11.5px;">${esc(r.jobTitle||'')}</span>
+        <span style="margin-left:auto;font-size:11px;color:var(--muted);">${esc(r.campaignName)} · ${esc(r.sequenceStage)}${waiting ? ' · '+waiting : ''}</span>
+      </div>
+      ${attn}
+      <div style="font-size:12.5px;background:var(--sidebar-hover-bg,#f2f3f6);border-radius:8px;padding:8px 10px;margin:6px 0 10px;">
+        <span class="muted" style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;">Their reply</span><br>
+        ${esc(r.lastInbound || '(no message text captured — open the thread on LinkedIn)')}
+        ${r.thread ? `<div style="margin-top:6px;"><a href="#" onclick="toggleReplyThread('${id}');return false;" style="font-size:11px;">Show full thread</a><pre id="replyThread-${id}" hidden style="white-space:pre-wrap;font-family:inherit;font-size:11.5px;margin-top:6px;padding-top:6px;border-top:1px solid var(--border);">${esc(r.thread)}</pre></div>` : ''}
+      </div>
+      <div id="replyArea-${id}">
+        ${r.draft
+          ? renderReplyDraftArea(r)
+          : '<div class="muted" style="font-size:12.5px;padding:6px 0;"><i class="ti ti-loader-2"></i> Drafting a response…</div>'}
+      </div>
+      ${staleNote}
+    </div>`;
+}
+
+function renderReplyDraftArea(r){
+  const id = r.campaignContactId;
+  return `
+    <textarea id="replyDraft-${id}" rows="5" style="width:100%;margin-bottom:8px;">${esc(r.draft||'')}</textarea>
+    <div style="width:100%;margin-bottom:8px;padding:8px;border:1px dashed var(--border);border-radius:6px;">
+      <div class="muted" style="font-size:11px;margin-bottom:4px;"><i class="ti ti-message-2-cog"></i> Not right? Steer it — ${esc(r.campaignName)} · reply</div>
+      <textarea id="reply-${id}-steer" rows="2" style="width:100%;" placeholder="e.g. shorter, drop the second question, don't pitch yet"></textarea>
+      <label style="display:flex;gap:6px;align-items:center;font-size:11px;margin-top:5px;">
+        <input type="checkbox" id="reply-${id}-remember" checked> Remember for ${esc(r.campaignName)} · reply
+      </label>
+      <button class="btn btn-secondary btn-sm" style="margin-top:6px;" onclick="replyRegenerate('${id}')"><i class="ti ti-refresh"></i> Regenerate</button>
+    </div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn btn-primary btn-sm" onclick="replyApprove('${id}')"><i class="ti ti-check"></i> Approve &amp; copy</button>
+      <button class="btn btn-secondary btn-sm" onclick="replySkip('${id}')">Skip for now</button>
+    </div>`;
+}
+
+function toggleReplyThread(id){
+  const el = document.getElementById('replyThread-'+id);
+  if(el) el.hidden = !el.hidden;
+}
+
+function replySkip(id){
+  const card = document.getElementById('replyCard-'+id);
+  if(card) card.remove();
+}
+
+async function replyRegenerate(id){
+  const r = (window.__repliesById || {})[id];
+  const area = document.getElementById('replyArea-'+id);
+  if(!r || !area) return;
+  const steerEl = document.getElementById('reply-'+id+'-steer');
+  const rememberEl = document.getElementById('reply-'+id+'-remember');
+  const steer = steerEl ? steerEl.value.trim() : '';
+  const rememberSteer = rememberEl ? rememberEl.checked : true;
+  area.innerHTML = '<div class="muted" style="font-size:12.5px;padding:6px 0;"><i class="ti ti-loader-2"></i> Regenerating…</div>';
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(r.campaignName)}/contacts/${r.contactId}/regenerate-reply`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ steer, rememberSteer })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    r.draft = data.message;
+    r.draftStale = false;
+    r.needsAttention = !!data.needsAttention;
+    r.attentionNote = data.attentionReason || '';
+    r.__original = data.message;
+    if(steer) toast(data.steerRemembered ? 'Steer applied and saved as a standing rule' : 'Steer applied to this draft', 'success');
+    area.innerHTML = renderReplyDraftArea(r);
+  } catch(err){
+    console.warn('Could not regenerate reply:', err.message);
+    toast('Could not regenerate: ' + err.message, 'warn');
+    area.innerHTML = renderReplyDraftArea(r);
+  }
+}
+
+async function replyApprove(id){
+  const r = (window.__repliesById || {})[id];
+  const textarea = document.getElementById('replyDraft-'+id);
+  if(!r || !textarea) return;
+  const message = textarea.value.trim();
+  if(!message){ toast('Nothing to send — the draft is empty', 'warn'); return; }
+
+  try { await navigator.clipboard.writeText(message); }
+  catch(e){ textarea.focus(); textarea.select(); document.execCommand('copy'); }
+
+  const original = r.__original || r.draft || '';
+  const draftOutcome = message === original ? 'Sent verbatim' : 'Sent edited';
+  const area = document.getElementById('replyArea-'+id);
+  if(area) area.innerHTML = '<div class="muted" style="font-size:12.5px;padding:6px 0;"><i class="ti ti-loader-2"></i> Copied — logging…</div>';
+
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(r.campaignName)}/contacts/${r.contactId}/mark-sent`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ message, draftOutcome, stageKey:'reply' })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    toast('Reply copied and logged — paste it into LinkedIn', 'success');
+    window.__repliesQueue = (window.__repliesQueue || []).filter(x => x.campaignContactId !== id);
+    delete (window.__repliesById || {})[id];
+    const card = document.getElementById('replyCard-'+id);
+    if(card) card.remove();
+    renderSidebar();
+    if(!window.__repliesQueue.length && state.currentPage === 'replies') renderPage();
+  } catch(err){
+    console.warn('Could not log reply:', err.message);
+    toast('Could not log the reply: ' + err.message, 'warn');
+    if(area) area.innerHTML = renderReplyDraftArea(r);
   }
 }
 
@@ -4635,6 +4832,12 @@ function getFastActionForCampaignContact(c, campaign){
     if(!replied) return { waiting: true };
     return { type:'Generate message', stageLabel: stage, messageNumber: Number(sentMatch[1]) + 1, campaignName: campaign.name, daysSinceTouch: null, isFastAction: true };
   }
+  // Sequence exhausted (all 3 sent) but they replied - there's no numbered
+  // message left to draft. The reply and its ready-made draft live on the
+  // Replies page; this card just points there.
+  if(stage === 'Message 3 Sent' && replied){
+    return { type:'Reply back', isReplyQueue: true, stageLabel: stage, campaignName: campaign.name, daysSinceTouch: null };
+  }
   if(WAITING_SEQUENCE_STAGES.has(stage)){
     return { waiting: true };
   }
@@ -4847,6 +5050,7 @@ function renderTodaysActionItem(a){
   window.__todaysActions = window.__todaysActions || {};
   window.__todaysActions[a.contact.id] = a;
   if(a.isReminder) return renderReminderActionCard(a);
+  if(a.isReplyQueue) return renderReplyBackActionCard(a);
   if(a.isFastAction) return renderFastActionCard(a);
 
   const c = a.contact;
@@ -4904,6 +5108,31 @@ function renderReminderActionCard(a){
     <div class="todo-item-actions">
       <button class="btn btn-secondary btn-sm" onclick="openContactDrawer('${esc(c.name)}', ${a.campaignName ? `'${esc(a.campaignName)}'` : 'null'})"><i class="ti ti-id"></i> Open profile</button>
       <button class="btn btn-ghost btn-sm" onclick="handleDismissReminder('${a.reminderId}','${c.id}')"><i class="ti ti-check"></i> Mark as done</button>
+    </div>
+  </div>`;
+}
+
+// Today's Actions card for a contact who has replied after the full 3-message
+// sequence - the reply and its AI draft live on the Replies page, so this card
+// is just a pointer there (not a draft-in-place card like renderFastActionCard).
+function renderReplyBackActionCard(a){
+  const c = a.contact;
+  return `
+  <div class="todo-item" id="todaysAction-${c.id}">
+    <div class="todo-item-main">
+      <div>
+        <div class="todo-item-name" style="cursor:pointer;" onclick="openContactDrawer('${esc(c.name)}', '${esc(a.campaignName)}')">${esc(c.name)}</div>
+        <div class="muted" style="font-size:12px;">${esc(c.role)} · ${esc(c.company)}</div>
+        <div style="margin-top:4px;"><span class="pill" style="background:var(--tint-blue-bg);color:var(--tint-blue-fg);"><i class="ti ti-rocket" style="font-size:11px;"></i> ${esc(a.campaignName)}</span></div>
+      </div>
+      <div style="text-align:right;">
+        <span class="pill" id="actionPill-${c.id}">Reply back</span>
+      </div>
+    </div>
+    <div class="todo-item-actions">
+      <button class="btn btn-primary btn-sm" onclick="navigate('replies')"><i class="ti ti-message-reply"></i> Open in Replies</button>
+      ${c.url ? `<a class="btn btn-ghost btn-sm" href="${esc(c.url)}" target="_blank" rel="noopener"><i class="ti ti-brand-linkedin"></i> LinkedIn</a>` : ''}
+      <button class="btn btn-ghost btn-sm" onclick="handleMarkActionDone('${c.id}')"><i class="ti ti-check"></i> Mark as done</button>
     </div>
   </div>`;
 }
@@ -20010,6 +20239,10 @@ hydrateSequencesFromAirtable();
 hydrateSettingsFromAirtable();
 hydrateLastAnalysisFromAirtable();
 hydrateDeadContactsFromAirtable();
+// Reply queue count for the sidebar badge - reads the database only (no
+// Engine call), so it's cheap to pull on boot. afterRender's own guard
+// stops this from firing a second time when the Replies page opens.
+loadRepliesQueue();
 </script>
 </body>
 </html>
