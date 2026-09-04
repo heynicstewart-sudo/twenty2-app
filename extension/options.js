@@ -1,4 +1,11 @@
 const $ = (id) => document.getElementById(id);
+// Accept a bare host ("foo.up.railway.app") or a full URL - always store a
+// scheme, or fetch() treats it as a path relative to the extension origin.
+const normBase = (v) => {
+  const s = String(v || '').trim().replace(/\/+$/, '');
+  if (!s) return '';
+  return /^https?:\/\//i.test(s) ? s : 'https://' + s;
+};
 const FIELDS = ['apiBase', 'token', 'clientSlug', 'hourlyCap', 'dailyCap', 'activeHoursStart', 'activeHoursEnd'];
 
 (async function load() {
@@ -11,7 +18,7 @@ const FIELDS = ['apiBase', 'token', 'clientSlug', 'hourlyCap', 'dailyCap', 'acti
 $('save').addEventListener('click', async () => {
   const cur = (await chrome.storage.local.get('settings')).settings || {};
   const next = { ...cur };
-  next.apiBase = $('apiBase').value.trim() || DEFAULT_SETTINGS.apiBase;
+  next.apiBase = normBase($('apiBase').value) || DEFAULT_SETTINGS.apiBase;
   next.token = $('token').value.trim();
   next.clientSlug = $('clientSlug').value.trim();
   next.hourlyCap = Math.max(1, +$('hourlyCap').value || DEFAULT_SETTINGS.hourlyCap);

@@ -52,7 +52,9 @@ async function loadsThisHour() {
 async function api(path, opts = {}) {
   const s = await getSettings();
   if (!s.token) throw new Error('No token set - open the extension Options.');
-  const url = s.apiBase.replace(/\/$/, '') + path + (path.includes('?') ? '&' : '?') +
+  let base = String(s.apiBase || '').trim().replace(/\/+$/, '');
+  if (base && !/^https?:\/\//i.test(base)) base = 'https://' + base;
+  const url = base + path + (path.includes('?') ? '&' : '?') +
     (s.clientSlug ? 'client=' + encodeURIComponent(s.clientSlug) : '');
   const res = await fetch(url, {
     ...opts,
