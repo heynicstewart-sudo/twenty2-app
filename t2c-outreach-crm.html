@@ -1757,13 +1757,42 @@ function _wrCampaignFunnel(c){
     rows.push({ label:'Meetings booked', count: booked, note: replied? `${Math.round(booked/replied*100)}% of replies`:'' });
   }
   const max = Math.max(1, ...rows.map(r => r.count));
-  const bars = rows.map((r,i) => _wrStep(r.label, r.count, max, r.note, i===0 || /booked/i.test(r.label))).join('');
-  // per-message reply line
-  const bm = (c.byMessage||[]).filter(m => m.sent>0);
-  const msgLine = bm.length
-    ? `<div style="font-size:9px;color:#555;margin-top:6px;">Replies by message &mdash; ${bm.map(m => `Msg ${m.message}: <b>${m.replied}</b> of ${m.sent} (${m.replyRate}%)`).join(' &nbsp;&middot;&nbsp; ')}</div>`
-    : '';
-  return bars + msgLine;
+  return rows.map((r,i) => _wrStep(r.label, r.count, max, r.note, i===0 || /booked/i.test(r.label))).join('');
+}
+
+// The message sequence, shown as a step-down: how many got each message,
+// how many replied, and - the key fact - how many were lost between one
+// message and the next.
+function _wrMessageSteps(c){
+  const sentRows = (c.byMessage||[]).filter(m => m.sent > 0);
+  if(!sentRows.length) return '';
+  const max = Math.max(1, ...sentRows.map(m => m.sent));
+  const parts = sentRows.map((m, i) => {
+    const w = Math.round(m.sent / max * 100);
+    const rw = Math.round(m.replied / max * 100);
+    const bar = `<div style="display:flex;align-items:center;gap:9px;font-size:10px;margin:4px 0;">
+      <div style="width:78px;font-weight:700;color:#1a1a2e;flex-shrink:0;">Message ${m.message}</div>
+      <div style="flex:1;background:#eef0f2;border-radius:3px;height:16px;position:relative;">
+        <div style="position:absolute;top:0;left:0;bottom:0;width:${w}%;background:#cfe0e4;border-radius:3px;"></div>
+        <div style="position:absolute;top:0;left:0;bottom:0;width:${rw}%;background:#2A6B7C;border-radius:3px;"></div>
+      </div>
+      <div style="width:58px;text-align:right;flex-shrink:0;"><b style="color:#1a1a2e;">${m.sent}</b> <span style="color:#999;">sent</span></div>
+      <div style="width:96px;text-align:right;flex-shrink:0;font-size:9px;color:#555;"><b style="color:#1a1a2e;">${m.replied}</b> replied (${m.replyRate}%)</div>
+    </div>`;
+    const next = sentRows[i + 1];
+    let drop = '';
+    if(next){
+      const lost = m.sent - next.sent;
+      const pct = m.sent ? Math.round(lost / m.sent * 100) : 0;
+      drop = `<div style="margin:3px 0 3px 78px;"><span style="display:inline-block;font-size:9.5px;color:#b4432a;font-weight:800;background:#fdeceb;border-radius:3px;padding:2px 7px;">&darr; ${pct}% drop-off to message ${next.message} &mdash; ${lost} of ${m.sent} did not continue</span></div>`;
+    }
+    return bar + drop;
+  }).join('');
+  return `<div style="margin-top:11px;">
+    <div style="font-size:8.5px;text-transform:uppercase;letter-spacing:.05em;color:#999;margin-bottom:2px;">Message sequence &mdash; where people drop off</div>
+    ${parts}
+    <div style="font-size:8px;color:#aaa;margin-top:3px;">Dark bar = replied, light bar = sent. A follow-up only goes out after the previous message gets a reply.</div>
+  </div>`;
 }
 
 // The analytical headline for a campaign: which job title connects most,
@@ -1839,6 +1868,7 @@ function buildWeeklyReportHTML(d){
         ${started ? `<div style="font-size:9px;color:#999;">Started ${_wrEsc(started)}</div>` : ''}
       </div>
       ${_wrCampaignFunnel(c)}
+      ${_wrMessageSteps(c)}
       ${_wrPicks(c)}
       <div style="font-size:8.5px;text-transform:uppercase;letter-spacing:.05em;color:#999;margin:12px 0 3px;">By job title</div>
       ${_wrBreakdownTable(c.byRole, 'Job title', c.emailMode)}
