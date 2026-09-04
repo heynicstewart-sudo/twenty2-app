@@ -5235,6 +5235,10 @@ async function extensionCaptureQueue() {
 async function synthesiseProfileEnrichment(s) {
   const exp = (s.experience || []).map(e =>
     `- ${e.title || ''}${e.company ? ' at ' + e.company : ''}${e.dates ? ' (' + e.dates + ')' : ''}${e.description ? '\n  ' + String(e.description).replace(/\n/g, ' ') : ''}`).join('\n');
+  const edu = (s.education || []).map(e =>
+    `- ${e.school || ''}${e.degree ? ' — ' + e.degree : ''}${e.dates ? ' (' + e.dates + ')' : ''}`).join('\n');
+  const expBlock = exp || s.experienceRaw || '(none on profile)';
+  const eduBlock = edu || s.educationRaw || '(none on profile)';
   const prompt = `A LinkedIn profile, read directly off the page (verbatim - trust it over any guess).
 
 Name: ${s.name || ''}
@@ -5245,7 +5249,10 @@ ABOUT:
 ${s.about || '(none on profile)'}
 
 EXPERIENCE:
-${exp || '(none on profile)'}
+${expBlock}
+
+EDUCATION:
+${eduBlock}
 ${s.recentPosts ? `\nRECENT POSTS:\n${s.recentPosts}\n` : ''}
 Return ONLY valid JSON in exactly this shape:
 { "currentTitle": string, "company": string, "workHistory": string, "education": string, "location": string, "bio": string, "recentActivity": string, "likelyPainPoints": string, "bestOutreachAngle": string }
@@ -5308,7 +5315,12 @@ app.post('/api/extension/profile', async (req, res) => {
 
       const rawBlock = [
         b.about ? `About:\n${b.about}` : '',
-        (b.experience || []).length ? `Experience:\n${(b.experience || []).map(e => `${e.title || ''}${e.company ? ' — ' + e.company : ''}${e.dates ? ' (' + e.dates + ')' : ''}${e.description ? '\n' + e.description : ''}`).join('\n\n')}` : ''
+        (b.experience || []).length
+          ? `Experience:\n${(b.experience || []).map(e => `${e.title || ''}${e.company ? ' — ' + e.company : ''}${e.dates ? ' (' + e.dates + ')' : ''}${e.description ? '\n' + e.description : ''}`).join('\n\n')}`
+          : (b.experienceRaw ? `Experience:\n${b.experienceRaw}` : ''),
+        (b.education || []).length
+          ? `Education:\n${(b.education || []).map(e => `${e.school || ''}${e.degree ? ' — ' + e.degree : ''}${e.dates ? ' (' + e.dates + ')' : ''}`).join('\n')}`
+          : (b.educationRaw ? `Education:\n${b.educationRaw}` : '')
       ].filter(Boolean).join('\n\n');
       const today = new Date().toISOString().slice(0, 10);
 

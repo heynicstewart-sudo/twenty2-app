@@ -22,7 +22,9 @@ const DEFAULT_SETTINGS = {
   activeHoursEnd: 21,
   maxConsecutiveFailures: 2, // stop the whole batch if this many in a row fail
   tabLoadTimeoutMs: 25000,
-  renderSettleMs: 4500     // wait after load for LinkedIn to lazy-render sections
+  renderSettleMs: 4500,     // wait after load for LinkedIn's SDUI to render the main card
+  detailsSettleMs: 3000,    // shorter wait for each /details/ sub-page
+  deepScrape: true          // also visit /details/experience/ + /details/education/ per contact
 };
 
 // A LinkedIn page that means "slow down / verify you're human". If the content

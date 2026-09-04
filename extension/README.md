@@ -9,7 +9,7 @@ yourself.
 
 | Job | How it's triggered | What it reads |
 |---|---|---|
-| **Capture a profile** | Passively when you open a profile of someone the CRM says needs a message; or a paced background batch | Name, headline, location, the full About section, the full Experience list |
+| **Capture a profile** | Passively when you open a profile of someone the CRM says needs a message; or a paced background batch | Name, headline, location, the full About section; the batch also opens `/details/experience/` and `/details/education/` in the same tab for the full history |
 | **Sync a conversation** | Popup → "Sync the open conversation" | Every message in the thread (full text, not the inbox preview), who sent it, timestamps → updates Conversation Context, flips "Reply Received", drafts the follow-up |
 | **Recent acceptances** | Popup → "Sync recent connections" | Your notifications for "X accepted your invitation" → advances those contacts from Connection Pending to Connected |
 
@@ -25,7 +25,11 @@ adjustable in Options (lower = safer, don't raise them):
 
 - **32–65s randomised gap** between profile loads, plus a **2–5 min break every 8**.
 - **18/hour and 45/day** hard caps (shared across passive + batch). Passive
-  captures count too.
+  captures count too. A deep batch capture visits 3 pages for one contact
+  (profile → experience → education) in a single ~20s tab session — that reads
+  like a normal "view profile, click Show all" and counts as **one** contact
+  against the caps. Set `deepScrape: false` in Options-stored settings to skip
+  the sub-pages and capture the main card only.
 - Batches only run **7am–9pm local**.
 - If any LinkedIn page shows a "browsing too fast" / security-check screen, the
   **batch aborts for the rest of the day** and tells you.
@@ -69,7 +73,17 @@ server config.
 
 ## Maintenance
 
-LinkedIn changes its page markup every few months. If profile captures suddenly
-come back with an empty About or no Experience, the CSS selectors in
-`content.js` (`sectionByAnchor`, `scrapeExperience`, `longestTextBlock`) need
-updating — that's the standing cost of reading LinkedIn at all.
+LinkedIn's profile is server-driven UI (SDUI): CSS classes are per-deploy
+hashes and useless. `content.js` keys off two things that have proven durable:
+
+- **card id suffixes** — `[id*="Topcard"]`, `[id*="AboutDetailsSection"]`,
+  `[id*="ExperienceDetailsSection"]`, `[id*="EducationDetailsSection"]`
+- **visible text order** — `scrapeDetails()` reads the section as an ordered
+  text sequence and `parseExperience()` reconstructs entries from it (handles
+  both flat roles and grouped-employer sub-roles).
+
+If captures come back thin, re-run the probes: open a profile, then its
+`/details/experience/` page, and check those id substrings still exist and that
+`orderedText()` on the section still yields `title / company / dates / location`
+rows. Update the id fragments or the `isDateRange` / `isBareDuration` heuristics
+as needed — that's the standing cost of reading LinkedIn at all.

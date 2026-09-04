@@ -1,6 +1,16 @@
 /* Runs on every linkedin.com page. Reads the DOM on request from the
  * background worker (batch), or on its own for passive capture. Never clicks
- * anything that sends a message or a connection request. */
+ * anything that sends a message or a connection request.
+ *
+ * LinkedIn's profile is now server-driven UI (SDUI): every CSS class is a
+ * per-deploy hash and means nothing. The only durable hooks are:
+ *   - card containers, keyed by a stable id suffix:
+ *       [id*="Topcard"], [id*="AboutDetailsSection"] / [id*="About"],
+ *       [id*="ExperienceDetailsSection"], [id*="EducationDetailsSection"]
+ *   - the order of visible text (headings, list rows)
+ * Experience and Education no longer render on /in/<slug>/ at all - they live on
+ * /in/<slug>/details/experience/ and /details/education/, which the background
+ * worker opens in the same tab and reads via scrapeDetails(). */
 
 const T = (el) => (el ? (el.innerText || el.textContent || '').trim() : '');
 const clean = (s) => (s || '').replace(/\s*\n\s*/g, '\n').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
@@ -18,78 +28,201 @@ function detectChallenge() {
   return hit ? { challenged: true, why: 'text:' + hit } : { challenged: false };
 }
 
-// ---------- profile ----------
-function sectionByAnchor(id) {
-  const anchor = document.getElementById(id);
-  if (anchor) {
-    let s = anchor.closest('section');
-    if (s) return s;
+// ---------- SDUI helpers ----------
+// First element whose id contains any of the given fragments (case-insensitive).
+function cardById(...frags) {
+  const els = document.querySelectorAll('[id*="sdui.profile"], [id*="DetailsSection"], [id*="Topcard"]');
+  for (const el of els) {
+    const id = (el.id || '').toLowerCase();
+    if (frags.some((f) => id.includes(f.toLowerCase()))) return el;
   }
-  // fallback: a <section> whose first heading text matches
-  const label = id.charAt(0).toUpperCase() + id.slice(1);
-  return [...document.querySelectorAll('main section')].find((sec) => {
-    const h = sec.querySelector('h2, .pvs-header__title, span[aria-hidden="true"]');
-    return h && T(h).toLowerCase().startsWith(label.toLowerCase());
+  return null;
+}
+// Fallback: a section/card whose first heading text matches a label exactly.
+function sectionByHeading(label) {
+  const re = new RegExp('^' + label + '$', 'i');
+  return [...document.querySelectorAll('section, div[id]')].find((s) => {
+    const h = s.querySelector('h2, h3');
+    return h && re.test(T(h));
   }) || null;
 }
-
-function longestTextBlock(root) {
-  if (!root) return '';
-  let best = '';
-  root.querySelectorAll('span[aria-hidden="true"], .inline-show-more-text, .pv-shared-text-with-see-more, p').forEach((el) => {
-    const t = T(el).replace(/\s*…\s*see more\s*$/i, '').replace(/\s*see more\s*$/i, '');
-    if (t.length > best.length) best = t;
-  });
-  return clean(best);
-}
-
-function scrapeExperience() {
-  const sec = sectionByAnchor('experience');
-  if (!sec) return [];
-  const items = sec.querySelectorAll('li.artdeco-list__item, li.pvs-list__paged-list-item, .pvs-list__item--line-separated');
+// Visible text of a subtree, in document order, consecutive duplicates dropped.
+function orderedText(root) {
+  if (!root) return [];
+  const tw = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   const out = [];
-  items.forEach((li) => {
-    // Each visible text line inside the item, in order, de-duped
-    const lines = [...li.querySelectorAll('span[aria-hidden="true"], .t-bold span, .t-normal span')]
-      .map((s) => T(s)).filter(Boolean);
-    const uniq = [...new Set(lines)];
-    if (!uniq.length) return;
-    const entry = { title: uniq[0] || '' };
-    if (uniq[1]) entry.company = uniq[1].replace(/\s*·.*$/, '');
-    const dateLine = uniq.find((l) => /\b(19|20)\d\d\b/.test(l) && /(present|yr|yrs|mo|mos|–|-|to)/i.test(l));
-    if (dateLine) entry.dates = dateLine;
-    const desc = uniq.slice(1).filter((l) => l !== entry.company && l !== entry.dates && l.length > 40).join(' ');
-    if (desc) entry.description = clean(desc);
-    out.push(entry);
-  });
-  return out.slice(0, 12);
+  let n;
+  while ((n = tw.nextNode())) {
+    const t = (n.textContent || '').replace(/\s+/g, ' ').trim();
+    if (t && t !== out[out.length - 1]) out.push(t);
+  }
+  return out;
 }
 
+const isDateRange = (s) => !!s && /\b(19|20)\d{2}\b/.test(s) && (/[-–—]/.test(s) || /present/i.test(s));
+const isBareDuration = (s) => !!s &&
+  /^(\d+\s*(yr|yrs|year|years|mo|mos|month|months)\b\s*)+$/i.test(String(s).trim()) &&
+  !/\b(19|20)\d{2}\b/.test(s);
+const isLongProse = (s) => s.length > 55 || (/[.!?]$/.test(s) && s.split(/\s+/).length > 4);
+const isControl = (s) => /^(load more|show all|show \d+ more|see more|see less|…?\s*see more|experience|education|skills|licenses & certifications)$/i.test(s.trim());
+
+// ---------- profile (main /in/<slug>/ page) ----------
 function scrapeProfile() {
   const ch = detectChallenge();
   if (ch.challenged) return { error: 'challenge', why: ch.why };
-  if (!/\/in\//.test(location.pathname)) return { error: 'not a profile page' };
+  if (!/\/in\//.test(window.location.pathname)) return { error: 'not a profile page' };
 
-  const main = document.querySelector('main') || document;
-  const name = T(main.querySelector('h1'));
-  const headline = T(main.querySelector('.text-body-medium.break-words'))
-    || T(main.querySelector('.pv-text-details__left-panel .text-body-medium'));
-  const locEl = [...main.querySelectorAll('.pv-text-details__left-panel .text-body-small, .text-body-small.inline')]
-    .map((e) => T(e)).find((t) => t && !/contact info|followers|connections/i.test(t));
-  const about = longestTextBlock(sectionByAnchor('about'));
-  const experience = scrapeExperience();
+  const topcard = cardById('Topcard') || document.querySelector('main section');
+  const lines = topcard ? T(topcard).split('\n').map((x) => x.trim()).filter(Boolean) : [];
+  const name = lines[0] || T(document.querySelector('h1')) || '';
 
-  const canonical = (document.querySelector('link[rel="canonical"]') || {}).href || location.href.split('?')[0];
-  const complete = !!(name && (about || experience.length));
+  const isPronoun = (s) => /^(she|he|they|ze|xe)\/[a-z]+$/i.test(s);
+  const isDegree = (s) => s === '.' || /^·?\s*(1st|2nd|3rd|\d+(st|nd|rd|th))\b/i.test(s);
+
+  let headline = '';
+  let hi = 1;
+  for (; hi < lines.length; hi++) {
+    const l = lines[hi];
+    if (l === name || isPronoun(l) || isDegree(l)) continue;
+    headline = l;
+    break;
+  }
+
+  // Location: after the headline, before the "Contact info"/"connections" block,
+  // the line that reads like a place (has a comma, and isn't the
+  // "Current Company · School" join line).
+  const rest = lines.slice(hi + 1);
+  const stop = rest.findIndex((l) => /contact info|connections|followers/i.test(l));
+  const pool = (stop >= 0 ? rest.slice(0, stop) : rest).filter((l) => l && l !== '.');
+  const place = pool.find((l) => l.includes(',') && !l.includes(' · '))
+    || pool.find((l) => !l.includes(' · ')) || '';
+
+  // Headline is usually "Title at Company".
+  let currentTitle = '';
+  let currentCompany = '';
+  const m = headline.match(/^(.*?)\s+(?:at|@)\s+(.+)$/i);
+  if (m) { currentTitle = m[1].trim(); currentCompany = m[2].trim(); }
+
+  const aboutCard = cardById('AboutDetailsSection', 'AboutCard') || sectionByHeading('About');
+  let about = '';
+  if (aboutCard) {
+    about = clean(T(aboutCard)
+      .replace(/^\s*About\s*/i, '')
+      .replace(/…?\s*see more\s*$/i, '')
+      .replace(/\bShow all\b[\s\S]*$/i, ''));
+  }
+
+  const canonical = (document.querySelector('link[rel="canonical"]') || {}).href
+    || window.location.href.split('?')[0];
+  const complete = !!(name && (about || headline));
   return {
-    url: canonical, name, headline, location: locEl || '',
-    about, experience,
+    url: canonical,
+    name,
+    headline,
+    location: place,
+    currentTitle,
+    currentCompany,
+    about,
     capturedAt: new Date().toISOString(),
     complete
   };
 }
 
-// ---------- messaging thread ----------
+// ---------- experience / education (the /details/<kind>/ sub-pages) ----------
+function parseExperience(seq) {
+  const a = seq.filter((t) => t && !isControl(t));
+  const entries = [];
+  let company = null; // inherited from the current grouped-employer header
+  let i = 0;
+
+  const structural = (k) => isDateRange(a[k]) || isBareDuration(a[k]);
+  const leadsToStructure = (k) =>
+    isDateRange(a[k + 1]) || isBareDuration(a[k + 1]) ||
+    isDateRange(a[k + 2]) || isBareDuration(a[k + 2]);
+
+  const consumeTail = (e) => {
+    let guard = 0;
+    while (i < a.length && guard++ < 5) {
+      const l = a[i];
+      if (!l || isControl(l) || structural(i) || leadsToStructure(i)) break;
+      if (!e.location && !isLongProse(l)) e.location = l;
+      else e.description = (e.description ? e.description + ' ' : '') + l;
+      i++;
+    }
+  };
+
+  while (i < a.length) {
+    const line = a[i];
+    if (!line || isControl(line)) { i++; continue; }
+
+    // A stray blurb/description line left behind by the previous entry.
+    if (isLongProse(line) && !isDateRange(a[i + 1]) && !isBareDuration(a[i + 1])) { i++; continue; }
+
+    // Grouped-employer header: [group title?] <company> <bare duration> [location...]
+    let groupJustSet = false;
+    if (isBareDuration(a[i + 1])) { company = line; i += 2; groupJustSet = true; }
+    else if (isBareDuration(a[i + 2]) && !isDateRange(a[i + 1])) { company = a[i + 1]; i += 3; groupJustSet = true; }
+    if (groupJustSet) {
+      // skip the header's own location line(s) - a sub-role title is always
+      // followed immediately by a date range, a location line is not.
+      while (i < a.length && a[i] && !structural(i) && !isControl(a[i]) &&
+             !isDateRange(a[i + 1]) && !isBareDuration(a[i + 1])) i++;
+      continue;
+    }
+
+    // Flat entry: <title> <company> <date range>
+    if (isDateRange(a[i + 2]) && !isDateRange(a[i + 1]) && !isBareDuration(a[i + 1])) {
+      const e = { title: line, company: a[i + 1], dates: a[i + 2] };
+      company = e.company;
+      i += 3;
+      consumeTail(e);
+      if (e.title && e.dates) entries.push(e);
+      continue;
+    }
+    // Sub-role under the current grouped employer: <title> <date range>
+    if (isDateRange(a[i + 1])) {
+      const e = { title: line, company, dates: a[i + 1] };
+      i += 2;
+      consumeTail(e);
+      if (e.title && e.dates) entries.push(e);
+      continue;
+    }
+    i++; // unclassifiable line
+  }
+  return entries.slice(0, 15);
+}
+
+function parseEducation(seq) {
+  const a = seq.filter((t) => t && !isControl(t));
+  const out = [];
+  for (let i = 0; i < a.length && out.length < 10; i++) {
+    if (structuralEdu(a[i])) continue;
+    const school = a[i];
+    const degree = a[i + 1] && !structuralEdu(a[i + 1]) ? a[i + 1] : '';
+    const dates = [a[i + 1], a[i + 2], a[i + 3]].find((x) => x && /\b(19|20)\d{2}\b/.test(x)) || '';
+    out.push({ school, degree, dates });
+    i += degree ? 1 : 0;
+  }
+  return out;
+  function structuralEdu(s) { return isDateRange(s) || isBareDuration(s) || (!!s && /^\s*(19|20)\d{2}\s*(–|-|to)?\s*((19|20)\d{2})?\s*$/.test(s)); }
+}
+
+function scrapeDetails(kind) {
+  const ch = detectChallenge();
+  if (ch.challenged) return { error: 'challenge', why: ch.why };
+  const isEdu = kind === 'education';
+  const card = cardById(isEdu ? 'EducationDetailsSection' : 'ExperienceDetailsSection')
+    || sectionByHeading(isEdu ? 'Education' : 'Experience')
+    || document.querySelector('main');
+  if (!card) return { error: kind + ' section not found' };
+
+  const seq = orderedText(card).filter((t) => !/^chevron[- ]?(right|down|left|up)$/i.test(t));
+  const raw = seq.filter((t) => !isControl(t)).join('\n').slice(0, 4000);
+  const entries = isEdu ? parseEducation(seq) : parseExperience(seq);
+  return { kind, entries, raw, count: entries.length };
+}
+
+// ---------- messaging thread (unchanged - class names here still live) ----------
 function myName() {
   return T(document.querySelector('.global-nav__me-photo'))
     || (document.querySelector('.global-nav__me-photo') || {}).alt
@@ -131,12 +264,10 @@ function scrapeThread() {
     messages.push({ from: from || 'them', text, time });
   });
 
-  return { url: location.href.split('?')[0], contactUrl, contactName, messages, capturedAt: new Date().toISOString() };
+  return { url: window.location.href.split('?')[0], contactUrl, contactName, messages, capturedAt: new Date().toISOString() };
 }
 
 // ---------- who recently accepted ----------
-// Works on the notifications page (items reading "X accepted your invitation")
-// and on a connections list (cards). Either way -> [{name, url}].
 function scrapeConnections() {
   const ch = detectChallenge();
   if (ch.challenged) return { error: 'challenge', why: ch.why };
@@ -150,7 +281,6 @@ function scrapeConnections() {
     out.push({ name: name.trim(), url: u });
   };
 
-  // notifications page
   document.querySelectorAll('.nt-card, article.nt-card, .notification-item, [data-view-name*="notification"]').forEach((card) => {
     const txt = T(card).toLowerCase();
     if (!txt.includes('accepted your invitation') && !txt.includes('is now a connection')) return;
@@ -159,7 +289,6 @@ function scrapeConnections() {
     push(name, a ? a.href : '');
   });
 
-  // connections list cards (fallback)
   if (!out.length) {
     document.querySelectorAll('.mn-connection-card, li.reusable-search__result-container').forEach((card) => {
       const a = card.querySelector('a[href*="/in/"]');
@@ -177,6 +306,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   try {
     if (msg.type === 'checkChallenge') sendResponse(detectChallenge());
     else if (msg.type === 'scrapeProfile') sendResponse(scrapeProfile());
+    else if (msg.type === 'scrapeDetails') sendResponse(scrapeDetails(msg.kind || 'experience'));
     else if (msg.type === 'scrapeThread') sendResponse(scrapeThread());
     else if (msg.type === 'scrapeConnections') sendResponse(scrapeConnections());
     else sendResponse({ error: 'unknown message' });
@@ -187,11 +317,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 });
 
 // ---------- passive capture (this tab, when you open a profile yourself) ----------
+// Main page only - name / headline / location / about. Experience and education
+// need the /details/ sub-pages, which only the paced batch visits.
 (async function passive() {
   const store = await chrome.storage.local.get(['settings', 'passiveOn']);
   if (store.passiveOn === false) return;
-  if (!/\/in\//.test(location.pathname)) return;
-  await sleep(3500); // let the page settle
+  if (!/\/in\//.test(window.location.pathname)) return;
+  if (/\/details\//.test(window.location.pathname)) return;
+  await sleep(3500);
   const s = scrapeProfile();
   if (s.error || !s.complete) return;
   chrome.runtime.sendMessage({ type: 'passiveProfile', payload: s });

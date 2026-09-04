@@ -83,16 +83,91 @@ async function scrapeInBgTab(url, message, settleMs, timeoutMs) {
     tab = await chrome.tabs.create({ url, active: false });
     await waitForTabComplete(tab.id, timeoutMs);
     await sleep(settleMs);
-    // gentle scroll so LinkedIn lazy-renders About/Experience
-    try {
-      await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: () => { window.scrollTo({ top: document.body.scrollHeight * 0.6, behavior: 'smooth' }); }
-      });
-      await sleep(1500);
-    } catch (_) {}
+    await gentleScroll(tab.id);
     const result = await chrome.tabs.sendMessage(tab.id, message);
     return result || { error: 'no response from page' };
+  } finally {
+    if (tab && tab.id) chrome.tabs.remove(tab.id).catch(() => {});
+  }
+}
+
+// Full-page scroll so LinkedIn's SDUI lazy-renders everything, then back to top.
+async function gentleScroll(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      func: async () => {
+        const s = (ms) => new Promise((r) => setTimeout(r, ms));
+        for (let y = 0; y < document.body.scrollHeight; y += 700) { window.scrollTo(0, y); await s(120); }
+        window.scrollTo(0, 0);
+      }
+    });
+    await sleep(1200);
+  } catch (_) {}
+}
+
+// Navigate an existing tab and wait for the load to finish.
+function navigateTab(tabId, url, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (fn) => { if (settled) return; settled = true; clearTimeout(to); chrome.tabs.onUpdated.removeListener(l); fn(); };
+    const to = setTimeout(() => finish(() => reject(new Error('nav timeout'))), timeoutMs);
+    const l = (id, info) => { if (id === tabId && info.status === 'complete') finish(resolve); };
+    chrome.tabs.onUpdated.addListener(l);
+    chrome.tabs.update(tabId, { url }).catch((e) => finish(() => reject(e)));
+  });
+}
+
+// Poll the tab until a selector matches (SDUI renders after 'complete' fires).
+async function waitForSelector(tabId, selector, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const [r] = await chrome.scripting.executeScript({
+        target: { tabId }, args: [selector], func: (sel) => !!document.querySelector(sel)
+      });
+      if (r && r.result) return true;
+    } catch (_) {}
+    await sleep(500);
+  }
+  return false;
+}
+
+// Open a profile, read the main card, then visit the /details/ sub-pages in the
+// SAME tab for experience + education. One continuous tab session per contact -
+// it reads like "view profile -> Show all experience -> Show all education", so
+// it still counts as one profile against the daily/hourly caps.
+async function scrapeProfileDeep(url, s) {
+  let tab;
+  try {
+    tab = await chrome.tabs.create({ url, active: false });
+    await waitForTabComplete(tab.id, s.tabLoadTimeoutMs);
+    await waitForSelector(tab.id, '[id*="Topcard"], main section', 8000);
+    await sleep(s.renderSettleMs);
+    await gentleScroll(tab.id);
+    const profile = await chrome.tabs.sendMessage(tab.id, { type: 'scrapeProfile' })
+      .catch(() => ({ error: 'no response from page' }));
+    if (profile.error === 'challenge') return profile;
+
+    if (s.deepScrape !== false && !profile.error) {
+      const base = url.split('?')[0].replace(/\/+$/, '') + '/';
+      for (const kind of ['experience', 'education']) {
+        try {
+          await navigateTab(tab.id, base + 'details/' + kind + '/', s.tabLoadTimeoutMs);
+          const key = kind === 'education' ? 'Education' : 'Experience';
+          await waitForSelector(tab.id, '[id*="' + key + 'DetailsSection"], main', 8000);
+          await sleep(s.detailsSettleMs || 3000);
+          await gentleScroll(tab.id);
+          const d = await chrome.tabs.sendMessage(tab.id, { type: 'scrapeDetails', kind }).catch(() => null);
+          if (d && d.error === 'challenge') return { error: 'challenge', why: d.why };
+          if (d && !d.error) {
+            if (kind === 'experience') { profile.experience = d.entries || []; profile.experienceRaw = d.raw || ''; }
+            else { profile.education = d.entries || []; profile.educationRaw = d.raw || ''; }
+          }
+        } catch (_) { /* sub-page is best-effort */ }
+      }
+    }
+    return profile;
   } finally {
     if (tab && tab.id) chrome.tabs.remove(tab.id).catch(() => {});
   }
@@ -162,13 +237,15 @@ async function tick() {
   let ok = false, note = '';
   try {
     if (item.task === 'profile') {
-      const scraped = await scrapeInBgTab(item.url, { type: 'scrapeProfile' }, s.renderSettleMs, s.tabLoadTimeoutMs);
+      const scraped = await scrapeProfileDeep(item.url, s);
       if (scraped.error === 'challenge') { await stopBatch('LinkedIn challenge page seen - stopping for the day'); return; }
-      if (scraped.error || !scraped.complete) { note = scraped.error || 'profile sections not readable'; }
+      const complete = scraped.name && (scraped.about || scraped.headline || (scraped.experience || []).length);
+      if (scraped.error || !complete) { note = scraped.error || 'profile not readable'; }
       else {
         const r = await api('/api/extension/profile', { method: 'POST', body: JSON.stringify(scraped) });
         ok = r.matched !== false;
-        note = r.matched === false ? 'no CRM contact matched this URL' : 'captured';
+        const roles = (scraped.experience || []).length;
+        note = r.matched === false ? 'no CRM contact matched this URL' : ('captured' + (roles ? ' · ' + roles + ' roles' : ''));
       }
       await bumpCounter();
     } else if (item.task === 'connections') {
