@@ -454,7 +454,11 @@ const OPTIONAL_LATE_ADDED_FIELDS = [
   'CTA Brought Forward', 'CTA Judgement Note', 'Reply Received',
   // Reply-queue fields - added by hand to Campaign Contacts after the
   // reply-triage feature ships, same graceful-degradation contract as above.
-  'Reply Sentiment', 'Last Reply At', 'Reply Draft At', 'Reply Needs Attention', 'Reply Attention Note'
+  'Reply Sentiment', 'Last Reply At', 'Reply Draft At', 'Reply Needs Attention', 'Reply Attention Note',
+  // Connection-note A/B: which arm this contact's request belongs to.
+  'Connection Arm',
+  // Campaigns table — hand-added on some bases only.
+  'Connection Note Mode', 'Sequence Length', 'CTA Message'
 ];
 const optionalFieldsMissing = new Set();
 function stripMissingOptionalFields(body) {
@@ -1698,9 +1702,12 @@ app.post('/api/airtable/campaign', async (req, res) => {
   // so they're folded into the existing "Strategy Notes" field as
   // labelled sections rather than dropped - that field already exists and
   // is semantically the right home for them.
-  const { name, goal, product, targetIcp, contactIds, gridIds, sequenceTemplates, strategyNotes, pitchAngle, objectionHandling, successMetric, startDate, status, ctas, contentContext, campaignType } = req.body;
+  const { name, goal, product, targetIcp, contactIds, gridIds, sequenceTemplates, strategyNotes, pitchAngle, objectionHandling, successMetric, startDate, status, ctas, contentContext, campaignType, connectionNoteMode, sequenceLength, ctaMessage } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
   const normalizedType = (campaignType || '').toLowerCase() === 'email' ? 'Email' : ((campaignType || '').toLowerCase() === 'linkedin' ? 'LinkedIn' : '');
+  const normalizedNoteMode = ['Note', 'No note', 'Split test'].includes(connectionNoteMode) ? connectionNoteMode : '';
+  const seqLen = Number.isFinite(+sequenceLength) && +sequenceLength >= 1 && +sequenceLength <= 8 ? Math.round(+sequenceLength) : null;
+  const ctaMsg = Number.isFinite(+ctaMessage) && +ctaMessage >= 1 && +ctaMessage <= 8 ? Math.round(+ctaMessage) : null;
 
   try {
     const existing = await findCampaignRecordByName(name);
@@ -1738,9 +1745,12 @@ app.post('/api/airtable/campaign', async (req, res) => {
       if (ctas) patchFields['CTAs'] = ctas;
       if (contentContext) patchFields['Content Context'] = contentContext;
       if (normalizedType) patchFields['Campaign Type'] = normalizedType;
+      if (normalizedNoteMode) patchFields['Connection Note Mode'] = normalizedNoteMode;
+      if (seqLen !== null) patchFields['Sequence Length'] = seqLen;
+      if (ctaMsg !== null) patchFields['CTA Message'] = ctaMsg;
 
       if (Object.keys(patchFields).length) {
-        await airtableRequest('PATCH', 'Campaigns', { records: [{ id: existing.id, fields: patchFields }] });
+        await airtableWriteAllowingMissingCtaFields('PATCH', 'Campaigns', { records: [{ id: existing.id, fields: patchFields }] });
       }
       return res.json({ success: true, updated: true, recordId: existing.id });
     }
@@ -1762,7 +1772,10 @@ app.post('/api/airtable/campaign', async (req, res) => {
       'Content Context': contentContext || '',
       'Campaign Type': normalizedType || 'LinkedIn'
     };
-    const data = await airtableRequest('POST', 'Campaigns', { records: [{ fields }] });
+    if (normalizedNoteMode) fields['Connection Note Mode'] = normalizedNoteMode;
+    if (seqLen !== null) fields['Sequence Length'] = seqLen;
+    if (ctaMsg !== null) fields['CTA Message'] = ctaMsg;
+    const data = await airtableWriteAllowingMissingCtaFields('POST', 'Campaigns', { records: [{ fields }] });
     res.json({ success: true, updated: false, recordId: data.records[0].id });
   } catch (err) {
     console.error('Airtable campaign upsert error:', err.message);
@@ -4677,7 +4690,7 @@ app.get('/api/campaign/:id/conversion-intelligence', async (req, res) => {
 // tab's FUNNEL_STAGE_GROUPS['connected'] uses client-side - the early
 // stages (Found, Connection Pending/Requested) don't count as connected.
 // Shared by /api/sales/insights and the offer learning-loop metrics below.
-const CONNECTED_OR_LATER_STAGES = ['Connected', 'Message 1 Sent', 'Pending Reply M1', 'Ready for Message 2', 'Message 2 Sent', 'Pending Reply M2', 'Ready for Message 3', 'Message 3 Sent', 'Pending Reply M3', 'Meeting Booked'];
+const CONNECTED_OR_LATER_STAGES = ['Connected', 'Message 1 Sent', 'Pending Reply M1', 'Ready for Message 2', 'Message 2 Sent', 'Pending Reply M2', 'Ready for Message 3', 'Message 3 Sent', 'Pending Reply M3', 'Message 4 Sent', 'Message 5 Sent', 'Message 6 Sent', 'Message 7 Sent', 'Message 8 Sent', 'Meeting Booked'];
 
 /* ===================== CANONICAL CAMPAIGN FUNNEL =====================
  * One definition of the outreach funnel, shared by every analytics surface
@@ -4700,9 +4713,11 @@ const FUNNEL_LADDER = [
   'Found', 'Connection Pending', 'Connected',
   'Message 1 Sent', 'Pending Reply M1', 'Ready for Message 2',
   'Message 2 Sent', 'Pending Reply M2', 'Ready for Message 3',
-  'Message 3 Sent', 'Pending Reply M3', 'Meeting Booked'
+  'Message 3 Sent', 'Pending Reply M3',
+  'Message 4 Sent', 'Message 5 Sent', 'Message 6 Sent', 'Message 7 Sent', 'Message 8 Sent',
+  'Meeting Booked'
 ];
-const OFF_LADDER_STAGES = new Set(['Excluded', 'Lost', 'Timed Out']);
+const OFF_LADDER_STAGES = new Set(['Excluded', 'Lost', 'Timed Out', 'Withdrawn']);
 const RUNG = {
   connectionSent: FUNNEL_LADDER.indexOf('Connection Pending'),
   connected: FUNNEL_LADDER.indexOf('Connected'),
@@ -4711,6 +4726,7 @@ const RUNG = {
   m3: FUNNEL_LADDER.indexOf('Message 3 Sent'),
   meeting: FUNNEL_LADDER.indexOf('Meeting Booked')
 };
+function messageRung(n) { return FUNNEL_LADDER.indexOf(`Message ${n} Sent`); }
 
 function ladderRung(stage) {
   return FUNNEL_LADDER.indexOf(normalizeSequenceStage(stage));
@@ -4762,12 +4778,15 @@ function buildFunnelContacts(ccRows, campaignRecordId, dealsByContactId) {
 
 // funnelContacts from buildFunnelContacts; deals = this campaign's Deal rows
 // [{outcome}]. Returns the step counts + step-to-step conversion the UI draws.
-function computeCampaignFunnel(funnelContacts, deals, emailMode) {
+function computeCampaignFunnel(funnelContacts, deals, emailMode, sequenceLength) {
   const active = funnelContacts.filter(c => !c.off);
   const reached = minRung => active.filter(c => c.furthestRung >= minRung).length;
   // Rung a contact reaches only once they've replied (the gate clears to
   // "Ready for Message 2"). Monotonic with the rest of the ladder.
   const repliedRung = FUNNEL_LADDER.indexOf('Ready for Message 2');
+  const seqLen = (Number.isFinite(+sequenceLength) && +sequenceLength >= 1 && +sequenceLength <= 8) ? Math.round(+sequenceLength) : 3;
+  const messageSteps = [];
+  for (let n = 1; n <= seqLen; n++) messageSteps.push({ key: `m${n}`, label: `Message ${n} sent`, count: reached(messageRung(n)) });
   const steps = emailMode ? [
     // Email campaigns have no connection step and follow-ups go out
     // regardless of reply, so the follow-up counts aren't funnel rungs -
@@ -4782,9 +4801,7 @@ function computeCampaignFunnel(funnelContacts, deals, emailMode) {
     { key: 'contacts', label: 'Contacts', count: funnelContacts.length },
     { key: 'connectionSent', label: 'Connection sent', count: active.filter(c => c.connectionSentDate || c.furthestRung >= RUNG.connectionSent).length },
     { key: 'connected', label: 'Connected', count: reached(RUNG.connected) },
-    { key: 'm1', label: 'Message 1 sent', count: reached(RUNG.m1) },
-    { key: 'm2', label: 'Message 2 sent', count: reached(RUNG.m2) },
-    { key: 'm3', label: 'Message 3 sent', count: reached(RUNG.m3) },
+    ...messageSteps,
     { key: 'meeting', label: 'Meeting booked', count: funnelContacts.filter(c => c.booked).length },
     { key: 'won', label: 'Won', count: (deals || []).filter(d => d.outcome === 'Won').length }
   ];
@@ -4793,13 +4810,13 @@ function computeCampaignFunnel(funnelContacts, deals, emailMode) {
     s.pctOfPrev = (prev && prev > 0) ? Math.round((s.count / prev) * 100) : null;
     s.pctOfContacts = steps[0].count ? Math.round((s.count / steps[0].count) * 100) : null;
   });
-  const reachedM3 = active.filter(c => c.furthestRung >= RUNG.m3);
+  const reachedFinal = active.filter(c => c.furthestRung >= messageRung(seqLen));
   return {
     steps,
     excluded: funnelContacts.filter(c => c.current === 'Excluded').length,
     lost: (deals || []).filter(d => d.outcome === 'Lost').length,
-    // sent all 3 messages, no booking and no live reply thread -> dead after the full sequence
-    noOutcomeAfterM3: reachedM3.filter(c => !c.booked && !c.won && !c.lost).length,
+    // sent every message in the sequence, no booking and no live reply -> dead after the full sequence
+    noOutcomeAfterM3: reachedFinal.filter(c => !c.booked && !c.won && !c.lost).length,
     active: active.length
   };
 }
@@ -4827,7 +4844,7 @@ app.get('/api/campaign/:id/funnel', async (req, res) => {
 
     const emailMode = isEmailCampaign(campaignRecord);
     const funnelContacts = buildFunnelContacts(ccRows, campaignRecord.id, dealsByContactId);
-    const funnel = computeCampaignFunnel(funnelContacts, myDeals, emailMode);
+    const funnel = computeCampaignFunnel(funnelContacts, myDeals, emailMode, campaignRecord.fields['Sequence Length']);
 
     // Reply + message-sent counts, campaign-scoped, deduped to distinct contacts.
     const myContactIds = new Set(funnelContacts.map(c => c.contactId));
@@ -4864,6 +4881,181 @@ app.get('/api/campaign/:id/funnel', async (req, res) => {
     });
   } catch (err) {
     console.error('Campaign funnel error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===================== CAMPAIGN SCORECARD =====================
+// GET /api/campaign/:id/scorecard?from=YYYY-MM-DD&to=YYYY-MM-DD
+// A HeyReach-style read of one campaign over a date window: four KPI tiles
+// (value, delta vs the previous equal-length window, "from X" denominator), a
+// daily time series for the area chart, the connection-note A/B split, a
+// low-reply-rate diagnostic, and the multi-threading warning. Everything is
+// sourced from dated history - Stage History transition dates, Touch Point
+// dates, Deal / Booking dates - not from a current-stage snapshot.
+
+function isoDay(d) { return new Date(d).toISOString().slice(0, 10); }
+function addDaysIso(iso, n) { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
+function inIso(dateStr, from, to) { if (!dateStr) return false; const d = String(dateStr).slice(0, 10); return d >= from && d <= to; }
+
+// Does this Campaign Contacts row's Stage History log a transition to `stage`
+// dated within [from,to]? Falls back to Connection Sent Date for the
+// connection-sent milestone on rows predating Stage History.
+function stageTransitionInRange(row, stage, from, to) {
+  return parseStageHistory(row.fields['Stage History']).some(h => h.stage === stage && inIso(h.date, from, to));
+}
+
+// An outbound message/email touch point (not a reply, not a transcript save) -
+// mirrors buildWeeklyReport's isOutboundMessage.
+function isOutboundMessageTp(f) {
+  const t = f['Type'] || '';
+  return !touchPointIsReply(f) && /message|email/i.test(t) && !/conversation/i.test(t);
+}
+
+function pctDelta(value, prev) {
+  if (!prev) return null;
+  return Math.round(((value - prev) / prev) * 100);
+}
+
+app.get('/api/campaign/:id/scorecard', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const campaignRecord = await resolveCampaignRecord(decodeURIComponent(req.params.id));
+    if (!campaignRecord) return res.status(404).json({ error: 'Campaign not found' });
+    const campaignId = campaignRecord.id;
+
+    const today = isoDay(new Date());
+    const to = (req.query.to && /^\d{4}-\d{2}-\d{2}$/.test(req.query.to)) ? req.query.to : today;
+    const from = (req.query.from && /^\d{4}-\d{2}-\d{2}$/.test(req.query.from)) ? req.query.from : addDaysIso(to, -6);
+    const spanDays = Math.max(0, Math.round((Date.parse(to) - Date.parse(from)) / 86400000));
+    const prevTo = addDaysIso(from, -1);
+    const prevFrom = addDaysIso(prevTo, -spanDays);
+
+    const [ccRows, tpRecords, dealRecords, contactRecords] = await Promise.all([
+      fetchCampaignContactsRows(),
+      airtableFetchAllRecords('Touch Points'),
+      airtableFetchAllRecords('Deals'),
+      airtableFetchAllRecords('Contacts')
+    ]);
+
+    const myRows = ccRows.filter(r => (r.fields['Campaign'] || []).includes(campaignId));
+    const myContactIds = new Set(myRows.map(r => (r.fields['Contact'] || [])[0]).filter(Boolean));
+    const myTps = tpRecords.filter(r =>
+      (r.fields['Campaign'] || []).includes(campaignId) ||
+      (r.fields['Contact'] || []).some(cid => myContactIds.has(cid))
+    );
+    const myDeals = dealRecords.filter(r => (r.fields['Campaign'] || []).includes(campaignId));
+
+    // ---- window metric helpers ----
+    const connSentIn = (f, t) => myRows.filter(r =>
+      stageTransitionInRange(r, 'Connection Pending', f, t) || inIso(r.fields['Connection Sent Date'], f, t)).length;
+    const connAcceptedIn = (f, t) => myRows.filter(r => stageTransitionInRange(r, 'Connected', f, t)).length;
+    const msgsSentIn = (f, t) => myTps.filter(r => isOutboundMessageTp(r.fields) && inIso(r.fields['Date'], f, t)).length;
+    const repliesIn = (f, t) => myTps.filter(r => touchPointIsReply(r.fields) && inIso(r.fields['Date'], f, t)).length;
+    const positiveSentimentContactIds = new Set(
+      myRows.filter(r => (r.fields['Reply Sentiment'] || '') === 'Positive').map(r => (r.fields['Contact'] || [])[0]).filter(Boolean)
+    );
+    const positiveRepliesIn = (f, t) => myTps.filter(r =>
+      touchPointIsReply(r.fields) && inIso(r.fields['Date'], f, t) &&
+      (r.fields['Contact'] || []).some(cid => positiveSentimentContactIds.has(cid))).length;
+    const meetingsIn = (f, t) => {
+      const ids = new Set();
+      myRows.forEach(r => { if (stageTransitionInRange(r, 'Meeting Booked', f, t)) ids.add((r.fields['Contact'] || [])[0]); });
+      myDeals.forEach(r => { if ((r.fields['Outcome'] || '') !== 'Lost' && inIso(r.fields['Date'], f, t)) ids.add((r.fields['Contact'] || [])[0]); });
+      ids.delete(undefined); ids.delete(null);
+      return ids.size;
+    };
+
+    const mkTile = (label, valFn, denomFn, denomLabel) => {
+      const value = valFn(from, to);
+      const prevValue = valFn(prevFrom, prevTo);
+      const denom = denomFn ? denomFn(from, to) : null;
+      return { label, value, prevValue, deltaPct: pctDelta(value, prevValue), denom, denomLabel };
+    };
+
+    const tiles = [
+      mkTile('Connections accepted', connAcceptedIn, connSentIn, 'sent'),
+      mkTile('Message replies', repliesIn, msgsSentIn, 'sent'),
+      mkTile('Positive replies', positiveRepliesIn, repliesIn, 'replies'),
+      mkTile('Meetings booked', meetingsIn, connAcceptedIn, 'accepted')
+    ];
+
+    // ---- daily series ----
+    const series = [];
+    for (let d = from; d <= to; d = addDaysIso(d, 1)) {
+      series.push({
+        date: d,
+        connectionsSent: connSentIn(d, d),
+        connectionsAccepted: connAcceptedIn(d, d),
+        messagesSent: msgsSentIn(d, d),
+        replies: repliesIn(d, d)
+      });
+    }
+
+    // ---- connection-note A/B ----
+    const dealsByContactId = {};
+    myDeals.forEach(d => {
+      const cid = (d.fields['Contact'] || [])[0];
+      if (cid) (dealsByContactId[cid] = dealsByContactId[cid] || []).push({ outcome: d.fields['Outcome'] || 'Pending' });
+    });
+    const funnelContacts = buildFunnelContacts(ccRows, campaignId, dealsByContactId);
+    const armByContactId = {};
+    myRows.forEach(r => { const cid = (r.fields['Contact'] || [])[0]; if (cid) armByContactId[cid] = r.fields['Connection Arm'] || null; });
+    const csdByContactId = {};
+    myRows.forEach(r => { const cid = (r.fields['Contact'] || [])[0]; if (cid && r.fields['Connection Sent Date']) csdByContactId[cid] = true; });
+    const armStats = arm => {
+      const inArm = funnelContacts.filter(fc => armByContactId[fc.contactId] === arm);
+      const sent = inArm.filter(fc => csdByContactId[fc.contactId] || fc.furthestRung >= RUNG.connectionSent).length;
+      const accepted = inArm.filter(fc => fc.furthestRung >= RUNG.connected).length;
+      return { sent, accepted, ratePct: sent ? Math.round((accepted / sent) * 100) : null };
+    };
+    const connectionAb = {
+      mode: campaignRecord.fields['Connection Note Mode'] || 'Note',
+      note: armStats('Note'),
+      noNote: armStats('No note')
+    };
+
+    // ---- low-reply-rate diagnostic (video heuristic) ----
+    const winAccepted = connAcceptedIn(from, to);
+    const winSent = connSentIn(from, to);
+    const winReplies = repliesIn(from, to);
+    const acceptedRatePct = winSent ? Math.round((winAccepted / winSent) * 100) : null;
+    const replyRatePct = winAccepted ? Math.round((winReplies / winAccepted) * 100) : null;
+    const diagnostic = (acceptedRatePct !== null && acceptedRatePct >= 20 && replyRatePct !== null && replyRatePct < 15)
+      ? { flag: true, message: `Acceptance is healthy (${acceptedRatePct}%) but only ${replyRatePct}% of accepted contacts have replied. That usually means the targeting or the message copy is off - review a sample of accepted contacts against the ICP.` }
+      : { flag: false };
+
+    // ---- multi-threading warning ----
+    const companyByContactId = {};
+    contactRecords.forEach(r => { companyByContactId[r.id] = (r.fields['Company'] || [])[0] || null; });
+    const companyNameById = {};
+    // Company link resolves to a record id; look up its name from Companies if available on the contact's lookup, else leave the id.
+    const activeContactRows = myRows.filter(r => {
+      const st = collapseLegacyStage(normalizeSequenceStage(r.fields['Sequence Stage']));
+      return !['Excluded', 'Lost', 'Timed Out', 'Withdrawn'].includes(st);
+    });
+    const perCompany = {};
+    activeContactRows.forEach(r => {
+      const cid = (r.fields['Contact'] || [])[0];
+      const coId = cid ? companyByContactId[cid] : null;
+      if (!coId) return;
+      (perCompany[coId] = perCompany[coId] || []).push((r.fields['Name'] || '').split(' — ')[0] || '');
+    });
+    const companiesRecords = await airtableFetchAllRecords('Companies').catch(() => []);
+    companiesRecords.forEach(r => { companyNameById[r.id] = r.fields['Company Name'] || ''; });
+    const multiThread = Object.entries(perCompany)
+      .filter(([, names]) => names.length >= 3)
+      .map(([coId, names]) => ({ company: companyNameById[coId] || 'Unknown company', count: names.length, contactNames: names.filter(Boolean) }))
+      .sort((a, b) => b.count - a.count);
+
+    res.json({
+      campaignName: campaignRecord.fields['Name'] || campaignRecord.fields['Campaign Name'] || '',
+      from, to, prevFrom, prevTo,
+      tiles, series, connectionAb, diagnostic, multiThread,
+      generatedAt: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Campaign scorecard error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -5002,7 +5194,7 @@ async function buildWeeklyReport(opts) {
       const emailMode = isEmailCampaign(cr);
       const myDeals = dealRecords.filter(r => (r.fields['Campaign'] || []).includes(cr.id)).map(r => ({ outcome: r.fields['Outcome'] || 'Pending' }));
       const fcs = buildFunnelContacts(ccRows, cr.id, dealsByContactId);
-      const funnel = computeCampaignFunnel(fcs, myDeals, emailMode);
+      const funnel = computeCampaignFunnel(fcs, myDeals, emailMode, cr.fields['Sequence Length']);
 
       const myIds = new Set(fcs.map(c => c.contactId));
       const myTp = tpRecords.filter(r => (r.fields['Campaign'] || []).includes(cr.id) || (r.fields['Contact'] || []).some(id => myIds.has(id)));
@@ -5487,7 +5679,7 @@ app.get('/api/sales/insights', async (req, res) => {
 
     const campaigns = campaignRecords
       .filter(r => (r.fields['Status'] || '') !== 'Draft')
-      .map(r => ({ id: r.id, name: r.fields['Name'] || '', status: r.fields['Status'] || '', email: isEmailCampaign(r) }));
+      .map(r => ({ id: r.id, name: r.fields['Name'] || '', status: r.fields['Status'] || '', email: isEmailCampaign(r), sequenceLength: r.fields['Sequence Length'] }));
 
     if (!campaigns.length) {
       return res.json({ insights: ['No live or past campaigns yet — insights will appear once a campaign goes live.'], generatedAt: new Date().toISOString() });
@@ -5501,7 +5693,7 @@ app.get('/api/sales/insights', async (req, res) => {
       myDealRows.forEach(d => { if (d.contactId) (dealsByContactId[d.contactId] = dealsByContactId[d.contactId] || []).push(d); });
 
       const funnelContacts = buildFunnelContacts(ccRows, c.id, dealsByContactId);
-      const funnel = computeCampaignFunnel(funnelContacts, myDealRows, c.email);
+      const funnel = computeCampaignFunnel(funnelContacts, myDealRows, c.email, c.sequenceLength);
       const contactIds = new Set(funnelContacts.map(x => x.contactId));
       const myTouchPoints = tpRecords.filter(r => (r.fields['Campaign'] || []).includes(c.id) || (r.fields['Contact'] || []).some(cid => contactIds.has(cid)));
 
@@ -9078,31 +9270,33 @@ function normalizeSequenceStage(stage) {
 // deliberately left out - the client doesn't offer a way to send early
 // from there either (see renderMsgStep's Reply toggle only appearing once
 // a message is marked sent).
+// Extended statically to 8 messages so a campaign with a longer sequence
+// (Campaigns.Sequence Length) advances correctly. Default campaigns only ever
+// touch stages 1-3; 4-8 are inert for them.
 const SEQUENCE_STAGE_NEXT = {
   'Connected': 'Message 1 Sent',
-  'Message 1 Sent': 'Message 2 Sent',
   'Ready for Message 2': 'Message 2 Sent',
-  'Message 2 Sent': 'Message 3 Sent',
   'Ready for Message 3': 'Message 3 Sent'
 };
+for (let n = 1; n <= 7; n++) SEQUENCE_STAGE_NEXT[`Message ${n} Sent`] = `Message ${n + 1} Sent`;
 
 // Which message number a "Generate message" click should draft, given the
-// contact's current (normalised) Sequence Stage. Same "Ready for Message
-// N" equivalence as SEQUENCE_STAGE_NEXT above.
+// contact's current (normalised) Sequence Stage.
 const MESSAGE_NUMBER_FOR_STAGE = {
   'Connected': 1,
-  'Message 1 Sent': 2,
   'Ready for Message 2': 2,
-  'Message 2 Sent': 3,
   'Ready for Message 3': 3
 };
+for (let n = 1; n <= 7; n++) MESSAGE_NUMBER_FOR_STAGE[`Message ${n} Sent`] = n + 1;
 
 // LinkedIn Sequence Stage now only ever advances on a SEND. Reply Yes/No sets
 // the "Reply Received" checkbox and never touches the stage. The reply-gated
 // stages ("Ready for Message N", "Pending Reply MN") are no longer written -
 // these helpers collapse any that still exist on old rows back to the send
 // milestone they followed, so read-paths stay correct during the transition.
-const LINKEDIN_STAGE_ORDER = ['Found', 'Connection Pending', 'Connected', 'Message 1 Sent', 'Message 2 Sent', 'Message 3 Sent', 'Meeting Booked'];
+const LINKEDIN_STAGE_ORDER = ['Found', 'Connection Pending', 'Connected',
+  'Message 1 Sent', 'Message 2 Sent', 'Message 3 Sent', 'Message 4 Sent',
+  'Message 5 Sent', 'Message 6 Sent', 'Message 7 Sent', 'Message 8 Sent', 'Meeting Booked'];
 const LEGACY_STAGE_COLLAPSE = {
   'Pending Reply M1': 'Message 1 Sent', 'Ready for Message 2': 'Message 1 Sent',
   'Pending Reply M2': 'Message 2 Sent', 'Ready for Message 3': 'Message 2 Sent',
@@ -9355,8 +9549,28 @@ app.get('/api/campaign/:id/campaign-contacts', async (req, res) => {
     const nameById = {};
     contactRecords.forEach(r => { nameById[r.id] = r.fields['Full Name'] || ''; });
 
-    const result = rows
-      .filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id))
+    const myRows = rows.filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id));
+
+    // Split-test campaigns: assign a balanced Connection Arm to any row that
+    // doesn't have one, so the Send-connection card can tell the operator
+    // whether to include a note and acceptance can be reported per arm.
+    if ((campaignRecord.fields['Connection Note Mode'] || 'Note') === 'Split test') {
+      let noteN = myRows.filter(r => r.fields['Connection Arm'] === 'Note').length;
+      let noNoteN = myRows.filter(r => r.fields['Connection Arm'] === 'No note').length;
+      const writes = [];
+      for (const r of myRows.filter(r => !r.fields['Connection Arm'])) {
+        const arm = noteN <= noNoteN ? 'Note' : 'No note';
+        if (arm === 'Note') noteN++; else noNoteN++;
+        r.fields['Connection Arm'] = arm;
+        writes.push({ id: r.id, fields: { 'Connection Arm': arm } });
+      }
+      if (writes.length) {
+        await airtableBatchPatch(CAMPAIGN_CONTACTS_TABLE, writes)
+          .catch(e => console.warn('Connection Arm backfill failed (non-fatal):', e.message));
+      }
+    }
+
+    const result = myRows
       .map(r => {
         const contactId = (r.fields['Contact'] || [])[0] || null;
         return {
@@ -9369,7 +9583,8 @@ app.get('/api/campaign/:id/campaign-contacts', async (req, res) => {
           connectionSentDate: r.fields['Connection Sent Date'] || null,
           replySentiment: r.fields['Reply Sentiment'] || null,
           lastReplyAt: r.fields['Last Reply At'] || null,
-          replyNeedsAttention: !!r.fields['Reply Needs Attention']
+          replyNeedsAttention: !!r.fields['Reply Needs Attention'],
+          connectionArm: r.fields['Connection Arm'] || null
         };
       })
       .filter(r => r.contactName);
@@ -9439,6 +9654,72 @@ app.post('/api/campaign/:id/check-timeouts', async (req, res) => {
     res.json({ success: true, flaggedCount: toFlag.length, flaggedNames, totalTimedOut });
   } catch (err) {
     console.error('Check timeouts error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Strategy tab "Stale requests to withdraw" - Campaign Contacts still at
+// "Connection Pending" whose request was sent more than `days` ago. A stale
+// pending request quietly hurts account reach (HeyReach Rule 7), so the
+// operator withdraws them in LinkedIn's sent-invitations UI, then marks them
+// Withdrawn here.
+app.get('/api/campaign/:id/stale-connections', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const campaignName = decodeURIComponent(req.params.id);
+  const days = parseInt(req.query.days, 10) || 14;
+  try {
+    const campaignRecord = await resolveCampaignRecord(campaignName);
+    if (!campaignRecord) return res.status(404).json({ error: 'Campaign not found' });
+    const [rows, contactRecords] = await Promise.all([fetchCampaignContactsRows(), airtableFetchAllRecords('Contacts')]);
+    const byId = {};
+    contactRecords.forEach(r => { byId[r.id] = r.fields || {}; });
+    const cutoff = addDaysIso(isoDay(new Date()), -days);
+    const stale = rows
+      .filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id))
+      .filter(r => normalizeSequenceStage(r.fields['Sequence Stage']) === 'Connection Pending'
+        && r.fields['Connection Sent Date'] && r.fields['Connection Sent Date'] < cutoff)
+      .map(r => {
+        const cid = (r.fields['Contact'] || [])[0] || null;
+        const cf = cid ? (byId[cid] || {}) : {};
+        return {
+          contactId: cid,
+          contactName: cf['Full Name'] || (r.fields['Name'] || '').split(' — ')[0] || '',
+          linkedInUrl: cf['LinkedIn URL'] || '',
+          daysPending: daysBetweenDates(r.fields['Connection Sent Date'], isoDay(new Date()))
+        };
+      })
+      .filter(x => x.contactName)
+      .sort((a, b) => (b.daysPending || 0) - (a.daysPending || 0));
+    res.json({ rows: stale, days });
+  } catch (err) {
+    console.error('Stale connections error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/campaign/:id/withdraw-connections', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const campaignName = decodeURIComponent(req.params.id);
+  const contactIds = Array.isArray(req.body && req.body.contactIds) ? req.body.contactIds : [];
+  if (!contactIds.length) return res.status(400).json({ error: 'contactIds (array) is required' });
+  try {
+    const campaignRecord = await resolveCampaignRecord(campaignName);
+    if (!campaignRecord) return res.status(404).json({ error: 'Campaign not found' });
+    const rows = await fetchCampaignContactsRows();
+    const today = isoDay(new Date());
+    const targets = rows.filter(r =>
+      (r.fields['Campaign'] || []).includes(campaignRecord.id) &&
+      contactIds.includes((r.fields['Contact'] || [])[0]) &&
+      normalizeSequenceStage(r.fields['Sequence Stage']) === 'Connection Pending');
+    if (targets.length) {
+      await airtableBatchPatch(CAMPAIGN_CONTACTS_TABLE, targets.map(r => ({
+        id: r.id,
+        fields: { 'Sequence Stage': 'Withdrawn', 'Stage History': appendStageHistory(r.fields['Stage History'], 'Withdrawn', today) }
+      })));
+    }
+    res.json({ success: true, withdrawn: targets.length });
+  } catch (err) {
+    console.error('Withdraw connections error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -9660,8 +9941,11 @@ async function getStrategyVoiceSettings() {
 // server-side drafting routes match the actual template text a rep wrote for
 // this stage, same as stage.template in POST /api/messages/generate.
 const SEQUENCE_TEMPLATE_STAGE_LABEL = { 1: 'Message 1', 2: 'Follow up 1', 3: 'Follow up 2' };
+function sequenceTemplateLabel(messageNumber) {
+  return SEQUENCE_TEMPLATE_STAGE_LABEL[messageNumber] || (messageNumber >= 2 ? `Follow up ${messageNumber - 1}` : null);
+}
 function extractStageTemplate(sequenceTemplatesBlob, messageNumber) {
-  const label = SEQUENCE_TEMPLATE_STAGE_LABEL[messageNumber];
+  const label = sequenceTemplateLabel(messageNumber);
   if (!label || !sequenceTemplatesBlob) return '';
   const block = sequenceTemplatesBlob.split('\n\n').find(b => b.startsWith(label + ' ('));
   if (!block) return '';
@@ -9675,6 +9959,26 @@ function extractStageTemplate(sequenceTemplatesBlob, messageNumber) {
 // number.
 const STAGE_KEY_FOR_MESSAGE_NUMBER = { 1: 'm1', 2: 'm2', 3: 'cta' };
 
+// Per-campaign sequence config (Campaigns.Sequence Length / CTA Message).
+// Default 3 messages, CTA on message 3 - exactly the pre-existing behaviour.
+function campaignSequenceLength(campaignRecord) {
+  const n = +(campaignRecord && campaignRecord.fields && campaignRecord.fields['Sequence Length']);
+  return (Number.isFinite(n) && n >= 1 && n <= 8) ? Math.round(n) : 3;
+}
+function campaignCtaMessage(campaignRecord) {
+  const seqLen = campaignSequenceLength(campaignRecord);
+  const n = +(campaignRecord && campaignRecord.fields && campaignRecord.fields['CTA Message']);
+  return (Number.isFinite(n) && n >= 1 && n <= seqLen) ? Math.round(n) : Math.min(3, seqLen);
+}
+// The style-corrections / prompt bucket for a message number in a campaign:
+// m1, m2, the designated cta, or a mid-sequence 'followup'.
+function stageKeyForMessage(messageNumber, ctaMessage) {
+  if (messageNumber === ctaMessage) return 'cta';
+  if (messageNumber === 1) return 'm1';
+  if (messageNumber === 2) return 'm2';
+  return 'followup';
+}
+
 // ---- Per-campaign, per-stage style corrections ("steer box") ----
 // Marcus types a steer ("stop hedging", "way too long, 3 sentences max")
 // against a specific draft; with "remember" ticked it's appended to the
@@ -9682,14 +9986,14 @@ const STAGE_KEY_FOR_MESSAGE_NUMBER = { 1: 'm1', 2: 'm2', 3: 'cta' };
 // every future draft for that same campaign + stage as a hard rule. Scoped
 // per campaign so one campaign's voice tuning never leaks into another's,
 // and per stage so an M1 correction doesn't reshape the CTA message.
-const STYLE_CORRECTION_STAGES = ['connect', 'm1', 'm2', 'cta', 'reply'];
+const STYLE_CORRECTION_STAGES = ['connect', 'm1', 'm2', 'cta', 'followup', 'reply'];
 const STYLE_CORRECTIONS_PER_STAGE_CAP = 12;
 // Campaign sequence-editor stage keys (CAMPAIGN_STAGE_META in the client)
 // map onto the canonical bucket keys used everywhere else.
 const SEQ_EDITOR_STAGE_TO_BUCKET = { message1: 'm1', followUp1: 'm2', followUp2: 'cta', connect: 'connect' };
 
 function emptyStyleCorrections() {
-  return { connect: [], m1: [], m2: [], cta: [], reply: [] };
+  return { connect: [], m1: [], m2: [], cta: [], followup: [], reply: [] };
 }
 
 function parseStyleCorrections(fieldValue) {
@@ -9713,10 +10017,11 @@ function styleCorrectionBucketKey(stageKeyOrLabel) {
   if (SEQ_EDITOR_STAGE_TO_BUCKET[raw]) return SEQ_EDITOR_STAGE_TO_BUCKET[raw];
   const lc = raw.toLowerCase();
   if (/\breply\b|reply back|responding/.test(lc)) return 'reply';
+  if (/follow\s*up|followup/.test(lc)) return 'followup';
   if (/connect|connection/.test(lc)) return 'connect';
   if (/message\s*1\b|\bm1\b|^1$/.test(lc)) return 'm1';
-  if (/message\s*2\b|\bm2\b|follow\s*up\s*1|^2$/.test(lc)) return 'm2';
-  if (/message\s*3\b|\bm3\b|\bcta\b|follow\s*up\s*2|invite|^3$/.test(lc)) return 'cta';
+  if (/message\s*2\b|\bm2\b|^2$/.test(lc)) return 'm2';
+  if (/\bcta\b|invite|^3$/.test(lc)) return 'cta';
   return null;
 }
 
@@ -9869,15 +10174,17 @@ async function buildCampaignOutreachPrompt({ campaignRecord, contactRecord, mess
   // this campaign and this message number.
   const performanceNote = campaignMessagePerformanceNote(touchPoints, resolvedName, messageNumber, contactId);
 
-  const stageKey = STAGE_KEY_FOR_MESSAGE_NUMBER[messageNumber];
+  const seqLen = campaignSequenceLength(campaignRecord);
+  const ctaMessage = campaignCtaMessage(campaignRecord);
+  const stageKey = stageKeyForMessage(messageNumber, ctaMessage);
   const template = extractStageTemplate(camp['Sequence Templates'], messageNumber);
   const ctaOptions = stageKey === 'cta' ? parseCtaList(camp['CTAs']) : [];
   const styleCorrections = parseStyleCorrections(camp['Style Corrections']);
 
-  // Earlier than the campaign's "Messages before CTA" cadence -> the offer is
-  // context only, not a pitch instruction (the model can still bring it
-  // forward if the conversation clearly calls for it, see ctaStrategyNoteText).
-  const cadenceN = parseInt(voice.messagesBeforeCta, 10) || 2;
+  // Earlier than the campaign's CTA-message target -> the offer is context
+  // only, not a pitch instruction (the model can still bring it forward if
+  // the conversation clearly calls for it, see ctaStrategyNoteText).
+  const cadenceN = ctaMessage;
   const offerNote = offer && offer.summary
     ? (messageNumber < cadenceN
         ? `\nThis campaign's offer, for context only (do not pitch it unless the contact has clearly signalled they want something like it): ${offer.summary}`
@@ -9894,7 +10201,7 @@ async function buildCampaignOutreachPrompt({ campaignRecord, contactRecord, mess
   const emailMode = isEmailCampaign(campaignRecord);
   const preamble = emailMode
     ? `You are drafting a cold outreach email to a business on behalf of T2C Outreach, Twenty2 Collective's outreach CRM.`
-    : `You are drafting LinkedIn outreach message ${messageNumber} of 3 for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM.`;
+    : `You are drafting LinkedIn outreach message ${messageNumber} of ${seqLen}${messageNumber === ctaMessage ? ' (this is the CTA message - the ask)' : ''} for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM.`;
   const writeInstruction = emailMode
     ? `Write the cold email to this business now. If there is a prior reply in the conversation above, respond to what they actually said rather than reintroducing yourself.`
     : `Write only message ${messageNumber} in this contact's sequence for this specific campaign, following on naturally from the conversation so far (if any) - if the conversation shows they've already replied, respond to what they actually said rather than reintroducing yourself.`;
@@ -9907,7 +10214,7 @@ Contact: ${cf['Full Name'] || 'Unknown'}, ${cf['Job Title'] || ''}. Profile note
 Recent posts (last 30 days only): ${recentPosts}${enrichmentNote}${imageNote ? '\n' + imageNote : ''}
 ${offerNote}
 
-${ctaStrategyNoteText(stageKey, messageNumber, voice.messagesBeforeCta)}${ctaOptionsPromptText(ctaOptions)}
+${ctaStrategyNoteText(stageKey, messageNumber, ctaMessage)}${ctaOptionsPromptText(ctaOptions)}
 
 ${voiceRulesPromptText(voice, emailMode)}${styleCorrectionsPromptText(styleCorrections, stageKey)}${steerPromptText(steer)}
 
@@ -10219,10 +10526,14 @@ app.post('/api/campaign/:id/contacts/:contactId/generate-message', async (req, r
     if (!messageNumber) {
       return res.status(400).json({ error: `Contact is at Sequence Stage "${stage}" - not a stage this card generates a message for.` });
     }
-    // LinkedIn: a follow-up (message 2 / 3) only becomes draftable once a reply
-    // to the message before it has been logged - the stage stays "Message N
-    // Sent" until the follow-up is actually sent, so the reply is the gate.
-    if (!isEmailCampaign(campaignRecord) && /^Message [12] Sent$/.test(stage) && !rowReplyReceived(row)) {
+    const seqLen = campaignSequenceLength(campaignRecord);
+    if (messageNumber > seqLen) {
+      return res.status(400).json({ error: `This campaign's sequence is ${seqLen} message${seqLen === 1 ? '' : 's'} - nothing further to draft for this contact.` });
+    }
+    // LinkedIn: a follow-up (message N+1) only becomes draftable once a reply
+    // to message N has been logged - the stage stays "Message N Sent" until
+    // the follow-up is actually sent, so the reply is the gate.
+    if (!isEmailCampaign(campaignRecord) && /^Message [1-7] Sent$/.test(stage) && !rowReplyReceived(row)) {
       return res.status(400).json({ error: `Message ${messageNumber - 1} was sent but no reply is logged yet - mark the reply first.` });
     }
 
@@ -10236,7 +10547,7 @@ app.post('/api/campaign/:id/contacts/:contactId/generate-message', async (req, r
     const rawMessage = await callClaudeText(promptText, 800);
     const envelope = parseDraftEnvelope(rawMessage);
     const message = await humanizeOutreachMessage(envelope.message, emailMode);
-    const ctaBroughtForward = ctaBroughtForwardEarly(messageNumber, voice.messagesBeforeCta, envelope.ctaIncluded);
+    const ctaBroughtForward = ctaBroughtForwardEarly(messageNumber, campaignCtaMessage(campaignRecord), envelope.ctaIncluded);
     const ctaReasoning = ctaBroughtForward ? envelope.ctaReasoning : '';
     await airtableWriteAllowingMissingCtaFields('PATCH', CAMPAIGN_CONTACTS_TABLE, {
       records: [{ id: row.id, fields: {
@@ -10346,8 +10657,17 @@ app.post('/api/campaign/:id/contacts/:contactId/mark-sent', async (req, res) => 
       // "Message 1 Sent" - never "whatever the row is at + 1". A repeat click
       // on an already-recorded message is a no-op stage-wise.
       const stage = collapseLegacyStage(rawStage);
+      // stageKey is m1/m2/cta for the fixed 3-step default, or m<N> (m4..m8)
+      // for a campaign with an extended sequence. messageNumber, when the
+      // client passes it, wins. A repeat click on an already-recorded message
+      // is a no-op stage-wise.
       const KEY_TO_N = { m1: 1, m2: 2, cta: 3, connect: 1 };
-      sentN = KEY_TO_N[req.body.stageKey] || MESSAGE_NUMBER_FOR_STAGE[stage] || 1;
+      const keyMatch = /^m([1-8])$/.exec(req.body.stageKey || '');
+      sentN = Number(req.body.messageNumber)
+        || KEY_TO_N[req.body.stageKey]
+        || (keyMatch ? Number(keyMatch[1]) : 0)
+        || MESSAGE_NUMBER_FOR_STAGE[stage]
+        || 1;
       const targetStage = `Message ${sentN} Sent`;
       advanced = linkedInStageRank(stage) < LINKEDIN_STAGE_ORDER.indexOf(targetStage);
       nextStage = advanced ? targetStage : stage;
@@ -10545,7 +10865,7 @@ app.get('/api/replies/queue', async (req, res) => {
       if (!camp || (camp.fields['Status'] || '') !== 'Live' || isEmailCampaign(camp)) continue;
       const stage = collapseLegacyStage(normalizeSequenceStage(row.fields['Sequence Stage']));
       if (linkedInStageRank(stage) < LINKEDIN_STAGE_ORDER.indexOf('Connected')) continue;
-      if (['Excluded', 'Timed Out'].includes(stage)) continue;
+      if (['Excluded', 'Timed Out', 'Withdrawn'].includes(stage)) continue;
 
       const contactId = (row.fields['Contact'] || [])[0] || null;
       const contact = contactId ? contactById[contactId] : null;
@@ -11275,7 +11595,7 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
         // old inline "Message [12] Sent" follow-up prompt with the richer
         // buildCampaignReplyPrompt (offer, CTAs, voice, style corrections).
         const inPlay = linkedInStageRank(currentStage) >= LINKEDIN_STAGE_ORDER.indexOf('Connected')
-          && !['Excluded', 'Timed Out', 'Meeting Booked'].includes(currentStage);
+          && !['Excluded', 'Timed Out', 'Withdrawn', 'Meeting Booked'].includes(currentStage);
         if (parsed.replied && inPlay && !isEmailCampaign(campaignRecord)
             && (campaignRecord.fields['Status'] || '') === 'Live'
             && row.fields['Reply Draft At'] !== today) {

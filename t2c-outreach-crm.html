@@ -547,6 +547,18 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .funnel-strip-conv{font-size:11px;font-weight:700;color:var(--success);margin-top:4px;}
 .funnel-strip-conv.is-drop{color:var(--danger);}
 .funnel-strip-arrow{display:flex;align-items:center;color:var(--border);flex-shrink:0;}
+/* Campaign scorecard — HeyReach-style KPI tiles */
+.kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;}
+.kpi-tile{background:var(--surface-2);border:1px solid var(--border-light);border-radius:var(--radius-card);padding:14px 16px;}
+.kpi-label{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;}
+.kpi-value{font-size:26px;font-weight:800;line-height:1.15;margin-top:6px;display:flex;align-items:baseline;gap:8px;}
+.kpi-delta{font-size:11px;font-weight:700;padding:1px 7px;border-radius:999px;}
+.kpi-delta.is-up{background:#dcfce7;color:#166534;}
+.kpi-delta.is-down{background:#fee2e2;color:#991b1b;}
+.kpi-sub{font-size:11px;color:var(--muted);margin-top:3px;}
+.scorecard-diag{margin-top:12px;font-size:12px;line-height:1.5;background:#fef3c7;border:1px solid #fde68a;color:#92400e;border-radius:8px;padding:9px 12px;}
+.scorecard-warn{margin-top:8px;font-size:11.5px;line-height:1.5;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;border-radius:8px;padding:8px 11px;}
+@media(max-width:900px){.kpi-row{grid-template-columns:repeat(2,1fr);}}
 .heatmap-grid{display:grid;grid-template-columns:70px repeat(5,1fr);gap:3px;font-size:10.5px;}
 .heatmap-grid .hm-head{font-weight:700;text-align:center;color:var(--muted);padding:4px 2px;}
 .heatmap-grid .hm-row-label{font-weight:700;padding:6px 4px;display:flex;align-items:center;}
@@ -4803,7 +4815,8 @@ function collapseLegacyStage(stage){ return LEGACY_STAGE_COLLAPSE[stage] || stag
 // getFastActionForCampaignContact handles that transition, not this set.
 const WAITING_SEQUENCE_STAGES = new Set([
   'Connection Pending',
-  'Message 1 Sent', 'Message 2 Sent', 'Message 3 Sent'
+  'Message 1 Sent', 'Message 2 Sent', 'Message 3 Sent',
+  'Message 4 Sent', 'Message 5 Sent', 'Message 6 Sent', 'Message 7 Sent', 'Message 8 Sent'
 ]);
 
 // Today's Actions "fast action" card for a contact in a live campaign, driven
@@ -4819,26 +4832,39 @@ function getFastActionForCampaignContact(c, campaign){
   const stage = collapseLegacyStage(stages[key] || 'Found');
   const replied = !!(window.__campaignReplyReceived && window.__campaignReplyReceived[campaign.id] && window.__campaignReplyReceived[campaign.id][key]);
 
+  const seqLen = campaign.sequenceLength || 3;
+  const arm = (window.__campaignConnectionArm && window.__campaignConnectionArm[campaign.id] && window.__campaignConnectionArm[campaign.id][key])
+    || (campaign.connectionNoteMode === 'No note' ? 'No note' : 'Note');
+
   if(stage === 'Found'){
-    return { type:'Send connection', stageLabel: stage, campaignName: campaign.name, daysSinceTouch: null, isFastAction: true };
+    return { type:'Send connection', stageLabel: stage, campaignName: campaign.name, connectionArm: arm, daysSinceTouch: null, isFastAction: true };
   }
   if(stage === 'Connected'){
     return { type:'Generate message', stageLabel: stage, messageNumber: 1, campaignName: campaign.name, daysSinceTouch: null, isFastAction: true };
   }
-  // A follow-up (message 2 / 3) is due once a reply to the previous message
-  // has been logged. Until then, "Message N Sent" is a waiting state.
-  const sentMatch = stage.match(/^Message ([12]) Sent$/);
+  // A follow-up (message N+1) is due once a reply to message N has been
+  // logged, up to the campaign's sequence length. Until then, "Message N
+  // Sent" is a waiting state.
+  const sentMatch = stage.match(/^Message ([1-7]) Sent$/);
   if(sentMatch){
-    if(!replied) return { waiting: true };
-    return { type:'Generate message', stageLabel: stage, messageNumber: Number(sentMatch[1]) + 1, campaignName: campaign.name, daysSinceTouch: null, isFastAction: true };
+    const n = Number(sentMatch[1]);
+    if(n >= seqLen) {
+      // Final message of this campaign's sequence - fall through to the
+      // "replied after the sequence" / waiting handling below.
+    } else if(!replied) {
+      return { waiting: true };
+    } else {
+      return { type:'Generate message', stageLabel: stage, messageNumber: n + 1, campaignName: campaign.name, daysSinceTouch: null, isFastAction: true };
+    }
   }
-  // Sequence exhausted (all 3 sent) but they replied - there's no numbered
-  // message left to draft. The reply and its ready-made draft live on the
-  // Replies page; this card just points there.
-  if(stage === 'Message 3 Sent' && replied){
+  // Sequence exhausted (final message sent) but they replied - there's no
+  // numbered message left to draft. The reply and its ready-made draft live
+  // on the Replies page; this card just points there.
+  const finalStage = `Message ${seqLen} Sent`;
+  if(stage === finalStage && replied){
     return { type:'Reply back', isReplyQueue: true, stageLabel: stage, campaignName: campaign.name, daysSinceTouch: null };
   }
-  if(WAITING_SEQUENCE_STAGES.has(stage)){
+  if(WAITING_SEQUENCE_STAGES.has(stage) || /^Message [1-8] Sent$/.test(stage)){
     return { waiting: true };
   }
   return null;
@@ -5171,9 +5197,11 @@ function renderFastActionCard(a){
     <div class="todo-item-actions">
       <div id="fastActionArea-${c.id}" style="display:contents;">
         ${(!email && a.type === 'Send connection')
-          ? `<a class="btn btn-primary btn-sm" href="${esc(c.url||'#')}" target="_blank" rel="noopener" onclick="handleContactLinkedInOpened('${c.id}')"><i class="ti ti-brand-linkedin"></i> Send connection</a>`
+          ? `<a class="btn btn-primary btn-sm" href="${esc(c.url||'#')}" target="_blank" rel="noopener" onclick="handleContactLinkedInOpened('${c.id}')"><i class="ti ti-brand-linkedin"></i> ${a.connectionArm === 'No note' ? 'Send — no note' : 'Send connection'}</a>`
           : `<button class="btn btn-primary btn-sm" onclick="handleGenerateFastMessage('${c.id}')"><i class="ti ti-sparkles"></i> ${email ? 'Draft email' : 'Generate message'}</button>`}
       </div>
+      ${(!email && a.type === 'Send connection' && a.connectionArm === 'No note') ? `<span class="muted" style="font-size:11px;align-self:center;">A/B: send this one <strong>without</strong> a note</span>` : ''}
+      ${(!email && a.type === 'Send connection' && a.connectionArm === 'Note' && campaignHasNoteMode(a.campaignName, 'Split test')) ? `<span class="muted" style="font-size:11px;align-self:center;">A/B: send this one <strong>with</strong> a note</span>` : ''}
       ${(!email && isMessage && c.url) ? `<a class="btn btn-ghost btn-sm" href="${esc(c.url)}" target="_blank" rel="noopener"><i class="ti ti-brand-linkedin"></i> LinkedIn</a>` : ''}
       ${email
         ? `<button class="btn btn-ghost btn-sm" onclick="openContactDrawer('${esc(c.name)}', '${esc(a.campaignName)}')"><i class="ti ti-search"></i> Research business</button>`
@@ -5637,12 +5665,14 @@ async function handleCopyAndMarkSent(cid){
     ? ((window.__fastActionCtaMeta || {})[cid] || {})
     : {};
 
-  const stageKey = { 1:'m1', 2:'m2', 3:'cta' }[action.messageNumber] || 'm1';
+  const campaignForKey = state.campaigns.find(x => x.name === action.campaignName);
+  const ctaMsgNum = (campaignForKey && campaignForKey.ctaMessage) || 3;
+  const stageKey = action.messageNumber === ctaMsgNum ? 'cta' : ('m' + (action.messageNumber || 1));
   try {
     const res = await fetch(`/api/campaign/${encodeURIComponent(action.campaignName)}/contacts/${cid}/mark-sent`, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ message, draftOutcome, stageKey, ...ctaMeta })
+      body: JSON.stringify({ message, draftOutcome, stageKey, messageNumber: action.messageNumber || undefined, ...ctaMeta })
     });
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
@@ -7896,6 +7926,9 @@ async function hydrateCampaignsFromAirtable(){
         status: f['Status'] || 'Draft',
         type: (f['Campaign Type'] || 'LinkedIn').toLowerCase() === 'email' ? 'email' : 'linkedin',
         ctas: f['CTAs'] || '',
+        connectionNoteMode: ['Note','No note','Split test'].includes(f['Connection Note Mode']) ? f['Connection Note Mode'] : 'Note',
+        sequenceLength: (Number.isFinite(+f['Sequence Length']) && +f['Sequence Length'] >= 1 && +f['Sequence Length'] <= 8) ? Math.round(+f['Sequence Length']) : 3,
+        ctaMessage: (Number.isFinite(+f['CTA Message']) && +f['CTA Message'] >= 1 && +f['CTA Message'] <= 8) ? Math.round(+f['CTA Message']) : 3,
         contentContext: f['Content Context'] || '',
         styleCorrections: parseCampaignStyleCorrections(f['Style Corrections']),
         conversationHistory: []
@@ -8275,6 +8308,11 @@ function isEmailRoadmap(){
 function campaignTypeByName(name){
   const c = name ? state.campaigns.find(x => x.name === name) : null;
   return (c && c.type) || 'linkedin';
+}
+
+function campaignHasNoteMode(name, mode){
+  const c = name ? state.campaigns.find(x => x.name === name) : null;
+  return !!c && (c.connectionNoteMode || 'Note') === mode;
 }
 
 const BUSINESS_FIELDS = [
@@ -11423,6 +11461,8 @@ function openCampaignDetail(campaignId, tab){
   window.__campaignDetailTab = tab || 'intelligence';
   window.__campaignAnalytics = null;
   window.__campaignMessagePerf = null;
+  window.__campaignScorecard = undefined;
+  window.__campaignScorecardFor = null;
   window.__campaignInsights = null;
   window.__campaignInsightsNotGenerated = false;
   window.__campaignInsightsError = null;
@@ -11465,6 +11505,7 @@ function setCampaignDetailTab(tab){
   if(tab === 'analytics' && !window.__campaignAnalytics) runCampaignAnalytics();
   if(tab === 'analytics' && !window.__campaignMessagePerf) runCampaignMessagePerformance();
   if(tab === 'analytics' && window.__campaignInsights === null && !window.__campaignInsightsError) runCampaignInsights();
+  if(tab === 'analytics' && window.__campaignScorecard === undefined){ const c = state.campaigns.find(x=>x.id===window.__campaignDetailId); if(c) loadCampaignScorecard(c); }
   if(tab === 'roadmap') initRoadmapDrag();
 }
 
@@ -11769,12 +11810,14 @@ async function loadCampaignSequenceStages(campaign){
     const map = {};
     const dateMap = {};
     const replyMap = {};
+    const armMap = {};
     (data.rows||[]).forEach(r => {
       if(!r.contactName) return;
       const key = r.contactName.trim().toLowerCase();
       map[key] = r.sequenceStage;
       dateMap[key] = r.connectionSentDate || null;
       replyMap[key] = !!r.replyReceived;
+      armMap[key] = r.connectionArm || null;
     });
     window.__campaignSequenceStages = window.__campaignSequenceStages || {};
     window.__campaignSequenceStages[campaign.id] = map;
@@ -11782,6 +11825,8 @@ async function loadCampaignSequenceStages(campaign){
     window.__campaignConnectionSentDates[campaign.id] = dateMap;
     window.__campaignReplyReceived = window.__campaignReplyReceived || {};
     window.__campaignReplyReceived[campaign.id] = replyMap;
+    window.__campaignConnectionArm = window.__campaignConnectionArm || {};
+    window.__campaignConnectionArm[campaign.id] = armMap;
   } catch(err){
     console.warn('Could not load campaign sequence stages:', err.message);
     window.__campaignSequenceStages = window.__campaignSequenceStages || {};
@@ -11791,7 +11836,7 @@ async function loadCampaignSequenceStages(campaign){
     window.__campaignReplyReceived = window.__campaignReplyReceived || {};
     window.__campaignReplyReceived[campaign.id] = {};
   }
-  if(window.__campaignView === 'detail' && window.__campaignDetailId === campaign.id && window.__campaignDetailTab === 'roadmap') renderPage();
+  if(window.__campaignView === 'detail' && window.__campaignDetailId === campaign.id && ['roadmap','analytics'].includes(window.__campaignDetailTab)) renderPage();
   // Both Grid view modes depend on this now - Table already did (sequence
   // stage column), and Grid does too since gridConnectionSentDateFor started
   // backing its day badge with Connection Sent Date.
@@ -12032,7 +12077,27 @@ function renderCampaignStrategyTab(campaign){
     <div class="field"><label>Objection handling</label><textarea id="stratObjections" rows="3">${esc(campaign.objectionHandling||'')}</textarea></div>
     <div class="field"><label>Success metric</label><input id="stratSuccessMetric" value="${esc(campaign.successMetric||'')}"></div>
     <div class="field"><label>CTAs (one per line)</label><textarea id="stratCtas" rows="3" placeholder="e.g. Change Value Check&#10;Free session&#10;Community Connect event">${esc(campaign.ctas||'')}</textarea><div class="muted" style="font-size:11px;margin-top:4px;">Used by the Sales tab's "CTA converting to bookings" chart - match these labels when logging touch points for best results.</div></div>
-    <div style="display:flex;gap:10px;">
+    ${(campaign.type||'linkedin')!=='email' ? `
+    <div class="field">
+      <label>Connection request note</label>
+      <select id="stratNoteMode">
+        <option value="Note"${(campaign.connectionNoteMode||'Note')==='Note'?' selected':''}>Send with a drafted note</option>
+        <option value="No note"${campaign.connectionNoteMode==='No note'?' selected':''}>Send with no note</option>
+        <option value="Split test"${campaign.connectionNoteMode==='Split test'?' selected':''}>Split test — 50/50 note vs no note</option>
+      </select>
+      <div class="muted" style="font-size:11px;margin-top:4px;">A strong profile often gets higher acceptance with no note. Split test assigns each contact an arm and reports acceptance per arm on the Analytics tab.</div>
+    </div>
+    <div class="field" style="display:flex;gap:14px;">
+      <div style="flex:1;"><label>Sequence length (messages)</label>
+        <select id="stratSeqLen">${[1,2,3,4,5,6,7,8].map(n=>`<option value="${n}"${(campaign.sequenceLength||3)===n?' selected':''}>${n}</option>`).join('')}</select>
+      </div>
+      <div style="flex:1;"><label>CTA on message #</label>
+        <select id="stratCtaMsg">${[1,2,3,4,5,6,7,8].map(n=>`<option value="${n}"${(campaign.ctaMessage||3)===n?' selected':''}>${n}</option>`).join('')}</select>
+      </div>
+    </div>
+    <div class="muted" style="font-size:11px;margin-top:-6px;">Default is 3 messages with the CTA on message 3. Increase the length to test a longer runway before the ask.</div>
+    ` : ''}
+    <div style="display:flex;gap:10px;margin-top:12px;">
       <button class="btn btn-primary btn-sm" onclick="saveCampaignStrategy('${campaign.id}')"><i class="ti ti-device-floppy"></i> Save changes</button>
       <button class="btn btn-secondary btn-sm" onclick="editCampaign('${campaign.id}')"><i class="ti ti-message-circle"></i> Continue in chat</button>
     </div>
@@ -12059,13 +12124,78 @@ function renderCampaignStrategyTab(campaign){
 // automatic, same pattern as Engine redraft / Run Engine elsewhere.
 function renderConnectionTimeoutSection(campaign){
   const cached = window.__timeoutCheckResults && window.__timeoutCheckResults[campaign.id];
+  const stale = window.__staleConnections && window.__staleConnections[campaign.id];
   return `
   <div class="card" style="margin-bottom:16px;">
     <div class="section-title"><i class="ti ti-clock-hour-4"></i> Connection timeout</div>
     <div class="muted" style="font-size:12px;margin-bottom:8px;">Flags contacts still at "Connection Pending" whose connection request was sent more than ${state.settings.timeoutDays} day${state.settings.timeoutDays===1?'':'s'} ago with no reply. Change the day count in Settings &gt; Connection timeout.</div>
     <button class="btn btn-secondary btn-sm" id="timeoutCheckBtn-${campaign.id}" onclick="checkCampaignTimeouts('${campaign.id}')"><i class="ti ti-alert-triangle"></i> Check for timeouts</button>
     <div id="timeoutCheckResult-${campaign.id}" style="margin-top:8px;">${cached ? renderTimeoutCheckResultHtml(cached) : ''}</div>
+
+    <div style="border-top:1px solid var(--border-light);margin-top:14px;padding-top:14px;">
+      <div class="section-title" style="font-size:13px;"><i class="ti ti-user-x"></i> Stale requests to withdraw</div>
+      <div class="muted" style="font-size:12px;margin-bottom:8px;">Connection requests still pending after 14+ days. Leaving them hanging quietly hurts your reach — withdraw them on LinkedIn, then mark them here.</div>
+      <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+        <button class="btn btn-secondary btn-sm" onclick="loadStaleConnections('${campaign.id}')"><i class="ti ti-refresh"></i> ${stale ? 'Refresh' : 'Find stale requests'}</button>
+        <a class="btn btn-ghost btn-sm" href="https://www.linkedin.com/mynetwork/invitation-manager/sent/" target="_blank" rel="noopener"><i class="ti ti-brand-linkedin"></i> Open LinkedIn sent invitations</a>
+      </div>
+      <div id="staleConnList-${campaign.id}">${stale ? renderStaleConnListHtml(campaign.id, stale) : ''}</div>
+    </div>
   </div>`;
+}
+
+async function loadStaleConnections(campaignId){
+  const campaign = state.campaigns.find(c => c.id === campaignId);
+  if(!campaign) return;
+  const el = document.getElementById('staleConnList-'+campaignId);
+  if(el) el.innerHTML = '<span class="muted" style="font-size:12px;"><i class="ti ti-loader-2"></i> Checking…</span>';
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaignRouteKey(campaign))}/stale-connections`);
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__staleConnections = window.__staleConnections || {};
+    window.__staleConnections[campaignId] = data.rows || [];
+  } catch(err){
+    toast('Could not load stale requests: ' + err.message, 'warn');
+    window.__staleConnections = window.__staleConnections || {};
+    window.__staleConnections[campaignId] = [];
+  }
+  if(window.__campaignDetailTab === 'strategy') renderPage();
+}
+
+function renderStaleConnListHtml(campaignId, rows){
+  if(!rows.length) return '<span class="muted" style="font-size:12.5px;">No stale requests — every pending connection is under 14 days old.</span>';
+  return `
+    <div style="max-height:220px;overflow-y:auto;border:1px solid var(--border-light);border-radius:8px;padding:8px;">
+      ${rows.map(r => `
+        <label style="display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:12.5px;">
+          <input type="checkbox" class="stale-conn-cb" value="${esc(r.contactId||'')}" checked>
+          <span>${esc(r.contactName)}${r.linkedInUrl ? ` <a href="${esc(r.linkedInUrl)}" target="_blank" rel="noopener" style="color:var(--blue);"><i class="ti ti-external-link" style="font-size:11px;"></i></a>` : ''} <span class="muted">— ${r.daysPending}d pending</span></span>
+        </label>
+      `).join('')}
+    </div>
+    <button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="withdrawStaleConnections('${campaignId}')"><i class="ti ti-check"></i> Mark selected withdrawn</button>`;
+}
+
+async function withdrawStaleConnections(campaignId){
+  const campaign = state.campaigns.find(c => c.id === campaignId);
+  if(!campaign) return;
+  const ids = Array.from(document.querySelectorAll('.stale-conn-cb:checked')).map(el => el.value).filter(Boolean);
+  if(!ids.length){ toast('No requests selected', 'warn'); return; }
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaignRouteKey(campaign))}/withdraw-connections`, {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ contactIds: ids })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    toast(`${data.withdrawn} request${data.withdrawn===1?'':'s'} marked withdrawn`, 'success');
+    window.__staleConnections[campaignId] = (window.__staleConnections[campaignId]||[]).filter(r => !ids.includes(r.contactId));
+    if(window.__campaignSequenceStages) delete window.__campaignSequenceStages[campaignId];
+    delete (window.__campaignFunnels||{})[campaignId];
+    renderPage();
+  } catch(err){
+    toast('Could not withdraw: ' + err.message, 'warn');
+  }
 }
 
 function renderTimeoutCheckResultHtml(result){
@@ -12116,6 +12246,12 @@ function saveCampaignStrategy(campaignId){
   campaign.ctas = document.getElementById('stratCtas').value.trim();
   const typeEl = document.getElementById('stratCampaignType');
   if(typeEl) campaign.type = typeEl.value === 'email' ? 'email' : 'linkedin';
+  const noteModeEl = document.getElementById('stratNoteMode');
+  if(noteModeEl) campaign.connectionNoteMode = noteModeEl.value;
+  const seqLenEl = document.getElementById('stratSeqLen');
+  const ctaMsgEl = document.getElementById('stratCtaMsg');
+  if(seqLenEl) campaign.sequenceLength = parseInt(seqLenEl.value, 10) || 3;
+  if(ctaMsgEl) campaign.ctaMessage = Math.min(parseInt(ctaMsgEl.value, 10) || 3, campaign.sequenceLength || 3);
   campaign.updatedAt = isoDate(TODAY);
   syncCampaignToAirtable(campaign);
   renderPage();
@@ -12159,40 +12295,29 @@ function inDateRange(dateStr, start, end){
   return d >= start && d <= end;
 }
 
-function campaignLeadStatus(c){
-  if(c.thread.booked) return 'booked';
-  if(campaignContactStatus(c) === 'Unresponsive') return 'lost';
-  if(c.state === 'messaging'){
-    const replied = (c.thread.m1 && c.thread.m1.replied) || (c.thread.m2 && c.thread.m2.replied);
-    return replied ? 'warm' : 'messaging';
+// The campaign scorecard (GET /api/campaign/:id/scorecard) - HeyReach-style
+// KPI tiles + daily series + connection-note A/B + diagnostics, all from
+// dated server history. Replaces the old client-built buildCampaignSeries /
+// lead-status pie, which were computed off local state and drifted.
+async function loadCampaignScorecard(campaign){
+  const period = window.__campaignAnalyticsPeriod || 'thisWeek';
+  const { start, end } = campaignPeriodBounds(period);
+  const from = isoDate(start), to = isoDate(end);
+  window.__campaignScorecardKey = campaign.id + '|' + from + '|' + to;
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaignRouteKey(campaign))}/scorecard?from=${from}&to=${to}`);
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
+    window.__campaignScorecard = data;
+  } catch(err){
+    window.__campaignScorecard = { error: err.message };
   }
-  return null;
-}
-
-function buildCampaignSeries(campaign, periodKey){
-  const { start, end } = campaignPeriodBounds(periodKey);
-  const contacts = campaignContacts(campaign);
-  const deals = campaign.deals || [];
-  const totalDays = Math.round((end-start)/86400000)+1;
-  const useDaily = totalDays <= 14;
-  const bucketDays = useDaily ? 1 : 7;
-  const buckets = [];
-  let cursor = new Date(start);
-  while(cursor <= end){
-    const bEnd = new Date(cursor); bEnd.setDate(bEnd.getDate()+bucketDays-1); bEnd.setHours(23,59,59,999);
-    buckets.push({ start:new Date(cursor), end: bEnd > end ? end : bEnd });
-    cursor = new Date(cursor); cursor.setDate(cursor.getDate()+bucketDays);
-  }
-  const labels = buckets.map(b => useDaily ? fmtDateShort(isoDate(b.start)) : `${fmtDateShort(isoDate(b.start))}–${fmtDateShort(isoDate(b.end))}`);
-  const contactIds = new Set(contacts.map(c=>c.id));
-  const leads = buckets.map(b => contacts.filter(c => inDateRange(c.foundDate, b.start, b.end) && campaignLeadStatus(c)).length);
-  const meetings = buckets.map(b => state.bookings.filter(bk => contactIds.has(bk.contactId) && inDateRange(bk.date, b.start, b.end)).length);
-  const won = buckets.map(b => deals.filter(d => d.outcome === 'won' && inDateRange(d.date, b.start, b.end)).length);
-  return { labels, leads, meetings, won };
+  if(window.__campaignDetailTab === 'analytics') renderPage();
 }
 
 function setCampaignAnalyticsPeriod(period){
   window.__campaignAnalyticsPeriod = period;
+  window.__campaignScorecard = undefined;
   renderPage();
 }
 
@@ -12278,33 +12403,107 @@ function refreshCampaignInsights(){
   runCampaignInsights(true);
 }
 
+function renderScorecardTile(t){
+  const has = typeof t.deltaPct === 'number';
+  const up = has && t.deltaPct >= 0;
+  const pill = has
+    ? `<span class="kpi-delta ${up?'is-up':'is-down'}">${up?'+':''}${t.deltaPct}%</span>`
+    : '';
+  const denom = (typeof t.denom === 'number')
+    ? `<div class="kpi-sub">from ${t.denom} ${esc(t.denomLabel||'')}</div>`
+    : '<div class="kpi-sub">&nbsp;</div>';
+  return `
+    <div class="kpi-tile">
+      <div class="kpi-label">${esc(t.label)}</div>
+      <div class="kpi-value">${t.value}${pill}</div>
+      ${denom}
+    </div>`;
+}
+
+// "Review accepted contacts" — the manual ICP-relevance scan from the Stan
+// video: accepted (Connected+) but still silent contacts, with job title +
+// AI summary snippet + one-click exclude. Reads the already-loaded stage /
+// reply maps; no new endpoint.
+function renderAcceptedReviewCard(campaign){
+  const stages = window.__campaignSequenceStages && window.__campaignSequenceStages[campaign.id];
+  const replies = (window.__campaignReplyReceived && window.__campaignReplyReceived[campaign.id]) || {};
+  if(!stages) return '';
+  const CONNECTED_PLUS = ['Connected','Message 1 Sent','Message 2 Sent','Message 3 Sent','Message 4 Sent','Message 5 Sent','Message 6 Sent','Message 7 Sent','Message 8 Sent'];
+  const silent = campaignContacts(campaign).filter(c => {
+    const key = c.name.trim().toLowerCase();
+    return CONNECTED_PLUS.includes(collapseLegacyStage(stages[key] || '')) && !replies[key];
+  });
+  if(!silent.length) return '';
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title" style="margin-bottom:4px;"><i class="ti ti-list-search"></i> Review accepted contacts (${silent.length})</div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:12px;">Accepted your request but haven't replied. Skim the roles and summaries against your ICP — a low reply rate is usually the wrong person, not just the wrong message. Exclude anyone who isn't a fit.</div>
+    <div style="max-height:280px;overflow-y:auto;">
+      ${silent.slice(0,40).map(c => `
+        <div style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--border-light);">
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:12.5px;font-weight:600;cursor:pointer;" onclick="openContactDrawer('${esc(c.name)}','${esc(campaign.name)}')">${esc(c.name)} <span class="muted" style="font-weight:400;">— ${esc(c.role||'')}</span>${c.url?` <a href="${esc(c.url)}" target="_blank" rel="noopener" style="color:var(--blue);"><i class="ti ti-brand-linkedin" style="font-size:11px;"></i></a>`:''}</div>
+            <div class="muted" style="font-size:11px;margin-top:2px;line-height:1.4;">${esc((c.aiSummary||c.summary||'').replace(/\{[\s\S]*?\}/,'').trim().slice(0,160) || 'No summary on file — enrich this contact.')}</div>
+          </div>
+          <button class="btn btn-ghost btn-sm" style="flex-shrink:0;" onclick="handleSkipContact('${c.id}')" title="Exclude from this campaign"><i class="ti ti-user-off"></i></button>
+        </div>
+      `).join('')}
+    </div>
+    ${silent.length>40 ? `<div class="muted" style="font-size:11px;margin-top:8px;">Showing 40 of ${silent.length}.</div>` : ''}
+  </div>`;
+}
+
+function renderConnectionAbCard(ab){
+  if(!ab) return '';
+  const show = ab.mode === 'Split test' || ((ab.note && ab.note.sent) || (ab.noNote && ab.noNote.sent));
+  if(!show) return '';
+  const arm = (label, s) => `
+    <div class="mini-card">
+      <div class="num">${s && s.ratePct!==null ? s.ratePct+'%' : '—'}</div>
+      <div class="label">${label} accepted</div>
+      <div class="muted" style="font-size:11px;margin-top:6px;">${s ? `${s.accepted} / ${s.sent} sent` : 'no data'}</div>
+    </div>`;
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title" style="margin-bottom:4px;"><i class="ti ti-git-branch"></i> Connection note A/B</div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:12px;">Acceptance rate by whether the request went out with a note or not. ${ab.mode==='Split test' ? 'Contacts are assigned a 50/50 arm automatically.' : 'Set the mode on the Strategy tab.'}</div>
+    <div class="mini-cards" style="grid-template-columns:repeat(2,1fr);margin-bottom:0;">
+      ${arm('With note', ab.note)}
+      ${arm('No note', ab.noNote)}
+    </div>
+  </div>`;
+}
+
 function renderCampaignAnalyticsTab(campaign){
   const period = window.__campaignAnalyticsPeriod || 'thisWeek';
   const data = window.__campaignAnalytics;
   const insights = window.__campaignInsights;
   const insightsErr = window.__campaignInsightsError;
+  const sc = window.__campaignScorecard;
   loadCampaignFunnel(campaign);
+  if(!(window.__campaignSequenceStages && window.__campaignSequenceStages[campaign.id])) loadCampaignSequenceStages(campaign);
   return `
   ${renderCampaignFunnelStrip(campaign)}
   <div class="card" style="margin-bottom:16px;">
-    <div class="toolbar" style="margin-bottom:6px;">
+    <div class="toolbar" style="margin-bottom:12px;">
       <div class="field" style="max-width:220px;"><label>Time range</label>
         <select onchange="setCampaignAnalyticsPeriod(this.value)">
           ${CAMPAIGN_PERIOD_OPTIONS.map(([k,l])=>`<option value="${k}" ${period===k?'selected':''}>${l}</option>`).join('')}
         </select>
       </div>
     </div>
-    <div class="two-col">
-      <div class="card">
-        <div class="section-title" style="margin-bottom:10px;"><i class="ti ti-chart-line"></i> Leads, meetings &amp; sales won over time</div>
-        <div style="position:relative;height:260px;"><canvas id="campLineChart"></canvas></div>
-      </div>
-      <div class="card">
-        <div class="section-title" style="margin-bottom:10px;"><i class="ti ti-chart-pie"></i> Lead status breakdown</div>
-        <div style="position:relative;height:260px;"><canvas id="campPieChart"></canvas></div>
-      </div>
-    </div>
+    ${!sc ? '<div class="muted"><i class="ti ti-loader-2"></i> Loading scorecard…</div>' :
+      sc.error ? `<div class="muted">Could not load scorecard: ${esc(sc.error)}</div>` : `
+      <div class="kpi-row">${(sc.tiles||[]).map(renderScorecardTile).join('')}</div>
+      ${sc.diagnostic && sc.diagnostic.flag ? `<div class="scorecard-diag"><i class="ti ti-alert-triangle"></i> ${esc(sc.diagnostic.message)}</div>` : ''}
+      ${(sc.multiThread && sc.multiThread.length) ? `<div class="scorecard-warn"><i class="ti ti-users"></i> ${sc.multiThread.length} compan${sc.multiThread.length===1?'y has':'ies have'} 3+ contacts in this campaign — LinkedIn multi-threading works best at 2. ${sc.multiThread.map(m=>esc(m.company)+' ('+m.count+')').join(', ')}</div>` : ''}
+      <div style="position:relative;height:280px;margin-top:14px;"><canvas id="campAreaChart"></canvas></div>
+    `}
   </div>
+
+  ${renderConnectionAbCard(sc && !sc.error ? sc.connectionAb : null)}
+
+  ${renderAcceptedReviewCard(campaign)}
 
   <div class="card" style="margin-bottom:16px;">
     <div class="section-title" style="margin-bottom:10px;"><i class="ti ti-database"></i> Activity &amp; benchmarks</div>
@@ -12337,44 +12536,46 @@ function renderCampaignAnalyticsTab(campaign){
 }
 
 function initCampaignAnalyticsCharts(campaign){
-  if(typeof Chart === 'undefined') return;
+  const key = campaign.id + '|' + (window.__campaignAnalyticsPeriod || 'thisWeek');
+  const sc = window.__campaignScorecard;
+  // Fetch the scorecard for this campaign+period if we haven't; the fetch
+  // re-renders on return, and this runs again then and draws the chart.
+  if((sc === undefined) || (window.__campaignScorecardFor !== key && !sc)){
+    window.__campaignScorecardFor = key;
+    loadCampaignScorecard(campaign);
+    return;
+  }
+  window.__campaignScorecardFor = key;
+  if(typeof Chart === 'undefined' || !sc || sc.error) return;
+
   window.__campCharts = window.__campCharts || {};
-  if(window.__campCharts.line) window.__campCharts.line.destroy();
-  if(window.__campCharts.pie) window.__campCharts.pie.destroy();
+  if(window.__campCharts.area) window.__campCharts.area.destroy();
 
-  const period = window.__campaignAnalyticsPeriod || 'thisWeek';
-  const series = buildCampaignSeries(campaign, period);
-  const lineEl = document.getElementById('campLineChart');
-  if(lineEl){
-    window.__campCharts.line = new Chart(lineEl, {
-      type: 'line',
-      data: {
-        labels: series.labels,
-        datasets: [
-          { label:'Leads', data: series.leads, borderColor:'#2A6B7C', backgroundColor:'#2A6B7C', tension:0.3 },
-          { label:'Meetings booked', data: series.meetings, borderColor:'#bd7c0c', backgroundColor:'#bd7c0c', tension:0.3 },
-          { label:'Sales won', data: series.won, borderColor:'#1f9d57', backgroundColor:'#1f9d57', tension:0.3 }
-        ]
-      },
-      options: { responsive:true, maintainAspectRatio:false, scales:{ y:{ beginAtZero:true, ticks:{ precision:0 } } }, plugins:{ legend:{ position:'bottom', labels:{ boxWidth:10, font:{ size:11 } } } } }
-    });
-  }
-
-  const contacts = campaignContacts(campaign);
-  const counts = {};
-  LEAD_STATUS_META.forEach(([key]) => counts[key] = 0);
-  contacts.forEach(c => { const s = campaignLeadStatus(c); if(s) counts[s]++; });
-  const pieEl = document.getElementById('campPieChart');
-  if(pieEl){
-    window.__campCharts.pie = new Chart(pieEl, {
-      type: 'pie',
-      data: {
-        labels: LEAD_STATUS_META.map(([,label])=>label),
-        datasets: [{ data: LEAD_STATUS_META.map(([key])=>counts[key]), backgroundColor: LEAD_STATUS_META.map(([,,color])=>color) }]
-      },
-      options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:'bottom', labels:{ boxWidth:10, font:{ size:11 } } } } }
-    });
-  }
+  const s = sc.series || [];
+  const el = document.getElementById('campAreaChart');
+  if(!el) return;
+  const ds = (label, field, color) => ({
+    label, data: s.map(p => p[field]||0),
+    borderColor: color, backgroundColor: color+'22', fill: true, tension: 0.35, pointRadius: 0, borderWidth: 2
+  });
+  window.__campCharts.area = new Chart(el, {
+    type: 'line',
+    data: {
+      labels: s.map(p => fmtDateShort(p.date)),
+      datasets: [
+        ds('Connections sent', 'connectionsSent', '#a78bda'),
+        ds('Connections accepted', 'connectionsAccepted', '#2A6B7C'),
+        ds('Messages sent', 'messagesSent', '#bd7c0c'),
+        ds('Replies', 'replies', '#1f9d57')
+      ]
+    },
+    options: {
+      responsive:true, maintainAspectRatio:false,
+      scales:{ y:{ beginAtZero:true, ticks:{ precision:0 } } },
+      plugins:{ legend:{ position:'bottom', labels:{ boxWidth:10, font:{ size:11 } } } },
+      interaction:{ mode:'index', intersect:false }
+    }
+  });
 }
 
 /* ---- Sales tab ---- */
@@ -13456,7 +13657,10 @@ function syncCampaignToAirtable(campaign, onSynced){
       startDate: campaign.createdAt,
       status: campaign.status,
       ctas: campaign.ctas || '',
-      campaignType: campaign.type || 'linkedin'
+      campaignType: campaign.type || 'linkedin',
+      connectionNoteMode: campaign.connectionNoteMode || 'Note',
+      sequenceLength: campaign.sequenceLength || 3,
+      ctaMessage: campaign.ctaMessage || (campaign.sequenceLength || 3)
     })
   })
     .then(res => res.json())
