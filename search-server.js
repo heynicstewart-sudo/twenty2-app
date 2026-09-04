@@ -4864,27 +4864,12 @@ app.get('/api/campaign/:id/funnel', async (req, res) => {
 });
 
 // ===================== WEEKLY REPORT (Agency tab -> Export PDF) =====================
-// One endpoint that reads the whole account and returns everything the
-// one-page weekly report needs: what was done this week (content, outreach,
-// ads), the live state of every campaign (funnel, reply-by-message,
-// drop-off, reply-by-role, CTA effect), and a Claude-written narrative +
-// key insights + recommendations grounded only in those numbers.
-function weeklyReportSystemPrompt(brief) {
-  const t = currentTenant();
-  const who = t && t.name ? `${t.name}${(t.profile && t.profile.descriptor) ? `, ${t.profile.descriptor}` : ''}` : 'this client';
-  const steer = (brief || '').trim()
-    ? `\n\nThe account manager has told you what this week's write-up should cover:\n"""\n${brief.trim()}\n"""\nFollow that brief. If it says to leave something out, leave it out. If it says to lead with something, lead with it.`
-    : '\n\nNo specific brief was given, so write a short neutral recap of the numbers.';
-  return `You write the opening paragraph of the weekly client progress report for ${who}. Audience: the client. Tone: plain, factual, specific. UK/AU English, no em dashes, no marketing fluff.
-
-You are given a summary of what was done this week and, for every live campaign, its funnel counts and per-message reply counts.${steer}
-
-Return ONLY valid JSON in exactly this shape:
-{
-  "summary": "2 to 4 sentences. State what happened this week using the real numbers. No recommendations, no 'what is working / what is not', no advice - the account manager writes that themselves. Just present the facts."
-}
-Every number you cite must come from the data given. Do not invent conversions - if no meetings are booked, say that directly.`;
-}
+// One endpoint that reads the whole account and returns a numbers-only
+// outreach report: this-week activity (optional), and for every live
+// campaign the funnel (connections sent -> made -> messages sent -> replied
+// -> booked), the job title most likely to connect and to respond, the
+// most responsive sector, and the full job-title / sector breakdowns.
+// No AI narrative - the account manager writes the commentary themselves.
 
 function _weekBounds() {
   const end = new Date(); end.setHours(23, 59, 59, 999);
@@ -4906,7 +4891,6 @@ async function handleWeeklyReport(req, res) {
   try {
     const src = req.method === 'POST' ? (req.body || {}) : (req.query || {});
     const slug = String(src.client || '').trim();
-    const brief = String(src.brief || '').trim().slice(0, 2000);
     // sections: which optional blocks to include. Campaign outreach is always in.
     const rawSections = Array.isArray(src.sections)
       ? src.sections
@@ -4923,7 +4907,7 @@ async function handleWeeklyReport(req, res) {
       if (!found) return res.status(404).json({ error: `Client "${slug}" not found or paused` });
       tenant = found;
     }
-    const out = await tenantALS.run(tenant, () => buildWeeklyReport({ brief, sections }));
+    const out = await tenantALS.run(tenant, () => buildWeeklyReport({ sections }));
     res.json(out);
   } catch (err) {
     console.error('Weekly report error:', err.message);
@@ -4935,7 +4919,6 @@ app.post('/api/report/weekly', handleWeeklyReport);
 
 async function buildWeeklyReport(opts) {
   {
-    const brief = (opts && opts.brief) || '';
     const sections = (opts && opts.sections) || { stats: true, content: true, ads: true };
     const wk = _weekBounds();
     const [campaignRecords, ccRows, tpRecords, contactRecords, contentRecords, dealRecords] = await Promise.all([
@@ -4948,7 +4931,14 @@ async function buildWeeklyReport(opts) {
     ]);
 
     const roleById = {};
-    contactRecords.forEach(r => { roleById[r.id] = (r.fields || {})['Job Title'] || ''; });
+    const sectorById = {};
+    contactRecords.forEach(r => {
+      const f = r.fields || {};
+      roleById[r.id] = f['Job Title'] || '';
+      // "Company Industry" is a lookup off the linked company - comes back as an array.
+      const ind = f['Company Industry'];
+      sectorById[r.id] = (Array.isArray(ind) ? ind.filter(Boolean).join(', ') : (ind || '')).trim();
+    });
 
     // ---- What was done this week ----
     const tpThisWeek = tpRecords.filter(r => _inWeek(r.fields['Date'], wk.start, wk.end));
@@ -5032,9 +5022,14 @@ async function buildWeeklyReport(opts) {
       myTp.forEach(r => { if (touchPointIsReply(r.fields)) (r.fields['Contact'] || []).forEach(id => repliedContactIds.add(id)); });
       fcs.forEach(c => { if (c.replyReceived) repliedContactIds.add(c.contactId); });
 
+      // Group free-text job titles into readable role labels. Common roles
+      // collapse to a shared label; anything else keeps its real title
+      // verbatim - never "Other" or "miscellaneous".
       const roleGroup = raw => {
-        const s = (raw || '').toLowerCase();
-        if (/head of|gm |general manager|chief|director|cdo|cto|cio/.test(s)) return 'Head / Director / C-level';
+        const t = (raw || '').trim();
+        const s = t.toLowerCase();
+        if (!t) return 'Job title not recorded';
+        if (/head of|gm |general manager|\bchief\b|director|cdo|cto|cio/.test(s)) return 'Head / Director / C-level';
         if (/product owner|\bpo\b/.test(s)) return 'Product Owner';
         if (/program|programme|portfolio/.test(s)) return 'Program / Portfolio Manager';
         if (/project manager|\bpm\b/.test(s)) return 'Project Manager';
@@ -5042,28 +5037,46 @@ async function buildWeeklyReport(opts) {
         if (/transformation/.test(s)) return 'Transformation Lead';
         if (/agile|scrum|delivery lead|iteration/.test(s)) return 'Agile / Delivery Lead';
         if (/analyst|\bba\b/.test(s)) return 'Business Analyst';
-        return raw ? 'Other' : 'Unknown';
+        return t;
       };
 
-      // Per job-title group: how many we approached, how many accepted the
-      // connection (or, for email, were emailed), and how many replied.
+      // Per group: how many we approached, how many accepted the connection
+      // (or, for email, were emailed), and how many replied.
       const connSentIds = new Set(fcs.filter(c => !c.off && (c.connectionSentDate || c.furthestRung >= RUNG.connectionSent)).map(c => c.contactId));
       const connectedIds = new Set(fcs.filter(c => !c.off && c.furthestRung >= RUNG.connected).map(c => c.contactId));
       const emailedIds = new Set(fcs.filter(c => !c.off && c.furthestRung >= RUNG.m1).map(c => c.contactId));
       const approachedIds = emailMode ? emailedIds : connSentIds;
       const acceptedIds = emailMode ? emailedIds : connectedIds;
-      const byRole = {};
-      approachedIds.forEach(id => {
-        const g = roleGroup(roleById[id]);
-        byRole[g] = byRole[g] || { approached: 0, accepted: 0, replied: 0 };
-        byRole[g].approached++;
-        if (acceptedIds.has(id)) byRole[g].accepted++;
-        if (repliedContactIds.has(id)) byRole[g].replied++;
-      });
-      Object.values(byRole).forEach(v => {
-        v.acceptRate = v.approached ? Math.round((v.accepted / v.approached) * 100) : 0;
-        v.replyRate = v.approached ? Math.round((v.replied / v.approached) * 100) : 0;
-      });
+
+      const groupBy = (labelOf) => {
+        const out = {};
+        approachedIds.forEach(id => {
+          const g = labelOf(id);
+          out[g] = out[g] || { approached: 0, accepted: 0, replied: 0 };
+          out[g].approached++;
+          if (acceptedIds.has(id)) out[g].accepted++;
+          if (repliedContactIds.has(id)) out[g].replied++;
+        });
+        Object.values(out).forEach(v => {
+          v.acceptRate = v.approached ? Math.round((v.accepted / v.approached) * 100) : 0;
+          v.replyRate = v.approached ? Math.round((v.replied / v.approached) * 100) : 0;
+        });
+        return out;
+      };
+      const byRole = groupBy(id => roleGroup(roleById[id]));
+      const bySector = groupBy(id => sectorById[id] || 'Sector not recorded');
+
+      // "Most likely to..." picks: highest rate, needing a small sample so a
+      // lone 100% doesn't win. Falls back to the largest group if none clear
+      // the bar. Skips the "not recorded" catch-alls for the headline pick.
+      const pick = (groups, rateKey) => {
+        const rows = Object.entries(groups).filter(([k]) => !/not recorded/i.test(k));
+        if (!rows.length) return null;
+        const eligible = rows.filter(([, v]) => v.approached >= 4);
+        const pool = eligible.length ? eligible : rows;
+        const [label, v] = pool.sort((a, b) => (b[1][rateKey] - a[1][rateKey]) || (b[1].approached - a[1].approached))[0];
+        return { label, ...v };
+      };
 
       const connectedForRate = (funnel.steps.find(s => s.key === (emailMode ? 'm1' : 'connected')) || {}).count || 0;
       return {
@@ -5072,44 +5085,18 @@ async function buildWeeklyReport(opts) {
         startDate: cr.fields['Start Date'] || '',
         goal: cr.fields['Goal'] || '',
         funnel: funnel.steps.map(s => ({ label: s.label, key: s.key, count: s.count, pctOfPrev: s.pctOfPrev })),
+        messagesSent: byMessage.reduce((n, m) => n + m.sent, 0),
         replies: repliedContactIds.size,
         replyRate: connectedForRate ? Math.round((repliedContactIds.size / connectedForRate) * 100) : 0,
         byMessage,
         dropOff,
-        byRole
+        byRole,
+        bySector,
+        mostLikelyToConnect: pick(byRole, 'acceptRate'),
+        mostLikelyToRespond: pick(byRole, 'replyRate'),
+        mostResponsiveSector: pick(bySector, 'replyRate')
       };
     });
-
-    // ---- Claude narrative ----
-    let ai = null;
-    if (process.env.ANTHROPIC_API_KEY) {
-      try {
-        const payload = {
-          weekOf: `${wk.startStr} to ${wk.endStr}`,
-          thisWeek: {
-            content: sections.content ? contentThisWeek : undefined,
-            contentByType: sections.content ? contentByType : undefined,
-            outreach,
-            googleAds: sections.ads ? googleAds : undefined,
-            newCampaigns: newCampaignsThisWeek
-          },
-          campaigns: campaigns.map(c => ({
-            name: c.name, emailMode: c.emailMode, goal: c.goal,
-            funnel: c.funnel,
-            replyRate: c.replyRate, replies: c.replies,
-            perMessageReplyRate: c.byMessage,
-            biggestDropOff: c.dropOff,
-            byJobTitle: c.byRole
-          }))
-        };
-        const raw = await callClaudeMessages(`DATA:\n${JSON.stringify(payload, null, 2)}`, 700, weeklyReportSystemPrompt(brief));
-        const m = stripCodeFences(raw).match(/\{[\s\S]*\}/);
-        ai = m ? JSON.parse(m[0]) : null;
-      } catch (e) {
-        console.warn('Weekly report AI narrative failed (non-fatal):', e.message);
-        ai = { error: e.message };
-      }
-    }
 
     return {
       account: currentTenant().name || 'Client',
@@ -5118,7 +5105,6 @@ async function buildWeeklyReport(opts) {
       weekEnd: wk.endStr,
       generatedAt: new Date().toISOString(),
       sections,
-      brief,
       thisWeek: {
         content: sections.content ? contentThisWeek : [],
         contentByType: sections.content ? contentByType : {},
@@ -5126,8 +5112,7 @@ async function buildWeeklyReport(opts) {
         googleAds: sections.ads ? googleAds : null,
         newCampaigns: newCampaignsThisWeek
       },
-      campaigns,
-      ai
+      campaigns
     };
   }
 }
