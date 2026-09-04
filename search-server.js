@@ -438,38 +438,43 @@ async function airtableRequest(method, table, body) {
   return res.json();
 }
 
-// The CTA-judgement fields ("CTA Brought Forward" checkbox, "CTA Judgement
-// Note" long text, on both Campaign Contacts and Touch Points) are added by
-// hand in Airtable after this ships. Until they exist, a write that includes
-// them 422s with UNKNOWN_FIELD_NAME and would take the whole core write
-// (stage advance, touch-point log) down with it. This wrapper strips those
-// fields and retries once on that error, then latches so subsequent writes
-// in the same process skip them without a failed round-trip.
-const CTA_JUDGEMENT_FIELDS = ['CTA Brought Forward', 'CTA Judgement Note'];
-let ctaJudgementFieldsMissing = false;
-function stripCtaJudgementFields(body) {
-  if (!body || !Array.isArray(body.records)) return body;
+// Some Campaign Contacts / Touch Points fields are added by hand in Airtable
+// after the feature that writes them ships - the CTA-judgement pair ("CTA
+// Brought Forward", "CTA Judgement Note") and the send-only "Reply Received"
+// checkbox. A client base created before, or provisioned without, one of
+// these 422s the whole write (stage advance, touch-point log) with
+// UNKNOWN_FIELD_NAME. This wrapper drops the named field on that error and
+// retries once, then latches per-process so later writes skip it cleanly.
+// The gated feature just no-ops for that base until the field is added.
+const OPTIONAL_LATE_ADDED_FIELDS = ['CTA Brought Forward', 'CTA Judgement Note', 'Reply Received'];
+const optionalFieldsMissing = new Set();
+function stripMissingOptionalFields(body) {
+  if (!body || !Array.isArray(body.records) || !optionalFieldsMissing.size) return body;
   return {
     ...body,
     records: body.records.map(r => {
       if (!r || !r.fields) return r;
       const fields = { ...r.fields };
-      CTA_JUDGEMENT_FIELDS.forEach(k => delete fields[k]);
+      optionalFieldsMissing.forEach(k => delete fields[k]);
       return { ...r, fields };
     })
   };
 }
 async function airtableWriteAllowingMissingCtaFields(method, table, body) {
-  if (ctaJudgementFieldsMissing) return airtableRequest(method, table, stripCtaJudgementFields(body));
-  try {
-    return await airtableRequest(method, table, body);
-  } catch (err) {
-    if (/UNKNOWN_FIELD_NAME/.test(err.message || '')) {
-      console.warn('CTA judgement fields not found in Airtable - writing without them. Add "CTA Brought Forward" (checkbox) and "CTA Judgement Note" (long text) to both Campaign Contacts and Touch Points to enable the early-CTA learning loop.');
-      ctaJudgementFieldsMissing = true;
-      return airtableRequest(method, table, stripCtaJudgementFields(body));
+  // Retry loop: Airtable names only the first unknown field per response, so
+  // a base missing several optional fields needs one retry per field.
+  for (let i = 0; i <= OPTIONAL_LATE_ADDED_FIELDS.length; i++) {
+    try {
+      return await airtableRequest(method, table, stripMissingOptionalFields(body));
+    } catch (err) {
+      const m = /Unknown field name: \\?"([^"\\]+)\\?"/.exec(err.message || '');
+      if (m && OPTIONAL_LATE_ADDED_FIELDS.includes(m[1]) && !optionalFieldsMissing.has(m[1])) {
+        console.warn(`Airtable field "${m[1]}" not found on this base - writing without it. Add it to Campaign Contacts to re-enable the feature that uses it.`);
+        optionalFieldsMissing.add(m[1]);
+        continue;
+      }
+      throw err;
     }
-    throw err;
   }
 }
 
