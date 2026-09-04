@@ -9690,7 +9690,7 @@ function openBookingModal(cid){
     </div>
     <div class="field"><label>Delivery date</label><input type="date" id="bkDate" value="${isoDate(TODAY)}"></div>
     <div class="field"><label>What converted them?</label>
-      <select id="bkCta">${CTA_OPTIONS.map(o=>`<option value="${esc(o)}" ${c.thread.ctaOption===o?'selected':''}>${esc(o)}</option>`).join('')}</select>
+      <select id="bkCta">${ctaOptionsFor(c).map(o=>`<option value="${esc(o)}" ${c.thread.ctaOption===o?'selected':''}>${esc(o)}</option>`).join('')}</select>
     </div>
     <div class="field"><label>Conversion notes</label><textarea id="bkNotes" rows="3" placeholder="What tipped it over the line?"></textarea></div>
   `;
@@ -10534,7 +10534,7 @@ async function saveGeneratedMessage(cid, stageKey){
   if(stageKey==='connect'){ c.connReqDate = c.connReqDate || isoDate(TODAY); }
   if(stageKey==='m1'){ c.connDate = c.connDate || isoDate(TODAY); c.thread.connSent = c.thread.connSent || isoDate(TODAY); c.thread.m1 = { sent: isoDate(TODAY), replied:false }; c.state='messaging'; const activityEntry = { type:'message', text:`Message 1 sent to ${c.name} (${c.company})`, date: isoDate(TODAY) }; state.activity.unshift(activityEntry); syncActivityToAirtable(activityEntry); }
   if(stageKey==='m2'){ c.thread.m2 = { sent: isoDate(TODAY), replied:false }; const activityEntry = { type:'message', text:`Message 2 sent to ${c.name} (${c.company})`, date: isoDate(TODAY) }; state.activity.unshift(activityEntry); syncActivityToAirtable(activityEntry); }
-  if(stageKey==='cta'){ c.thread.cta = c.thread.cta || { sent: isoDate(TODAY), replied:false }; c.thread.ctaOption = c.thread.ctaOption || CTA_OPTIONS[0]; const activityEntry = { type:'message', text:`CTA message sent to ${c.name} (${c.company})`, date: isoDate(TODAY) }; state.activity.unshift(activityEntry); syncActivityToAirtable(activityEntry); }
+  if(stageKey==='cta'){ c.thread.cta = c.thread.cta || { sent: isoDate(TODAY), replied:false }; c.thread.ctaOption = c.thread.ctaOption || ctaOptionsFor(c)[0]; const activityEntry = { type:'message', text:`CTA message sent to ${c.name} (${c.company})`, date: isoDate(TODAY) }; state.activity.unshift(activityEntry); syncActivityToAirtable(activityEntry); }
   const originalDraft = (window.__genCtx && window.__genCtx.originalDraft) || '';
   notifyWebhook(c);
   closeModal();
