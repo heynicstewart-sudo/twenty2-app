@@ -1680,28 +1680,48 @@ async function runWeeklyReport(slug){
     await new Promise(r => setTimeout(r, 120)); // let fonts/layout settle
 
     setStatus('Rendering PDF...');
-    const canvas = await html2canvas(sheet, { scale: 2, backgroundColor:'#ffffff', useCORS:true, logging:false });
+    const scale = 2;
+    // Cut points that a page break is allowed to land on: the top and bottom
+    // edge of every atomic block (.wr-keep), in canvas pixels. A break is
+    // only ever placed at one of these, so no block is sliced through the
+    // middle.
+    const sheetTop = sheet.getBoundingClientRect().top;
+    const safeCuts = new Set([0]);
+    sheet.querySelectorAll('.wr-keep').forEach(el => {
+      const r = el.getBoundingClientRect();
+      safeCuts.add(Math.round((r.top - sheetTop) * scale));
+      safeCuts.add(Math.round((r.bottom - sheetTop) * scale));
+    });
+
+    const canvas = await html2canvas(sheet, { scale, backgroundColor:'#ffffff', useCORS:true, logging:false });
+    safeCuts.add(canvas.height);
+    const cuts = [...safeCuts].filter(v => v >= 0 && v <= canvas.height).sort((a,b) => a-b);
+
     const { jsPDF } = window.jspdf;
     const pdf = new jsPDF('p','mm','a4');
     const pw = 210, ph = 297, margin = 10;
     const iw = pw - margin*2;
-    const ih = canvas.height * (iw / canvas.width);
-    const img = canvas.toDataURL('image/jpeg', 0.94);
-    if(ih <= ph - margin*2){
-      pdf.addImage(img, 'JPEG', margin, margin, iw, ih);
+    const pageCanvasH = canvas.width * ((ph - margin*2) / iw);
+    const fullIh = canvas.height * (iw / canvas.width);
+
+    if(fullIh <= ph - margin*2){
+      pdf.addImage(canvas.toDataURL('image/jpeg', 0.94), 'JPEG', margin, margin, iw, fullIh);
     } else {
-      // overflowed one page - paginate rather than crop
-      let y = 0;
-      const pageIh = ph - margin*2;
-      const pageCanvasH = canvas.width * (pageIh / iw);
-      while(y < canvas.height){
+      let y = 0, page = 0;
+      while(y < canvas.height - 1){
+        const budget = y + pageCanvasH;
+        // furthest safe cut that still fits on this page; if none is far
+        // enough (a single block taller than a page), fall back to a hard cut.
+        let end = cuts.filter(c => c > y && c <= budget).pop();
+        if(end == null) end = Math.min(budget, canvas.height);
+        if(canvas.height - end < 60) end = canvas.height; // absorb a tiny tail rather than spill a near-empty page
+        const sliceH = end - y;
         const slice = document.createElement('canvas');
-        slice.width = canvas.width;
-        slice.height = Math.min(pageCanvasH, canvas.height - y);
-        slice.getContext('2d').drawImage(canvas, 0, y, canvas.width, slice.height, 0, 0, canvas.width, slice.height);
-        if(y > 0) pdf.addPage();
-        pdf.addImage(slice.toDataURL('image/jpeg',0.94), 'JPEG', margin, margin, iw, slice.height * (iw/canvas.width));
-        y += slice.height;
+        slice.width = canvas.width; slice.height = sliceH;
+        slice.getContext('2d').drawImage(canvas, 0, y, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
+        if(page > 0) pdf.addPage();
+        pdf.addImage(slice.toDataURL('image/jpeg',0.94), 'JPEG', margin, margin, iw, sliceH * (iw/canvas.width));
+        y = end; page++;
       }
     }
     const fnameClient = (data.account || clientName || 'Weekly').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '');
@@ -1790,7 +1810,7 @@ function _wrMessageSteps(c){
     }
     return bar + drop;
   }).join('');
-  return `<div style="margin-top:12px;border:1px solid #e3e6e9;border-radius:8px;overflow:hidden;">
+  return `<div class="wr-keep" style="margin-top:12px;border:1px solid #e3e6e9;border-radius:8px;overflow:hidden;">
     <div style="background:#2A6B7C;color:#fff;font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;padding:6px 12px;">Message sequence &mdash; where people drop off</div>
     <div style="padding:9px 12px 10px;">
       ${parts}
@@ -1810,7 +1830,7 @@ function _wrPicks(c){
     return `<div style="display:flex;gap:10px;font-size:9.5px;margin:2px 0;">
       <div style="width:150px;color:#777;flex-shrink:0;">${label}</div><div>${val}</div></div>`;
   };
-  return `<div style="background:#f7f9fa;border-radius:6px;padding:8px 10px;margin-top:8px;">
+  return `<div class="wr-keep" style="background:#f7f9fa;border-radius:6px;padding:8px 10px;margin-top:8px;">
     ${row('Most likely to connect', c.mostLikelyToConnect)}
     ${row('Most likely to respond', c.mostLikelyToRespond)}
     ${row('Most responsive sector', c.mostResponsiveSector)}
@@ -1864,24 +1884,30 @@ function buildWeeklyReportHTML(d){
   const campCards = (d.campaigns||[]).map(c => {
     const started = c.startDate ? new Date(c.startDate).toLocaleDateString('en-AU') : '';
     const sectorTable = _wrHasRealSectors(c.bySector) ? `
-      <div style="font-size:8.5px;text-transform:uppercase;letter-spacing:.05em;color:#999;margin:10px 0 3px;">By sector</div>
-      ${_wrBreakdownTable(c.bySector, 'Sector', c.emailMode)}` : '';
-    return `<div style="border:1px solid #e3e6e9;border-radius:8px;padding:12px 14px;">
-      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
-        <div style="font-weight:800;font-size:12.5px;color:#1a1a2e;">${_wrEsc(c.name)}</div>
-        ${started ? `<div style="font-size:9px;color:#999;">Started ${_wrEsc(started)}</div>` : ''}
+      <div class="wr-keep" style="margin-top:10px;">
+        <div style="font-size:8.5px;text-transform:uppercase;letter-spacing:.05em;color:#999;margin-bottom:3px;">By sector</div>
+        ${_wrBreakdownTable(c.bySector, 'Sector', c.emailMode)}
+      </div>` : '';
+    return `<div class="wr-keep" style="border:1px solid #e3e6e9;border-radius:8px;padding:12px 14px;">
+      <div class="wr-keep">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
+          <div style="font-weight:800;font-size:12.5px;color:#1a1a2e;">${_wrEsc(c.name)}</div>
+          ${started ? `<div style="font-size:9px;color:#999;">Started ${_wrEsc(started)}</div>` : ''}
+        </div>
+        ${_wrCampaignFunnel(c)}
       </div>
-      ${_wrCampaignFunnel(c)}
       ${_wrMessageSteps(c)}
       ${_wrPicks(c)}
-      <div style="font-size:8.5px;text-transform:uppercase;letter-spacing:.05em;color:#999;margin:12px 0 3px;">By job title</div>
-      ${_wrBreakdownTable(c.byRole, 'Job title', c.emailMode)}
+      <div class="wr-keep" style="margin-top:12px;">
+        <div style="font-size:8.5px;text-transform:uppercase;letter-spacing:.05em;color:#999;margin-bottom:3px;">By job title</div>
+        ${_wrBreakdownTable(c.byRole, 'Job title', c.emailMode)}
+      </div>
       ${sectorTable}
     </div>`;
   }).join('');
 
   const statsBlock = sec.stats ? `
-    <div style="margin-top:16px;">
+    <div class="wr-keep" style="margin-top:16px;">
       <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#2A6B7C;">New activity this week (${_wrEsc(d.weekOf||'')})</div>
       <div style="display:grid;grid-template-columns:repeat(${sec.content?3:2},1fr);gap:10px;margin-top:6px;">
         ${_wrTile(o.messagesSent||0, 'Messages sent')}
@@ -1893,7 +1919,7 @@ function buildWeeklyReportHTML(d){
     </div>` : '';
 
   const contentBlock = (sec.content && content.length) ? `
-    <div style="margin-top:16px;">
+    <div class="wr-keep" style="margin-top:16px;">
       <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#2A6B7C;">Content published</div>
       <ul style="font-size:9.5px;color:#333;margin:5px 0 0;padding-left:15px;">
         ${content.slice(0,10).map(c => `<li style="margin:2px 0;">${_wrEsc(c.title)}${c.type?` <span style="color:#999;">(${_wrEsc(c.type)})</span>`:''}</li>`).join('')}
@@ -1902,7 +1928,7 @@ function buildWeeklyReportHTML(d){
 
   const g = tw.googleAds;
   const adsBlock = sec.ads ? `
-    <div style="margin-top:16px;">
+    <div class="wr-keep" style="margin-top:16px;">
       <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#2A6B7C;">${_wrEsc(d.account||'Client')} - Google Ads</div>
       ${(g && !g.error) ? `
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:6px;">
@@ -1927,7 +1953,7 @@ function buildWeeklyReportHTML(d){
       </div>
     </div>
 
-    <div style="margin-top:20px;">
+    <div class="wr-keep" style="margin-top:20px;">
       <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#2A6B7C;">All campaigns &mdash; to date</div>
       <div style="display:grid;grid-template-columns:repeat(${allEmail?3:4},1fr);gap:10px;margin-top:8px;">
         ${allEmail ? `
@@ -1949,11 +1975,11 @@ function buildWeeklyReportHTML(d){
     ${adsBlock}
 
     <div style="margin-top:22px;">
-      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#2A6B7C;">By campaign</div>
+      <div class="wr-keep" style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#2A6B7C;">By campaign</div>
       <div style="display:flex;flex-direction:column;gap:12px;margin-top:10px;">${campCards || '<div style="font-size:10px;color:#888;">No live campaigns.</div>'}</div>
     </div>
 
-    <div style="margin-top:20px;border-top:1px solid #e3e6e9;padding-top:7px;font-size:8px;color:#aaa;line-height:1.5;">
+    <div class="wr-keep" style="margin-top:20px;border-top:1px solid #e3e6e9;padding-top:7px;font-size:8px;color:#aaa;line-height:1.5;">
       Connections made = connection requests accepted. People messaged = reached message 1 or later. Replied = distinct people who answered any message. The message-sequence block counts each message send. "Most likely to connect / respond" needs at least four people approached in that group. Meetings booked come from logged deals only.
     </div>
   </div>`;
