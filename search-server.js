@@ -4865,22 +4865,21 @@ app.get('/api/campaign/:id/funnel', async (req, res) => {
 // ads), the live state of every campaign (funnel, reply-by-message,
 // drop-off, reply-by-role, CTA effect), and a Claude-written narrative +
 // key insights + recommendations grounded only in those numbers.
-function weeklyReportSystemPrompt() {
+function weeklyReportSystemPrompt(brief) {
   const t = currentTenant();
   const who = t && t.name ? `${t.name}${(t.profile && t.profile.descriptor) ? `, ${t.profile.descriptor}` : ''}` : 'this client';
-  return `You write the weekly client progress report for ${who}. Audience: the client. Tone: plain, confident, specific. UK/AU English, no em dashes, no marketing fluff.
+  const steer = (brief || '').trim()
+    ? `\n\nThe account manager has told you what this week's write-up should cover:\n"""\n${brief.trim()}\n"""\nFollow that brief. If it says to leave something out, leave it out. If it says to lead with something, lead with it.`
+    : '\n\nNo specific brief was given, so write a short neutral recap of the numbers.';
+  return `You write the opening paragraph of the weekly client progress report for ${who}. Audience: the client. Tone: plain, factual, specific. UK/AU English, no em dashes, no marketing fluff.
 
-You are given: a summary of what was done this week (content, SEO, LinkedIn outreach, Google Ads) and, for every live campaign, its funnel counts, per-message reply rates, the biggest drop-off point, which job titles are replying, and how early-CTA messages are landing.
+You are given a summary of what was done this week and, for every live campaign, its funnel counts and per-message reply counts.${steer}
 
 Return ONLY valid JSON in exactly this shape:
 {
-  "weekSummary": "2-3 sentences: what got done this week and the single most important takeaway.",
-  "campaignReads": { "<campaign name>": "2-4 sentences on where this campaign stands - reply rate vs what's normal for cold outreach (~5-15%), where people are dropping off, which message is or isn't landing, which roles respond." },
-  "whatsWorking": ["3-5 bullet strings, each citing a real number from the data"],
-  "whatsNot": ["2-4 bullet strings, each citing a real number - drop-off points, CTAs turning people away, roles that go quiet"],
-  "recommendations": ["3-5 concrete next steps, each tied to a number or pattern above"]
+  "summary": "2 to 4 sentences. State what happened this week using the real numbers. No recommendations, no 'what is working / what is not', no advice - the account manager writes that themselves. Just present the facts."
 }
-Every number you cite must come from the data given. If a campaign has too little data (under ~10 messages sent), say so plainly rather than over-reading it. Do not invent conversions - if no meetings are booked, say that directly.`;
+Every number you cite must come from the data given. Do not invent conversions - if no meetings are booked, say that directly.`;
 }
 
 function _weekBounds() {
@@ -4898,10 +4897,21 @@ function _inWeek(dateStr, start, end) {
 // read + narrative runs inside that client's tenant context (its own base,
 // its own keys), same pattern as /api/agency/overview. No slug -> the
 // request's own active client (the cookie-resolved tenant).
-app.get('/api/report/weekly', async (req, res) => {
+async function handleWeeklyReport(req, res) {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   try {
-    const slug = (req.query.client || '').trim();
+    const src = req.method === 'POST' ? (req.body || {}) : (req.query || {});
+    const slug = String(src.client || '').trim();
+    const brief = String(src.brief || '').trim().slice(0, 2000);
+    // sections: which optional blocks to include. Campaign outreach is always in.
+    const rawSections = Array.isArray(src.sections)
+      ? src.sections
+      : String(src.sections || '').split(',').map(s => s.trim()).filter(Boolean);
+    const sections = {
+      stats: rawSections.includes('stats'),
+      content: rawSections.includes('content'),
+      ads: rawSections.includes('ads')
+    };
     let tenant = currentTenant();
     if (slug) {
       const clients = await getClients();
@@ -4909,16 +4919,20 @@ app.get('/api/report/weekly', async (req, res) => {
       if (!found) return res.status(404).json({ error: `Client "${slug}" not found or paused` });
       tenant = found;
     }
-    const out = await tenantALS.run(tenant, () => buildWeeklyReport());
+    const out = await tenantALS.run(tenant, () => buildWeeklyReport({ brief, sections }));
     res.json(out);
   } catch (err) {
     console.error('Weekly report error:', err.message);
     res.status(500).json({ error: err.message });
   }
-});
+}
+app.get('/api/report/weekly', handleWeeklyReport);
+app.post('/api/report/weekly', handleWeeklyReport);
 
-async function buildWeeklyReport() {
+async function buildWeeklyReport(opts) {
   {
+    const brief = (opts && opts.brief) || '';
+    const sections = (opts && opts.sections) || { stats: true, content: true, ads: true };
     const wk = _weekBounds();
     const [campaignRecords, ccRows, tpRecords, contactRecords, contentRecords, dealRecords] = await Promise.all([
       airtableFetchAllRecords('Campaigns'),
@@ -4953,12 +4967,16 @@ async function buildWeeklyReport() {
     contentThisWeek.forEach(c => { contentByType[c.type || 'Other'] = (contentByType[c.type || 'Other'] || 0) + 1; });
 
     let googleAds = null;
-    try {
-      if (process.env.GSC_SERVICE_ACCOUNT_JSON) {
-        const g = await fetchGoogleAdsData(false);
-        googleAds = g && g.summary ? g.summary : (g || null);
-      }
-    } catch (e) { googleAds = { error: 'Google Ads sheet not reachable' }; }
+    if (sections.ads) {
+      try {
+        if (process.env.GSC_SERVICE_ACCOUNT_JSON) {
+          const g = await fetchGoogleAdsData(false);
+          googleAds = googleAdsReportSummary(g);
+        } else {
+          googleAds = { error: 'No Google Ads account connected for this client.' };
+        }
+      } catch (e) { googleAds = { error: 'Google Ads account not reachable.' }; }
+    }
 
     const newCampaignsThisWeek = campaignRecords
       .filter(r => _inWeek(r.fields['Start Date'], wk.start, wk.end))
@@ -5005,11 +5023,11 @@ async function buildWeeklyReport() {
         }
       }
 
-      // reply-by-role: roles of contacts who replied (any message), vs roles messaged
+      // who replied (any message), by contact id
       const repliedContactIds = new Set();
       myTp.forEach(r => { if (touchPointIsReply(r.fields)) (r.fields['Contact'] || []).forEach(id => repliedContactIds.add(id)); });
       fcs.forEach(c => { if (c.replyReceived) repliedContactIds.add(c.contactId); });
-      const messagedIds = new Set(fcs.filter(c => !c.off && c.furthestRung >= FUNNEL_LADDER.indexOf('Message 1 Sent')).map(c => c.contactId));
+
       const roleGroup = raw => {
         const s = (raw || '').toLowerCase();
         if (/head of|gm |general manager|chief|director|cdo|cto|cio/.test(s)) return 'Head / Director / C-level';
@@ -5022,21 +5040,26 @@ async function buildWeeklyReport() {
         if (/analyst|\bba\b/.test(s)) return 'Business Analyst';
         return raw ? 'Other' : 'Unknown';
       };
-      const replyByRole = {};
-      messagedIds.forEach(id => {
-        const g = roleGroup(roleById[id]);
-        replyByRole[g] = replyByRole[g] || { messaged: 0, replied: 0 };
-        replyByRole[g].messaged++;
-        if (repliedContactIds.has(id)) replyByRole[g].replied++;
-      });
-      Object.values(replyByRole).forEach(v => { v.replyRate = v.messaged ? Math.round((v.replied / v.messaged) * 100) : 0; });
 
-      // early CTA effect
-      const earlyCtaTp = myTp.filter(r => r.fields['CTA Brought Forward']);
-      const earlyCtaContacts = new Set(earlyCtaTp.map(r => (r.fields['Contact'] || [])[0]).filter(Boolean));
-      let earlyCtaReplied = 0;
-      earlyCtaContacts.forEach(id => { if (repliedContactIds.has(id)) earlyCtaReplied++; });
-      const ctaNotes = [...new Set(myTp.filter(r => r.fields['CTA Judgement Note']).map(r => r.fields['CTA Judgement Note']))].slice(0, 4);
+      // Per job-title group: how many we approached, how many accepted the
+      // connection (or, for email, were emailed), and how many replied.
+      const connSentIds = new Set(fcs.filter(c => !c.off && (c.connectionSentDate || c.furthestRung >= RUNG.connectionSent)).map(c => c.contactId));
+      const connectedIds = new Set(fcs.filter(c => !c.off && c.furthestRung >= RUNG.connected).map(c => c.contactId));
+      const emailedIds = new Set(fcs.filter(c => !c.off && c.furthestRung >= RUNG.m1).map(c => c.contactId));
+      const approachedIds = emailMode ? emailedIds : connSentIds;
+      const acceptedIds = emailMode ? emailedIds : connectedIds;
+      const byRole = {};
+      approachedIds.forEach(id => {
+        const g = roleGroup(roleById[id]);
+        byRole[g] = byRole[g] || { approached: 0, accepted: 0, replied: 0 };
+        byRole[g].approached++;
+        if (acceptedIds.has(id)) byRole[g].accepted++;
+        if (repliedContactIds.has(id)) byRole[g].replied++;
+      });
+      Object.values(byRole).forEach(v => {
+        v.acceptRate = v.approached ? Math.round((v.accepted / v.approached) * 100) : 0;
+        v.replyRate = v.approached ? Math.round((v.replied / v.approached) * 100) : 0;
+      });
 
       const connectedForRate = (funnel.steps.find(s => s.key === (emailMode ? 'm1' : 'connected')) || {}).count || 0;
       return {
@@ -5045,14 +5068,11 @@ async function buildWeeklyReport() {
         startDate: cr.fields['Start Date'] || '',
         goal: cr.fields['Goal'] || '',
         funnel: funnel.steps.map(s => ({ label: s.label, key: s.key, count: s.count, pctOfPrev: s.pctOfPrev })),
-        excluded: funnel.excluded,
-        deadAfterM3: funnel.noOutcomeAfterM3,
         replies: repliedContactIds.size,
         replyRate: connectedForRate ? Math.round((repliedContactIds.size / connectedForRate) * 100) : 0,
         byMessage,
         dropOff,
-        replyByRole,
-        earlyCta: { count: earlyCtaContacts.size, replied: earlyCtaReplied, notes: ctaNotes }
+        byRole
       };
     });
 
@@ -5063,22 +5083,22 @@ async function buildWeeklyReport() {
         const payload = {
           weekOf: `${wk.startStr} to ${wk.endStr}`,
           thisWeek: {
-            content: contentThisWeek, contentByType,
+            content: sections.content ? contentThisWeek : undefined,
+            contentByType: sections.content ? contentByType : undefined,
             outreach,
-            googleAds: googleAds,
+            googleAds: sections.ads ? googleAds : undefined,
             newCampaigns: newCampaignsThisWeek
           },
           campaigns: campaigns.map(c => ({
             name: c.name, emailMode: c.emailMode, goal: c.goal,
-            funnel: c.funnel, excluded: c.excluded, deadAfterM3: c.deadAfterM3,
+            funnel: c.funnel,
             replyRate: c.replyRate, replies: c.replies,
             perMessageReplyRate: c.byMessage,
             biggestDropOff: c.dropOff,
-            replyByRole: c.replyByRole,
-            earlyCtaEffect: c.earlyCta
+            byJobTitle: c.byRole
           }))
         };
-        const raw = await callClaudeMessages(`DATA:\n${JSON.stringify(payload, null, 2)}`, 1800, weeklyReportSystemPrompt());
+        const raw = await callClaudeMessages(`DATA:\n${JSON.stringify(payload, null, 2)}`, 700, weeklyReportSystemPrompt(brief));
         const m = stripCodeFences(raw).match(/\{[\s\S]*\}/);
         ai = m ? JSON.parse(m[0]) : null;
       } catch (e) {
@@ -5093,11 +5113,58 @@ async function buildWeeklyReport() {
       weekStart: wk.startStr,
       weekEnd: wk.endStr,
       generatedAt: new Date().toISOString(),
-      thisWeek: { content: contentThisWeek, contentByType, outreach, googleAds, newCampaigns: newCampaignsThisWeek },
+      sections,
+      brief,
+      thisWeek: {
+        content: sections.content ? contentThisWeek : [],
+        contentByType: sections.content ? contentByType : {},
+        outreach,
+        googleAds: sections.ads ? googleAds : null,
+        newCampaigns: newCampaignsThisWeek
+      },
       campaigns,
       ai
     };
   }
+}
+
+// Google Ads sheet export -> a small client-facing summary: totals for the
+// whole period the sheet covers, labelled with the client's own name (never
+// "Google Ads account 123" or a sheet id). Sums whichever of the common
+// metric columns are present on the Campaigns tab.
+function googleAdsReportSummary(g) {
+  const camp = (g && g.sheets && g.sheets['Campaigns']) || null;
+  const records = (camp && camp.records) || [];
+  if (!records.length) return { error: 'No Google Ads data in the connected sheet.' };
+  const num = v => {
+    const n = parseFloat(String(v == null ? '' : v).replace(/[^0-9.\-]/g, ''));
+    return isNaN(n) ? 0 : n;
+  };
+  const pick = (row, names) => {
+    const keys = Object.keys(row);
+    for (const want of names) {
+      const k = keys.find(k => k.toLowerCase().replace(/[^a-z]/g, '') === want);
+      if (k != null) return row[k];
+    }
+    return undefined;
+  };
+  let cost = 0, clicks = 0, impressions = 0, conversions = 0, activeCampaigns = 0;
+  records.forEach(r => {
+    cost += num(pick(r, ['cost', 'spend', 'amountspent']));
+    clicks += num(pick(r, ['clicks']));
+    impressions += num(pick(r, ['impr', 'impressions', 'imprs']));
+    conversions += num(pick(r, ['conversions', 'conv', 'conversion']));
+    if (String(pick(r, ['campaignstate', 'status', 'state']) || '').toLowerCase().includes('enabled')) activeCampaigns++;
+  });
+  return {
+    activeCampaigns: activeCampaigns || records.length,
+    spend: Math.round(cost * 100) / 100,
+    clicks: Math.round(clicks),
+    impressions: Math.round(impressions),
+    conversions: Math.round(conversions * 10) / 10,
+    ctr: impressions ? Math.round((clicks / impressions) * 1000) / 10 : 0,
+    cpc: clicks ? Math.round((cost / clicks) * 100) / 100 : 0
+  };
 }
 
 // ===================== BROWSER EXTENSION (read-only LinkedIn capture) =====================

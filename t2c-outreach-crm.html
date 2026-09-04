@@ -1595,7 +1595,7 @@ function renderAgencyPage(){
 
   <div class="card" style="margin-bottom:18px;">
     <div class="section-title" style="margin-bottom:2px;"><i class="ti ti-file-text"></i> Weekly client report</div>
-    <div class="muted" style="font-size:12px;">Each client card below has an <strong>Export report</strong> button - a one-page PDF for that client only, covering what got done this week and the live state of every campaign. The Engine reads that client's whole account before writing it.</div>
+    <div class="muted" style="font-size:12px;">Each client card below has an <strong>Export report</strong> button. Pick which sections to include, give the Engine a short brief on what to focus on (or leave out), and it builds a clean one-page PDF: the campaign funnel, who's connecting and replying by job title, and the totals across every campaign.</div>
     <div id="weeklyReportStatus" class="muted" style="font-size:12px;margin-top:10px;display:none;"></div>
   </div>
 
@@ -1624,16 +1624,60 @@ async function refreshExtensionStatus(){
 // ---- Weekly report: fetch the whole-account rundown, render a one-page
 // sheet, rasterise it to a PDF. Visuals are CSS bars, not Chart.js, so the
 // html2canvas capture is deterministic. ----
-async function generateWeeklyReport(slug){
+// Clicking "Export report" opens this: choose sections, brief the Engine,
+// then generate. Keeps the PDF short and on the operator's terms.
+function generateWeeklyReport(slug){
+  const clientName = (((window.__agencyOverview || {}).clients || []).find(x => x.slug === slug) || {}).name || 'this client';
+  const cb = (id, label, hint, checked) => `
+    <label style="display:flex;gap:9px;align-items:flex-start;padding:8px 10px;border:1px solid var(--border);border-radius:8px;cursor:pointer;text-transform:none;letter-spacing:normal;">
+      <input type="checkbox" id="${id}" ${checked?'checked':''} style="margin-top:2px;">
+      <span><span style="font-weight:600;font-size:13px;">${label}</span><br><span class="muted" style="font-size:11.5px;">${hint}</span></span>
+    </label>`;
+  openModal(`Weekly report - ${esc(clientName)}`, `
+    <div style="display:flex;flex-direction:column;gap:12px;">
+      <div>
+        <div style="font-weight:600;font-size:13px;margin-bottom:4px;">Brief for the Engine <span class="muted" style="font-weight:400;">(optional)</span></div>
+        <div class="muted" style="font-size:11.5px;margin-bottom:6px;">What should this week's write-up lead with, and what should it leave out? The Engine writes the opening paragraph to match. It does not add recommendations - that's your email to write.</div>
+        <textarea id="wrBrief" rows="4" placeholder="e.g. Lead with the PO Course results - reply rate is well above benchmark. Don't mention Google Ads this week, we're pausing it. Note that the Change Leaders campaign is only a week old." style="width:100%;box-sizing:border-box;font-family:inherit;font-size:12.5px;padding:8px;border:1px solid var(--border);border-radius:8px;resize:vertical;"></textarea>
+      </div>
+      <div>
+        <div style="font-weight:600;font-size:13px;margin-bottom:6px;">Sections to include</div>
+        <div style="display:flex;flex-direction:column;gap:7px;">
+          <label style="display:flex;gap:9px;align-items:flex-start;padding:8px 10px;border:1px solid var(--border);border-radius:8px;opacity:.6;text-transform:none;letter-spacing:normal;">
+            <input type="checkbox" checked disabled style="margin-top:2px;">
+            <span><span style="font-weight:600;font-size:13px;">Campaign outreach</span><br><span class="muted" style="font-size:11.5px;">The funnel, job-title breakdown and combined totals. Always included.</span></span>
+          </label>
+          ${cb('wrSecStats','This week at a glance','Tiles for LinkedIn messages sent, replies received, content pieces.',false)}
+          ${cb('wrSecContent','Content published','List of blog posts and other content that went live this week.',false)}
+          ${cb('wrSecAds','Google Ads','Spend, clicks, impressions and conversions for the period.',false)}
+        </div>
+      </div>
+    </div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="runWeeklyReport('${esc(slug)}')"><i class="ti ti-download"></i> Generate PDF</button>`);
+}
+
+async function runWeeklyReport(slug){
+  const brief = (document.getElementById('wrBrief')||{}).value || '';
+  const sections = [
+    document.getElementById('wrSecStats')?.checked ? 'stats' : '',
+    document.getElementById('wrSecContent')?.checked ? 'content' : '',
+    document.getElementById('wrSecAds')?.checked ? 'ads' : ''
+  ].filter(Boolean);
+  closeModal();
   const btn = slug ? document.getElementById('weeklyReportBtn-' + slug) : null;
   const status = document.getElementById('weeklyReportStatus');
   const clientName = (((window.__agencyOverview || {}).clients || []).find(x => x.slug === slug) || {}).name || '';
   const label = clientName || 'this client';
   const setStatus = (t) => { if(status){ status.style.display='block'; status.textContent = t; } };
   if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Reading the account...'; }
-  setStatus(`${label}: pulling contacts, campaigns, touch points, content and ads, then asking the Engine for the read. This takes ~20-40s.`);
+  setStatus(`${label}: pulling campaigns and touch points, then asking the Engine for the opening read. This takes ~20-40s.`);
   try {
-    const res = await fetch('/api/report/weekly' + (slug ? '?client=' + encodeURIComponent(slug) : ''));
+    const res = await fetch('/api/report/weekly', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client: slug || undefined, brief, sections })
+    });
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
 
@@ -1682,74 +1726,143 @@ async function generateWeeklyReport(slug){
 }
 
 function _wrPct(n){ return Math.max(0, Math.min(100, Math.round(n||0))); }
-function _wrBar(label, count, max, color){
+function _wrEsc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+// One funnel row: label, proportional bar, big count, and a grey note that
+// carries the drop-off ("62% of previous", "27% of 22 messaged").
+function _wrStep(label, count, max, note, strong){
   const w = max ? Math.round((count/max)*100) : 0;
-  return `<div style="display:flex;align-items:center;gap:8px;margin:3px 0;font-size:9.5px;">
-    <div style="width:92px;color:#555;flex-shrink:0;">${_wrEsc(label)}</div>
-    <div style="flex:1;background:#eef0f2;border-radius:3px;height:14px;position:relative;">
-      <div style="width:${w}%;background:${color};height:100%;border-radius:3px;min-width:${count?'2px':'0'};"></div>
+  return `<div style="display:flex;align-items:center;gap:9px;margin:4px 0;font-size:10px;">
+    <div style="width:120px;color:#444;flex-shrink:0;${strong?'font-weight:700;':''}">${_wrEsc(label)}</div>
+    <div style="flex:1;background:#eef0f2;border-radius:3px;height:15px;">
+      <div style="width:${w}%;background:#2A6B7C;height:100%;border-radius:3px;min-width:${count?'2px':'0'};"></div>
     </div>
-    <div style="width:26px;text-align:right;font-weight:700;color:#222;flex-shrink:0;">${count}</div>
+    <div style="width:30px;text-align:right;font-weight:800;color:#1a1a2e;flex-shrink:0;">${count}</div>
+    <div style="width:110px;text-align:right;color:#8a8f96;flex-shrink:0;font-size:9px;">${_wrEsc(note||'')}</div>
   </div>`;
 }
-function _wrEsc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function _wrTile(value, label){
+  return `<div style="background:#f5f7f8;border-radius:7px;padding:9px 11px;"><div style="font-size:19px;font-weight:800;">${_wrEsc(value)}</div><div style="font-size:9px;color:#777;text-transform:uppercase;letter-spacing:.04em;margin-top:1px;">${_wrEsc(label)}</div></div>`;
+}
+
+// Collapse one campaign's full funnel + per-message data into the short
+// funnel the client sees, with a drop-off note on every step.
+function _wrCampaignFunnel(c){
+  const byKey = {}; (c.funnel||[]).forEach(s => { byKey[s.key] = s.count; });
+  const bm = {}; (c.byMessage||[]).forEach(m => { bm[m.message] = m; });
+  const rows = [];
+  if(c.emailMode){
+    const emailed = byKey.m1||0, replied = byKey.replied||0, booked = byKey.meeting||0;
+    rows.push({ label:'Emailed', count: emailed, note:'' });
+    rows.push({ label:'Replied', count: replied, note: emailed? `${Math.round(replied/emailed*100)}% of emailed`:'' });
+    rows.push({ label:'Booked', count: booked, note: replied? `${Math.round(booked/replied*100)}% of replies`:'' });
+  } else {
+    const sent = byKey.connectionSent||0, acc = byKey.connected||0, booked = byKey.meeting||0;
+    rows.push({ label:'Connections sent', count: sent, note:'' });
+    rows.push({ label:'Accepted', count: acc, note: sent? `${Math.round(acc/sent*100)}% accepted`:'' });
+    [1,2,3].forEach(n => {
+      const m = bm[n] || { sent:0, replied:0, replyRate:0 };
+      rows.push({ label:`Replied to msg ${n}`, count: m.replied||0, note: m.sent? `${m.replyRate}% of ${m.sent} sent` : 'none sent yet' });
+    });
+    rows.push({ label:'Booked', count: booked, note: acc? `${Math.round(booked/acc*100)}% of accepted`:'' });
+  }
+  const max = Math.max(1, ...rows.map(r => r.count));
+  return rows.map((r,i) => _wrStep(r.label, r.count, max, r.note, i===0 || r.label==='Booked')).join('');
+}
+
+// "Who's connecting and replying" - job-title groups ranked by how many we
+// approached, with accept and reply rates.
+function _wrRoleTable(byRole){
+  const rows = Object.entries(byRole||{})
+    .filter(([r,v]) => v.approached >= 2 && r !== 'Unknown')
+    .sort((a,b) => b[1].approached - a[1].approached)
+    .slice(0,5);
+  if(!rows.length) return '<div style="font-size:9px;color:#999;">Not enough data by job title yet.</div>';
+  const head = `<tr style="color:#999;font-size:8px;text-transform:uppercase;letter-spacing:.04em;">
+    <th style="text-align:left;font-weight:600;padding:2px 0;">Job title</th>
+    <th style="text-align:right;font-weight:600;padding:2px 6px;">Approached</th>
+    <th style="text-align:right;font-weight:600;padding:2px 6px;">Accepted</th>
+    <th style="text-align:right;font-weight:600;padding:2px 0;">Replied</th></tr>`;
+  const body = rows.map(([r,v]) => `<tr style="font-size:9.5px;color:#333;border-top:1px solid #eef0f2;">
+    <td style="padding:3px 0;">${_wrEsc(r)}</td>
+    <td style="text-align:right;padding:3px 6px;">${v.approached}</td>
+    <td style="text-align:right;padding:3px 6px;">${v.accepted} <span style="color:#999;">(${v.acceptRate}%)</span></td>
+    <td style="text-align:right;padding:3px 0;">${v.replied} <span style="color:#999;">(${v.replyRate}%)</span></td>
+  </tr>`).join('');
+  return `<table style="width:100%;border-collapse:collapse;">${head}${body}</table>`;
+}
 
 function buildWeeklyReportHTML(d){
   const tw = d.thisWeek || {};
   const o = tw.outreach || {};
+  const sec = d.sections || {};
   const ai = d.ai && !d.ai.error ? d.ai : {};
   const content = tw.content || [];
-  const contentLines = Object.entries(tw.contentByType || {}).map(([t,n]) => `${n} ${t}${n>1?'s':''}`).join(', ') || 'nothing published';
-  const gads = tw.googleAds;
-  const gadsLine = gads && !gads.error
-    ? (typeof gads === 'object' ? Object.entries(gads).slice(0,4).map(([k,v]) => `${k}: ${v}`).join(' · ') : String(gads))
-    : (gads && gads.error ? gads.error : 'no data connected');
+  const anyEmail = (d.campaigns||[]).some(c => c.emailMode);
+  const sentWord = anyEmail && (d.campaigns||[]).every(c => c.emailMode) ? 'Emails sent' : 'Connections sent';
+
+  // ---- combined totals across every live campaign ----
+  const totals = { sent:0, accepted:0, replied:0, booked:0 };
+  (d.campaigns||[]).forEach(c => {
+    const k = {}; (c.funnel||[]).forEach(s => { k[s.key] = s.count; });
+    totals.sent     += c.emailMode ? (k.m1||0) : (k.connectionSent||0);
+    totals.accepted += c.emailMode ? (k.m1||0) : (k.connected||0);
+    totals.replied  += c.replies || 0;
+    totals.booked   += k.meeting || 0;
+  });
 
   const campCards = (d.campaigns||[]).map(c => {
-    const f = c.funnel || [];
-    const maxF = Math.max(1, ...f.map(s => s.count));
-    const funnelBars = f.map(s => _wrBar(s.label, s.count, maxF, '#2A6B7C')).join('');
-    const msgBars = (c.byMessage||[]).filter(m => m.sent>0).map(m =>
-      `<div style="display:flex;align-items:center;gap:8px;margin:3px 0;font-size:9.5px;">
-        <div style="width:92px;color:#555;">Msg ${m.message} (${m.sent} sent)</div>
-        <div style="flex:1;background:#eef0f2;border-radius:3px;height:14px;"><div style="width:${_wrPct(m.replyRate)}%;background:#e0a44a;height:100%;border-radius:3px;"></div></div>
-        <div style="width:34px;text-align:right;font-weight:700;">${m.replyRate}%</div>
-      </div>`).join('') || '<div style="font-size:9.5px;color:#888;">No messages sent yet</div>';
-    const roles = Object.entries(c.replyByRole||{}).filter(([,v]) => v.messaged>=2).sort((a,b)=>b[1].replyRate-a[1].replyRate).slice(0,4);
-    const roleLines = roles.length
-      ? roles.map(([r,v]) => `<div style="font-size:9px;color:#555;">${_wrEsc(r)}: <b>${v.replyRate}%</b> <span style="color:#999;">(${v.replied}/${v.messaged})</span></div>`).join('')
-      : '<div style="font-size:9px;color:#999;">Not enough data by role yet</div>';
-    const drop = c.dropOff ? `Biggest drop-off: <b>${_wrEsc(c.dropOff.from)} → ${_wrEsc(c.dropOff.to)}</b>, lost ${c.dropOff.lost} (${c.dropOff.pct}%)` : 'No clear drop-off yet';
-    const read = (ai.campaignReads && ai.campaignReads[c.name]) || '';
-    return `<div style="border:1px solid #e3e6e9;border-radius:8px;padding:10px 12px;">
-      <div style="display:flex;justify-content:space-between;align-items:baseline;">
-        <div style="font-weight:800;font-size:11.5px;color:#1a1a2e;">${_wrEsc(c.name)}</div>
-        <div style="font-size:10px;color:#555;">Reply rate <b style="color:#2A6B7C;font-size:12px;">${c.replyRate}%</b></div>
+    const started = c.startDate ? new Date(c.startDate).toLocaleDateString('en-AU') : '';
+    return `<div style="border:1px solid #e3e6e9;border-radius:8px;padding:11px 13px;">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px;">
+        <div style="font-weight:800;font-size:12px;color:#1a1a2e;">${_wrEsc(c.name)}</div>
+        ${started ? `<div style="font-size:9px;color:#999;">Started ${_wrEsc(started)}</div>` : ''}
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:6px;">
-        <div>
-          <div style="font-size:8.5px;text-transform:uppercase;letter-spacing:.05em;color:#999;margin-bottom:2px;">Funnel</div>
-          ${funnelBars}
-        </div>
-        <div>
-          <div style="font-size:8.5px;text-transform:uppercase;letter-spacing:.05em;color:#999;margin-bottom:2px;">Reply rate by message</div>
-          ${msgBars}
-          <div style="font-size:8.5px;text-transform:uppercase;letter-spacing:.05em;color:#999;margin:6px 0 2px;">Who replies</div>
-          ${roleLines}
-        </div>
-      </div>
-      <div style="font-size:9.5px;color:#444;margin-top:6px;">${drop}. Excluded: ${c.excluded}. ${c.deadAfterM3?`${c.deadAfterM3} went cold after all 3 messages.`:''}</div>
-      ${read ? `<div style="font-size:9.5px;color:#333;margin-top:5px;padding-top:5px;border-top:1px dashed #e3e6e9;font-style:italic;">${_wrEsc(read)}</div>` : ''}
+      ${_wrCampaignFunnel(c)}
+      <div style="font-size:8.5px;text-transform:uppercase;letter-spacing:.05em;color:#999;margin:9px 0 3px;">Who's connecting and replying</div>
+      ${_wrRoleTable(c.byRole)}
     </div>`;
   }).join('');
 
-  const list = (arr, ord) => (arr||[]).map((x,i) => `<li style="margin:2px 0;">${ord?`<b>${i+1}.</b> `:''}${_wrEsc(x)}</li>`).join('');
+  const statsBlock = sec.stats ? `
+    <div style="margin-top:16px;">
+      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#2A6B7C;">This week at a glance</div>
+      <div style="display:grid;grid-template-columns:repeat(${sec.content?3:2},1fr);gap:10px;margin-top:6px;">
+        ${_wrTile(o.messagesSent||0, 'LinkedIn messages sent')}
+        ${_wrTile(o.repliesIn||0, 'Replies received')}
+        ${sec.content ? _wrTile(content.length, 'Content pieces published') : ''}
+      </div>
+      ${(tw.newCampaigns||[]).length ? `<div style="font-size:9.5px;color:#555;margin-top:6px;"><b>New campaigns this week:</b> ${(tw.newCampaigns||[]).map(_wrEsc).join(', ')}.</div>` : ''}
+    </div>` : '';
+
+  const contentBlock = (sec.content && content.length) ? `
+    <div style="margin-top:16px;">
+      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#2A6B7C;">Content published</div>
+      <ul style="font-size:9.5px;color:#333;margin:5px 0 0;padding-left:15px;">
+        ${content.slice(0,10).map(c => `<li style="margin:2px 0;">${_wrEsc(c.title)}${c.type?` <span style="color:#999;">(${_wrEsc(c.type)})</span>`:''}</li>`).join('')}
+      </ul>
+    </div>` : '';
+
+  const g = tw.googleAds;
+  const adsBlock = sec.ads ? `
+    <div style="margin-top:16px;">
+      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#2A6B7C;">${_wrEsc(d.account||'Client')} - Google Ads</div>
+      ${(g && !g.error) ? `
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:6px;">
+          ${_wrTile('$'+(g.spend!=null?g.spend.toLocaleString('en-AU'):'0'), 'Spend')}
+          ${_wrTile((g.clicks||0).toLocaleString('en-AU'), 'Clicks')}
+          ${_wrTile((g.impressions||0).toLocaleString('en-AU'), 'Impressions')}
+          ${_wrTile(g.conversions||0, 'Conversions')}
+        </div>
+        <div style="font-size:9px;color:#999;margin-top:5px;">CTR ${g.ctr||0}% &middot; Avg CPC $${g.cpc||0} &middot; ${g.activeCampaigns||0} active campaign${g.activeCampaigns===1?'':'s'}. Figures cover the full period in the connected account.</div>
+      ` : `<div style="font-size:9.5px;color:#999;margin-top:5px;">${_wrEsc((g&&g.error)||'No Google Ads data.')}</div>`}
+    </div>` : '';
 
   return `<div id="weeklyReportSheet" style="width:800px;background:#fff;color:#1a1a2e;font-family:'Plus Jakarta Sans',system-ui,sans-serif;padding:26px 30px;box-sizing:border-box;">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #2A6B7C;padding-bottom:10px;">
       <div>
         <div style="font-size:17px;font-weight:800;letter-spacing:-.01em;">${_wrEsc(d.account||'Client')}</div>
-        <div style="font-size:10.5px;color:#666;">Outreach &amp; marketing — weekly progress</div>
+        <div style="font-size:10.5px;color:#666;">Outreach &amp; marketing &mdash; weekly progress</div>
       </div>
       <div style="text-align:right;">
         <div style="font-size:12px;font-weight:700;color:#2A6B7C;">Week of ${_wrEsc(d.weekOf||'')}</div>
@@ -1757,43 +1870,27 @@ function buildWeeklyReportHTML(d){
       </div>
     </div>
 
-    <div style="margin-top:14px;">
-      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#2A6B7C;">This week</div>
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:6px;">
-        <div style="background:#f5f7f8;border-radius:7px;padding:8px 10px;"><div style="font-size:19px;font-weight:800;">${o.messagesSent||0}</div><div style="font-size:9px;color:#777;text-transform:uppercase;letter-spacing:.04em;">LinkedIn messages sent</div></div>
-        <div style="background:#f5f7f8;border-radius:7px;padding:8px 10px;"><div style="font-size:19px;font-weight:800;">${o.repliesIn||0}</div><div style="font-size:9px;color:#777;text-transform:uppercase;letter-spacing:.04em;">Replies received</div></div>
-        <div style="background:#f5f7f8;border-radius:7px;padding:8px 10px;"><div style="font-size:19px;font-weight:800;">${content.length}</div><div style="font-size:9px;color:#777;text-transform:uppercase;letter-spacing:.04em;">Content pieces</div></div>
+    ${ai.summary ? `<div style="font-size:10.5px;line-height:1.5;color:#222;margin-top:14px;background:#eef4f5;border-left:3px solid #2A6B7C;padding:9px 12px;border-radius:0 5px 5px 0;">${_wrEsc(ai.summary)}</div>` : ''}
+
+    ${statsBlock}
+    ${contentBlock}
+    ${adsBlock}
+
+    <div style="margin-top:16px;">
+      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#2A6B7C;">Campaign results</div>
+
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:6px;">
+        ${_wrTile(totals.sent, sentWord + ' (all campaigns)')}
+        ${_wrTile(totals.accepted, anyEmail ? 'Reached' : 'Accepted')}
+        ${_wrTile(totals.replied, 'Replied')}
+        ${_wrTile(totals.booked, 'Meetings booked')}
       </div>
-      <div style="font-size:9.5px;color:#555;margin-top:6px;">
-        <b>Content:</b> ${_wrEsc(contentLines)}${content.length?` — ${content.slice(0,5).map(c=>_wrEsc(c.title)).join('; ')}`:''}.<br>
-        <b>Google Ads:</b> ${_wrEsc(gadsLine)}.${(tw.newCampaigns||[]).length?`<br><b>New campaigns:</b> ${(tw.newCampaigns||[]).map(_wrEsc).join(', ')}.`:''}
-      </div>
-      ${ai.weekSummary ? `<div style="font-size:10px;color:#222;margin-top:7px;background:#eef4f5;border-left:3px solid #2A6B7C;padding:7px 10px;border-radius:0 5px 5px 0;">${_wrEsc(ai.weekSummary)}</div>` : ''}
+
+      <div style="display:flex;flex-direction:column;gap:9px;margin-top:10px;">${campCards || '<div style="font-size:10px;color:#888;">No live campaigns.</div>'}</div>
     </div>
 
-    <div style="margin-top:14px;">
-      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#2A6B7C;">Campaigns</div>
-      <div style="display:flex;flex-direction:column;gap:8px;margin-top:6px;">${campCards || '<div style="font-size:10px;color:#888;">No live campaigns.</div>'}</div>
-    </div>
-
-    <div style="margin-top:14px;display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-      <div>
-        <div style="font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:#1a7a3a;">What's working</div>
-        <ul style="font-size:9.5px;color:#333;margin:4px 0 0;padding-left:15px;">${list(ai.whatsWorking)||'<li style="color:#999;">Not enough data yet</li>'}</ul>
-      </div>
-      <div>
-        <div style="font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:#b4432a;">What's not</div>
-        <ul style="font-size:9.5px;color:#333;margin:4px 0 0;padding-left:15px;">${list(ai.whatsNot)||'<li style="color:#999;">Not enough data yet</li>'}</ul>
-      </div>
-    </div>
-
-    <div style="margin-top:12px;">
-      <div style="font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:#2A6B7C;">Recommendations</div>
-      <ol style="font-size:9.5px;color:#222;margin:4px 0 0;padding-left:0;list-style:none;">${list(ai.recommendations, true)||'<li style="color:#999;">—</li>'}</ol>
-    </div>
-
-    <div style="margin-top:14px;border-top:1px solid #e3e6e9;padding-top:6px;font-size:8px;color:#aaa;">
-      Reply rate = distinct contacts who replied ÷ contacts connected. Funnel counts read from each contact's stage history. Meetings booked are read from logged deals only.
+    <div style="margin-top:16px;border-top:1px solid #e3e6e9;padding-top:6px;font-size:8px;color:#aaa;">
+      Each step shows how many people reached it; the grey figure is the drop-off from the step before. "Replied to msg N" counts people who answered that message out of those it was sent to. Meetings booked come from logged deals only.
     </div>
   </div>`;
 }
