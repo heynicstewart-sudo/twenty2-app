@@ -2,7 +2,7 @@
 // lives in chrome.storage.local under "settings".
 const DEFAULT_SETTINGS = {
   // Where the CRM lives. No trailing slash.
-  apiBase: 'https://t2c-app-production.up.railway.app',
+  apiBase: 'https://twenty2-app-production.up.railway.app',
   // Shared secret - must match EXTENSION_TOKEN on the server.
   token: '',
   // Multi-tenant: which client this LinkedIn account belongs to. Blank = the

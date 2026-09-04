@@ -53,7 +53,7 @@ server config.
 1. `chrome://extensions` → toggle **Developer mode** on.
 2. **Load unpacked** → pick this `extension/` folder.
 3. Click the extension icon → **Set token** → fill in:
-   - **CRM URL**: `https://t2c-app-production.up.railway.app` (or your Railway URL)
+   - **CRM URL**: `https://twenty2-app-production.up.railway.app` (or your Railway URL)
    - **Extension token**: the same value you set as `EXTENSION_TOKEN`
    - **Client slug**: leave blank unless you run more than one client base
 4. The popup should show `Connected — <account>` and a "N due" count.

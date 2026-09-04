@@ -14,6 +14,10 @@ const BASIC_AUTH_PASS = process.env.RAILWAY_BASIC_AUTH_PASS;
 
 if (BASIC_AUTH_USER && BASIC_AUTH_PASS) {
   app.use((req, res, next) => {
+    // The Chrome capture extension can't carry the browser Basic-Auth prompt.
+    // Its routes have their own secret (EXTENSION_TOKEN via extensionAuth), so
+    // let them past this gate and be checked there.
+    if (req.path.startsWith('/api/extension/')) return next();
     const header = req.headers.authorization || '';
     const [scheme, encoded] = header.split(' ');
     const decoded = scheme === 'Basic' && encoded ? Buffer.from(encoded, 'base64').toString('utf8') : '';
