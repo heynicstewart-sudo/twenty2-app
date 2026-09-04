@@ -59,10 +59,21 @@ function orderedText(root) {
   return out;
 }
 
+const EMP_TYPE = 'full[- ]?time|part[- ]?time|contract|freelance|self[- ]?employed|internship|apprenticeship|seasonal|temporary|permanent';
 const isDateRange = (s) => !!s && /\b(19|20)\d{2}\b/.test(s) && (/[-–—]/.test(s) || /present/i.test(s));
-const isBareDuration = (s) => !!s &&
-  /^(\d+\s*(yr|yrs|year|years|mo|mos|month|months)\b\s*)+$/i.test(String(s).trim()) &&
-  !/\b(19|20)\d{2}\b/.test(s);
+// "4 yrs 1 mo", and LinkedIn's grouped-employer variant "Full-time · 4 yrs".
+const isBareDuration = (s) => {
+  if (!s) return false;
+  const t = String(s).trim().replace(new RegExp('^(' + EMP_TYPE + ')\\s*·?\\s*', 'i'), '');
+  return /^(\d+\s*(yr|yrs|year|years|mo|mos|month|months)\b\s*)+$/i.test(t) && !/\b(19|20)\d{2}\b/.test(t);
+};
+// A standalone "Full-time" / "Contract" row - metadata, never a title or company.
+const isEmploymentType = (s) => new RegExp('^(' + EMP_TYPE + ')$', 'i').test(String(s || '').trim());
+// "Perth, Western Australia, Australia" / "Joondalup, WA" - a place, not a title.
+const isPlaceLine = (s) => {
+  const t = String(s || '').trim();
+  return t.split(',').length >= 2 && /^[A-Z][A-Za-z.'\- ]+,\s*[A-Z]/.test(t) && !/\d/.test(t);
+};
 const isLongProse = (s) => s.length > 55 || (/[.!?]$/.test(s) && s.split(/\s+/).length > 4);
 const isControl = (s) => /^(load more|show all|show \d+ more|see more|see less|…?\s*see more|experience|education|skills|licenses & certifications)$/i.test(s.trim());
 
@@ -144,7 +155,9 @@ function parseExperience(seq) {
     let guard = 0;
     while (i < a.length && guard++ < 5) {
       const l = a[i];
-      if (!l || isControl(l) || structural(i) || leadsToStructure(i)) break;
+      if (!l || isControl(l) || isEmploymentType(l) || structural(i)) break;
+      if (!e.location && isPlaceLine(l)) { e.location = l; i++; continue; }
+      if (leadsToStructure(i)) break;
       if (!e.location && !isLongProse(l)) e.location = l;
       else e.description = (e.description ? e.description + ' ' : '') + l;
       i++;
@@ -153,10 +166,10 @@ function parseExperience(seq) {
 
   while (i < a.length) {
     const line = a[i];
-    if (!line || isControl(line)) { i++; continue; }
+    if (!line || isControl(line) || isEmploymentType(line)) { i++; continue; }
 
-    // A stray blurb/description line left behind by the previous entry.
-    if (isLongProse(line) && !isDateRange(a[i + 1]) && !isBareDuration(a[i + 1])) { i++; continue; }
+    // A stray blurb/description or a leaked location line from the previous entry.
+    if ((isLongProse(line) || isPlaceLine(line)) && !isDateRange(a[i + 1]) && !isBareDuration(a[i + 1])) { i++; continue; }
 
     // Grouped-employer header: [group title?] <company> <bare duration> [location...]
     let groupJustSet = false;
@@ -170,6 +183,14 @@ function parseExperience(seq) {
       continue;
     }
 
+    // <title> <employment type> <date range>  -> sub-role, company inherited
+    if (isEmploymentType(a[i + 1]) && isDateRange(a[i + 2])) {
+      const e = { title: line, company, dates: a[i + 2] };
+      i += 3;
+      consumeTail(e);
+      if (e.title && e.dates) entries.push(e);
+      continue;
+    }
     // Flat entry: <title> <company> <date range>
     if (isDateRange(a[i + 2]) && !isDateRange(a[i + 1]) && !isBareDuration(a[i + 1])) {
       const e = { title: line, company: a[i + 1], dates: a[i + 2] };

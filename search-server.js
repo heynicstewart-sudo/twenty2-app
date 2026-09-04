@@ -5237,7 +5237,10 @@ async function synthesiseProfileEnrichment(s) {
     `- ${e.title || ''}${e.company ? ' at ' + e.company : ''}${e.dates ? ' (' + e.dates + ')' : ''}${e.description ? '\n  ' + String(e.description).replace(/\n/g, ' ') : ''}`).join('\n');
   const edu = (s.education || []).map(e =>
     `- ${e.school || ''}${e.degree ? ' — ' + e.degree : ''}${e.dates ? ' (' + e.dates + ')' : ''}`).join('\n');
-  const expBlock = exp || s.experienceRaw || '(none on profile)';
+  // Structured list is the primary read; the verbatim page text is appended as a
+  // fallback so Claude can reconcile if the parser mis-split a grouped employer.
+  const expBlock = [exp, exp && s.experienceRaw ? `\nVerbatim from the page:\n${s.experienceRaw}` : (exp ? '' : s.experienceRaw)]
+    .filter(Boolean).join('\n') || '(none on profile)';
   const eduBlock = edu || s.educationRaw || '(none on profile)';
   const prompt = `A LinkedIn profile, read directly off the page (verbatim - trust it over any guess).
 
