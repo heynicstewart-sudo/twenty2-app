@@ -5100,6 +5100,250 @@ async function buildWeeklyReport() {
   }
 }
 
+// ===================== BROWSER EXTENSION (read-only LinkedIn capture) =====================
+// The companion extension (see /extension) reads profile / conversation /
+// connections pages the operator is ALREADY viewing, or that a paced
+// background batch opens, and posts what it read here. It never sends a
+// message or a connection request on LinkedIn. Auth: a shared token
+// (EXTENSION_TOKEN env) + an optional ?client=<slug> so multi-tenant writes
+// land in the right base.
+
+function extensionAuth(req, res) {
+  if (!process.env.EXTENSION_TOKEN) { res.status(503).json({ error: 'Extension sync is off on this deployment (no EXTENSION_TOKEN set).' }); return false; }
+  const token = req.get('X-Extension-Token') || req.query.token || '';
+  if (token !== process.env.EXTENSION_TOKEN) { res.status(401).json({ error: 'Bad extension token' }); return false; }
+  return true;
+}
+async function extensionTenant(req) {
+  const slug = (req.query.client || '').trim();
+  if (!slug) return currentTenant();
+  const clients = await getClients();
+  return clients.find(c => c.slug === slug && c.status !== 'Paused') || currentTenant();
+}
+function normLinkedInUrl(u) {
+  const s = extractLinkedInSlug(u || '');
+  return s ? s.toLowerCase() : null;
+}
+
+// The batch work list: contacts in a live campaign at a draft-imminent stage
+// (Connected, or Message 1/2 Sent with a reply in) that have a LinkedIn URL
+// and haven't been captured FROM LinkedIn in the last 30 days.
+async function extensionCaptureQueue() {
+  const [contactRecords, ccRows, campaignRecords] = await Promise.all([
+    airtableFetchAllRecords('Contacts'),
+    fetchCampaignContactsRows(),
+    airtableFetchAllRecords('Campaigns')
+  ]);
+  const liveIds = new Set(campaignRecords.filter(r => (r.fields['Status'] || '') === 'Live').map(r => r.id));
+  const campNameById = {}; campaignRecords.forEach(r => { campNameById[r.id] = r.fields['Name'] || r.fields['Campaign Name'] || ''; });
+  const cById = {}; contactRecords.forEach(r => { cById[r.id] = r; });
+  const thirtyAgo = Date.now() - 30 * 864e5;
+  const seen = new Set();
+  const items = [];
+  for (const row of ccRows) {
+    const campIds = (row.fields['Campaign'] || []).filter(id => liveIds.has(id));
+    if (!campIds.length) continue;
+    const stage = collapseLegacyStage(normalizeSequenceStage(row.fields['Sequence Stage']));
+    const replied = rowReplyReceived(row);
+    if (!(stage === 'Connected' || (/^Message [12] Sent$/.test(stage) && replied))) continue;
+    const cid = (row.fields['Contact'] || [])[0];
+    if (!cid || seen.has(cid)) continue;
+    const c = cById[cid]; if (!c) continue;
+    const url = c.fields['LinkedIn URL'] || '';
+    if (!normLinkedInUrl(url)) continue;
+    const enr = parseContactEnrichment(c.fields['AI Summary']);
+    if (enr && enr.source === 'linkedin' && enr.date && new Date(enr.date).getTime() > thirtyAgo) continue;
+    seen.add(cid);
+    items.push({
+      contactId: cid, name: c.fields['Full Name'] || '', url,
+      campaign: campNameById[campIds[0]] || '',
+      needs: stage === 'Connected' ? 'message 1' : 'follow-up'
+    });
+  }
+  return items;
+}
+
+async function synthesiseProfileEnrichment(s) {
+  const exp = (s.experience || []).map(e =>
+    `- ${e.title || ''}${e.company ? ' at ' + e.company : ''}${e.dates ? ' (' + e.dates + ')' : ''}${e.description ? '\n  ' + String(e.description).replace(/\n/g, ' ') : ''}`).join('\n');
+  const prompt = `A LinkedIn profile, read directly off the page (verbatim - trust it over any guess).
+
+Name: ${s.name || ''}
+Headline: ${s.headline || ''}
+Location: ${s.location || ''}
+
+ABOUT:
+${s.about || '(none on profile)'}
+
+EXPERIENCE:
+${exp || '(none on profile)'}
+${s.recentPosts ? `\nRECENT POSTS:\n${s.recentPosts}\n` : ''}
+Return ONLY valid JSON in exactly this shape:
+{ "currentTitle": string, "company": string, "workHistory": string, "education": string, "location": string, "bio": string, "recentActivity": string, "likelyPainPoints": string, "bestOutreachAngle": string }
+"bio" = 2-3 sentences distilled from the About. "workHistory" = the prior roles from Experience in one short paragraph. "likelyPainPoints" and "bestOutreachAngle" = your read for a Perth Agile and change consultancy doing cold outreach, grounded in what's actually on the profile. If a field genuinely isn't in the data, write "Not in profile" rather than inventing it.`;
+  const p = await callClaudeJson(prompt, 1100);
+  p.date = new Date().toISOString().slice(0, 10);
+  p.source = 'linkedin';
+  return p;
+}
+
+// No-auth: just says whether the deployment has EXTENSION_TOKEN set, so the
+// Agency tab can show "capture is on / not set up yet".
+app.get('/api/extension/config-check', (req, res) => {
+  res.json({ enabled: !!process.env.EXTENSION_TOKEN });
+});
+
+app.get('/api/extension/ping', async (req, res) => {
+  if (!extensionAuth(req, res)) return;
+  try {
+    const tenant = await extensionTenant(req);
+    const items = await tenantALS.run(tenant, () => extensionCaptureQueue());
+    res.json({ ok: true, account: tenant.name || 'Client', queueCount: items.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/extension/capture-queue', async (req, res) => {
+  if (!extensionAuth(req, res)) return;
+  try {
+    const tenant = await extensionTenant(req);
+    const items = await tenantALS.run(tenant, () => extensionCaptureQueue());
+    res.json({ ok: true, items });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/extension/should-capture', async (req, res) => {
+  if (!extensionAuth(req, res)) return;
+  try {
+    const tenant = await extensionTenant(req);
+    const slug = normLinkedInUrl(req.query.url || '');
+    if (!slug) return res.json({ capture: false });
+    const items = await tenantALS.run(tenant, () => extensionCaptureQueue());
+    const hit = items.find(i => normLinkedInUrl(i.url) === slug);
+    res.json(hit ? { capture: true, ...hit } : { capture: false });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/extension/profile', async (req, res) => {
+  if (!extensionAuth(req, res)) return;
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  try {
+    const tenant = await extensionTenant(req);
+    const b = req.body || {};
+    const slug = normLinkedInUrl(b.url || '');
+    if (!slug) return res.status(400).json({ error: 'a profile url with /in/<slug> is required' });
+    const out = await tenantALS.run(tenant, async () => {
+      const contactRecords = await airtableFetchAllRecords('Contacts');
+      const match = contactRecords.find(r => normLinkedInUrl(r.fields['LinkedIn URL']) === slug)
+        || (b.name ? contactRecords.find(r => (r.fields['Full Name'] || '').trim().toLowerCase() === String(b.name).trim().toLowerCase()) : null);
+      if (!match) return { matched: false };
+
+      const rawBlock = [
+        b.about ? `About:\n${b.about}` : '',
+        (b.experience || []).length ? `Experience:\n${(b.experience || []).map(e => `${e.title || ''}${e.company ? ' — ' + e.company : ''}${e.dates ? ' (' + e.dates + ')' : ''}${e.description ? '\n' + e.description : ''}`).join('\n\n')}` : ''
+      ].filter(Boolean).join('\n\n');
+      const today = new Date().toISOString().slice(0, 10);
+
+      const enrichment = await synthesiseProfileEnrichment(b);
+      await persistContactEnrichment(match, enrichment);
+
+      const fields = {};
+      if (rawBlock) {
+        const notes = stripLinkedInNoteBlock(match.fields['Notes'] || '');
+        fields['Notes'] = `[${today}] ===== FROM LINKEDIN =====\n${rawBlock}\n===== END LINKEDIN =====${notes ? '\n\n' + notes : ''}`;
+      }
+      if (b.recentPosts && !(match.fields['Recent Posts'] || '').trim()) fields['Recent Posts'] = b.recentPosts;
+      if (Object.keys(fields).length) await airtableRequest('PATCH', 'Contacts', { records: [{ id: match.id, fields }] });
+      return { matched: true, contactId: match.id, name: match.fields['Full Name'] || '' };
+    });
+    res.json({ ok: true, ...out });
+  } catch (e) { console.error('extension/profile:', e.message); res.status(500).json({ error: e.message }); }
+});
+// Strip a prior delimited "FROM LINKEDIN" block so a re-capture replaces it
+// rather than stacking. Anything the operator wrote by hand (which sits after
+// the delimiter) is kept.
+function stripLinkedInNoteBlock(notes) {
+  return String(notes || '').replace(/^\[\d{4}-\d{2}-\d{2}\] ===== FROM LINKEDIN =====[\s\S]*?===== END LINKEDIN =====\n*/, '').trim();
+}
+
+app.post('/api/extension/conversation', async (req, res) => {
+  if (!extensionAuth(req, res)) return;
+  try {
+    const tenant = await extensionTenant(req);
+    const b = req.body || {};
+    const msgs = Array.isArray(b.messages) ? b.messages.filter(m => m && m.text) : [];
+    if (!msgs.length) return res.json({ ok: true, matched: false, reason: 'no messages read' });
+    const out = await tenantALS.run(tenant, async () => {
+      const contactRecords = await airtableFetchAllRecords('Contacts');
+      const slug = normLinkedInUrl(b.contactUrl || '');
+      const match = (slug && contactRecords.find(r => normLinkedInUrl(r.fields['LinkedIn URL']) === slug))
+        || (b.contactName ? contactRecords.find(r => (r.fields['Full Name'] || '').trim().toLowerCase() === String(b.contactName).trim().toLowerCase()) : null);
+      if (!match) return { matched: false };
+      const them = match.fields['Full Name'] || 'Them';
+      const transcript = msgs.map(m => `${m.from === 'me' ? 'Marcus' : them}${m.time ? ' (' + m.time + ')' : ''}: ${m.text}`).join('\n');
+      const today = new Date().toISOString().slice(0, 10);
+      const existing = match.fields['Conversation Context'] || '';
+      await airtableRequest('PATCH', 'Contacts', { records: [{ id: match.id, fields: { 'Conversation Context': `[${today}] Full thread (from LinkedIn):\n${transcript}${existing ? '\n\n' + existing : ''}` } }] });
+
+      const theyReplied = msgs[msgs.length - 1].from === 'them';
+      let flagged = 0;
+      if (theyReplied) {
+        const ccRows = await fetchCampaignContactsRows();
+        for (const row of ccRows) {
+          if ((row.fields['Contact'] || [])[0] !== match.id) continue;
+          if (!/^Message [123] Sent$/.test(collapseLegacyStage(normalizeSequenceStage(row.fields['Sequence Stage'])))) continue;
+          await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, { records: [{ id: row.id, fields: { 'Reply Received': true } }], typecast: true }).catch(() => {});
+          flagged++;
+        }
+      }
+      return { matched: true, contactId: match.id, name: them, replyLogged: theyReplied, rowsFlagged: flagged };
+    });
+    res.json({ ok: true, ...out });
+  } catch (e) { console.error('extension/conversation:', e.message); res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/extension/connections', async (req, res) => {
+  if (!extensionAuth(req, res)) return;
+  try {
+    const tenant = await extensionTenant(req);
+    const conns = Array.isArray(req.body && req.body.connections) ? req.body.connections : [];
+    const out = await tenantALS.run(tenant, async () => {
+      const [contactRecords, ccRows, campaignRecords] = await Promise.all([
+        airtableFetchAllRecords('Contacts'), fetchCampaignContactsRows(), airtableFetchAllRecords('Campaigns')
+      ]);
+      const liveIds = new Set(campaignRecords.filter(r => (r.fields['Status'] || '') === 'Live').map(r => r.id));
+      const bySlug = {}, byName = {};
+      contactRecords.forEach(r => {
+        const s = normLinkedInUrl(r.fields['LinkedIn URL']); if (s) bySlug[s] = r;
+        const n = (r.fields['Full Name'] || '').trim().toLowerCase(); if (n) byName[n] = r;
+      });
+      const advanced = [];
+      const today = new Date().toISOString().slice(0, 10);
+      for (const conn of conns) {
+        const c = bySlug[normLinkedInUrl(conn.url)] || byName[String(conn.name || '').trim().toLowerCase()];
+        if (!c) continue;
+        const rows = ccRows.filter(row =>
+          (row.fields['Contact'] || [])[0] === c.id &&
+          (row.fields['Campaign'] || []).some(id => liveIds.has(id)) &&
+          collapseLegacyStage(normalizeSequenceStage(row.fields['Sequence Stage'])) === 'Connection Pending');
+        for (const row of rows) {
+          await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, { records: [{ id: row.id, fields: {
+            'Sequence Stage': 'Connected',
+            'Stage History': appendStageHistory(row.fields['Stage History'], 'Connected', today)
+          } }], typecast: true }).catch(() => {});
+        }
+        if (rows.length) {
+          if (!advanced.includes(c.fields['Full Name'])) advanced.push(c.fields['Full Name']);
+          if ((c.fields['Journey Stage'] || 'Connection Pending') === 'Connection Pending') {
+            await airtableRequest('PATCH', 'Contacts', { records: [{ id: c.id, fields: { 'Journey Stage': 'Connected' } }] }).catch(() => {});
+          }
+        }
+      }
+      return { advanced };
+    });
+    res.json({ ok: true, ...out });
+  } catch (e) { console.error('extension/connections:', e.message); res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/sales/insights', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 

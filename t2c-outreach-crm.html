@@ -1599,8 +1599,26 @@ function renderAgencyPage(){
     <div id="weeklyReportStatus" class="muted" style="font-size:12px;margin-top:10px;display:none;"></div>
   </div>
 
+  <div class="card" style="margin-bottom:18px;">
+    <div class="section-title" style="margin-bottom:2px;"><i class="ti ti-brand-linkedin"></i> LinkedIn capture extension</div>
+    <div class="muted" style="font-size:12px;">A read-only browser extension that pulls each contact's real About + Experience off LinkedIn (better than the web guess), reads full reply threads, and flips accepted connections to Connected - in a paced background batch. It never sends messages or requests.</div>
+    <div id="extensionStatus" class="muted" style="font-size:12px;margin-top:8px;"></div>
+  </div>
+
   <div id="agencyOverviewGrid">${renderAgencyOverviewGrid(window.__agencyOverview)}</div>
   <div id="weeklyReportStage" style="position:fixed;left:-99999px;top:0;"></div>`;
+}
+
+async function refreshExtensionStatus(){
+  const el = document.getElementById('extensionStatus');
+  if(!el) return;
+  try {
+    const r = await fetch('/api/extension/config-check');
+    const d = await r.json();
+    el.innerHTML = d.enabled
+      ? `<i class="ti ti-circle-check" style="color:var(--success);"></i> Sync endpoint is on. Load the extension from the <code>extension/</code> folder (Chrome &rarr; Extensions &rarr; Developer mode &rarr; Load unpacked), then paste the token in its Options.`
+      : `<i class="ti ti-circle-dashed"></i> Not set up yet. Set <code>EXTENSION_TOKEN</code> to any long random string in the deployment's environment variables, then load the extension from the <code>extension/</code> folder.`;
+  } catch(e){ el.textContent = 'Could not check extension status.'; }
 }
 
 // ---- Weekly report: fetch the whole-account rundown, render a one-page
@@ -2035,6 +2053,7 @@ function ensureContextDataLoaded(){
 
 function afterRender(page){
   if(page === 'agency' && window.__agencyOverview === undefined) loadAgencyOverview();
+  if(page === 'agency') refreshExtensionStatus();
   if(page === 'campaigns' && (window.__campaignView || 'list') === 'list'){
     loadAllCampaignFunnels();
   }

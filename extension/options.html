@@ -1,0 +1,51 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root { color-scheme: light; }
+  body { max-width: 520px; margin: 30px auto; padding: 0 20px; font: 14px/1.5 -apple-system, system-ui, sans-serif; color: #1a1a2e; }
+  h1 { font-size: 18px; }
+  label { display: block; font-weight: 600; margin: 16px 0 4px; font-size: 13px; }
+  input { width: 100%; padding: 8px 10px; border: 1px solid #d5d9dd; border-radius: 7px; font: inherit; box-sizing: border-box; }
+  .muted { color: #777; font-size: 12px; margin-top: 3px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  button { margin-top: 20px; background: #2A6B7C; color: #fff; border: 0; border-radius: 7px; padding: 9px 16px; font: inherit; cursor: pointer; }
+  #saved { color: #1a7a3a; margin-left: 10px; font-size: 13px; }
+  fieldset { border: 1px solid #e3e6e9; border-radius: 8px; margin-top: 20px; }
+  legend { font-weight: 700; font-size: 13px; padding: 0 6px; }
+</style>
+</head>
+<body>
+  <h1>T2C Outreach capture — settings</h1>
+  <p class="muted">This extension only <strong>reads</strong> LinkedIn. It never sends a message or a connection request.</p>
+
+  <label>CRM URL</label>
+  <input id="apiBase" placeholder="https://t2c-app-production.up.railway.app">
+
+  <label>Extension token</label>
+  <input id="token" type="password" placeholder="paste the EXTENSION_TOKEN value">
+  <div class="muted">Must match <code>EXTENSION_TOKEN</code> set on the server.</div>
+
+  <label>Client slug (optional)</label>
+  <input id="clientSlug" placeholder="leave blank for the default client">
+  <div class="muted">Only needed if you manage more than one client base.</div>
+
+  <fieldset>
+    <legend>Pacing &amp; caps — the anti-flag guardrails</legend>
+    <div class="grid2">
+      <div><label>Min gap between profiles (sec)</label><input id="minGapSec" type="number" min="30"></div>
+      <div><label>Max gap (sec)</label><input id="maxGapSec" type="number" min="30"></div>
+      <div><label>Per-hour cap</label><input id="hourlyCap" type="number" min="1"></div>
+      <div><label>Per-day cap</label><input id="dailyCap" type="number" min="1"></div>
+      <div><label>Active hours from</label><input id="activeHoursStart" type="number" min="0" max="23"></div>
+      <div><label>Active hours to</label><input id="activeHoursEnd" type="number" min="1" max="24"></div>
+    </div>
+    <div class="muted" style="padding:0 10px 10px;">Defaults are deliberately conservative (32–65s gap, 18/hr, 45/day, 7am–9pm). Lowering them is safer, raising them is not.</div>
+  </fieldset>
+
+  <button id="save">Save</button><span id="saved"></span>
+  <script src="config.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "T2C Outreach — LinkedIn capture",
+  "version": "0.1.0",
+  "description": "Reads (never sends) LinkedIn profiles, threads and your connections list, and syncs them to the T2C Outreach CRM. Read-only, paced, capped.",
+  "permissions": ["storage", "tabs", "alarms", "scripting"],
+  "host_permissions": [
+    "https://www.linkedin.com/*",
+    "https://*.up.railway.app/*",
+    "http://localhost:3000/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "T2C Outreach capture" },
+  "options_page": "options.html",
+  "content_scripts": [
+    {
+      "matches": ["https://www.linkedin.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
