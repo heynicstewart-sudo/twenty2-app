@@ -7996,6 +7996,23 @@ function regenerateOpenMessageModalIfNeeded(cid){
 function campaignForRoadmap(){
   return state.campaigns.find(c => c.id === window.__roadmapCampaignId) || null;
 }
+
+// CTA dropdown on the meeting step: offer THIS campaign's own CTAs (set on
+// the Strategy tab, one per line), not the hard-coded CTA_OPTIONS list.
+// Falls back to CTA_OPTIONS only when the campaign can't be resolved or has
+// none set. Always keeps "Other", and preserves any value already logged
+// even if it's since been removed from the Strategy list.
+function ctaOptionsFor(c){
+  const camp = campaignForRoadmap() || activeCampaignForContact(c);
+  let opts = (camp && (camp.ctas || '').trim())
+    ? camp.ctas.split(/\r?\n/).map(s => s.trim()).filter(Boolean)
+    : CTA_OPTIONS.filter(o => o !== 'Other');
+  const set = ((c.thread && c.thread.ctaOption) || '').trim();
+  if(set && !opts.some(o => o.toLowerCase() === set.toLowerCase())) opts.push(set);
+  opts.push('Other');
+  const seen = new Set();
+  return opts.filter(o => { const k = o.toLowerCase(); return seen.has(k) ? false : seen.add(k); });
+}
 function isEmailRoadmap(){
   const c = campaignForRoadmap();
   return !!(c && c.type === 'email');
@@ -8240,7 +8257,7 @@ function renderThread(c){
     ${renderMsgStep(c,'cta', stageLabelFor('cta', email ? 'email' : 'linkedin'), `
       ${email ? '' : `<select onchange="setCta('${c.id}',this.value)" style="margin-top:8px;">
         <option value="">Select CTA...</option>
-        ${CTA_OPTIONS.map(o=>`<option value="${esc(o)}" ${t.ctaOption===o?'selected':''}>${esc(o)}</option>`).join('')}
+        ${ctaOptionsFor(c).map(o=>`<option value="${esc(o)}" ${t.ctaOption===o?'selected':''}>${esc(o)}</option>`).join('')}
       </select>`}
       <button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="event.stopPropagation();openBookingModal('${c.id}')" ${t.booked?'disabled':''}>
         <i class="ti ti-calendar-check"></i> ${t.booked ? (email ? 'Booked' : 'Meeting booked') : (email ? 'Mark as booked' : 'Mark as meeting booked')}
