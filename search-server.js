@@ -4740,6 +4740,32 @@ const RUNG = {
 };
 function messageRung(n) { return FUNNEL_LADDER.indexOf(`Message ${n} Sent`); }
 
+// Generalized variant A/B (Draft trust / variant-performance work): buckets
+// a campaign's rows by any Campaign Contacts field (Connection Arm, Message
+// Variant, ...) and reports sent/accepted/rate per distinct value actually
+// found - not just two fixed arms. The connection-note A/B card was the
+// first user of this; GET /api/campaign/:id/variant-performance reuses it
+// for any other tagged experiment.
+function computeVariantStats(campaignRows, funnelContacts, airtableFieldName) {
+  const valueByContactId = {};
+  campaignRows.forEach(r => {
+    const cid = (r.fields['Contact'] || [])[0];
+    const v = r.fields[airtableFieldName];
+    if (cid && v) valueByContactId[cid] = v;
+  });
+  const csdByContactId = {};
+  campaignRows.forEach(r => { const cid = (r.fields['Contact'] || [])[0]; if (cid && r.fields['Connection Sent Date']) csdByContactId[cid] = true; });
+  const out = {};
+  [...new Set(Object.values(valueByContactId))].forEach(v => {
+    const inGroup = funnelContacts.filter(fc => valueByContactId[fc.contactId] === v);
+    const sent = inGroup.filter(fc => csdByContactId[fc.contactId] || fc.furthestRung >= RUNG.connectionSent).length;
+    const accepted = inGroup.filter(fc => fc.furthestRung >= RUNG.connected).length;
+    out[v] = { sent, accepted, ratePct: sent ? Math.round((accepted / sent) * 100) : null };
+  });
+  return out;
+}
+const VARIANT_FIELD_MAP = { connectionArm: 'Connection Arm', messageVariant: 'Message Variant' };
+
 function ladderRung(stage) {
   return FUNNEL_LADDER.indexOf(normalizeSequenceStage(stage));
 }
@@ -5011,20 +5037,11 @@ app.get('/api/campaign/:id/scorecard', async (req, res) => {
       if (cid) (dealsByContactId[cid] = dealsByContactId[cid] || []).push({ outcome: d.fields['Outcome'] || 'Pending' });
     });
     const funnelContacts = buildFunnelContacts(ccRows, campaignId, dealsByContactId);
-    const armByContactId = {};
-    myRows.forEach(r => { const cid = (r.fields['Contact'] || [])[0]; if (cid) armByContactId[cid] = r.fields['Connection Arm'] || null; });
-    const csdByContactId = {};
-    myRows.forEach(r => { const cid = (r.fields['Contact'] || [])[0]; if (cid && r.fields['Connection Sent Date']) csdByContactId[cid] = true; });
-    const armStats = arm => {
-      const inArm = funnelContacts.filter(fc => armByContactId[fc.contactId] === arm);
-      const sent = inArm.filter(fc => csdByContactId[fc.contactId] || fc.furthestRung >= RUNG.connectionSent).length;
-      const accepted = inArm.filter(fc => fc.furthestRung >= RUNG.connected).length;
-      return { sent, accepted, ratePct: sent ? Math.round((accepted / sent) * 100) : null };
-    };
+    const armStats = computeVariantStats(myRows, funnelContacts, 'Connection Arm');
     const connectionAb = {
       mode: campaignRecord.fields['Connection Note Mode'] || 'Note',
-      note: armStats('Note'),
-      noNote: armStats('No note')
+      note: armStats['Note'] || { sent: 0, accepted: 0, ratePct: null },
+      noNote: armStats['No note'] || { sent: 0, accepted: 0, ratePct: null }
     };
 
     // ---- low-reply-rate diagnostic (video heuristic) ----
@@ -5068,6 +5085,57 @@ app.get('/api/campaign/:id/scorecard', async (req, res) => {
     });
   } catch (err) {
     console.error('Campaign scorecard error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Any tagged experiment (Connection Arm, Message Variant, ...), not just the
+// connection-note one baked into the scorecard - reuses computeVariantStats.
+app.get('/api/campaign/:id/variant-performance', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const campaignName = decodeURIComponent(req.params.id);
+  const fieldKey = req.query.field;
+  const airtableField = VARIANT_FIELD_MAP[fieldKey];
+  if (!airtableField) return res.status(400).json({ error: `field must be one of: ${Object.keys(VARIANT_FIELD_MAP).join(', ')}` });
+  try {
+    const campaignRecord = await resolveCampaignRecord(campaignName);
+    if (!campaignRecord) return res.status(404).json({ error: 'Campaign not found' });
+    const [ccRows, dealRecords] = await Promise.all([fetchCampaignContactsRows(), airtableFetchAllRecords('Deals')]);
+    const myRows = ccRows.filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id));
+    const dealsByContactId = {};
+    dealRecords.filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id)).forEach(r => {
+      const cid = (r.fields['Contact'] || [])[0];
+      if (cid) (dealsByContactId[cid] = dealsByContactId[cid] || []).push({ outcome: r.fields['Outcome'] || 'Pending' });
+    });
+    const funnelContacts = buildFunnelContacts(ccRows, campaignRecord.id, dealsByContactId);
+    const stats = computeVariantStats(myRows, funnelContacts, airtableField);
+    res.json({ field: fieldKey, stats });
+  } catch (err) {
+    console.error('Variant performance error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Draft trust (Jeanne DeWitt Grosser's "when do you stop reviewing every
+// output" metric): what share of AI drafts in this campaign went out
+// unedited. A snapshot across the campaign's current Draft Outcome values,
+// not date-ranged - that field only ever holds the most recent send per row,
+// so a per-window slice would just be noise.
+app.get('/api/campaign/:id/draft-trust', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const campaignName = decodeURIComponent(req.params.id);
+  try {
+    const campaignRecord = await resolveCampaignRecord(campaignName);
+    if (!campaignRecord) return res.status(404).json({ error: 'Campaign not found' });
+    const rows = await fetchCampaignContactsRows();
+    const myRows = rows.filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id) && r.fields['Draft Outcome']);
+    const counts = { 'Sent verbatim': 0, 'Sent edited': 0, 'Discarded': 0 };
+    myRows.forEach(r => { const o = r.fields['Draft Outcome']; if (counts[o] !== undefined) counts[o]++; });
+    const total = counts['Sent verbatim'] + counts['Sent edited'] + counts['Discarded'];
+    const verbatimRatePct = total ? Math.round((counts['Sent verbatim'] / total) * 100) : null;
+    res.json({ total, counts, verbatimRatePct });
+  } catch (err) {
+    console.error('Draft trust error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -10898,6 +10966,11 @@ app.post('/api/campaign/:id/contacts/:contactId/mark-sent', async (req, res) => 
     stageFields['Final Message Sent'] = message;
     stageFields['Original Message Draft'] = originalDraft;
     if (draftOutcome) stageFields['Draft Outcome'] = draftOutcome;
+    // Optional freeform experiment tag (generalized variant A/B - see
+    // computeVariantStats / GET .../variant-performance). Distinct from
+    // Connection Arm, which is assigned server-side for split-test campaigns;
+    // this is any other ad-hoc experiment the operator wants to track.
+    if (req.body.variantTag) stageFields['Message Variant'] = req.body.variantTag;
     // CTA judgement: prefer what the client passed straight from the generate
     // call; fall back to whatever generate-message already stamped on this
     // row at draft time (so a message drafted there and sent via the manual

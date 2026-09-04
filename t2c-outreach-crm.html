@@ -11465,6 +11465,8 @@ function openCampaignDetail(campaignId, tab){
   window.__campaignMessagePerf = null;
   window.__campaignScorecard = undefined;
   window.__campaignScorecardFor = null;
+  if(window.__draftTrust) delete window.__draftTrust[campaignId];
+  if(window.__variantPerf) delete window.__variantPerf[campaignId];
   window.__campaignInsights = null;
   window.__campaignInsightsNotGenerated = false;
   window.__campaignInsightsError = null;
@@ -11508,6 +11510,8 @@ function setCampaignDetailTab(tab){
   if(tab === 'analytics' && !window.__campaignMessagePerf) runCampaignMessagePerformance();
   if(tab === 'analytics' && window.__campaignInsights === null && !window.__campaignInsightsError) runCampaignInsights();
   if(tab === 'analytics' && window.__campaignScorecard === undefined){ const c = state.campaigns.find(x=>x.id===window.__campaignDetailId); if(c) loadCampaignScorecard(c); }
+  if(tab === 'analytics' && !(window.__draftTrust && window.__draftTrust[window.__campaignDetailId])){ const c = state.campaigns.find(x=>x.id===window.__campaignDetailId); if(c) loadDraftTrust(c); }
+  if(tab === 'analytics' && !(window.__variantPerf && window.__variantPerf[window.__campaignDetailId])){ const c = state.campaigns.find(x=>x.id===window.__campaignDetailId); if(c) loadMessageVariantPerformance(c); }
   if(tab === 'roadmap') initRoadmapDrag();
 }
 
@@ -12480,6 +12484,76 @@ async function runCampaignMessagePerformance(){
   if(window.__campaignDetailTab === 'analytics') renderPage();
 }
 
+// ---- Draft trust + generalized variant A/B ----
+// Jeanne DeWitt Grosser's "when do you stop reviewing every output" metric -
+// what share of AI drafts in this campaign go out unedited. Free (reads
+// Draft Outcome, already logged) so it loads automatically, unlike the
+// token-costing Engine cards on this tab.
+async function loadDraftTrust(campaign){
+  window.__draftTrust = window.__draftTrust || {};
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaignRouteKey(campaign))}/draft-trust`);
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__draftTrust[campaign.id] = data;
+  } catch(err){
+    window.__draftTrust[campaign.id] = { error: err.message };
+  }
+  if(window.__campaignDetailId === campaign.id && window.__campaignDetailTab === 'analytics') renderPage();
+}
+
+function renderDraftTrustCard(campaign){
+  const data = window.__draftTrust && window.__draftTrust[campaign.id];
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title" style="margin-bottom:4px;"><i class="ti ti-shield-check"></i> Draft trust</div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Share of AI drafts sent exactly as written - the signal for when a stage needs less review, not more.</div>
+    ${!data ? '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading…</div>' :
+      data.error ? `<div class="muted">Could not load: ${esc(data.error)}</div>` :
+      !data.total ? '<div class="empty-state">No sent drafts logged yet.</div>' : `
+      <div class="mini-cards" style="grid-template-columns:repeat(3,1fr);margin-bottom:0;">
+        <div class="mini-card"><div class="num">${data.verbatimRatePct}%</div><div class="label">Sent verbatim</div></div>
+        <div class="mini-card"><div class="num">${data.counts['Sent edited']}</div><div class="label">Edited before sending</div></div>
+        <div class="mini-card"><div class="num">${data.counts['Discarded']}</div><div class="label">Discarded</div></div>
+      </div>`}
+  </div>`;
+}
+
+// Generic "Message Variant" A/B - any ad-hoc experiment tagged via mark-sent's
+// optional variantTag, grouped and compared the same way the connection-note
+// A/B card compares Note vs No note (both now run on computeVariantStats).
+async function loadMessageVariantPerformance(campaign){
+  window.__variantPerf = window.__variantPerf || {};
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaignRouteKey(campaign))}/variant-performance?field=messageVariant`);
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__variantPerf[campaign.id] = data;
+  } catch(err){
+    window.__variantPerf[campaign.id] = { error: err.message };
+  }
+  if(window.__campaignDetailId === campaign.id && window.__campaignDetailTab === 'analytics') renderPage();
+}
+
+function renderVariantPerformanceCard(campaign){
+  const data = window.__variantPerf && window.__variantPerf[campaign.id];
+  const stats = data && !data.error ? data.stats : null;
+  if(!stats || !Object.keys(stats).length) return '';
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title" style="margin-bottom:4px;"><i class="ti ti-git-branch"></i> Variant performance</div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Acceptance by whatever's tagged in Message Variant for this campaign's contacts.</div>
+    <div class="mini-cards" style="grid-template-columns:repeat(${Math.min(4,Object.keys(stats).length)},1fr);margin-bottom:0;">
+      ${Object.entries(stats).map(([label,s]) => `
+        <div class="mini-card">
+          <div class="num">${s.ratePct!==null?s.ratePct+'%':'—'}</div>
+          <div class="label">${esc(label)}</div>
+          <div class="muted" style="font-size:11px;margin-top:6px;">${s.accepted} / ${s.sent} accepted</div>
+        </div>`).join('')}
+    </div>
+  </div>`;
+}
+
 function renderCampaignMessagePerformance(){
   const data = window.__campaignMessagePerf;
   return `
@@ -12734,6 +12808,10 @@ function renderCampaignAnalyticsTab(campaign){
   </div>
 
   ${renderCampaignMessagePerformance()}
+
+  ${renderDraftTrustCard(campaign)}
+
+  ${renderVariantPerformanceCard(campaign)}
 
   ${renderAutopsyDigestCard(campaign)}
 
