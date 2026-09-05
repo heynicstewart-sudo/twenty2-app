@@ -474,7 +474,9 @@ const OPTIONAL_LATE_ADDED_FIELDS = [
   // Risk-vs-upside framing.
   'Framing Used', 'Framing Reasoning', 'Framing Mode',
   // Account-as-pipeline (redesign plan §4) — Campaigns table.
-  'Decision Maker Criteria'
+  'Decision Maker Criteria',
+  // Deep company research (Companies table).
+  'Deep Research (JSON)'
 ];
 const optionalFieldsMissing = new Set();
 function stripMissingOptionalFields(body) {
@@ -4969,6 +4971,7 @@ app.get('/api/campaign/:id/funnel', async (req, res) => {
 
 function isoDay(d) { return new Date(d).toISOString().slice(0, 10); }
 function addDaysIso(iso, n) { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
+function parseJsonSafe(raw) { if (!raw) return null; try { return JSON.parse(raw); } catch (e) { return null; } }
 function inIso(dateStr, from, to) { if (!dateStr) return false; const d = String(dateStr).slice(0, 10); return d >= from && d <= to; }
 
 // Does this Campaign Contacts row's Stage History log a transition to `stage`
@@ -9175,7 +9178,8 @@ app.get('/api/companies/profile', async (req, res) => {
         icpSizeBand: cf['ICP Size Band'] || null,
         icpMomentum: cf['ICP Momentum'] || null,
         icpWorkloadType: cf['ICP Workload Type'] || null,
-        icpScoredAt: cf['ICP Scored At'] || null
+        icpScoredAt: cf['ICP Scored At'] || null,
+        deepResearch: parseJsonSafe(cf['Deep Research (JSON)'])
       },
       relationshipFlag,
       matchingCaseStudies,
@@ -9192,25 +9196,22 @@ app.get('/api/companies/profile', async (req, res) => {
   }
 });
 
-app.post('/api/companies/enrich', async (req, res) => {
-  if (!process.env.SERPER_API_KEY) return res.status(500).json({ error: 'SERPER_API_KEY not configured' });
-  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
-  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
-  const { name } = req.body;
-  if (!name) return res.status(400).json({ error: 'name is required' });
+// Real external research (LinkedIn + news via Serper, synthesized by
+// Claude) - as opposed to scoreIcpForCompany below, which only CLASSIFIES
+// whatever's already on file and silently defaults to "Small/Flat/Other"
+// when there's nothing there. Extracted from POST /api/companies/enrich so
+// the pre-message-1 profiling gate can call the same real research, not
+// just run ICP scoring against an empty record and call it "profiled."
+async function enrichCompanyResearch(companyRecord) {
+  const name = companyRecord.fields['Company Name'];
+  const [linkedinSearch, newsSearch] = await Promise.all([
+    fetch(SERPER_URL, { method: 'POST', headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ q: `${name} site:linkedin.com/company/` }) }).then(r => r.json()),
+    fetch(SERPER_URL, { method: 'POST', headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ q: `${name} news` }) }).then(r => r.json())
+  ]);
+  const linkedinResults = (linkedinSearch.organic || []).slice(0, 5).map(r => `${r.title || ''}\n${r.snippet || ''}`).join('\n\n');
+  const newsResults = (newsSearch.organic || []).slice(0, 5).map(r => `${r.title || ''}\n${r.snippet || ''}\n${r.link || ''}`).join('\n\n');
 
-  try {
-    const companyRecord = await findRecordByFieldName('Companies', 'Company Name', name);
-    if (!companyRecord) return res.status(404).json({ error: 'Company not found' });
-
-    const [linkedinSearch, newsSearch] = await Promise.all([
-      fetch(SERPER_URL, { method: 'POST', headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ q: `${name} site:linkedin.com/company/` }) }).then(r => r.json()),
-      fetch(SERPER_URL, { method: 'POST', headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ q: `${name} news` }) }).then(r => r.json())
-    ]);
-    const linkedinResults = (linkedinSearch.organic || []).slice(0, 5).map(r => `${r.title || ''}\n${r.snippet || ''}`).join('\n\n');
-    const newsResults = (newsSearch.organic || []).slice(0, 5).map(r => `${r.title || ''}\n${r.snippet || ''}\n${r.link || ''}`).join('\n\n');
-
-    const prompt = `You are researching a company for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM, ahead of outreach.
+  const prompt = `You are researching a company for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM, ahead of outreach.
 
 Company: ${name}
 
@@ -9225,22 +9226,121 @@ Based only on the above, return ONLY valid JSON, no markdown, no commentary, in 
 
 If a field can't be determined from the results, say "Not enough public information found" rather than inventing detail.`;
 
-    const enrichment = await callClaudeJson(prompt, 1000);
-    const today = new Date().toISOString().slice(0, 10);
-    const formattedBlock = [
-      `[Enriched: ${today}]`,
-      `Industry: ${enrichment.industry || '—'}`,
-      `Estimated size: ${enrichment.estimatedSize || '—'}`,
-      `LinkedIn signal: ${enrichment.linkedinSignalSummary || '—'}`,
-      (enrichment.recentNews || []).length ? `Recent news:\n${enrichment.recentNews.map(n => `- ${n}`).join('\n')}` : '',
-      (enrichment.techStack || []).length ? `Tech stack: ${enrichment.techStack.join(', ')}` : ''
-    ].filter(Boolean).join('\n');
+  const enrichment = await callClaudeJson(prompt, 1000);
+  const today = new Date().toISOString().slice(0, 10);
+  const formattedBlock = [
+    `[Enriched: ${today}]`,
+    `Industry: ${enrichment.industry || '—'}`,
+    `Estimated size: ${enrichment.estimatedSize || '—'}`,
+    `LinkedIn signal: ${enrichment.linkedinSignalSummary || '—'}`,
+    (enrichment.recentNews || []).length ? `Recent news:\n${enrichment.recentNews.map(n => `- ${n}`).join('\n')}` : '',
+    (enrichment.techStack || []).length ? `Tech stack: ${enrichment.techStack.join(', ')}` : ''
+  ].filter(Boolean).join('\n');
 
-    const existingSummary = companyRecord.fields['AI Summary'] || '';
-    const newSummary = existingSummary ? formattedBlock + '\n\n' + existingSummary : formattedBlock;
-    await airtableRequest('PATCH', 'Companies', { records: [{ id: companyRecord.id, fields: { 'AI Summary': newSummary } }] });
+  const existingSummary = companyRecord.fields['AI Summary'] || '';
+  const newSummary = existingSummary ? formattedBlock + '\n\n' + existingSummary : formattedBlock;
+  await airtableRequest('PATCH', 'Companies', { records: [{ id: companyRecord.id, fields: { 'AI Summary': newSummary } }] });
+  companyRecord.fields['AI Summary'] = newSummary; // keep the in-memory record current for callers using it right after (the profiling gate)
 
-    res.json(Object.assign({ success: true, enrichedDate: today }, enrichment));
+  return Object.assign({ success: true, enrichedDate: today }, enrichment);
+}
+
+// ---- Deep company research ----
+// The Jeanne DeWitt Grosser "set an agent loose to research the account"
+// idea, taken further than enrichCompanyResearch's single LinkedIn+news
+// pass: five parallel, purpose-built searches (funding, headcount,
+// leadership, competitors, news) each with their own targeted query,
+// synthesized into one structured profile rather than a flat paragraph.
+// Same SERPER_API_KEY/ANTHROPIC_API_KEY this app already has - no new
+// integration, just more thorough querying. Stored on its own field
+// (Deep Research JSON) so the Profile page can render it as real
+// sections, distinct from the shorter AI Summary enrichment above.
+const DEEP_RESEARCH_QUERIES = [
+  { key: 'overview', q: name => `${name} company overview site:linkedin.com/company/` },
+  { key: 'funding', q: name => `${name} funding OR investment OR "series" OR acquisition OR IPO` },
+  { key: 'headcount', q: name => `${name} employees OR headcount OR "company size"` },
+  { key: 'leadership', q: name => `${name} leadership team OR CEO OR "chief executive" OR executives` },
+  { key: 'competitors', q: name => `${name} competitors OR "vs" OR alternatives` },
+  { key: 'news', q: name => `${name} news 2025 OR 2026` }
+];
+
+async function deepResearchCompany(companyRecord) {
+  const name = companyRecord.fields['Company Name'];
+  const searches = await Promise.all(DEEP_RESEARCH_QUERIES.map(({ key, q }) =>
+    fetch(SERPER_URL, { method: 'POST', headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ q: q(name) }) })
+      .then(r => r.json())
+      .then(json => ({ key, results: (json.organic || []).slice(0, 5).map(r => `${r.title || ''}\n${r.snippet || ''}${r.link ? `\n${r.link}` : ''}`).join('\n\n') }))
+      .catch(() => ({ key, results: '' }))
+  ));
+  const byKey = {}; searches.forEach(s => { byKey[s.key] = s.results; });
+
+  const prompt = `You are doing deep pre-outreach research on one company for T2C Outreach, Twenty2 Collective's outreach CRM - the goal is to know exactly who this company is and what they're dealing with BEFORE any message gets sent to them, not a generic pitch.
+
+Company: ${name}
+
+General overview search results:
+${byKey.overview || 'No results found.'}
+
+Funding/investment search results:
+${byKey.funding || 'No results found.'}
+
+Headcount/company size search results:
+${byKey.headcount || 'No results found.'}
+
+Leadership team search results:
+${byKey.leadership || 'No results found.'}
+
+Competitors search results:
+${byKey.competitors || 'No results found.'}
+
+Recent news search results:
+${byKey.news || 'No results found.'}
+
+Based ONLY on the above, return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{
+  "headcountEstimate": string,
+  "fundingStatus": string,
+  "leadershipTeam": string[],
+  "recentNews": string[],
+  "competitors": string[],
+  "growthSignals": string,
+  "challenges": string
+}
+
+For each field, say "Not enough public information found" rather than inventing detail. "growthSignals" should note anything suggesting momentum (hiring, funding, expansion, leadership change) or its absence. "challenges" is your best inference of what this company might actually be dealing with right now, grounded only in what's above - useful for finding a genuine value angle, not a sales pitch.`;
+
+  const research = await callClaudeJson(prompt, 1500);
+  const today = new Date().toISOString().slice(0, 10);
+  const result = { researchedAt: today, ...research };
+  await airtableWriteAllowingMissingCtaFields('PATCH', 'Companies', { records: [{ id: companyRecord.id, fields: { 'Deep Research (JSON)': JSON.stringify(result) } }] });
+  return result;
+}
+
+app.post('/api/companies/:name/deep-research', async (req, res) => {
+  if (!process.env.SERPER_API_KEY) return res.status(500).json({ error: 'SERPER_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const companyRecord = await findRecordByFieldName('Companies', 'Company Name', decodeURIComponent(req.params.name));
+    if (!companyRecord) return res.status(404).json({ error: 'Company not found' });
+    res.json({ success: true, ...await deepResearchCompany(companyRecord) });
+  } catch (err) {
+    console.error('Deep research error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/companies/enrich', async (req, res) => {
+  if (!process.env.SERPER_API_KEY) return res.status(500).json({ error: 'SERPER_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { name } = req.body;
+  if (!name) return res.status(400).json({ error: 'name is required' });
+
+  try {
+    const companyRecord = await findRecordByFieldName('Companies', 'Company Name', name);
+    if (!companyRecord) return res.status(404).json({ error: 'Company not found' });
+    res.json(await enrichCompanyResearch(companyRecord));
   } catch (err) {
     console.error('Company enrich error:', err.message);
     res.status(500).json({ error: err.message });
@@ -9276,19 +9376,21 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 }
 
 // "Profile before you speak" (Jeanne DeWitt Grosser: research every account
-// before outreach, so every touch is grounded, not spray-and-pray). True if
-// there's already SOMETHING beyond a bare name/title to draft message 1
-// from - a real enrichment block, a decent AI Summary, or a scored/described
-// company. False means the pre-send profiling gate in generate-message
-// should try to fix that first.
+// before outreach, so every touch is grounded, not spray-and-pray) - and
+// specifically, research the WHOLE COMPANY, not just whoever happens to be
+// the first contact reached there. Requires real content at BOTH levels,
+// not either/or: a thin contact note next to a real company profile no
+// longer passes, and vice versa. Previously `ICP Scored At` alone counted
+// as "profiled" - but scoreIcpForCompany silently defaults to
+// Small/Flat/Other when it has nothing to read, so a company with zero
+// real research could pass this gate. Now requires actual narrative
+// content on the company, not just a classification timestamp.
 function hasSufficientProfile(contactRecord, companyRecord) {
   const cf = (contactRecord && contactRecord.fields) || {};
-  if (parseContactEnrichment(cf['AI Summary'])) return true;
-  if (stripContactEnrichmentBlock(cf['AI Summary']).trim().length > 40) return true;
+  const hasContactProfile = !!parseContactEnrichment(cf['AI Summary']) || stripContactEnrichmentBlock(cf['AI Summary']).trim().length > 40;
   const cof = (companyRecord && companyRecord.fields) || {};
-  if (cof['ICP Scored At']) return true;
-  if ((cof['Company Overview (AI)'] || cof['AI Summary'] || '').trim().length > 40) return true;
-  return false;
+  const hasCompanyProfile = (cof['Company Overview (AI)'] || cof['AI Summary'] || '').trim().length > 60;
+  return hasContactProfile && hasCompanyProfile;
 }
 
 // Twenty2's own existing-relationship flag on a Companies record - written
@@ -11070,6 +11172,57 @@ async function angleLibraryNote(campaignRecord, contactRecord) {
   return `\n\nPreferred angle for this profile (${cf['ICP Size Band'] || '?'} / ${cf['ICP Momentum'] || '?'} / ${cf['ICP Workload Type'] || '?'}): ${entry.angle}\nUse this as the primary hook unless the conversation has clearly moved past it - don't paste it verbatim, weave it in naturally.`;
 }
 
+// Scoped Contacts fetch (filterByFormula on the linked Company field) rather
+// than a full-table pull - this runs on every single draft, so it has to
+// stay cheap even on a base with thousands of contacts.
+async function fetchContactsForCompany(companyId) {
+  if (!companyId) return [];
+  try {
+    const formula = `FIND("${companyId}", ARRAYJOIN({Company}))`;
+    return await airtableFetchAllPaginated('Contacts', `filterByFormula=${encodeURIComponent(formula)}`);
+  } catch (err) {
+    console.warn('fetchContactsForCompany failed (non-fatal):', err.message);
+    return [];
+  }
+}
+
+// This is the fix for "the Monday data doesn't actually live in the app" -
+// previously matchCaseStudiesForCompany only fed the company drawer (a human
+// has to go look). Feeding it here means the ENGINE leans on it too: a
+// relevant past case study becomes a natural proof point, and knowing other
+// contacts at the same account are already in play keeps the message
+// consistent with a genuine multi-threaded relationship instead of a
+// generic one-off pitch. Deliberately excludes twenty2RelationshipFlag - that
+// carries compliance-sensitive do-not-contact language (see
+// twenty2RelationshipFlag's own comment) that must stay human-reviewed-only,
+// never handed to a model that might paraphrase it into a live draft.
+async function accountEnrichmentPromptNote(contactRecord, campaignContactsRows) {
+  const companyId = (contactRecord.fields['Company'] || [])[0];
+  if (!companyId) return '';
+  let company;
+  try { company = await airtableGetRecord('Companies', companyId); } catch (e) { return ''; }
+  if (!company) return '';
+
+  const [caseStudies, companyContacts] = await Promise.all([
+    matchCaseStudiesForCompany(company),
+    fetchContactsForCompany(companyId)
+  ]);
+
+  const caseStudyNote = caseStudies.length
+    ? `\nTwenty2's own relevant past work in this sector (use as a natural proof point ONLY if it genuinely fits the conversation - don't force it in, don't paste it verbatim): ${caseStudies[0].client} (${caseStudies[0].sector}, ${caseStudies[0].year}) - ${caseStudies[0].outcome}`
+    : '';
+
+  const reachedElsewhere = companyContacts
+    .filter(c => c.id !== contactRecord.id)
+    .filter(c => campaignContactsRows.some(r => (r.fields['Contact'] || [])[0] === c.id))
+    .map(c => (c.fields['Full Name'] || '') + (c.fields['Job Title'] ? ` (${c.fields['Job Title']})` : ''));
+  const coverageNote = reachedElsewhere.length
+    ? `\nAccount context: Twenty2 is also in touch with ${reachedElsewhere.length} other contact${reachedElsewhere.length === 1 ? '' : 's'} at this same company. This is a multi-threaded account, not a single cold contact - keep this message consistent with building a genuine account-wide relationship, but do NOT explicitly name or reference these other contacts to this person.`
+    : '';
+
+  return `${caseStudyNote}${coverageNote}`;
+}
+
 // Single source of truth for what an in-campaign outreach draft (message 1, 2
 // or the CTA) is told - used by BOTH the Today's Actions fast-action card
 // (POST /api/campaign/:id/contacts/:contactId/generate-message) and the
@@ -11154,7 +11307,7 @@ Campaign: "${resolvedName}". Goal: ${camp['Goal'] || 'not recorded'}. Product: $
 ${template ? `\nTemplate for this stage:\n${template}\n` : ''}
 Contact: ${cf['Full Name'] || 'Unknown'}, ${cf['Job Title'] || ''}. Profile notes: ${cf['Notes'] || 'none'}. AI summary: ${aiSummaryNarrative || 'none yet'}. Conversation so far: ${cf['Conversation Context'] || 'none yet - this is the first message'}.
 Recent posts (last 30 days only): ${recentPosts}${enrichmentNote}${imageNote ? '\n' + imageNote : ''}
-${offerNote}${await angleLibraryNote(campaignRecord, contactRecord)}
+${offerNote}${await angleLibraryNote(campaignRecord, contactRecord)}${await accountEnrichmentPromptNote(contactRecord, rows)}
 
 ${ctaStrategyNoteText(stageKey, messageNumber, ctaMessage)}${ctaOptionsPromptText(ctaOptions)}
 
@@ -11218,7 +11371,7 @@ async function buildCampaignReplyPrompt({ campaignRecord, contactRecord, steer }
 Campaign: "${resolvedName}". Goal: ${camp['Goal'] || 'not recorded'}. Product: ${camp['Product'] || 'not recorded'}. Target ICP: ${camp['Target ICP'] || 'not recorded'}. Strategy notes: ${camp['Strategy Notes'] || 'none recorded'}.
 
 Contact: ${cf['Full Name'] || 'Unknown'}, ${cf['Job Title'] || ''}. Profile notes: ${cf['Notes'] || 'none'}. AI summary: ${aiSummaryNarrative || 'none yet'}.${enrichmentNote}
-${offerNote}${await angleLibraryNote(campaignRecord, contactRecord)}
+${offerNote}${await angleLibraryNote(campaignRecord, contactRecord)}${await accountEnrichmentPromptNote(contactRecord, rows)}
 
 Full conversation so far (most recent entry first if dated; "Marcus:" is you, the other name is them):
 ${cf['Conversation Context'] || '(no thread captured - treat their most recent message as a short positive reply and move things forward)'}
@@ -11525,6 +11678,23 @@ app.post('/api/campaign/:id/contacts/:contactId/generate-message', async (req, r
             profiled = true;
           } catch (err) {
             console.warn('Pre-send contact profiling failed (non-fatal):', err.message);
+          }
+        }
+        // Real company research, not just classification - scoreIcpForCompany
+        // alone would silently default to Small/Flat/Other on an empty
+        // record and count as "profiled." Only run the (slower, external-
+        // search) research pass when the company genuinely has nothing on
+        // file yet, then score ICP against the result either way.
+        if (companyRecord && process.env.SERPER_API_KEY) {
+          const cof = companyRecord.fields || {};
+          const hasCompanyNarrative = (cof['Company Overview (AI)'] || cof['AI Summary'] || '').trim().length > 60;
+          if (!hasCompanyNarrative) {
+            try {
+              await enrichCompanyResearch(companyRecord);
+              profiled = true;
+            } catch (err) {
+              console.warn('Pre-send company research failed (non-fatal):', err.message);
+            }
           }
         }
         if (companyRecord && !companyRecord.fields['ICP Scored At']) {

@@ -10336,6 +10336,7 @@ function renderCompanyDrawerContent(data){
       <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
         ${c.linkedinUrl ? `<a href="${esc(c.linkedinUrl)}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm"><i class="ti ti-brand-linkedin"></i></a>` : ''}
         <button class="btn btn-secondary btn-sm" id="enrichCompanyBtn" onclick="enrichCompanyDrawer()"><i class="ti ti-sparkles"></i> Enrich</button>
+        <button class="btn btn-secondary btn-sm" id="deepResearchBtn" onclick="runDeepResearch()"><i class="ti ti-telescope"></i> Deep research</button>
         <button class="btn btn-secondary btn-sm" onclick="closeDrawer();navigate('profile');selectProfileCompany('${esc(c.name)}')"><i class="ti ti-hierarchy-2"></i> View account board</button>
       </div>
     </div>
@@ -10343,6 +10344,10 @@ function renderCompanyDrawerContent(data){
 
   <div class="drawer-section" id="companyEnrichmentSection">
     ${renderCompanyEnrichmentSection(c)}
+  </div>
+
+  <div class="drawer-section" id="deepResearchSection">
+    ${renderDeepResearchSection(c.deepResearch)}
   </div>
 
   ${renderRelationshipFlagSection(data.relationshipFlag)}
@@ -10404,6 +10409,48 @@ async function enrichCompanyDrawer(){
   } finally {
     if(btn){ btn.disabled = false; btn.innerHTML = original; }
   }
+}
+
+// Deep research (Jeanne DeWitt Grosser "set an agent loose on the account"):
+// 5 parallel targeted searches (funding, headcount, leadership, competitors,
+// news) synthesized into a structured profile - much deeper than the plain
+// Enrich button above, and rendered as real sections rather than a
+// paragraph, so a rep can actually scan it before message 1.
+async function runDeepResearch(){
+  const btn = document.getElementById('deepResearchBtn');
+  const original = btn ? btn.innerHTML : '';
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Researching…'; }
+  try {
+    const res = await fetch(`/api/companies/${encodeURIComponent(window.__drawerCompanyName)}/deep-research`, { method:'POST' });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Deep research failed');
+    const section = document.getElementById('deepResearchSection');
+    if(section) section.innerHTML = renderDeepResearchSection(data);
+    if(window.__drawerCompanyProfile) window.__drawerCompanyProfile.company.deepResearch = data;
+    toast('Deep research complete', 'success');
+  } catch(err){
+    toast('Could not run deep research: ' + err.message, 'warn');
+  } finally {
+    if(btn){ btn.disabled = false; btn.innerHTML = original; }
+  }
+}
+
+function renderDeepResearchSection(dr){
+  if(!dr) return `
+    <div class="section-title" style="font-size:13px;"><i class="ti ti-telescope"></i> Deep research</div>
+    <div class="muted" style="font-size:12px;">Not run yet - funding, headcount, leadership, competitors and recent news in one pass, before message 1 goes out.</div>`;
+  const list = (label, arr) => (arr && arr.length) ? `<div style="margin-top:6px;"><strong style="font-size:11.5px;">${esc(label)}:</strong><ul style="margin:4px 0 0 16px;padding:0;font-size:12px;">${arr.map(x=>`<li>${esc(x)}</li>`).join('')}</ul></div>` : '';
+  return `
+    <div class="section-title" style="font-size:13px;"><i class="ti ti-telescope"></i> Deep research</div>
+    <div class="muted" style="font-size:11px;margin-bottom:6px;">Researched ${fmtDate(dr.researchedAt)}. Press Deep research to refresh.</div>
+    <div style="font-size:12px;"><strong>Headcount:</strong> ${esc(dr.headcountEstimate||'—')}</div>
+    <div style="font-size:12px;margin-top:6px;"><strong>Funding:</strong> ${esc(dr.fundingStatus||'—')}</div>
+    <div style="font-size:12px;margin-top:6px;"><strong>Growth signals:</strong> ${esc(dr.growthSignals||'—')}</div>
+    <div style="font-size:12px;margin-top:6px;"><strong>Likely challenges:</strong> ${esc(dr.challenges||'—')}</div>
+    ${list('Leadership team', dr.leadershipTeam)}
+    ${list('Recent news', dr.recentNews)}
+    ${list('Competitors', dr.competitors)}
+  `;
 }
 
 async function saveCompanyDrawerNote(){
