@@ -642,6 +642,18 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .faq-item h5{font-size:13px;font-weight:800;margin-bottom:4px;}
 .faq-item p{font-size:12.5px;color:var(--muted);line-height:1.6;}
 
+/* GTM Motion page */
+.gtm-stages{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:20px;}
+.gtm-stage{flex:1;min-width:190px;border:1px solid var(--border);border-radius:var(--radius-card);background:var(--surface);padding:18px 16px;}
+.gtm-stage-num{width:28px;height:28px;border-radius:50%;background:var(--accent);color:var(--accent-ink);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12.5px;margin-bottom:10px;}
+.gtm-stage-icon{font-size:19px;color:var(--accent);margin-bottom:8px;display:block;}
+.gtm-stage h4{font-size:13.5px;font-weight:800;margin-bottom:6px;}
+.gtm-stage p{font-size:12px;color:var(--muted);line-height:1.55;margin-bottom:10px;}
+.gtm-stage .gtm-tag{font-size:10px;font-weight:700;color:var(--accent-strong);background:var(--accent-dim);padding:3px 8px;border-radius:20px;display:inline-block;line-height:1.5;}
+.gtm-loop-card{border:1px solid var(--border);border-radius:var(--radius-card);background:var(--surface);padding:20px;text-align:center;}
+.gtm-loop-card svg{max-width:420px;width:100%;height:auto;}
+.gtm-loop-caption{font-size:12px;color:var(--muted);margin-top:8px;max-width:460px;margin-left:auto;margin-right:auto;line-height:1.6;}
+
 /* Context menu */
 .ctx-menu{position:fixed;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card);box-shadow:var(--shadow-lg);z-index:300;overflow:hidden;min-width:180px;}
 .ctx-item{padding:10px 14px;font-size:12.5px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:8px;}
@@ -1521,6 +1533,7 @@ const NAV = [
   { id:'content', label:'Funnel', icon:'ti-news' },
   { id:'campaigns', label:'Campaigns', icon:'ti-rocket' },
   { id:'profile', label:'Profile', icon:'ti-hierarchy-2' },
+  { id:'gtmmotion', label:'GTM Motion', icon:'ti-topology-star-3', hidden:true },
   { id:'replies', label:'Replies', icon:'ti-message-reply', hidden:true },
   { id:'logger', label:'Logger', icon:'ti-clipboard-text', hidden:true },
   { id:'calendar', label:'Sales', icon:'ti-calendar', hidden:true },
@@ -2309,7 +2322,7 @@ function renderPage(){
 
   // 'research' deleted outright (redesign plan §1) - renderResearch() is
   // left defined (harmless dead code) but no longer reachable via dispatch.
-  const renderers = { home: renderHome, companyuniverse: renderCompanyUniverse, profile: renderProfilePage, replies: renderReplies, logger: renderLoggerPage, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, contentcalendar: renderContentCalendarPage, settings: renderSettings, agency: renderAgencyPage };
+  const renderers = { home: renderHome, companyuniverse: renderCompanyUniverse, profile: renderProfilePage, gtmmotion: renderGtmMotionPage, replies: renderReplies, logger: renderLoggerPage, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, contentcalendar: renderContentCalendarPage, settings: renderSettings, agency: renderAgencyPage };
   el.innerHTML = renderers[state.currentPage]();
   afterRender(state.currentPage);
 
@@ -6177,6 +6190,83 @@ function renderHowItWorks(){
     </div>
   </div>
   `;
+}
+
+/* ===================== GTM MOTION (Jeanne vision pivot §1) ===================== */
+// A static visual explaining Twenty2's own go-to-market motion - not a
+// funnel with a start and end, but a loop the Engine drives every cycle,
+// getting sharper each time it turns. Each stage below names the real,
+// already-shipped feature that powers it (see project_gtm_engineer_nuggets
+// and project_profile_gate_and_remaining_gaps memory) - this page is a
+// story over existing capability, not new functionality.
+
+const GTM_STAGES = [
+  { icon:'ti-target-arrow', title:'Profile the account', body:'Score every company on size, momentum and workload before anyone drafts a word - and check whether Twenty2 already has a relationship there.', tag:'ICP segmentation · Angle Library · relationship flag' },
+  { icon:'ti-route-2', title:'Sequence with judgment', body:'The Engine decides cadence, when to bring a CTA forward, and whether to frame the message as risk or upside - per contact, not a fixed script.', tag:'Early-CTA judgment · risk/upside framing' },
+  { icon:'ti-message-2-heart', title:'Engage as a person', body:'Humanized drafts, a collaborative "map the gap" session instead of a pitch, and call prep grounded in the real thread.', tag:'Reply queue · map the gap · call prep' },
+  { icon:'ti-trophy', title:'Close and deepen', body:'See the whole account’s status, not one contact’s - who’s reached, who’s engaged, who’s booked - and track it through to a closed deal.', tag:'Account-as-pipeline · scorecard' },
+  { icon:'ti-refresh', title:'Learn, never go cold', body:'Every stall gets diagnosed into a style correction. Every cold contact with a fresh signal gets a reason to re-engage. Both feed back into stage 1.', tag:'Deal Autopsy · signal re-engagement' }
+];
+
+function renderGtmMotionPage(){
+  return `
+  <div class="howto-hero">
+    <h2>Twenty2's GTM Engine</h2>
+    <p>Not a funnel with a start and an end - a loop the Engine drives every cycle, and it gets sharper each time it turns. Five stages, each already live in this app.</p>
+  </div>
+
+  <div class="gtm-stages">
+    ${GTM_STAGES.map((s,i) => `
+      <div class="gtm-stage">
+        <div class="gtm-stage-num">${i+1}</div>
+        <i class="ti ${s.icon} gtm-stage-icon"></i>
+        <h4>${esc(s.title)}</h4>
+        <p>${esc(s.body)}</p>
+        <span class="gtm-tag">${esc(s.tag)}</span>
+      </div>
+    `).join('')}
+  </div>
+
+  <div class="gtm-loop-card">
+    <div class="section-title" style="justify-content:center;"><i class="ti ti-recycle"></i> The flywheel</div>
+    ${renderGtmFlywheelSvg()}
+    <div class="gtm-loop-caption">Every close sharpens the Angle Library. Every stall becomes a style correction. Every re-engaged signal starts the loop again - the account gets better profiled, not just re-contacted.</div>
+  </div>
+  `;
+}
+
+function renderGtmFlywheelSvg(){
+  const nodes = [
+    { x:300, y:70,  label:'1 Profile',  anchor:'middle', lx:300, ly:38  },
+    { x:481, y:201, label:'2 Sequence', anchor:'start',  lx:500, ly:190 },
+    { x:412, y:414, label:'3 Engage',   anchor:'start',  lx:430, ly:445 },
+    { x:188, y:414, label:'4 Close',    anchor:'end',    lx:170, ly:445 },
+    { x:119, y:201, label:'5 Learn',    anchor:'end',    lx:100, ly:190 }
+  ];
+  const edges = [
+    { end:[472,186], control:[418,98]  },
+    { end:[424,400], control:[491,322] },
+    { end:[205,421], control:[300,460] },
+    { end:[118,219], control:[110,322] },
+    { end:[282,74],  control:[182,98]  }
+  ];
+  const paths = nodes.map((n,i) => {
+    const e = edges[i];
+    return `<path d="M${n.x},${n.y} Q${e.control[0]},${e.control[1]} ${e.end[0]},${e.end[1]}" fill="none" stroke="var(--accent-2)" stroke-width="2.5" marker-end="url(#gtmArrow)"/>`;
+  }).join('');
+  const circles = nodes.map(n => `<circle cx="${n.x}" cy="${n.y}" r="26" fill="var(--accent)" stroke="var(--surface)" stroke-width="3"/><text x="${n.x}" y="${n.y+5}" text-anchor="middle" font-size="15" font-weight="800" fill="var(--accent-ink)">${n.label.slice(0,1)}</text>`).join('');
+  const labels = nodes.map(n => `<text x="${n.lx}" y="${n.ly}" text-anchor="${n.anchor}" font-size="13" font-weight="700" fill="var(--text)">${n.label.slice(2)}</text>`).join('');
+  return `
+  <svg viewBox="0 0 600 500" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="gtmArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0L10,5L0,10z" fill="var(--accent-2)"/>
+      </marker>
+    </defs>
+    ${paths}
+    ${circles}
+    ${labels}
+  </svg>`;
 }
 
 /* ===================== GRID PAGE ===================== */
@@ -12677,6 +12767,9 @@ async function removeGlobalAngleLibraryEntry(idx){
 function renderCompanyUniverse(){
   window.__ctxCampaignTag = null;
   return `
+  <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+    <button class="btn btn-ghost btn-sm" onclick="navigate('gtmmotion')"><i class="ti ti-topology-star-3"></i> See our GTM motion</button>
+  </div>
   <div class="card" style="margin-bottom:16px;">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-grid-dots"></i> ICP segmentation</div>
@@ -21140,6 +21233,13 @@ function renderSettings(){
   const isMultiClient = !!(session && (session.controlPlane || (session.clients && session.clients.length > 1)));
   return `
   ${isMultiClient ? renderAgencyPage() : ''}
+  <div class="settings-section card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+    <div>
+      <div class="section-title" style="margin-bottom:2px;"><i class="ti ti-topology-star-3"></i> How our GTM motion works</div>
+      <div class="muted" style="font-size:12px;">The 5-stage loop this app runs - profile, sequence, engage, close, learn.</div>
+    </div>
+    <button class="btn btn-secondary btn-sm" onclick="navigate('gtmmotion')"><i class="ti ti-arrow-right"></i> View</button>
+  </div>
   <div class="settings-section card">
     <div class="section-title"><i class="ti ti-brand-linkedin"></i> LinkedIn accounts</div>
     ${s.accounts.map((a,i) => `
