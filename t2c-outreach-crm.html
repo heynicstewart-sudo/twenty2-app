@@ -2454,8 +2454,59 @@ function renderReplyDraftArea(r){
       <button class="btn btn-primary btn-sm" onclick="replyApprove('${id}')"><i class="ti ti-check"></i> Approve &amp; copy</button>
       <button class="btn btn-secondary btn-sm" onclick="replySkip('${id}')">Skip for now</button>
       <button class="btn btn-ghost btn-sm" onclick="generateReplyArtifact('${id}')" title="Generate a short, genuinely useful observation to share instead of another ask"><i class="ti ti-gift"></i> Send an artifact instead</button>
+      <button class="btn btn-ghost btn-sm" onclick="generateMappingInvite('${id}')" title="Propose mapping their current setup together, instead of pitching an outcome"><i class="ti ti-chalkboard"></i> Propose a mapping session</button>
+      <button class="btn btn-ghost btn-sm" onclick="generateCallPrep('${id}')" title="Open discovery questions for a booked call - listen more, talk less"><i class="ti ti-phone-outgoing"></i> Prep for the call</button>
     </div>
-    <div id="replyArtifact-${id}" style="margin-top:8px;"></div>`;
+    <div id="replyArtifact-${id}" style="margin-top:8px;"></div>
+    <div id="replyMapping-${id}" style="margin-top:8px;"></div>
+    <div id="replyCallPrep-${id}" style="margin-top:8px;"></div>`;
+}
+
+async function generateMappingInvite(id){
+  const r = (window.__repliesById || {})[id];
+  const el = document.getElementById('replyMapping-'+id);
+  if(!r || !el) return;
+  el.innerHTML = '<span class="muted" style="font-size:11.5px;"><i class="ti ti-loader-2"></i> Generating…</span>';
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(r.campaignName)}/contacts/${r.contactId}/generate-mapping-invite`, { method:'POST' });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    el.innerHTML = `
+      <div class="muted" style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;">Map the gap together - not a pitch</div>
+      <textarea id="replyMappingText-${id}" rows="3" style="width:100%;margin-bottom:6px;">${esc(data.invite)}</textarea>
+      ${data.mappingQuestions.length ? `
+        <div class="muted" style="font-size:11px;margin-bottom:2px;">To walk through together on the call:</div>
+        <ul style="padding-left:18px;font-size:12px;line-height:1.6;margin:0 0 6px;">${data.mappingQuestions.map(q=>`<li>${esc(q)}</li>`).join('')}</ul>` : ''}
+      <button class="btn btn-secondary btn-sm" onclick="copyMappingInvite('${id}')"><i class="ti ti-copy"></i> Copy invite</button>`;
+  } catch(err){
+    el.innerHTML = `<span class="muted" style="font-size:11.5px;">Could not generate: ${esc(err.message)}</span>`;
+  }
+}
+
+async function copyMappingInvite(id){
+  const ta = document.getElementById('replyMappingText-'+id);
+  if(!ta) return;
+  try { await navigator.clipboard.writeText(ta.value); toast('Copied', 'success'); }
+  catch(e){ ta.focus(); ta.select(); document.execCommand('copy'); toast('Copied', 'success'); }
+}
+
+async function generateCallPrep(id){
+  const r = (window.__repliesById || {})[id];
+  const el = document.getElementById('replyCallPrep-'+id);
+  if(!r || !el) return;
+  el.innerHTML = '<span class="muted" style="font-size:11.5px;"><i class="ti ti-loader-2"></i> Prepping…</span>';
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(r.campaignName)}/contacts/${r.contactId}/call-prep`, { method:'POST' });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    el.innerHTML = `
+      <div class="muted" style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;">Call prep - listen more, talk less</div>
+      ${data.context ? `<div style="font-size:12px;margin-bottom:6px;">${esc(data.context)}</div>` : ''}
+      <ul style="padding-left:18px;font-size:12px;line-height:1.6;margin:0 0 6px;">${data.questions.map(q=>`<li>${esc(q)}</li>`).join('')}</ul>
+      ${data.watchFor ? `<div class="muted" style="font-size:11px;"><i class="ti ti-ear"></i> ${esc(data.watchFor)}</div>` : ''}`;
+  } catch(err){
+    el.innerHTML = `<span class="muted" style="font-size:11.5px;">Could not generate: ${esc(err.message)}</span>`;
+  }
 }
 
 async function generateReplyArtifact(id){
@@ -5582,11 +5633,14 @@ async function handleGenerateFastMessage(cid){
     const framingNoteHtml = data.framingUsed
       ? `<div class="muted" style="font-size:11px;margin-bottom:8px;"><i class="ti ti-scale"></i> Framed around <strong>${esc(data.framingUsed)}</strong>${data.framingReasoning ? ' - ' + esc(data.framingReasoning) : ''}</div>`
       : '';
+    const profiledNoteHtml = data.profiled
+      ? `<div class="muted" style="font-size:11px;margin-bottom:8px;"><i class="ti ti-search"></i> Profiled this contact/company before drafting - had nothing on file to ground the first message in yet.</div>`
+      : '';
     const ruleCount = campaign ? campaignStyleRules(campaign, stageKey).length : 0;
     const stageLabel = { connect:'Connection request', m1:'Message 1', m2:'Message 2', cta:'CTA' }[stageKey] || stageKey;
     area.innerHTML = `
       <textarea id="fastActionDraft-${cid}" rows="4" style="width:100%;margin-bottom:8px;">${esc(data.message)}</textarea>
-      ${ctaNoteHtml}${framingNoteHtml}
+      ${ctaNoteHtml}${framingNoteHtml}${profiledNoteHtml}
       <div style="width:100%;margin-bottom:8px;padding:8px;border:1px dashed var(--border);border-radius:6px;">
         <div class="muted" style="font-size:11px;margin-bottom:4px;"><i class="ti ti-message-2-cog"></i> Not right? Steer it — ${esc(action.campaignName)} · ${esc(stageLabel)}${ruleCount ? ` · ${ruleCount} standing rule${ruleCount===1?'':'s'}` : ''}</div>
         <textarea id="fast-${cid}-steer" rows="2" style="width:100%;" placeholder="e.g. too long and too hedgy, 3 sentences, no 'I might be wrong' caveats"></textarea>

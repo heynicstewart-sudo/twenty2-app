@@ -9158,6 +9158,22 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 {"sizeBand": "string", "momentum": "string", "workloadType": "string"}`;
 }
 
+// "Profile before you speak" (Jeanne DeWitt Grosser: research every account
+// before outreach, so every touch is grounded, not spray-and-pray). True if
+// there's already SOMETHING beyond a bare name/title to draft message 1
+// from - a real enrichment block, a decent AI Summary, or a scored/described
+// company. False means the pre-send profiling gate in generate-message
+// should try to fix that first.
+function hasSufficientProfile(contactRecord, companyRecord) {
+  const cf = (contactRecord && contactRecord.fields) || {};
+  if (parseContactEnrichment(cf['AI Summary'])) return true;
+  if (stripContactEnrichmentBlock(cf['AI Summary']).trim().length > 40) return true;
+  const cof = (companyRecord && companyRecord.fields) || {};
+  if (cof['ICP Scored At']) return true;
+  if ((cof['Company Overview (AI)'] || cof['AI Summary'] || '').trim().length > 40) return true;
+  return false;
+}
+
 async function scoreIcpForCompany(companyRecord) {
   const parsed = await callClaudeJson(buildIcpScoringPrompt(companyRecord), 300);
   const sizeBand = ICP_SIZE_BANDS.includes(parsed.sizeBand) ? parsed.sizeBand : 'Small';
@@ -10901,6 +10917,38 @@ app.post('/api/campaign/:id/contacts/:contactId/generate-message', async (req, r
     }
 
     const camp = campaignRecord.fields || {};
+
+    // Profile-before-you-speak gate: message 1 is the highest-stakes, most
+    // spray-and-pray-prone touch, so if there's nothing on file to ground it
+    // in yet, profile the contact/company first. Best-effort - each step
+    // degrades silently without its API key, never blocks drafting.
+    let profiled = false;
+    if (messageNumber === 1 && !isEmailCampaign(campaignRecord)) {
+      const companyId = (cf['Company'] || [])[0];
+      const companyRecord = companyId ? await airtableGetRecord('Companies', companyId) : null;
+      if (!hasSufficientProfile(contactRecord, companyRecord)) {
+        if (process.env.SERPER_API_KEY && cf['LinkedIn URL']) {
+          try {
+            const companyName = companyRecord ? (companyRecord.fields['Company Name'] || '') : '';
+            const profile = await researchContactEnrichment(cf['Full Name'], companyName, cf['LinkedIn URL']);
+            await persistContactEnrichment(contactRecord, profile);
+            contactRecord.fields['AI Summary'] = `ENRICHMENT_JSON: ${JSON.stringify(profile)}\n\n${stripContactEnrichmentBlock(cf['AI Summary']).trim()}`;
+            profiled = true;
+          } catch (err) {
+            console.warn('Pre-send contact profiling failed (non-fatal):', err.message);
+          }
+        }
+        if (companyRecord && !companyRecord.fields['ICP Scored At']) {
+          try {
+            await scoreIcpForCompany(companyRecord);
+            profiled = true;
+          } catch (err) {
+            console.warn('Pre-send ICP scoring failed (non-fatal):', err.message);
+          }
+        }
+      }
+    }
+
     // Prompt assembly is shared with POST /api/messages/generate (the Write &
     // copy message modal) so the fast card and the modal produce the same draft.
     const { promptText, stageKey, styleCorrections, voice, emailMode } = await buildCampaignOutreachPrompt({
@@ -10935,7 +10983,7 @@ app.post('/api/campaign/:id/contacts/:contactId/generate-message', async (req, r
       }
     }
 
-    res.json({ success: true, message, messageNumber, stage, stageKey, ctaBroughtForward, ctaReasoning, framingUsed: envelope.framingUsed, framingReasoning: envelope.framingReasoning, steerRemembered, styleCorrections: updatedCorrections });
+    res.json({ success: true, message, messageNumber, stage, stageKey, ctaBroughtForward, ctaReasoning, framingUsed: envelope.framingUsed, framingReasoning: envelope.framingReasoning, profiled, steerRemembered, styleCorrections: updatedCorrections });
   } catch (err) {
     console.error('Generate message error:', err.message);
     res.status(500).json({ error: err.message });
@@ -11323,6 +11371,86 @@ Return ONLY the snapshot text, no preamble, no markdown, no quotation marks arou
     res.json({ success: true, artifact: stripEnEmDashes(artifact) });
   } catch (err) {
     console.error('Generate artifact error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// "Map the gap, don't pitch the outcome" - Jeanne DeWitt Grosser's Stripe
+// whiteboard session, adapted: propose jointly diagnosing the contact's
+// current setup instead of asserting a problem or selling an outcome. The
+// questions this generates double as Call Prep material once a call is
+// actually booked (see .../call-prep below).
+app.post('/api/campaign/:id/contacts/:contactId/generate-mapping-invite', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  const campaignName = decodeURIComponent(req.params.id);
+  const contactId = req.params.contactId;
+  try {
+    const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
+    if (!campaignRecord) return res.status(404).json({ error: `Campaign "${campaignName}" not found` });
+    const contactRecord = await airtableGetRecord('Contacts', contactId);
+    if (!contactRecord) return res.status(404).json({ error: 'Contact not found' });
+    const camp = campaignRecord.fields || {};
+    const cf = contactRecord.fields || {};
+
+    const prompt = `You are proposing a short collaborative working session to a LinkedIn contact for T2C Outreach, Twenty2 Collective's outreach CRM - NOT a sales pitch. The model: instead of asserting a problem or selling an outcome, offer to map their current setup together and let the gap reveal itself (the way a payments company might whiteboard a customer's architecture rather than pitch a feature).
+
+Campaign: "${camp['Name'] || camp['Campaign Name'] || ''}". Goal: ${camp['Goal'] || 'not recorded'}. Product: ${camp['Product'] || 'not recorded'}. Objection handling / strategy notes: ${camp['Strategy Notes'] || 'none recorded'}.
+Contact: ${cf['Full Name'] || 'Unknown'}, ${cf['Job Title'] || ''}. Conversation so far: ${cf['Conversation Context'] || 'none yet'}.
+
+Write:
+1. "invite": 2-3 short sentences proposing a brief (10-15 minute) joint session to map out their current setup relevant to what this campaign is about - low-pressure, explicitly not a pitch, no deck, framed as genuinely useful to them either way.
+2. "mappingQuestions": 4-6 short, open discovery questions that would guide that mapping session - about their current process/setup, not about your product. Grounded in what this campaign is actually solving, not generic.
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{"invite": "string", "mappingQuestions": ["string", ...]}`;
+
+    const parsed = await callClaudeJson(prompt, 600);
+    const invite = stripEnEmDashes((parsed.invite || '').trim());
+    const mappingQuestions = Array.isArray(parsed.mappingQuestions) ? parsed.mappingQuestions.filter(q => q && q.trim()).slice(0, 6) : [];
+    res.json({ success: true, invite, mappingQuestions });
+  } catch (err) {
+    console.error('Generate mapping invite error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Call prep - Jeanne DeWitt Grosser: "listen more, talk less, ask a question
+// about the question." Nothing in this app touches an actual sales call
+// today; this generates a short set of open discovery questions ahead of one,
+// grounded in the real thread + this campaign's objection handling, not a
+// generic checklist. Not persisted; returned for the operator's own use.
+app.post('/api/campaign/:id/contacts/:contactId/call-prep', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  const campaignName = decodeURIComponent(req.params.id);
+  const contactId = req.params.contactId;
+  try {
+    const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
+    if (!campaignRecord) return res.status(404).json({ error: `Campaign "${campaignName}" not found` });
+    const contactRecord = await airtableGetRecord('Contacts', contactId);
+    if (!contactRecord) return res.status(404).json({ error: 'Contact not found' });
+    const camp = campaignRecord.fields || {};
+    const cf = contactRecord.fields || {};
+
+    const prompt = `You are preparing a rep for an upcoming call with a LinkedIn contact for T2C Outreach, Twenty2 Collective's outreach CRM. The goal is genuine discovery, not a pitch script - the rep should be listening more than talking.
+
+Campaign: "${camp['Name'] || camp['Campaign Name'] || ''}". Goal: ${camp['Goal'] || 'not recorded'}. Product: ${camp['Product'] || 'not recorded'}. Objection handling / strategy notes: ${camp['Strategy Notes'] || 'none recorded'}.
+Contact: ${cf['Full Name'] || 'Unknown'}, ${cf['Job Title'] || ''}. Full conversation so far: ${cf['Conversation Context'] || 'none yet'}.
+
+Write:
+1. "context": one or two sentences summarising where this relationship stands and what they seem to actually care about, grounded in the conversation - not generic.
+2. "questions": 4-6 short, OPEN discovery questions to ask on the call, ordered from broad to specific - questions that surface their real situation and let them arrive at the gap themselves, not leading questions that assume the answer.
+3. "watchFor": one sentence on the single most likely objection or hesitation to listen for, based on the conversation, and how to respond to it without being defensive.
+
+Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
+{"context": "string", "questions": ["string", ...], "watchFor": "string"}`;
+
+    const parsed = await callClaudeJson(prompt, 600);
+    const questions = Array.isArray(parsed.questions) ? parsed.questions.filter(q => q && q.trim()).slice(0, 6) : [];
+    res.json({ success: true, context: (parsed.context || '').trim(), questions, watchFor: (parsed.watchFor || '').trim() });
+  } catch (err) {
+    console.error('Call prep error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
