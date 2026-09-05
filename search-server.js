@@ -476,7 +476,9 @@ const OPTIONAL_LATE_ADDED_FIELDS = [
   // Account-as-pipeline (redesign plan §4) — Campaigns table.
   'Decision Maker Criteria',
   // Deep company research (Companies table).
-  'Deep Research (JSON)'
+  'Deep Research (JSON)',
+  // Manual change-architecture whiteboard (Companies table).
+  'Change Architecture (JSON)'
 ];
 const optionalFieldsMissing = new Set();
 function stripMissingOptionalFields(body) {
@@ -9149,7 +9151,7 @@ app.get('/api/companies/profile', async (req, res) => {
 
     const deals = dealRecords
       .filter(r => (r.fields['Company'] || []).includes(companyRecord.id))
-      .map(r => ({ id: r.id, outcome: r.fields['Outcome'] || '', dealValue: r.fields['Deal Value'] || 0, date: r.fields['Date'] || '', notes: r.fields['Notes'] || '' }));
+      .map(r => ({ id: r.id, outcome: r.fields['Outcome'] || '', dealValue: r.fields['Deal Value'] || 0, date: r.fields['Date'] || '', notes: r.fields['Notes'] || '', lossReason: r.fields['Loss Reason'] || '', source: r.fields['Source'] || '' }));
 
     const contentSignals = signalRecords
       .filter(r => (r.fields['Related Companies'] || []).includes(companyRecord.id))
@@ -9326,6 +9328,46 @@ app.post('/api/companies/:name/deep-research', async (req, res) => {
     res.json({ success: true, ...await deepResearchCompany(companyRecord) });
   } catch (err) {
     console.error('Deep research error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Manual "change architecture" whiteboard ----
+// Deliberately NOT AI-generated - the user wants to design this himself,
+// live in a collaborative first meeting with the prospect (Twenty2's own
+// Stage 1 positioning: offer to map the prospect's own change architecture
+// as free value before any pitch, surfacing the risks they're exposed to
+// if they don't adapt). A free-form canvas: nodes the user places and
+// labels by hand (current state / pain point / change initiative / future
+// state / risk), connected by edges the user draws. Whole-document
+// replace on save - simplest correct model for a single-editor whiteboard,
+// no operational-transform/merge complexity needed.
+app.get('/api/companies/:name/change-architecture', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const companyRecord = await findRecordByFieldName('Companies', 'Company Name', decodeURIComponent(req.params.name));
+    if (!companyRecord) return res.status(404).json({ error: 'Company not found' });
+    const saved = parseJsonSafe(companyRecord.fields['Change Architecture (JSON)']);
+    res.json(saved || { nodes: [], edges: [] });
+  } catch (err) {
+    console.error('Change architecture load error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/companies/:name/change-architecture', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { nodes, edges } = req.body || {};
+  if (!Array.isArray(nodes) || !Array.isArray(edges)) return res.status(400).json({ error: 'nodes and edges arrays are required' });
+  try {
+    const companyRecord = await findRecordByFieldName('Companies', 'Company Name', decodeURIComponent(req.params.name));
+    if (!companyRecord) return res.status(404).json({ error: 'Company not found' });
+    await airtableWriteAllowingMissingCtaFields('PATCH', 'Companies', {
+      records: [{ id: companyRecord.id, fields: { 'Change Architecture (JSON)': JSON.stringify({ nodes, edges }) } }]
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Change architecture save error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -9748,6 +9790,82 @@ app.get('/api/companies/gtm-performance', async (req, res) => {
     res.json({ bySegment, unscoredNote: 'Only companies with an ICP score are included - run "Score ICP" on Company Universe to widen coverage.' });
   } catch (err) {
     console.error('GTM performance rollup error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===================== LOST DEALS (why deals broke down) =====================
+// The Deals table already supported Outcome=Lost, but had no structured
+// reason and was only ever written by the outreach booking flow (requires
+// a contactId) - Twenty2's own client-services deals (tracked separately in
+// Monday.com, backfilled as free-text prose into Companies.'Twenty2
+// Relationship Notes') never had anywhere structured to land. Two new Deals
+// fields (Loss Reason, Source) plus this account-level logging route - no
+// campaign/contact required, since a Monday-sourced client deal has neither
+// - give the Twenty2 team a real place to log this going forward, so the
+// data gets cleaner over time instead of staying scattered prose.
+app.post('/api/companies/:name/deals', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const companyName = decodeURIComponent(req.params.name);
+  const { outcome, dealValue, lossReason, notes, date, source } = req.body;
+  if (!outcome) return res.status(400).json({ error: 'outcome is required' });
+  try {
+    const companyRecord = await findRecordByFieldName('Companies', 'Company Name', companyName);
+    if (!companyRecord) return res.status(404).json({ error: `Company "${companyName}" not found` });
+    const fields = {
+      'Company': [companyRecord.id],
+      'Outcome': outcome,
+      'Notes': notes || '',
+      'Date': date || new Date().toISOString().slice(0, 10),
+      'Source': source || 'Monday (client pipeline)'
+    };
+    if (dealValue) fields['Deal Value'] = dealValue;
+    if (lossReason) fields['Loss Reason'] = lossReason;
+    const data = await airtableRequest('POST', 'Deals', { records: [{ fields }], typecast: true });
+    res.json({ success: true, deal: data.records[0] });
+  } catch (err) {
+    console.error('Account-level deal log error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Account-wide "why deals are lost" - every Lost Deals row on file, grouped
+// by Loss Reason, so a recurring pattern (e.g. "funding withdrawn" keeps
+// coming up with government accounts) is visible without reading every
+// company's notes by hand. Deliberately mechanical (no Engine call) -
+// same reasoning as gtm-performance above.
+app.get('/api/companies/lost-deals', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const [dealRecords, companyRecords] = await Promise.all([
+      airtableFetchAllRecords('Deals'), airtableFetchAllRecords('Companies')
+    ]);
+    const companyById = {}; companyRecords.forEach(r => { companyById[r.id] = r; });
+    const lost = dealRecords.filter(d => (d.fields['Outcome'] || '') === 'Lost').map(d => {
+      const companyId = (d.fields['Company'] || [])[0];
+      const company = companyId ? companyById[companyId] : null;
+      return {
+        id: d.id,
+        companyName: company ? (company.fields['Company Name'] || '') : '',
+        dealValue: d.fields['Deal Value'] || 0,
+        lossReason: d.fields['Loss Reason'] || 'Not yet recorded',
+        source: d.fields['Source'] || 'Outreach',
+        notes: d.fields['Notes'] || '',
+        date: d.fields['Date'] || ''
+      };
+    }).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+    const byReason = {};
+    lost.forEach(d => {
+      (byReason[d.lossReason] = byReason[d.lossReason] || { reason: d.lossReason, count: 0, totalValue: 0, deals: [] });
+      byReason[d.lossReason].count += 1;
+      byReason[d.lossReason].totalValue += d.dealValue;
+      byReason[d.lossReason].deals.push(d);
+    });
+
+    res.json({ lost, byReason: Object.values(byReason).sort((a, b) => b.count - a.count) });
+  } catch (err) {
+    console.error('Lost-deals rollup error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

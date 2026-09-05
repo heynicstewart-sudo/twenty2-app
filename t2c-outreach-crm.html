@@ -662,6 +662,7 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .pbc-icp{font-size:10.5px;color:rgba(255,255,255,.7);margin-top:4px;}
 .pbc-rel{font-size:10px;font-weight:700;color:#fff;background:rgba(255,255,255,.18);border-radius:var(--radius-pill);padding:2px 8px;margin-top:6px;display:inline-block;}
 .profile-board-node{position:absolute;width:128px;padding:8px 10px;border-radius:var(--radius-input);background:var(--surface);border:2px solid var(--border);cursor:grab;z-index:3;user-select:none;box-shadow:var(--shadow-sm);}
+.change-arch-edge-badge{width:16px;height:16px;border-radius:50%;background:var(--surface);border:1px solid var(--border);color:var(--muted);font-size:11px;line-height:14px;text-align:center;cursor:pointer;z-index:2;}
 .profile-board-node:active{cursor:grabbing;}
 .pbn-name{font-weight:700;font-size:11.5px;line-height:1.3;}
 .pbn-title{font-size:10px;line-height:1.3;margin-top:1px;}
@@ -2398,6 +2399,7 @@ function afterRender(page){
     if(window.__accountSegmentation === undefined) loadAccountSegmentation();
     if(window.__globalAngleLibrary === undefined) loadGlobalAngleLibrary();
     if(window.__gtmPerformance === undefined) loadGtmPerformance();
+    if(window.__lostDeals === undefined) loadLostDeals();
     ensureContextDataLoaded();
   }
   if(page === 'replies' && window.__repliesQueue === undefined && !window.__repliesLoading) loadRepliesQueue();
@@ -2459,9 +2461,15 @@ function afterRender(page){
   }
   if(page === 'profile' && window.__profileSelectedCompany){
     const name = window.__profileSelectedCompany;
-    window.__profileBoardData = window.__profileBoardData || {};
-    if(window.__profileBoardData[name] === undefined) loadProfileBoard(name);
-    else layoutProfileBoard();
+    if((window.__profileSubTab||'board') === 'architecture'){
+      window.__changeArch = window.__changeArch || {};
+      if(window.__changeArch[name] === undefined) loadChangeArchitecture(name);
+      else redrawChangeArchLines(name);
+    } else {
+      window.__profileBoardData = window.__profileBoardData || {};
+      if(window.__profileBoardData[name] === undefined) loadProfileBoard(name);
+      else layoutProfileBoard();
+    }
   }
 }
 
@@ -10379,8 +10387,23 @@ function renderCompanyDrawerContent(data){
   <div class="drawer-section">
     <div class="section-title" style="font-size:13px;"><i class="ti ti-history"></i> Account history</div>
     ${(data.touchPoints||[]).length ? data.touchPoints.map(tp=>`<div class="tp-item"><div style="display:flex;justify-content:space-between;"><strong>${esc(tp.contactName)}</strong><span class="muted">${fmtDate(tp.date)}</span></div><div style="margin-top:2px;">${esc((tp.notes||'').slice(0,140))}${(tp.notes||'').length>140?'…':''}</div></div>`).join('') : '<div class="muted" style="font-size:12px;">No touch points logged yet.</div>'}
-    ${(data.deals||[]).length ? `<div class="muted" style="font-size:11px;font-weight:700;margin-top:12px;margin-bottom:6px;">DEALS</div>${data.deals.map(d=>`<div class="tp-item">${esc(d.outcome)}${d.dealValue?' · $'+Number(d.dealValue).toLocaleString():''} · ${fmtDate(d.date)}</div>`).join('')}` : ''}
+    ${(data.deals||[]).length ? `<div class="muted" style="font-size:11px;font-weight:700;margin-top:12px;margin-bottom:6px;">DEALS</div>${data.deals.map(d=>`<div class="tp-item">${esc(d.outcome)}${d.dealValue?' · $'+Number(d.dealValue).toLocaleString():''}${d.date?' · '+fmtDate(d.date):''}${d.lossReason?' · <span class="tag tag-opened" style="font-size:10px;">'+esc(d.lossReason)+'</span>':''}${d.notes?'<div class="muted" style="font-size:11px;margin-top:2px;">'+esc(d.notes)+'</div>':''}</div>`).join('')}` : ''}
     ${(data.contentSignals||[]).length ? `<div class="muted" style="font-size:11px;font-weight:700;margin-top:12px;margin-bottom:6px;">CONTENT SIGNALS</div>${data.contentSignals.map(s=>`<div class="tp-item">${esc(s.theme)}</div>`).join('')}` : ''}
+  </div>
+
+  <div class="drawer-section">
+    <div class="section-title" style="font-size:13px;"><i class="ti ti-mood-sad"></i> Log account deal</div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:8px;">For a client-services deal (Twenty2's own pipeline, e.g. from Monday) rather than an outreach-generated one - no campaign/contact needed.</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
+      <select id="dealOutcome-${esc(c.name)}" style="flex:1;min-width:100px;"><option value="Won">Won</option><option value="Lost" selected>Lost</option><option value="Pending">Pending</option></select>
+      <input id="dealValue-${esc(c.name)}" type="number" placeholder="Value ($)" style="flex:1;min-width:100px;">
+    </div>
+    <select id="dealLossReason-${esc(c.name)}" style="width:100%;margin-bottom:6px;">
+      <option value="">Loss reason (if lost)</option>
+      <option>Funding withdrawn</option><option>Lost to competitor</option><option>Timing / priority</option><option>Budget too low</option><option>Went cold / no response</option><option>Other</option>
+    </select>
+    <textarea id="dealNotes-${esc(c.name)}" rows="2" placeholder="What happened, in your own words..."></textarea>
+    <button class="btn btn-secondary btn-sm" style="margin-top:8px;" onclick="logAccountDeal('${esc(c.name)}')"><i class="ti ti-plus"></i> Log deal</button>
   </div>
 
   <div class="drawer-section">
@@ -10487,6 +10510,30 @@ async function saveCompanyDrawerNote(){
     toast('Could not save note: ' + err.message, 'warn');
   } finally {
     if(btn) btn.disabled = false;
+  }
+}
+
+// Account-level deal logging - separate from the outreach booking flow's
+// "Log a deal" (which requires a contactId from a campaign roadmap card).
+// This is for Twenty2's own client-services pipeline (Monday.com), which
+// has neither a campaign nor a specific outreach contact tied to it.
+async function logAccountDeal(name){
+  const outcome = document.getElementById('dealOutcome-'+name).value;
+  const dealValue = parseFloat(document.getElementById('dealValue-'+name).value) || 0;
+  const lossReason = document.getElementById('dealLossReason-'+name).value;
+  const notes = document.getElementById('dealNotes-'+name).value.trim();
+  try {
+    const res = await fetch(`/api/companies/${encodeURIComponent(name)}/deals`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ outcome, dealValue, lossReason, notes, source: 'Monday (client pipeline)' })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Save failed');
+    toast('Deal logged', 'success');
+    window.__lostDeals = undefined; // force the Company Universe rollup to refetch next visit
+    openCompanyDrawer(name);
+  } catch(err){
+    toast('Could not log deal: ' + err.message, 'warn');
   }
 }
 
@@ -12871,6 +12918,58 @@ function renderGtmPerformanceSection(data){
   `;
 }
 
+// ---- Why deals are lost ----
+// The structured counterpart to the scattered prose in Companies.'Twenty2
+// Relationship Notes' - a real Loss Reason field on the Deals table
+// (search-server.js), so the Twenty2 team has somewhere clean to log this
+// going forward instead of burying it in free text. Seeded with the loss
+// history already recoverable from the Monday backfill notes; everything
+// after this point should get logged here directly.
+async function loadLostDeals(){
+  try {
+    const res = await fetch('/api/companies/lost-deals');
+    const json = await res.json();
+    if(!res.ok) throw new Error(json.error || 'Request failed');
+    window.__lostDeals = json;
+  } catch(err){
+    window.__lostDeals = { error: err.message };
+  }
+  if(state.currentPage === 'companyuniverse'){
+    const el = document.getElementById('lostDealsSection');
+    if(el) el.innerHTML = renderLostDealsSection(window.__lostDeals);
+  }
+}
+
+function renderLostDealsSection(data){
+  if(!data) return '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading...</div>';
+  if(data.error) return `<div class="muted">Could not load: ${esc(data.error)}</div>`;
+  if(!data.lost || !data.lost.length) return '<div class="empty-state">No lost deals logged yet - use "Log account deal" in a company\'s drawer to start building this out.</div>';
+  return `
+    <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
+      ${data.byReason.map(r => `
+        <div style="flex:1;min-width:150px;border:1px solid var(--border-light);border-radius:var(--radius-input);padding:10px 12px;">
+          <div style="font-weight:700;font-size:13px;">${r.count}</div>
+          <div class="muted" style="font-size:11px;">${esc(r.reason)}</div>
+          ${r.totalValue ? `<div class="muted" style="font-size:10.5px;margin-top:2px;">$${r.totalValue.toLocaleString()}</div>` : ''}
+        </div>
+      `).join('')}
+    </div>
+    <div style="display:flex;flex-direction:column;gap:0;">
+      ${data.lost.slice(0, 20).map(d => `
+        <div style="padding:8px 0;border-bottom:1px solid var(--border-light);cursor:pointer;" onclick="navigate('profile');selectProfileCompany('${esc(d.companyName)}')">
+          <div style="display:flex;justify-content:space-between;gap:8px;">
+            <strong style="font-size:12.5px;">${esc(d.companyName||'Unknown company')}</strong>
+            <span class="muted" style="font-size:11px;flex:none;">${d.dealValue ? '$'+d.dealValue.toLocaleString() : ''} ${d.date ? '· '+fmtDate(d.date) : ''}</span>
+          </div>
+          <div style="font-size:11.5px;margin-top:2px;"><span class="tag tag-opened" style="font-size:10px;">${esc(d.lossReason)}</span> <span class="muted" style="font-size:10.5px;">${esc(d.source)}</span></div>
+          ${d.notes ? `<div class="muted" style="font-size:11.5px;margin-top:3px;">${esc(d.notes.slice(0,160))}${d.notes.length>160?'…':''}</div>` : ''}
+        </div>
+      `).join('')}
+    </div>
+    ${data.lost.length > 20 ? `<div class="muted" style="font-size:11px;margin-top:8px;">+${data.lost.length-20} more.</div>` : ''}
+  `;
+}
+
 // ---- Account-wide Deal Autopsy ----
 // Same diagnosis logic as the per-campaign digest, just not reset by
 // campaign boundaries - the fix for "how do we learn for future
@@ -13040,6 +13139,12 @@ function renderCompanyUniverse(){
     ${renderAccountAutopsySection(window.__accountAutopsyDigest)}
   </div>
 
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title" style="margin-bottom:4px;"><i class="ti ti-mood-sad"></i> Why deals are lost</div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every Lost deal on file, structured by reason - client-services deals from Twenty2's own pipeline as well as outreach-generated ones. Log a new one from a company's drawer or Profile board.</div>
+    <div id="lostDealsSection">${renderLostDealsSection(window.__lostDeals)}</div>
+  </div>
+
   ${renderGlobalAngleLibrarySection()}
 
   <div class="card">
@@ -13075,6 +13180,7 @@ function renderProfilePage(){
   }
 
   const selectedCompany = window.__profileSelectedCompany || '';
+  const profileSubTab = window.__profileSubTab || 'board';
 
   return `
   <div class="card" style="margin-bottom:16px;">
@@ -13094,7 +13200,13 @@ function renderProfilePage(){
       </div>
     ` : ''}
   </div>
-  ${selectedCompany ? renderProfileCompanyBoard(selectedCompany, scopeCampaignId) : ''}
+  ${selectedCompany ? `
+    <div style="display:flex;gap:6px;margin-bottom:12px;">
+      <button class="btn ${profileSubTab==='board'?'btn-primary':'btn-secondary'} btn-sm" onclick="setProfileSubTab('board')"><i class="ti ti-hierarchy-2"></i> Account board</button>
+      <button class="btn ${profileSubTab==='architecture'?'btn-primary':'btn-secondary'} btn-sm" onclick="setProfileSubTab('architecture')"><i class="ti ti-affiliate"></i> Change architecture</button>
+    </div>
+    ${profileSubTab === 'architecture' ? renderChangeArchitectureCanvas(selectedCompany) : renderProfileCompanyBoard(selectedCompany, scopeCampaignId)}
+  ` : ''}
   `;
 }
 
@@ -13110,6 +13222,13 @@ function setProfileQuery(value){
 function selectProfileCompany(name){
   window.__profileSelectedCompany = name;
   window.__profileCampaignScope = '';
+  window.__profileSubTab = 'board';
+  renderPage();
+}
+
+function setProfileSubTab(tab){
+  window.__profileSubTab = tab;
+  if(tab === 'architecture') loadChangeArchitecture(window.__profileSelectedCompany);
   renderPage();
 }
 
@@ -13327,6 +13446,230 @@ function handleProfileNodeClick(e, contactName){
 function setProfileCampaignScope(campaignId){
   window.__profileCampaignScope = campaignId;
   renderPage();
+}
+
+// ---- Change architecture whiteboard ----
+// A manually-authored canvas, not AI-generated - the user draws this
+// himself, typically live in a first collaborative meeting with the
+// prospect: map their CURRENT state, the PAIN POINTS in it, the CHANGE
+// initiatives being considered, the FUTURE state, and the RISK of not
+// acting. Twenty2's own Stage 1 positioning (offer this mapping as free
+// value before any pitch). Whole-canvas autosave on every change - simple
+// and correct for a single-editor whiteboard.
+const CHANGE_ARCH_TYPES = {
+  current: { label: 'Current state', color: '#71717a' },
+  pain: { label: 'Pain point', color: '#dc2626' },
+  change: { label: 'Change initiative', color: '#2A6B7C' },
+  future: { label: 'Future state', color: '#16a34a' },
+  risk: { label: 'Risk if no action', color: '#d97706' }
+};
+const CHANGE_ARCH_TYPE_ORDER = ['current', 'pain', 'change', 'future', 'risk'];
+
+async function loadChangeArchitecture(companyName){
+  if(!companyName) return;
+  window.__changeArch = window.__changeArch || {};
+  try {
+    const res = await fetch(`/api/companies/${encodeURIComponent(companyName)}/change-architecture`);
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__changeArch[companyName] = data;
+  } catch(err){
+    window.__changeArch[companyName] = { nodes: [], edges: [], error: err.message };
+  }
+  if(window.__profileSelectedCompany === companyName && window.__profileSubTab === 'architecture') renderPage();
+}
+
+let __changeArchSaveTimer = null;
+function saveChangeArchitecture(companyName){
+  const el = document.getElementById('changeArchSaveStatus');
+  if(el) el.textContent = 'Saving…';
+  clearTimeout(__changeArchSaveTimer);
+  __changeArchSaveTimer = setTimeout(async () => {
+    const data = window.__changeArch && window.__changeArch[companyName];
+    if(!data) return;
+    try {
+      const res = await fetch(`/api/companies/${encodeURIComponent(companyName)}/change-architecture`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nodes: data.nodes, edges: data.edges })
+      });
+      const body = await res.json().catch(() => ({}));
+      if(!res.ok) throw new Error(body.error || `Request failed (${res.status})`);
+      const el2 = document.getElementById('changeArchSaveStatus');
+      if(el2) el2.textContent = 'Saved';
+    } catch(err){
+      const el2 = document.getElementById('changeArchSaveStatus');
+      if(el2) el2.textContent = 'Could not save - ' + err.message;
+    }
+  }, 700);
+}
+
+function addChangeArchNode(companyName){
+  const data = window.__changeArch && window.__changeArch[companyName];
+  if(!data) return;
+  const canvas = document.getElementById('changeArchCanvas');
+  const cw = canvas ? canvas.clientWidth : 700, ch = canvas ? canvas.clientHeight : 520;
+  const id = 'n' + Date.now() + Math.floor(Math.random()*1000);
+  data.nodes.push({ id, x: Math.max(20, cw/2 - 70 + (Math.random()*80-40)), y: Math.max(20, ch/2 - 24 + (Math.random()*80-40)), text: 'New node', type: 'current' });
+  saveChangeArchitecture(companyName);
+  renderPage();
+}
+
+function cycleChangeArchNodeType(companyName, nodeId){
+  const data = window.__changeArch && window.__changeArch[companyName];
+  const node = data && data.nodes.find(n => n.id === nodeId);
+  if(!node) return;
+  const i = CHANGE_ARCH_TYPE_ORDER.indexOf(node.type);
+  node.type = CHANGE_ARCH_TYPE_ORDER[(i+1) % CHANGE_ARCH_TYPE_ORDER.length];
+  saveChangeArchitecture(companyName);
+  renderPage();
+}
+
+function editChangeArchNodeText(companyName, nodeId, el){
+  const data = window.__changeArch && window.__changeArch[companyName];
+  const node = data && data.nodes.find(n => n.id === nodeId);
+  if(!node) return;
+  const text = (el.textContent || '').trim() || 'New node';
+  if(text !== node.text){ node.text = text; saveChangeArchitecture(companyName); }
+}
+
+function deleteChangeArchNode(companyName, nodeId){
+  const data = window.__changeArch && window.__changeArch[companyName];
+  if(!data) return;
+  data.nodes = data.nodes.filter(n => n.id !== nodeId);
+  data.edges = data.edges.filter(e => e.from !== nodeId && e.to !== nodeId);
+  saveChangeArchitecture(companyName);
+  renderPage();
+}
+
+function toggleChangeArchConnectMode(){
+  window.__changeArchConnectMode = !window.__changeArchConnectMode;
+  window.__changeArchConnectFrom = null;
+  renderPage();
+}
+
+function handleChangeArchNodeClick(companyName, nodeId){
+  if(window.__caSuppressClick){ window.__caSuppressClick = false; return; }
+  if(!window.__changeArchConnectMode) return;
+  if(!window.__changeArchConnectFrom){
+    window.__changeArchConnectFrom = nodeId;
+    renderPage();
+    return;
+  }
+  if(window.__changeArchConnectFrom === nodeId){ window.__changeArchConnectFrom = null; renderPage(); return; }
+  const data = window.__changeArch && window.__changeArch[companyName];
+  if(data){
+    const exists = data.edges.some(e => (e.from===window.__changeArchConnectFrom && e.to===nodeId) || (e.from===nodeId && e.to===window.__changeArchConnectFrom));
+    if(!exists) data.edges.push({ id: 'e'+Date.now(), from: window.__changeArchConnectFrom, to: nodeId });
+    saveChangeArchitecture(companyName);
+  }
+  window.__changeArchConnectFrom = null;
+  renderPage();
+}
+
+function deleteChangeArchEdge(companyName, edgeId){
+  const data = window.__changeArch && window.__changeArch[companyName];
+  if(!data) return;
+  data.edges = data.edges.filter(e => e.id !== edgeId);
+  saveChangeArchitecture(companyName);
+  renderPage();
+}
+
+let __caDrag = null;
+function startChangeArchNodeDrag(e, companyName, nodeId){
+  e.preventDefault();
+  e.stopPropagation();
+  const canvas = document.getElementById('changeArchCanvas');
+  const node = document.getElementById('caNode-'+nodeId);
+  if(!canvas || !node) return;
+  const canvasRect = canvas.getBoundingClientRect();
+  const nodeRect = node.getBoundingClientRect();
+  __caDrag = { companyName, nodeId, node, canvasRect, grabX: e.clientX - nodeRect.left, grabY: e.clientY - nodeRect.top, moved: false };
+  document.onmousemove = dragChangeArchNode;
+  document.onmouseup = endChangeArchNodeDrag;
+}
+function dragChangeArchNode(e){
+  const d = __caDrag;
+  if(!d) return;
+  d.moved = true;
+  const maxLeft = d.canvasRect.width - d.node.offsetWidth;
+  const maxTop = d.canvasRect.height - d.node.offsetHeight;
+  const left = Math.max(0, Math.min(maxLeft, e.clientX - d.canvasRect.left - d.grabX));
+  const top = Math.max(0, Math.min(maxTop, e.clientY - d.canvasRect.top - d.grabY));
+  d.node.style.left = left + 'px';
+  d.node.style.top = top + 'px';
+  const data = window.__changeArch && window.__changeArch[d.companyName];
+  const node = data && data.nodes.find(n => n.id === d.nodeId);
+  if(node){ node.x = left; node.y = top; }
+  redrawChangeArchLines(d.companyName);
+}
+function endChangeArchNodeDrag(e){
+  const d = __caDrag;
+  document.onmousemove = null;
+  document.onmouseup = null;
+  if(!d) return;
+  if(d.moved){ window.__caSuppressClick = true; saveChangeArchitecture(d.companyName); }
+  __caDrag = null;
+}
+
+function redrawChangeArchLines(companyName){
+  const svg = document.getElementById('changeArchLines');
+  const badges = document.getElementById('changeArchEdgeBadges');
+  const data = window.__changeArch && window.__changeArch[companyName];
+  if(!svg || !data) return;
+  const centerOf = nodeId => {
+    const el = document.getElementById('caNode-'+nodeId);
+    if(!el) return null;
+    return { x: el.offsetLeft + el.offsetWidth/2, y: el.offsetTop + el.offsetHeight/2 };
+  };
+  const lines = [];
+  const badgeEls = [];
+  data.edges.forEach(edge => {
+    const a = centerOf(edge.from), b = centerOf(edge.to);
+    if(!a || !b) return;
+    lines.push(`<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="var(--border)" stroke-width="2"/>`);
+    const mx = (a.x+b.x)/2, my = (a.y+b.y)/2;
+    badgeEls.push(`<div class="change-arch-edge-badge" style="position:absolute;left:${mx-8}px;top:${my-8}px;" onclick="deleteChangeArchEdge('${esc(companyName)}','${edge.id}')" title="Remove connection">×</div>`);
+  });
+  svg.innerHTML = lines.join('');
+  if(badges) badges.innerHTML = badgeEls.join('');
+}
+
+function renderChangeArchitectureCanvas(companyName){
+  const data = window.__changeArch && window.__changeArch[companyName];
+  if(!data) return '<div class="card"><div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading...</div></div>';
+  const connectMode = !!window.__changeArchConnectMode;
+  const connectFrom = window.__changeArchConnectFrom;
+  return `
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:4px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-affiliate"></i> Change architecture</div>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <span id="changeArchSaveStatus" class="muted" style="font-size:11px;"></span>
+        <button class="btn btn-secondary btn-sm" onclick="addChangeArchNode('${esc(companyName)}')"><i class="ti ti-plus"></i> Add node</button>
+        <button class="btn ${connectMode?'btn-primary':'btn-secondary'} btn-sm" onclick="toggleChangeArchConnectMode()"><i class="ti ti-arrows-join"></i> ${connectMode ? (connectFrom ? 'Click a node to connect…' : 'Click two nodes to connect') : 'Connect'}</button>
+      </div>
+    </div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Map this account's own change architecture by hand - current state, pain points, change initiatives, future state, risk of not acting. Built live with the prospect as free value, not generated. Click a node's coloured dot to change its type, click its text to edit, drag to arrange.</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+      ${CHANGE_ARCH_TYPE_ORDER.map(t => `<span style="font-size:10.5px;display:flex;align-items:center;gap:4px;"><span style="width:9px;height:9px;border-radius:50%;background:${CHANGE_ARCH_TYPES[t].color};display:inline-block;"></span>${esc(CHANGE_ARCH_TYPES[t].label)}</span>`).join('')}
+    </div>
+    <div id="changeArchCanvas" style="position:relative;width:100%;height:520px;border:1px solid var(--border-light);border-radius:10px;background:var(--surface-2);overflow:hidden;">
+      <svg id="changeArchLines" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;"></svg>
+      <div id="changeArchEdgeBadges" style="position:absolute;top:0;left:0;width:100%;height:100%;"></div>
+      ${!data.nodes.length ? '<div class="empty-state" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);">No nodes yet - press "Add node" to start mapping this account.</div>' : ''}
+      ${data.nodes.map(n => `
+        <div id="caNode-${n.id}" class="profile-board-node" style="position:absolute;left:${n.x}px;top:${n.y}px;width:150px;min-height:52px;cursor:${connectMode?'pointer':'grab'};border-left:4px solid ${CHANGE_ARCH_TYPES[n.type].color};${connectFrom===n.id?'outline:2px solid var(--accent-2);':''}"
+             onmousedown="${connectMode?'':`startChangeArchNodeDrag(event,'${esc(companyName)}','${n.id}')`}"
+             onclick="handleChangeArchNodeClick('${esc(companyName)}','${n.id}')">
+          <div style="display:flex;align-items:flex-start;gap:6px;padding:6px 8px;">
+            <span ${connectMode?'':`onclick="event.stopPropagation();cycleChangeArchNodeType('${esc(companyName)}','${n.id}')"`} title="${esc(CHANGE_ARCH_TYPES[n.type].label)} - click to change" style="width:10px;height:10px;border-radius:50%;background:${CHANGE_ARCH_TYPES[n.type].color};flex-shrink:0;margin-top:3px;cursor:pointer;"></span>
+            <div contenteditable="${connectMode?'false':'true'}" spellcheck="false" ${connectMode?'':'onmousedown="event.stopPropagation();" onclick="event.stopPropagation();"'} onblur="editChangeArchNodeText('${esc(companyName)}','${n.id}',this)" style="flex:1;font-size:12px;outline:none;word-break:break-word;">${esc(n.text)}</div>
+            <span ${connectMode?'':`onclick="event.stopPropagation();deleteChangeArchNode('${esc(companyName)}','${n.id}')"`} style="cursor:pointer;color:var(--muted);font-size:13px;line-height:1;" title="Delete">×</span>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  </div>`;
 }
 
 function renderAngleLibrarySection(campaign){
