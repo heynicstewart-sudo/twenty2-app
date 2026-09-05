@@ -10335,6 +10335,7 @@ function renderCompanyDrawerContent(data){
       <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
         ${c.linkedinUrl ? `<a href="${esc(c.linkedinUrl)}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm"><i class="ti ti-brand-linkedin"></i></a>` : ''}
         <button class="btn btn-secondary btn-sm" id="enrichCompanyBtn" onclick="enrichCompanyDrawer()"><i class="ti ti-sparkles"></i> Enrich</button>
+        <button class="btn btn-secondary btn-sm" onclick="closeDrawer();navigate('profile');selectProfileCompany('${esc(c.name)}')"><i class="ti ti-hierarchy-2"></i> View account board</button>
       </div>
     </div>
   </div>
@@ -12635,7 +12636,10 @@ function renderCampaignPipelineTab(campaign){
       <div class="section-title" style="color:${color};"><i class="ti ${icon}"></i> ${esc(status)} (${accounts.length})</div>
       ${accounts.map(a => `
         <div style="padding:8px 0;border-bottom:1px solid var(--border-light);">
-          <div style="font-weight:600;">${esc(a.companyName || 'Unknown company')}</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+            <div style="font-weight:600;">${esc(a.companyName || 'Unknown company')}</div>
+            ${a.companyName ? `<button class="btn btn-ghost btn-sm" style="flex:none;" onclick="navigate('profile');selectProfileCompany('${esc(a.companyName)}')"><i class="ti ti-hierarchy-2"></i> View account board</button>` : ''}
+          </div>
           ${a.matches.length ? `<div class="muted" style="font-size:12px;">${a.matches.map(m=>`${esc(m.name)} (${esc(m.jobTitle)}) — ${esc(m.stage)}`).join(', ')}</div>` : ''}
           ${a.nonMatches.length ? `<div class="muted" style="font-size:11.5px;">Reached but not a match: ${a.nonMatches.map(m=>`${esc(m.name)} (${esc(m.jobTitle||'no title on file')})`).join(', ')}</div>` : ''}
         </div>
