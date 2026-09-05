@@ -1672,6 +1672,12 @@ function renderAgencyPage(){
     <div id="extensionStatus" class="muted" style="font-size:12px;margin-top:8px;"></div>
   </div>
 
+  <div class="card" style="margin-bottom:18px;">
+    <div class="section-title" style="margin-bottom:2px;"><i class="ti ti-refresh-dot"></i> Monday.com live sync</div>
+    <div class="muted" style="font-size:12px;">Watches Monday's Deals and Twenty2 Business Pipeline boards - any change there is written to a company's Relationship record here automatically.</div>
+    <div id="mondaySyncHealth" class="muted" style="font-size:12px;margin-top:8px;"></div>
+  </div>
+
   <div id="agencyOverviewGrid">${renderAgencyOverviewGrid(window.__agencyOverview)}</div>
   <div id="weeklyReportStage" style="position:fixed;left:-99999px;top:0;"></div>`;
 }
@@ -1686,6 +1692,32 @@ async function refreshExtensionStatus(){
       ? `<i class="ti ti-circle-check" style="color:var(--success);"></i> Sync endpoint is on. Load the extension from the <code>extension/</code> folder (Chrome &rarr; Extensions &rarr; Developer mode &rarr; Load unpacked), then paste the token in its Options.`
       : `<i class="ti ti-circle-dashed"></i> Not set up yet. Set <code>EXTENSION_TOKEN</code> to any long random string in the deployment's environment variables, then load the extension from the <code>extension/</code> folder.`;
   } catch(e){ el.textContent = 'Could not check extension status.'; }
+}
+
+// A stale/revoked MONDAY_API_KEY otherwise fails inside a fire-and-forget
+// webhook handler with nothing visible anywhere - this is the whole point
+// of the Monday Sync Health field: surface it here instead.
+async function refreshMondaySyncHealth(){
+  const el = document.getElementById('mondaySyncHealth');
+  if(!el) return;
+  try {
+    const r = await fetch('/api/monday/sync-health');
+    const h = await r.json();
+    if (!h.lastSuccessAt && !h.lastErrorAt) {
+      el.innerHTML = `<i class="ti ti-circle-dashed"></i> No sync activity recorded yet - it fires the first time something changes on a watched Monday board.`;
+      return;
+    }
+    const fmt = iso => iso ? new Date(iso).toLocaleString() : null;
+    // A more-recent error than the last success means it's currently broken,
+    // even if it worked at some point in the past - that's the case an
+    // expired API key produces, and the one this indicator exists to catch.
+    const brokenNow = h.lastErrorAt && (!h.lastSuccessAt || new Date(h.lastErrorAt) > new Date(h.lastSuccessAt));
+    if (brokenNow) {
+      el.innerHTML = `<i class="ti ti-alert-triangle" style="color:var(--danger);"></i> <strong style="color:var(--danger);">Sync is failing</strong> - last error ${esc(fmt(h.lastErrorAt))}: ${esc(h.lastErrorMessage || 'unknown error')}. This usually means <code>MONDAY_API_KEY</code> on Railway has expired or been revoked - generate a fresh one from the Monday agent and update the env var.${h.lastSuccessAt ? ` (last worked ${esc(fmt(h.lastSuccessAt))})` : ''}`;
+    } else {
+      el.innerHTML = `<i class="ti ti-circle-check" style="color:var(--success);"></i> Synced OK - last update ${esc(fmt(h.lastSuccessAt))}.`;
+    }
+  } catch(e){ el.textContent = 'Could not check Monday sync status.'; }
 }
 
 // ---- Weekly report: fetch the whole-account rundown, render a one-page
@@ -2313,7 +2345,7 @@ function afterRender(page){
   // via nav (ensureAgencyNav is now a no-op).
   const isMultiClientSession = !!(window.__session && (window.__session.controlPlane || (window.__session.clients && window.__session.clients.length > 1)));
   if(page === 'settings' && isMultiClientSession && window.__agencyOverview === undefined) loadAgencyOverview();
-  if(page === 'settings' && isMultiClientSession) refreshExtensionStatus();
+  if(page === 'settings' && isMultiClientSession) { refreshExtensionStatus(); refreshMondaySyncHealth(); }
   if(page === 'campaigns' && (window.__campaignView || 'list') === 'list'){
     loadAllCampaignFunnels();
   }

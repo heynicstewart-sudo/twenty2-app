@@ -12012,6 +12012,34 @@ async function findAirtableCompanyByMondayName(rawName) {
   return companies.find(c => mondayNormalizeCompanyName(c.fields['Company Name']) === key) || null;
 }
 
+// Reads/writes Settings.Monday Sync Health (JSON: {lastSuccessAt, lastErrorAt,
+// lastErrorMessage}) so a stale/revoked MONDAY_API_KEY shows up as a visible
+// warning in Settings instead of failing silently forever.
+async function mondayRecordSyncHealth(patch) {
+  try {
+    const settingsRecord = await getOrCreateSettingsRecord();
+    let health = {};
+    try { health = JSON.parse(settingsRecord.fields['Monday Sync Health'] || '{}'); } catch (_) { health = {}; }
+    Object.assign(health, patch);
+    await airtableRequest('PATCH', SETTINGS_TABLE, {
+      records: [{ id: settingsRecord.id, fields: { 'Monday Sync Health': JSON.stringify(health) } }]
+    });
+  } catch (err) {
+    console.error('Failed to record Monday sync health (non-fatal):', err.message);
+  }
+}
+
+app.get('/api/monday/sync-health', async (req, res) => {
+  try {
+    const settingsRecord = await getSettingsRecord();
+    let health = {};
+    try { health = JSON.parse((settingsRecord && settingsRecord.fields['Monday Sync Health']) || '{}'); } catch (_) { health = {}; }
+    res.json(health);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/monday/webhook', async (req, res) => {
   // Monday's challenge-response handshake fires once, on webhook creation,
   // before any real event - must echo back verbatim with no auth check, or
@@ -12034,13 +12062,17 @@ app.post('/api/monday/webhook', async (req, res) => {
     if (!boardMeta) return;
     if (!process.env.MONDAY_API_KEY || !AIRTABLE_API_KEY) {
       console.warn('Monday webhook fired but MONDAY_API_KEY or AIRTABLE_API_KEY is not configured - skipping');
+      await mondayRecordSyncHealth({ lastErrorAt: new Date().toISOString(), lastErrorMessage: 'MONDAY_API_KEY or AIRTABLE_API_KEY not configured on Railway' });
       return;
     }
 
     const itemId = event.pulseId;
     if (!itemId) return;
     const row = await mondayFetchItem(itemId);
-    if (!row) return;
+    if (!row) {
+      await mondayRecordSyncHealth({ lastErrorAt: new Date().toISOString(), lastErrorMessage: `Could not fetch Monday item ${itemId} - MONDAY_API_KEY may be stale/revoked` });
+      return;
+    }
 
     // Pipeline board's own Client column names the account directly; Deals-
     // board item names are "Company — Deal Name" style (same em/en-dash
@@ -12050,7 +12082,7 @@ app.post('/api/monday/webhook', async (req, res) => {
       : row.name.split(' — ')[0].split(' - ')[0].split(' –')[0].trim();
 
     const companyRecord = await findAirtableCompanyByMondayName(companyNameRaw);
-    if (!companyRecord) return; // not one of this account's outreach prospects - nothing to flag
+    if (!companyRecord) { await mondayRecordSyncHealth({ lastSuccessAt: new Date().toISOString() }); return; } // not one of this account's outreach prospects - nothing to flag, but the sync itself worked
 
     const today = new Date().toISOString().slice(0, 10);
     const stage = row['Stage'] || row['Outcome'] || '';
@@ -12067,9 +12099,11 @@ app.post('/api/monday/webhook', async (req, res) => {
     if (!cf['Twenty2 Relationship Status']) patchFields['Twenty2 Relationship Status'] = 'Warm Relationship';
 
     await airtableRequest('PATCH', 'Companies', { records: [{ id: companyRecord.id, fields: patchFields }] });
+    await mondayRecordSyncHealth({ lastSuccessAt: new Date().toISOString() });
     console.log(`[Monday webhook] ${companyRecord.fields['Company Name']}: ${summaryLine}`);
   } catch (err) {
     console.error('Monday webhook processing error (non-fatal, already acked):', err.message);
+    await mondayRecordSyncHealth({ lastErrorAt: new Date().toISOString(), lastErrorMessage: err.message });
   }
 });
 
