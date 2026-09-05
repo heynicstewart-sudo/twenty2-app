@@ -1023,10 +1023,18 @@ function esc(str){ return (str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').r
 function relationshipFlagHtml(flag){
   if(!flag || !flag.status) return '';
   const isActive = flag.status === 'Active Deal In Progress';
+  // Once the Monday.com webhook is registered (see the setup comment above
+  // POST /api/monday/webhook in search-server.js), liveSyncLog carries
+  // anything detected since the 5 Sep 2026 backfill - show its most recent
+  // line or two instead of the whole history, and soften the "not live"
+  // caveat below since there's now at least some live signal on file.
+  const syncLines = (flag.liveSyncLog||'').split('\n').filter(Boolean);
+  const recentSync = syncLines.slice(-2);
   return `<div style="font-size:12px;color:var(--danger);background:var(--tint-red-bg);border:1px solid var(--danger);border-radius:6px;padding:8px 10px;margin-bottom:8px;">
     <div style="font-weight:600;margin-bottom:3px;"><i class="ti ti-alert-triangle"></i> Twenty2 already has ${isActive ? 'an ACTIVE DEAL' : 'a relationship'} with this company - ${esc(flag.status)}</div>
     ${flag.notes ? `<div style="white-space:pre-wrap;">${esc(flag.notes)}</div>` : ''}
-    <div class="muted" style="margin-top:4px;">Check with Marcus/Nic before sending - this backfill is a one-off snapshot from 5 Sep 2026, not live.</div>
+    ${recentSync.length ? `<div class="muted" style="margin-top:6px;font-size:11px;"><strong>Recent live update:</strong><br>${recentSync.map(l=>esc(l)).join('<br>')}</div>` : ''}
+    <div class="muted" style="margin-top:4px;">Check with Marcus/Nic before sending - ${recentSync.length ? 'notes above are last confirmed' : 'this backfill is a one-off snapshot from 5 Sep 2026, not live'}.</div>
   </div>`;
 }
 

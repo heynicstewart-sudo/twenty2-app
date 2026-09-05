@@ -9295,7 +9295,8 @@ function twenty2RelationshipFlag(companyRecord) {
     status,
     notes: cf['Twenty2 Relationship Notes'] || '',
     accountMap: cf['Account Map (Key Stakeholders)'] || '',
-    tier: cf['Tier'] || ''
+    tier: cf['Tier'] || '',
+    liveSyncLog: cf['Monday Live Sync Log'] || ''
   };
 }
 
@@ -11919,6 +11920,147 @@ async function postSlackNudge(text) {
     return false;
   }
 }
+
+// ===================== MONDAY.COM WEBHOOK SYNC =====================
+// Live follow-up to the one-off 5 Sep 2026 Monday.com CRM backfill (see the
+// project_monday_backfill session memory for the full story - 38+ of this
+// account's outreach prospects turned out to already have an active deal,
+// past engagement, or warm relationship with Twenty2 itself, some with
+// explicit do-not-contact constraints). That backfill is a snapshot, not
+// live - this keeps it from going stale the moment Marcus adds a deal in
+// Monday. Push-based (Monday webhooks), not polling, per this app's
+// existing no-new-cron-jobs precedent (project_ambient_ai_cost_control -
+// every other integration here, Trigify/Serper/Slack, is called live or
+// via an incoming webhook, never scheduled).
+//
+// SETUP - NOT done by this commit, needs a human with the Monday token:
+// 1. Railway env vars:
+//    - MONDAY_API_KEY: a monday.com API token (e.g. the "Nic_Claude" agent
+//      identity created during the backfill, scoped to just the boards
+//      below via Board settings > Members on each board in Monday).
+//    - MONDAY_WEBHOOK_TOKEN: any long random string you make up - a shared
+//      secret Monday echoes back in the URL on every delivery (Monday's
+//      webhooks don't support custom headers, so this rides in the query
+//      string instead).
+// 2. Once deployed with both env vars set, register the webhook with
+//    Monday's API - a one-off GraphQL call, not run automatically by this
+//    app (replace <board_id>/<deployed-url>/<token>):
+//      mutation {
+//        create_webhook(
+//          board_id: <board_id>,
+//          url: "<deployed-url>/api/monday/webhook?token=<MONDAY_WEBHOOK_TOKEN>",
+//          event: change_column_value
+//        ) { id }
+//      }
+//    Run once per board in MONDAY_WATCHED_BOARDS below with
+//    event: change_column_value, and once more per board with
+//    event: create_pulse (to also catch brand new deals, not just changes
+//    to existing ones). Four calls total for the two watched boards.
+const MONDAY_WATCHED_BOARDS = {
+  '2045166966': { kind: 'deal' },     // Deals (CRM workspace)
+  '5027918836': { kind: 'pipeline' }  // Twenty2 Business Pipeline
+};
+
+// Same normalization as the Python backfill script used (strip parens,
+// punctuation, common suffixes) - kept in sync by hand since the backfill
+// itself was a one-off scratch script, not code living in this repo.
+function mondayNormalizeCompanyName(s) {
+  if (!s) return '';
+  s = s.toLowerCase();
+  s = s.replace(/\([^)]*\)/g, '');
+  s = s.replace(/[^a-z0-9 ]/g, '');
+  s = s.replace(/\b(pty|ltd|limited|inc|australia|wa|group|corporation|the)\b/g, '');
+  s = s.replace(/\s+/g, ' ').trim();
+  return s;
+}
+
+async function mondayGraphQL(query) {
+  const res = await fetch('https://api.monday.com/v2', {
+    method: 'POST',
+    headers: { 'Authorization': process.env.MONDAY_API_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query })
+  });
+  const data = await res.json();
+  if (data.errors) throw new Error(JSON.stringify(data.errors));
+  return data.data;
+}
+
+async function mondayFetchItem(itemId) {
+  const data = await mondayGraphQL(`{ items(ids:[${itemId}]) { id name column_values { column { title } text } } }`);
+  const item = data.items && data.items[0];
+  if (!item) return null;
+  const row = { name: item.name };
+  item.column_values.forEach(cv => { row[cv.column.title] = cv.text; });
+  return row;
+}
+
+async function findAirtableCompanyByMondayName(rawName) {
+  const key = mondayNormalizeCompanyName(rawName);
+  if (!key) return null;
+  const companies = await airtableFetchAllRecords('Companies');
+  return companies.find(c => mondayNormalizeCompanyName(c.fields['Company Name']) === key) || null;
+}
+
+app.post('/api/monday/webhook', async (req, res) => {
+  // Monday's challenge-response handshake fires once, on webhook creation,
+  // before any real event - must echo back verbatim with no auth check, or
+  // create_webhook above never succeeds.
+  if (req.body && req.body.challenge) return res.json({ challenge: req.body.challenge });
+
+  if (!process.env.MONDAY_WEBHOOK_TOKEN || req.query.token !== process.env.MONDAY_WEBHOOK_TOKEN) {
+    return res.status(401).json({ error: 'bad or missing token' });
+  }
+  // Ack immediately - Monday retries deliveries that don't get a fast 200,
+  // and the real work below (a Monday API call + an Airtable read-then-
+  // write) can take a few seconds. Nothing past this point can change the
+  // response.
+  res.json({ success: true });
+
+  try {
+    const event = req.body && req.body.event;
+    if (!event || !event.boardId) return;
+    const boardMeta = MONDAY_WATCHED_BOARDS[String(event.boardId)];
+    if (!boardMeta) return;
+    if (!process.env.MONDAY_API_KEY || !AIRTABLE_API_KEY) {
+      console.warn('Monday webhook fired but MONDAY_API_KEY or AIRTABLE_API_KEY is not configured - skipping');
+      return;
+    }
+
+    const itemId = event.pulseId;
+    if (!itemId) return;
+    const row = await mondayFetchItem(itemId);
+    if (!row) return;
+
+    // Pipeline board's own Client column names the account directly; Deals-
+    // board item names are "Company — Deal Name" style (same em/en-dash
+    // splitting the one-off backfill script used).
+    const companyNameRaw = boardMeta.kind === 'pipeline'
+      ? (row['Client'] || row.name)
+      : row.name.split(' — ')[0].split(' - ')[0].split(' –')[0].trim();
+
+    const companyRecord = await findAirtableCompanyByMondayName(companyNameRaw);
+    if (!companyRecord) return; // not one of this account's outreach prospects - nothing to flag
+
+    const today = new Date().toISOString().slice(0, 10);
+    const stage = row['Stage'] || row['Outcome'] || '';
+    const value = row['Deal Value'] || row['Estimated Value ($)'] || '';
+    const summaryLine = `[${today}, live sync] ${row.name}${stage ? ` — stage=${stage}` : ''}${value ? `, value=$${value}` : ''}`.trim();
+
+    const cf = companyRecord.fields || {};
+    const existingLog = cf['Monday Live Sync Log'] || '';
+    const newLog = (existingLog ? `${existingLog}\n${summaryLine}` : summaryLine).slice(-9000);
+    const patchFields = { 'Monday Live Sync Log': newLog };
+    // Never overwrites the backfill's human-reviewed status/notes - only
+    // sets a status when this company didn't already have one, so a brand
+    // new deal on a prospect nobody had flagged yet still gets caught.
+    if (!cf['Twenty2 Relationship Status']) patchFields['Twenty2 Relationship Status'] = 'Warm Relationship';
+
+    await airtableRequest('PATCH', 'Companies', { records: [{ id: companyRecord.id, fields: patchFields }] });
+    console.log(`[Monday webhook] ${companyRecord.fields['Company Name']}: ${summaryLine}`);
+  } catch (err) {
+    console.error('Monday webhook processing error (non-fatal, already acked):', err.message);
+  }
+});
 
 // A contact is "fair game" for autopsy once they're Connected or later and
 // the sequence isn't a clean win - i.e. there's an actual story to diagnose,
