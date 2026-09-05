@@ -12967,6 +12967,10 @@ function renderCampaignAnalyticsTab(campaign){
       ${sc.diagnostic && sc.diagnostic.flag ? `<div class="scorecard-diag"><i class="ti ti-alert-triangle"></i> ${esc(sc.diagnostic.message)}</div>` : ''}
       ${(sc.multiThread && sc.multiThread.length) ? `<div class="scorecard-warn"><i class="ti ti-users"></i> ${sc.multiThread.length} compan${sc.multiThread.length===1?'y has':'ies have'} 3+ contacts in this campaign — LinkedIn multi-threading works best at 2. ${sc.multiThread.map(m=>esc(m.company)+' ('+m.count+')').join(', ')}</div>` : ''}
       <div style="position:relative;height:280px;margin-top:14px;"><canvas id="campAreaChart"></canvas></div>
+      ${(sc.changeMarkers && sc.changeMarkers.length) ? `
+        <div class="muted" style="font-size:11px;margin-top:10px;padding-top:10px;border-top:1px solid var(--border-light);">
+          <i class="ti ti-flag"></i> Changed in this window: ${sc.changeMarkers.map(m=>`${esc(m.date)} — ${esc(m.field)}: ${esc(String(m.from))} → ${esc(String(m.to))}`).join(' · ')}
+        </div>` : ''}
     `}
   </div>
 

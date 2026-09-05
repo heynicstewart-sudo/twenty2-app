@@ -458,7 +458,7 @@ const OPTIONAL_LATE_ADDED_FIELDS = [
   // Connection-note A/B: which arm this contact's request belongs to.
   'Connection Arm',
   // Campaigns table — hand-added on some bases only.
-  'Connection Note Mode', 'Sequence Length', 'CTA Message',
+  'Connection Note Mode', 'Sequence Length', 'CTA Message', 'Change Log',
   // Deal Autopsy (Campaign Contacts).
   'Autopsy Note', 'Autopsy Milestone', 'Autopsy Run At',
   // Segmentation / Mad-Libs personalization.
@@ -1758,6 +1758,31 @@ app.post('/api/airtable/campaign', async (req, res) => {
       if (ctaMsg !== null) patchFields['CTA Message'] = ctaMsg;
       if (Array.isArray(angleLibrary) && angleLibrary.length) patchFields['Angle Library'] = JSON.stringify(angleLibrary);
       if (['Auto', 'Always Risk', 'Always Upside'].includes(framingMode)) patchFields['Framing Mode'] = framingMode;
+
+      // Change markers for the scorecard - "since when" a delta might be
+      // explained by a config change, not just performance drift. Angle
+      // Library is logged as an entry count (the raw JSON is too long to be
+      // a useful marker label); the other 4 as plain before/after values.
+      const CHANGE_TRACKED_FIELDS = ['Connection Note Mode', 'Sequence Length', 'CTA Message', 'Framing Mode'];
+      const changeEntries = [];
+      const today = new Date().toISOString().slice(0, 10);
+      CHANGE_TRACKED_FIELDS.forEach(f => {
+        if (patchFields[f] === undefined) return;
+        const from = existing.fields[f] ?? null;
+        const to = patchFields[f];
+        if (from !== to) changeEntries.push({ date: today, field: f, from, to });
+      });
+      if (patchFields['Angle Library'] !== undefined) {
+        const prevCount = (() => { try { return (JSON.parse(existing.fields['Angle Library'] || '[]') || []).length; } catch (e) { return 0; } })();
+        const nextCount = angleLibrary.length;
+        if (prevCount !== nextCount) changeEntries.push({ date: today, field: 'Angle Library', from: `${prevCount} angles`, to: `${nextCount} angles` });
+      }
+      if (changeEntries.length) {
+        let log = [];
+        try { log = JSON.parse(existing.fields['Change Log'] || '[]'); } catch (e) { /* not JSON yet */ }
+        if (!Array.isArray(log)) log = [];
+        patchFields['Change Log'] = JSON.stringify([...log, ...changeEntries].slice(-50));
+      }
 
       if (Object.keys(patchFields).length) {
         await airtableWriteAllowingMissingCtaFields('PATCH', 'Campaigns', { records: [{ id: existing.id, fields: patchFields }] });
@@ -5077,10 +5102,18 @@ app.get('/api/campaign/:id/scorecard', async (req, res) => {
       .map(([coId, names]) => ({ company: companyNameById[coId] || 'Unknown company', count: names.length, contactNames: names.filter(Boolean) }))
       .sort((a, b) => b.count - a.count);
 
+    // Change markers - "since when" a delta might be explained by a config
+    // change (Group G). Only entries that fall inside this window matter.
+    let changeMarkers = [];
+    try {
+      const log = JSON.parse(campaignRecord.fields['Change Log'] || '[]');
+      if (Array.isArray(log)) changeMarkers = log.filter(e => e && e.date && e.date >= from && e.date <= to);
+    } catch (e) { /* not JSON yet - no markers */ }
+
     res.json({
       campaignName: campaignRecord.fields['Name'] || campaignRecord.fields['Campaign Name'] || '',
       from, to, prevFrom, prevTo,
-      tiles, series, connectionAb, diagnostic, multiThread,
+      tiles, series, connectionAb, diagnostic, multiThread, changeMarkers,
       generatedAt: new Date().toISOString()
     });
   } catch (err) {
@@ -5707,8 +5740,22 @@ app.post('/api/extension/conversation', async (req, res) => {
           // got a draft today (a same-day re-scrape of the same thread).
           if (row.fields['Reply Draft At'] === today) continue;
           try {
-            await generateReplyDraftForRow(campById[(row.fields['Campaign'] || [])[0]], match, row);
+            const camp = campById[(row.fields['Campaign'] || [])[0]];
+            const draftResult = await generateReplyDraftForRow(camp, match, row);
             drafted++;
+            // Real-time dealbot nudge (Jeanne DeWitt Grosser: don't wait for
+            // the weekly review to catch a deal going sideways) - only for
+            // the cases that actually warrant interrupting someone: a cold/
+            // negative reply, or one the Engine flagged as needing a human.
+            // Guarded to those two so this never becomes a nudge-per-reply
+            // firehose; best-effort via postSlackNudge (Group 3), no-ops
+            // silently without SLACK_WEBHOOK_URL.
+            if (['Cold', 'Negative'].includes(sentiment) || draftResult.needsAttention) {
+              const reason = draftResult.needsAttention
+                ? (draftResult.attentionReason || 'needs a human to weigh in')
+                : `${sentiment} reply`;
+              postSlackNudge(`*Reply worth a look — ${camp.fields['Name'] || camp.fields['Campaign Name'] || ''}*\n${them}: ${reason}`).catch(() => {});
+            }
           } catch (draftErr) {
             console.warn('extension/conversation auto-draft failed (non-fatal):', draftErr.message);
           }
@@ -12358,6 +12405,13 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
           try {
             const r = await generateReplyDraftForRow(campaignRecord, contactRecord, row);
             draft = r.message;
+            // Real-time dealbot nudge - see the matching comment in
+            // /api/extension/conversation. This route's sentiment is 3-way
+            // (Positive/Neutral/Negative), no "Cold".
+            if (parsed.sentiment === 'Negative' || r.needsAttention) {
+              const reason = r.needsAttention ? (r.attentionReason || 'needs a human to weigh in') : 'Negative reply';
+              postSlackNudge(`*Reply worth a look — ${campaignRecord.fields['Name'] || campaignRecord.fields['Campaign Name'] || ''}*\n${contactName}: ${reason}`).catch(() => {});
+            }
           } catch (draftErr) {
             console.warn('parse-screenshot auto-draft failed (non-fatal):', draftErr.message);
           }
