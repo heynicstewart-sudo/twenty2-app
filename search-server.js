@@ -9095,15 +9095,35 @@ app.get('/api/companies/profile', async (req, res) => {
     if (!companyRecord) return res.status(404).json({ error: 'Company not found' });
     const cf = companyRecord.fields || {};
 
-    const [contactRecords, tpRecords, dealRecords, signalRecords] = await Promise.all([
+    const [contactRecords, tpRecords, dealRecords, signalRecords, campaignContactRows, campaignRecords] = await Promise.all([
       airtableFetchAllRecords('Contacts'),
       airtableFetchAllRecords('Touch Points'),
       airtableFetchAllRecords('Deals'),
-      airtableFetchAllRecords('Content Signals')
+      airtableFetchAllRecords('Content Signals'),
+      fetchCampaignContactsRows(),
+      airtableFetchAllRecords('Campaigns')
     ]);
 
     const myContactIds = new Set(cf['Contacts'] || []);
     const contactsById = {}; contactRecords.forEach(r => { contactsById[r.id] = r; });
+
+    // Which campaigns touch this company (Company Universe §3) - every
+    // campaign with at least one Campaign Contacts row for a contact linked
+    // to this company, not just the ones in cf['Contacts'] (that field can
+    // lag a contact's own Company link on some records).
+    const campaignsById = {}; campaignRecords.forEach(r => { campaignsById[r.id] = r; });
+    const touchingCampaignIds = new Set();
+    campaignContactRows.forEach(row => {
+      const contactId = (row.fields['Contact'] || [])[0];
+      const contact = contactId ? contactsById[contactId] : null;
+      if (contact && (contact.fields['Company'] || [])[0] === companyRecord.id) {
+        (row.fields['Campaign'] || []).forEach(cid => touchingCampaignIds.add(cid));
+      }
+    });
+    const campaignsTouching = [...touchingCampaignIds]
+      .map(id => campaignsById[id])
+      .filter(Boolean)
+      .map(r => ({ id: r.id, name: r.fields['Name'] || r.fields['Campaign Name'] || '' }));
 
     const keyContacts = contactRecords
       .filter(r => myContactIds.has(r.id))
@@ -9139,12 +9159,17 @@ app.get('/api/companies/profile', async (req, res) => {
         notes: cf['Notes'] || '',
         latestSignal: cf['Latest Signal'] || '',
         signalDate: cf['Signal Date'] || '',
-        lastEnrichedDate: enrichMatch ? enrichMatch[1] : null
+        lastEnrichedDate: enrichMatch ? enrichMatch[1] : null,
+        icpSizeBand: cf['ICP Size Band'] || null,
+        icpMomentum: cf['ICP Momentum'] || null,
+        icpWorkloadType: cf['ICP Workload Type'] || null,
+        icpScoredAt: cf['ICP Scored At'] || null
       },
       keyContacts,
       touchPoints,
       deals,
-      contentSignals
+      contentSignals,
+      campaignsTouching
     });
   } catch (err) {
     console.error('Company profile error:', err.message);
@@ -9307,6 +9332,36 @@ app.post('/api/campaign/:id/clear-angle-library', async (req, res) => {
   }
 });
 
+// Global Angle Library (redesign plan §3) - lives on Settings now, editable
+// from the Company Universe page instead of per-campaign. Old
+// Campaigns.Angle Library field/routes above left untouched (unused, no
+// data-loss risk) - a client base mid-transition still has both.
+app.post('/api/settings/angle-library', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { angleLibrary } = req.body;
+  if (!Array.isArray(angleLibrary)) return res.status(400).json({ error: 'angleLibrary must be an array' });
+  try {
+    const settingsRecord = await getOrCreateSettingsRecord();
+    await airtableRequest('PATCH', SETTINGS_TABLE, { records: [{ id: settingsRecord.id, fields: { 'Angle Library': JSON.stringify(angleLibrary) } }] });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Save global angle library error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/settings/clear-angle-library', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const settingsRecord = await getOrCreateSettingsRecord();
+    await airtableRequest('PATCH', SETTINGS_TABLE, { records: [{ id: settingsRecord.id, fields: { 'Angle Library': '' } }] });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Clear global angle library error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/companies/:id/score-icp', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
@@ -9368,39 +9423,71 @@ app.post('/api/campaign/:id/score-icp-bulk', async (req, res) => {
   }
 });
 
-// Companies bucketed by Size x Momentum for the campaign's segmentation grid.
+// Companies bucketed by Size x Momentum - shared by the per-campaign Grid
+// tab's segmentation grid and the account-wide Company Universe page
+// (redesign plan §3: "generalize GET /api/campaign/:id/segmentation into
+// GET /api/companies/segmentation, optional ?campaignId= filter, matching
+// the 'all campaigns or just one' the user asked for"). companyId is
+// optional - when omitted, every company that has ever been scored or ever
+// linked to any campaign is included (account-wide); when given, only
+// companies reachable from that one campaign.
+async function buildSegmentation(campaignId) {
+  const [companyRecords, rows, contactRecords] = await Promise.all([
+    airtableFetchAllRecords('Companies'),
+    campaignId ? fetchCampaignContactsRows() : Promise.resolve([]),
+    campaignId ? airtableFetchAllRecords('Contacts') : Promise.resolve([])
+  ]);
+  const companyById = {}; companyRecords.forEach(r => { companyById[r.id] = r; });
+
+  let scopedCompanyRecords;
+  if (campaignId) {
+    const contactById = {}; contactRecords.forEach(r => { contactById[r.id] = r; });
+    const companyIds = new Set();
+    rows.filter(r => (r.fields['Campaign'] || []).includes(campaignId)).forEach(r => {
+      const contactId = (r.fields['Contact'] || [])[0];
+      const contact = contactId ? contactById[contactId] : null;
+      const cid = contact ? (contact.fields['Company'] || [])[0] : null;
+      if (cid) companyIds.add(cid);
+    });
+    scopedCompanyRecords = [...companyIds].map(id => companyById[id]).filter(Boolean);
+  } else {
+    // Account-wide: every company with a real profile on file (scored, or
+    // has a name at minimum) - not every bare stub Airtable might hold.
+    scopedCompanyRecords = companyRecords.filter(c => c.fields['Company Name']);
+  }
+
+  const companies = scopedCompanyRecords.map(c => ({
+    companyId: c.id,
+    companyName: c.fields['Company Name'] || '',
+    sizeBand: c.fields['ICP Size Band'] || null,
+    momentum: c.fields['ICP Momentum'] || null,
+    workloadType: c.fields['ICP Workload Type'] || null,
+    scored: !!c.fields['ICP Scored At']
+  }));
+  return { companies, totalCompanies: companies.length, scoredCount: companies.filter(c => c.scored).length };
+}
+
 app.get('/api/campaign/:id/segmentation', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   const campaignName = decodeURIComponent(req.params.id);
   try {
     const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
     if (!campaignRecord) return res.status(404).json({ error: `Campaign "${campaignName}" not found` });
-
-    const [rows, contactRecords, companyRecords] = await Promise.all([
-      fetchCampaignContactsRows(), airtableFetchAllRecords('Contacts'), airtableFetchAllRecords('Companies')
-    ]);
-    const contactById = {}; contactRecords.forEach(r => { contactById[r.id] = r; });
-    const companyById = {}; companyRecords.forEach(r => { companyById[r.id] = r; });
-
-    const companyIds = new Set();
-    rows.filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id)).forEach(r => {
-      const contactId = (r.fields['Contact'] || [])[0];
-      const contact = contactId ? contactById[contactId] : null;
-      const companyId = contact ? (contact.fields['Company'] || [])[0] : null;
-      if (companyId) companyIds.add(companyId);
-    });
-
-    const companies = [...companyIds].map(id => companyById[id]).filter(Boolean).map(c => ({
-      companyId: c.id,
-      companyName: c.fields['Company Name'] || '',
-      sizeBand: c.fields['ICP Size Band'] || null,
-      momentum: c.fields['ICP Momentum'] || null,
-      workloadType: c.fields['ICP Workload Type'] || null,
-      scored: !!c.fields['ICP Scored At']
-    }));
-    res.json({ companies, totalCompanies: companies.length, scoredCount: companies.filter(c => c.scored).length });
+    res.json(await buildSegmentation(campaignRecord.id));
   } catch (err) {
     console.error('Segmentation error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Account-wide version (Company Universe page) - optional ?campaignId= to
+// scope to one campaign instead, same shape as the route above.
+app.get('/api/companies/segmentation', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    res.json(await buildSegmentation(req.query.campaignId || null));
+  } catch (err) {
+    console.error('Company-wide segmentation error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -10710,8 +10797,17 @@ function campaignMessagePerformanceNote(touchPoints, campaignName, messageNumber
 // approved angle as the preferred hook. Empty library or unscored company ->
 // empty string, i.e. zero behaviour change from before this feature existed.
 // One extra Airtable read per draft, but only when the library is non-empty.
+// Global, not per-campaign (redesign plan §3: "profiled once, referenced by
+// every campaign" - the concrete fix for the old per-Campaigns.Angle Library
+// field meaning the same company had to be re-profiled fresh for every new
+// campaign that targeted it). Reads Settings.Angle Library instead of the
+// campaign record now; campaignRecord param kept (unused) so call sites
+// don't all need updating, and the old Campaigns.Angle Library field is
+// left in place, unread, rather than migrated/deleted - no data-loss risk.
 async function angleLibraryNote(campaignRecord, contactRecord) {
-  const raw = (campaignRecord.fields || {})['Angle Library'];
+  let settings;
+  try { settings = await getSettingsRecord(); } catch (e) { return ''; }
+  const raw = settings && settings.fields && settings.fields['Angle Library'];
   if (!raw || !raw.trim()) return '';
   let entries;
   try { entries = JSON.parse(raw); } catch (e) { return ''; }

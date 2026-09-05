@@ -1490,6 +1490,7 @@ function goToRunIntelligence(){
 // `grid` stay in NAV as hidden entries so page dispatch still resolves them.
 const NAV = [
   { id:'home', label:'Home', icon:'ti-home' },
+  { id:'companyuniverse', label:'Company Universe', icon:'ti-building-skyscraper' },
   { id:'replies', label:'Replies', icon:'ti-message-reply' },
   { id:'logger', label:'Logger', icon:'ti-clipboard-text' },
   { id:'campaigns', label:'Campaigns', icon:'ti-rocket' },
@@ -2245,7 +2246,7 @@ function renderPage(){
   const gs = document.getElementById('gridScroll');
   const savedGridScroll = gs ? { left: gs.scrollLeft, top: gs.scrollTop } : null;
 
-  const renderers = { home: renderHome, replies: renderReplies, logger: renderLoggerPage, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, contentcalendar: renderContentCalendarPage, research: renderResearch, settings: renderSettings, agency: renderAgencyPage };
+  const renderers = { home: renderHome, companyuniverse: renderCompanyUniverse, replies: renderReplies, logger: renderLoggerPage, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, contentcalendar: renderContentCalendarPage, research: renderResearch, settings: renderSettings, agency: renderAgencyPage };
   el.innerHTML = renderers[state.currentPage]();
   afterRender(state.currentPage);
 
@@ -2300,6 +2301,11 @@ function afterRender(page){
     }
   }
   if(page === 'intelligence' && (window.__intelSubTab||'intelligence') === 'context') ensureContextDataLoaded();
+  if(page === 'companyuniverse'){
+    if(window.__accountSegmentation === undefined) loadAccountSegmentation();
+    if(window.__globalAngleLibrary === undefined) loadGlobalAngleLibrary();
+    ensureContextDataLoaded();
+  }
   if(page === 'replies' && window.__repliesQueue === undefined && !window.__repliesLoading) loadRepliesQueue();
   if(page === 'home') ensureTodaysActionsSequenceStagesLoaded();
   if(page === 'home' && window.__dueReminders === undefined) loadDueReminders();
@@ -10079,6 +10085,16 @@ function renderCompanyDrawerContent(data){
     <div style="font-size:12px;">${esc(c.latestSignal)}${c.signalDate?` <span class="muted">(${fmtDate(c.signalDate)})</span>`:''}</div>
   </div>` : ''}
 
+  ${c.icpScoredAt ? `<div class="drawer-section">
+    <div class="muted" style="font-size:11px;font-weight:700;margin-bottom:4px;">ICP ATTRIBUTES</div>
+    <div style="font-size:12px;">${esc(c.icpSizeBand||'?')} size · ${esc(c.icpMomentum||'?')} momentum · ${esc(c.icpWorkloadType||'?')}</div>
+  </div>` : ''}
+
+  ${(data.campaignsTouching||[]).length ? `<div class="drawer-section">
+    <div class="muted" style="font-size:11px;font-weight:700;margin-bottom:6px;">CAMPAIGNS TOUCHING THIS ACCOUNT</div>
+    ${data.campaignsTouching.map(camp=>`<div class="tp-item" style="cursor:pointer;" onclick="closeDrawer();navigate('campaigns');openCampaignDetail('${camp.id}','pipeline')"><strong>${esc(camp.name)}</strong></div>`).join('')}
+  </div>` : ''}
+
   ${(data.keyContacts||[]).length ? `<div class="drawer-section">
     <div class="muted" style="font-size:11px;font-weight:700;margin-bottom:6px;">KEY CONTACTS</div>
     ${data.keyContacts.map(kc=>`<div class="tp-item" style="cursor:pointer;" onclick="openContactDrawer('${esc(kc.name)}', null)"><strong>${esc(kc.name)}</strong>${kc.journeyStage?` <span class="muted">· ${esc(kc.journeyStage)}</span>`:''}</div>`).join('')}
@@ -12395,8 +12411,6 @@ function renderCampaignStrategyTab(campaign){
 
   ${renderReengagementSection(campaign)}
 
-  ${renderAngleLibrarySection(campaign)}
-
   ${renderCampaignMessagingSection(campaign)}
 
   <div class="card">
@@ -12421,6 +12435,163 @@ function renderCampaignStrategyTab(campaign){
 // time. Empty library = zero change to existing drafting behaviour.
 const ICP_SIZE_BANDS = ['any', 'Micro', 'Small', 'Mid', 'Large'];
 const ICP_MOMENTUM_OPTIONS = ['any', 'Hiring', 'Funded', 'Leadership Change', 'Flat'];
+
+/* ===================== COMPANY UNIVERSE (redesign plan §3) ===================== */
+// New top-level page: account-wide segmentation (every company, not just
+// one campaign's), a global Angle Library (moved off the old per-campaign
+// Campaigns.Angle Library - "profiled once, referenced by every campaign"),
+// and the untagged Context capture tool (moved here from the old top-level
+// Intelligence > Context sub-tab, since "general knowledge about a
+// contact/company not tied to one campaign" is exactly Universe territory).
+// The company detail panel itself is the existing Company Drawer
+// (openCompanyDrawer/renderCompanyDrawerContent) - already built, just
+// wired up here as click-a-company-in-the-grid instead of built fresh.
+
+async function loadAccountSegmentation(){
+  if(window.__accountSegmentationLoading) return;
+  window.__accountSegmentationLoading = true;
+  try {
+    const res = await fetch('/api/companies/segmentation');
+    const json = await res.json();
+    if(!res.ok) throw new Error(json.error || 'Request failed');
+    window.__accountSegmentation = json;
+  } catch(err){
+    window.__accountSegmentation = { error: err.message };
+  } finally {
+    window.__accountSegmentationLoading = false;
+  }
+  if(state.currentPage === 'companyuniverse') renderPage();
+}
+
+async function scoreIcpBulkAccountWide(){
+  const btn = document.getElementById('scoreIcpBtnUniverse');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Scoring…'; }
+  const companies = (window.__accountSegmentation && window.__accountSegmentation.companies) || [];
+  const unscored = companies.filter(c => !c.scored);
+  let scored = 0;
+  for(const c of unscored){
+    try { await fetch(`/api/companies/${c.companyId}/score-icp`, { method:'POST' }); scored++; }
+    catch(e){ /* best-effort, continue with the rest */ }
+  }
+  toast(`Scored ${scored} compan${scored===1?'y':'ies'}`, 'success');
+  window.__accountSegmentation = null;
+  await loadAccountSegmentation();
+  if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-sparkles"></i> Score ICP'; }
+}
+
+function renderAccountSegmentationGrid(){
+  const data = window.__accountSegmentation;
+  if(!data) return '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading...</div>';
+  if(data.error) return `<div class="muted">Could not load: ${esc(data.error)}</div>`;
+  if(!data.companies.length) return '<div class="empty-state">No companies on file yet.</div>';
+
+  const unscored = data.companies.filter(c => !c.scored);
+  const cellFor = (size, momentum) => data.companies.filter(c => c.sizeBand === size && c.momentum === momentum);
+
+  return `
+    <div class="muted" style="font-size:11.5px;margin-bottom:8px;">${data.scoredCount} of ${data.totalCompanies} scored, account-wide.</div>
+    <div style="overflow-x:auto;">
+      <div style="display:grid;grid-template-columns:90px repeat(${SEGMENTATION_SIZE_COLS.length},minmax(120px,1fr));gap:4px;min-width:560px;">
+        <div></div>
+        ${SEGMENTATION_SIZE_COLS.map(s => `<div class="muted" style="font-size:10.5px;font-weight:700;text-align:center;padding:4px;">${s}</div>`).join('')}
+        ${SEGMENTATION_MOMENTUM_ROWS.map(m => `
+          <div class="muted" style="font-size:10.5px;font-weight:700;display:flex;align-items:center;">${esc(m)}</div>
+          ${SEGMENTATION_SIZE_COLS.map(s => {
+            const cos = cellFor(s, m);
+            return `<div style="background:var(--surface-2);border:1px solid var(--border-light);border-radius:6px;padding:6px;min-height:44px;font-size:11px;">
+              ${cos.length ? cos.map(c=>`<span class="tp-item" style="cursor:pointer;display:block;padding:2px 0;" onclick="openCompanyDrawer('${esc(c.companyName)}')">${esc(c.companyName)}</span>`).join('') : '<span class="muted">—</span>'}
+            </div>`;
+          }).join('')}
+        `).join('')}
+      </div>
+    </div>
+    ${unscored.length ? `<div class="muted" style="font-size:11px;margin-top:10px;">${unscored.length} not yet scored: ${unscored.slice(0,8).map(c=>esc(c.companyName)).join(', ')}${unscored.length>8?'…':''}</div>` : ''}
+  `;
+}
+
+async function loadGlobalAngleLibrary(){
+  try {
+    const res = await fetch('/api/settings/app-config');
+    const json = await res.json();
+    if(!res.ok) throw new Error(json.error || 'Request failed');
+    try { window.__globalAngleLibrary = JSON.parse(json['Angle Library']||'[]') || []; }
+    catch(e){ window.__globalAngleLibrary = []; }
+  } catch(err){
+    window.__globalAngleLibrary = [];
+  }
+  if(state.currentPage === 'companyuniverse') renderPage();
+}
+
+function renderGlobalAngleLibrarySection(){
+  const entries = window.__globalAngleLibrary || [];
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title"><i class="ti ti-target-arrow"></i> Angle Library</div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px;">Pre-approved hooks for specific company profiles, shared across every campaign - when a company's scored ICP attributes match an entry, the drafter uses it as the primary angle instead of improvising. Leave empty to keep drafting exactly as it works today.</div>
+    ${entries.length ? entries.map((e,i) => `
+      <div style="display:flex;gap:8px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--border-light);">
+        <div style="flex:1;">
+          <div style="font-size:11px;" class="muted">${esc(e.sizeBand||'any')} / ${esc(e.momentum||'any')} / ${esc(e.workloadType||'any')}</div>
+          <div style="font-size:12.5px;margin-top:2px;">${esc(e.angle||'')}</div>
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="removeGlobalAngleLibraryEntry(${i})" title="Remove"><i class="ti ti-trash"></i></button>
+      </div>
+    `).join('') : '<div class="muted" style="font-size:12px;margin-bottom:8px;">No angles saved yet.</div>'}
+    <div style="margin-top:12px;padding:10px;border:1px dashed var(--border);border-radius:8px;">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+        <select id="globalAngleSizeBand" style="flex:1;min-width:100px;">${ICP_SIZE_BANDS.map(v=>`<option value="${v}">${v==='any'?'Any size':v}</option>`).join('')}</select>
+        <select id="globalAngleMomentum" style="flex:1;min-width:100px;">${ICP_MOMENTUM_OPTIONS.map(v=>`<option value="${v}">${v==='any'?'Any momentum':v}</option>`).join('')}</select>
+        <input id="globalAngleWorkload" placeholder="Workload type (or blank = any)" style="flex:1;min-width:140px;">
+      </div>
+      <textarea id="globalAngleText" rows="2" placeholder="e.g. Open with the fact they're hiring right now - ask what's driving the growth."></textarea>
+      <button class="btn btn-secondary btn-sm" style="margin-top:6px;" onclick="addGlobalAngleLibraryEntry()"><i class="ti ti-plus"></i> Add angle</button>
+    </div>
+  </div>`;
+}
+
+async function addGlobalAngleLibraryEntry(){
+  const angle = (document.getElementById('globalAngleText').value || '').trim();
+  if(!angle){ toast('Write the angle text first', 'warn'); return; }
+  const sizeBand = document.getElementById('globalAngleSizeBand').value;
+  const momentum = document.getElementById('globalAngleMomentum').value;
+  const workloadType = (document.getElementById('globalAngleWorkload').value || '').trim() || 'any';
+  window.__globalAngleLibrary = window.__globalAngleLibrary || [];
+  window.__globalAngleLibrary.push({ sizeBand, momentum, workloadType, angle });
+  await fetch('/api/settings/angle-library', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ angleLibrary: window.__globalAngleLibrary }) }).catch(()=>{});
+  renderPage();
+  toast('Angle saved', 'success');
+}
+
+async function removeGlobalAngleLibraryEntry(idx){
+  if(!window.__globalAngleLibrary) return;
+  window.__globalAngleLibrary.splice(idx, 1);
+  const endpoint = window.__globalAngleLibrary.length ? '/api/settings/angle-library' : '/api/settings/clear-angle-library';
+  const body = window.__globalAngleLibrary.length ? JSON.stringify({ angleLibrary: window.__globalAngleLibrary }) : undefined;
+  await fetch(endpoint, { method:'POST', headers: body ? {'Content-Type':'application/json'} : undefined, body }).catch(()=>{});
+  renderPage();
+}
+
+function renderCompanyUniverse(){
+  window.__ctxCampaignTag = null;
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-grid-dots"></i> ICP segmentation</div>
+      <button class="btn btn-secondary btn-sm" id="scoreIcpBtnUniverse" onclick="scoreIcpBulkAccountWide()"><i class="ti ti-sparkles"></i> Score ICP</button>
+    </div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Size x momentum - every company on file, scored on 3 attributes. Click a company to open its profile. Costs Engine tokens; already-scored companies are skipped automatically.</div>
+    ${renderAccountSegmentationGrid()}
+  </div>
+
+  ${renderGlobalAngleLibrarySection()}
+
+  <div class="card">
+    <div class="section-title"><i class="ti ti-notebook"></i> Context capture</div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px;">General knowledge about a contact or company not tied to any one campaign - moved here from the old top-level Engine tab.</div>
+    ${renderContext()}
+  </div>
+  `;
+}
 
 function renderAngleLibrarySection(campaign){
   if((campaign.type||'linkedin')==='email') return '';
