@@ -1520,6 +1520,7 @@ const NAV = [
   { id:'companyuniverse', label:'Company Universe', icon:'ti-building-skyscraper' },
   { id:'content', label:'Funnel', icon:'ti-news' },
   { id:'campaigns', label:'Campaigns', icon:'ti-rocket' },
+  { id:'profile', label:'Profile', icon:'ti-hierarchy-2' },
   { id:'replies', label:'Replies', icon:'ti-message-reply', hidden:true },
   { id:'logger', label:'Logger', icon:'ti-clipboard-text', hidden:true },
   { id:'calendar', label:'Sales', icon:'ti-calendar', hidden:true },
@@ -2276,7 +2277,7 @@ function renderPage(){
 
   // 'research' deleted outright (redesign plan §1) - renderResearch() is
   // left defined (harmless dead code) but no longer reachable via dispatch.
-  const renderers = { home: renderHome, companyuniverse: renderCompanyUniverse, replies: renderReplies, logger: renderLoggerPage, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, contentcalendar: renderContentCalendarPage, settings: renderSettings, agency: renderAgencyPage };
+  const renderers = { home: renderHome, companyuniverse: renderCompanyUniverse, profile: renderProfilePage, replies: renderReplies, logger: renderLoggerPage, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, contentcalendar: renderContentCalendarPage, settings: renderSettings, agency: renderAgencyPage };
   el.innerHTML = renderers[state.currentPage]();
   afterRender(state.currentPage);
 
@@ -12661,6 +12662,113 @@ function renderCompanyUniverse(){
     ${renderContext()}
   </div>
   `;
+}
+
+/* ===================== PROFILE (redesign plan §1, "new") ===================== */
+// Search for a person or a company; a company result shows a simple tree of
+// its contacts grouped by job title (Jeanne DeWitt Grosser: profile the
+// account, not just the individual) - a plain nested list, not a draggable
+// free-form graph. The plan explicitly ships this simple layout now and
+// defers only the fancier canvas-style graph to a later pass:
+// "the Profile page's mind-map ships as a simple tree layout now, not a
+// draggable free-form graph."
+// The user's own spec for this page (from the redesign conversation): search
+// a person OR a company; a company's profile shows the stem of connections
+// between job titles and people, scoped to all campaigns or just one.
+
+function renderProfilePage(){
+  const query = (window.__profileQuery || '').trim().toLowerCase();
+  const scopeCampaignId = window.__profileCampaignScope || '';
+
+  let peopleResults = [];
+  let companyResults = [];
+  if(query.length >= 2){
+    peopleResults = state.contacts.filter(c => (c.name||'').toLowerCase().includes(query)).slice(0, 20);
+    const companyNames = [...new Set(state.contacts.map(c => c.company).filter(Boolean))];
+    companyResults = companyNames.filter(name => name.toLowerCase().includes(query)).slice(0, 20);
+  }
+
+  const selectedCompany = window.__profileSelectedCompany || '';
+
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title"><i class="ti ti-hierarchy-2"></i> Profile</div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px;">Search for a person or a company. A company's profile shows every contact reached there, grouped by job title.</div>
+    <input id="profileSearchInput" type="text" placeholder="Search a person or company..." value="${esc(window.__profileQuery||'')}" oninput="setProfileQuery(this.value)" style="width:100%;max-width:420px;">
+    ${query.length >= 2 ? `
+      <div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:14px;">
+        <div style="min-width:200px;">
+          <div class="muted" style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">People</div>
+          ${peopleResults.length ? peopleResults.map(c => `<div class="tp-item" style="cursor:pointer;" onclick="openContactDrawer('${esc(c.name)}', null)"><strong>${esc(c.name)}</strong><br><span class="muted" style="font-size:11px;">${esc(c.role||'')} · ${esc(c.company||'')}</span></div>`).join('') : '<div class="muted" style="font-size:12px;">No matches.</div>'}
+        </div>
+        <div style="min-width:200px;">
+          <div class="muted" style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Companies</div>
+          ${companyResults.length ? companyResults.map(name => `<div class="tp-item ${selectedCompany===name?'active':''}" style="cursor:pointer;" onclick="selectProfileCompany('${esc(name)}')"><strong>${esc(name)}</strong></div>`).join('') : '<div class="muted" style="font-size:12px;">No matches.</div>'}
+        </div>
+      </div>
+    ` : ''}
+  </div>
+  ${selectedCompany ? renderProfileCompanyTree(selectedCompany, scopeCampaignId) : ''}
+  `;
+}
+
+function setProfileQuery(value){
+  window.__profileQuery = value;
+  renderPage();
+  // renderPage() replaces the input element wholesale - restore focus/caret
+  // so typing doesn't lose its place after each keystroke's re-render.
+  const input = document.getElementById('profileSearchInput');
+  if(input){ input.focus(); input.setSelectionRange(value.length, value.length); }
+}
+
+function selectProfileCompany(name){
+  window.__profileSelectedCompany = name;
+  window.__profileCampaignScope = '';
+  renderPage();
+}
+
+function renderProfileCompanyTree(companyName, scopeCampaignId){
+  const scopeCampaign = scopeCampaignId ? state.campaigns.find(c => c.id === scopeCampaignId) : null;
+  const inScope = scopeCampaign ? new Set(campaignContacts(scopeCampaign).map(c => c.id)) : null;
+  const contacts = state.contacts.filter(c => c.company === companyName && (!inScope || inScope.has(c.id)));
+
+  const groups = {};
+  contacts.forEach(c => {
+    const title = c.role || 'No title on file';
+    (groups[title] = groups[title] || []).push(c);
+  });
+  const titles = Object.keys(groups).sort((a,b) => groups[b].length - groups[a].length);
+
+  return `
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:4px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-building"></i> ${esc(companyName)}</div>
+      <div class="field" style="max-width:240px;margin-bottom:0;">
+        <select onchange="setProfileCampaignScope(this.value)">
+          <option value="">All campaigns</option>
+          ${state.campaigns.map(c => `<option value="${c.id}" ${scopeCampaignId===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:12px;">${contacts.length} contact${contacts.length===1?'':'s'}${scopeCampaign ? ` in ${esc(scopeCampaign.name)}` : ' across all campaigns'}, grouped by job title.</div>
+    ${titles.length ? `
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        ${titles.map(title => `
+          <div style="display:flex;gap:12px;align-items:flex-start;">
+            <div style="min-width:160px;font-weight:600;font-size:12.5px;padding-top:4px;"><i class="ti ti-corner-down-right"></i> ${esc(title)}</div>
+            <div style="flex:1;display:flex;flex-wrap:wrap;gap:8px;">
+              ${groups[title].map(c => `<span class="tp-item" style="cursor:pointer;padding:6px 10px;" onclick="openContactDrawer('${esc(c.name)}', null)">${esc(c.name)}</span>`).join('')}
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    ` : '<div class="empty-state">No contacts on file at this company' + (scopeCampaign ? ' for this campaign' : '') + '.</div>'}
+  </div>`;
+}
+
+function setProfileCampaignScope(campaignId){
+  window.__profileCampaignScope = campaignId;
+  renderPage();
 }
 
 function renderAngleLibrarySection(campaign){
