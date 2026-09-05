@@ -18,6 +18,12 @@ if (BASIC_AUTH_USER && BASIC_AUTH_PASS) {
     // Its routes have their own secret (EXTENSION_TOKEN via extensionAuth), so
     // let them past this gate and be checked there.
     if (req.path.startsWith('/api/extension/')) return next();
+    // Same reasoning for Monday.com's webhook - it's a server-to-server call
+    // with no browser to carry a Basic-Auth prompt, and Monday's webhook
+    // config has no field for HTTP auth credentials anyway. Its own
+    // shared-secret check (MONDAY_WEBHOOK_TOKEN via ?token=) happens inside
+    // the route itself, same pattern as the extension.
+    if (req.path === '/api/monday/webhook') return next();
     const header = req.headers.authorization || '';
     const [scheme, encoded] = header.split(' ');
     const decoded = scheme === 'Basic' && encoded ? Buffer.from(encoded, 'base64').toString('utf8') : '';
