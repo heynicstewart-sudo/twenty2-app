@@ -2285,6 +2285,7 @@ function afterRender(page){
     const tab = window.__campaignDetailTab;
     const campaign = state.campaigns.find(c => c.id === window.__campaignDetailId);
     if(tab === 'roadmap') initRoadmapDrag();
+    if(tab === 'pipeline' && campaign) loadAccountPipeline(campaign);
     if(tab === 'intelligence') ensureContextDataLoaded();
     if(tab === 'analytics' && campaign) initCampaignAnalyticsCharts(campaign);
     if(tab === 'sales' && campaign){
@@ -2302,6 +2303,7 @@ function afterRender(page){
   if(page === 'replies' && window.__repliesQueue === undefined && !window.__repliesLoading) loadRepliesQueue();
   if(page === 'home') ensureTodaysActionsSequenceStagesLoaded();
   if(page === 'home' && window.__dueReminders === undefined) loadDueReminders();
+  if(page === 'home' && window.__wrongPersonaAccounts === undefined) loadWrongPersonaAccounts();
   if(page === 'logger' && window.__repsCache === undefined) loadRepsCache();
   if(page === 'logger' && window.__loggerCampaigns === undefined) loadLoggerCampaigns();
   if(page === 'calendar'){
@@ -5047,11 +5049,63 @@ function reminderTodaysActions(){
     .filter(Boolean);
 }
 
+// Account-as-pipeline (redesign plan §4): "You've reached 3 people at Acme
+// Co, none match your Decision Maker Criteria" - one card per account stuck
+// at "Wrong persona(s) only" on a Live campaign that actually has criteria
+// set (no criteria = nothing to judge against, so silently skipped rather
+// than flagging every account as wrong). Loaded async into
+// window.__wrongPersonaAccounts by loadWrongPersonaAccounts (called from
+// afterRender on the home page, same trigger as reminders/sequence stages)
+// since GET .../account-pipeline is a per-campaign network call - unlike
+// every other Today's Actions source, which is synchronous over
+// already-loaded state.
+async function loadWrongPersonaAccounts(){
+  if(window.__wrongPersonaLoading) return;
+  window.__wrongPersonaLoading = true;
+  try {
+    const liveCampaigns = state.campaigns.filter(c => c.status === 'Live' && (c.decisionMakerCriteria||'').trim());
+    const results = await Promise.all(liveCampaigns.map(async camp => {
+      try {
+        const res = await fetch(`/api/campaign/${encodeURIComponent(campaignRouteKey(camp))}/account-pipeline`);
+        const json = await res.json();
+        if(!res.ok || !json.hasCriteria) return [];
+        return (json.accounts||[])
+          .filter(a => a.status === 'Wrong persona(s) only' && a.nonMatches.length)
+          .map(a => ({ campaign: camp, account: a }));
+      } catch(e){ return []; }
+    }));
+    window.__wrongPersonaAccounts = results.flat();
+  } catch(e){
+    window.__wrongPersonaAccounts = [];
+  } finally {
+    window.__wrongPersonaLoading = false;
+  }
+  if(state.currentPage === 'home') renderPage();
+}
+
+function wrongPersonaTodaysActions(){
+  return (window.__wrongPersonaAccounts || [])
+    .map(({ campaign, account }) => {
+      // Anchor the card's identity on one of the real contacts reached at
+      // this account (needed by renderTodaysActionItem's window.__todaysActions
+      // bookkeeping) - the first non-matching contact by name lookup.
+      const anchor = state.contacts.find(c => c.name === account.nonMatches[0].name);
+      if(!anchor) return null;
+      return {
+        contact: anchor, isWrongPersona: true, type: 'Wrong persona(s) only',
+        campaignName: campaign.name, campaignId: campaign.id, companyName: account.companyName,
+        reachedContacts: account.nonMatches, daysSinceTouch: null
+      };
+    })
+    .filter(Boolean);
+}
+
 function computeTodaysActions(){
   const actions = state.contacts
     .map(c => { const action = getContactAction(c); return action ? { contact:c, ...action } : null; })
     .filter(Boolean)
     .concat(reminderTodaysActions())
+    .concat(wrongPersonaTodaysActions())
     .sort((a,b) => (b.daysSinceTouch||0) - (a.daysSinceTouch||0));
 
   // Diagnostic: every contact above is sourced via campaignContactRecordFor,
@@ -5096,6 +5150,7 @@ const TODAYS_ACTIONS_TABS = [
 
 function todaysActionMatchesTab(a, tabId){
   if(a.isReminder) return tabId === 'followup';
+  if(a.isWrongPersona) return tabId === 'followup';
   if(tabId === 'connection') return a.type === 'Send connection';
   if(tabId === 'message') return (a.type === 'Generate message' && a.messageNumber === 1) || a.type === 'Send first message';
   if(tabId === 'followup') return contactQualifiesForFollowUp(a.contact);
@@ -5181,6 +5236,7 @@ function renderTodaysActionItem(a){
   window.__todaysActions[a.contact.id] = a;
   if(a.isReminder) return renderReminderActionCard(a);
   if(a.isReplyQueue) return renderReplyBackActionCard(a);
+  if(a.isWrongPersona) return renderWrongPersonaActionCard(a);
   if(a.isFastAction) return renderFastActionCard(a);
 
   const c = a.contact;
@@ -5238,6 +5294,33 @@ function renderReminderActionCard(a){
     <div class="todo-item-actions">
       <button class="btn btn-secondary btn-sm" onclick="openContactDrawer('${esc(c.name)}', ${a.campaignName ? `'${esc(a.campaignName)}'` : 'null'})"><i class="ti ti-id"></i> Open profile</button>
       <button class="btn btn-ghost btn-sm" onclick="handleDismissReminder('${a.reminderId}','${c.id}')"><i class="ti ti-check"></i> Mark as done</button>
+    </div>
+  </div>`;
+}
+
+// Today's Actions card for account-as-pipeline's "Wrong persona(s) only"
+// status (redesign plan §4) - reused contact (a.contact) is just one of the
+// reached-but-not-a-match people, shown here as an anchor; the point of the
+// card is the account, not any one of them, so it lists everyone reached at
+// this company instead of drilling into a single profile.
+function renderWrongPersonaActionCard(a){
+  const c = a.contact;
+  return `
+  <div class="todo-item" id="todaysAction-${c.id}">
+    <div class="todo-item-main">
+      <div>
+        <div class="todo-item-name">${esc(a.companyName)}</div>
+        <div class="muted" style="font-size:12px;">You've reached ${a.reachedContacts.length} ${a.reachedContacts.length===1?'person':'people'} here, none match your Decision Maker Criteria</div>
+        <div style="margin-top:6px;font-size:12.5px;">${a.reachedContacts.map(m=>`${esc(m.name)} (${esc(m.jobTitle||'no title on file')})`).join(', ')}</div>
+        <div style="margin-top:4px;"><span class="pill" style="background:var(--tint-blue-bg);color:var(--tint-blue-fg);"><i class="ti ti-rocket" style="font-size:11px;"></i> ${esc(a.campaignName)}</span></div>
+      </div>
+      <div style="text-align:right;">
+        <span class="pill" style="background:var(--warning-bg,#fef3c7);color:var(--warning,#b45309);">Wrong persona(s) only</span>
+      </div>
+    </div>
+    <div class="todo-item-actions">
+      <button class="btn btn-primary btn-sm" onclick="navigate('campaigns');openCampaignDetail('${a.campaignId}','pipeline')"><i class="ti ti-sitemap"></i> Open in Pipeline</button>
+      <button class="btn btn-ghost btn-sm" onclick="handleMarkActionDone('${c.id}')"><i class="ti ti-check"></i> Mark as done</button>
     </div>
   </div>`;
 }
@@ -8043,6 +8126,7 @@ async function hydrateCampaignsFromAirtable(){
         ctaMessage: (Number.isFinite(+f['CTA Message']) && +f['CTA Message'] >= 1 && +f['CTA Message'] <= 8) ? Math.round(+f['CTA Message']) : 3,
         angleLibrary: (() => { try { const j = JSON.parse(f['Angle Library']||'[]'); return Array.isArray(j) ? j : []; } catch(e){ return []; } })(),
         framingMode: ['Auto','Always Risk','Always Upside'].includes(f['Framing Mode']) ? f['Framing Mode'] : 'Auto',
+        decisionMakerCriteria: f['Decision Maker Criteria'] || '',
         contentContext: f['Content Context'] || '',
         styleCorrections: parseCampaignStyleCorrections(f['Style Corrections']),
         conversationHistory: []
@@ -11564,7 +11648,7 @@ function editCampaign(campaignId){
 
 /* ---- Detail view ---- */
 
-const CAMPAIGN_DETAIL_TABS = [['intelligence','Engine'],['grid','Grid'],['roadmap','Roadmap'],['strategy','Strategy'],['analytics','Analytics'],['sales','Sales'],['content','Content']];
+const CAMPAIGN_DETAIL_TABS = [['intelligence','Engine'],['grid','Grid'],['roadmap','Roadmap'],['pipeline','Pipeline'],['strategy','Strategy'],['analytics','Analytics'],['sales','Sales'],['content','Content']];
 
 // tab param lets callers (e.g. the Grid page's back button) land on a
 // specific tab instead of always resetting to the first one.
@@ -11672,6 +11756,7 @@ function renderCampaignDetail(){
   ${tab==='intelligence' ? renderCampaignIntelligenceTab(campaign) : ''}
   ${tab==='grid' ? renderCampaignGridTab(campaign) : ''}
   ${tab==='roadmap' ? renderCampaignRoadmapTab(campaign) : ''}
+  ${tab==='pipeline' ? renderCampaignPipelineTab(campaign) : ''}
   ${tab==='strategy' ? renderCampaignStrategyTab(campaign) : ''}
   ${tab==='analytics' ? renderCampaignAnalyticsTab(campaign) : ''}
   ${tab==='sales' ? renderCampaignSalesTab(campaign) : ''}
@@ -12183,6 +12268,83 @@ function confirmAddCampaignContacts(){
 // above, so this one tab is the complete controller for messaging
 // templates, sales scripts and CTAs for this campaign.
 
+/* ---- Pipeline tab (account-as-pipeline, redesign plan §4) ---- */
+// The account is the pipeline unit, not the contact - separate from the
+// Roadmap kanban above (which stays for day-to-day contact-by-contact
+// sending). This is the roll-up view: every company reachable from this
+// campaign, grouped by whether the *right* person (per this campaign's
+// Decision Maker Criteria, set on the Strategy tab) has actually been
+// reached - GET /api/campaign/:id/account-pipeline, mechanical string
+// match server-side, no Engine call.
+
+async function loadAccountPipeline(campaign){
+  const key = campaignRouteKey(campaign);
+  if(window.__accountPipelineLoading) return;
+  if(window.__accountPipeline && window.__accountPipelineScope === key) return;
+  window.__accountPipelineLoading = true;
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(key)}/account-pipeline`);
+    const json = await res.json();
+    if(!res.ok) throw new Error(json.error || ('Request failed with status '+res.status));
+    window.__accountPipeline = json;
+    window.__accountPipelineScope = key;
+  } catch(err){
+    window.__accountPipeline = { error: err.message };
+    window.__accountPipelineScope = key;
+  } finally {
+    window.__accountPipelineLoading = false;
+  }
+  if(window.__campaignDetailTab === 'pipeline') renderPage();
+}
+
+const ACCOUNT_STATUS_META = {
+  'Booked': ['ti-confetti', '#44A574'],
+  'Engaged': ['ti-messages', '#2A6B7C'],
+  'Right person reached': ['ti-user-check', '#3b82f6'],
+  'Wrong persona(s) only': ['ti-user-x', '#b45309'],
+  'Not yet mapped': ['ti-help-circle', '#94a3b8']
+};
+const ACCOUNT_STATUS_DISPLAY_ORDER = ['Booked','Engaged','Right person reached','Wrong persona(s) only','Not yet mapped'];
+
+function renderCampaignPipelineTab(campaign){
+  const data = window.__accountPipeline;
+  if(window.__accountPipelineScope !== campaignRouteKey(campaign) || !data){
+    return '<div class="muted"><i class="ti ti-loader-2"></i> Loading account pipeline...</div>';
+  }
+  if(data.error) return `<div class="card"><div class="muted">Could not load: ${esc(data.error)}</div></div>`;
+  if(!data.hasCriteria){
+    return `<div class="card empty-state">
+      <i class="ti ti-target-arrow" style="font-size:28px;"></i>
+      <p>No Decision Maker Criteria set for this campaign yet.</p>
+      <p class="muted" style="font-size:12.5px;">Add keywords (one per line - e.g. "CEO", "Director", "Head of") on the Strategy tab so this page can tell which contacts count as the right person per account.</p>
+      <button class="btn btn-primary btn-sm" onclick="setCampaignDetailTab('strategy')"><i class="ti ti-target"></i> Go to Strategy tab</button>
+    </div>`;
+  }
+  if(!data.accounts.length){
+    return '<div class="card empty-state"><p>No companies reachable from this campaign yet - add contacts on the Roadmap or Grid tab first.</p></div>';
+  }
+  return `
+  <div class="kpi-row" style="margin-bottom:16px;">
+    ${ACCOUNT_STATUS_DISPLAY_ORDER.map(s => `<div class="mini-card"><div class="num">${data.counts[s]||0}</div><div class="label">${esc(s)}</div></div>`).join('')}
+  </div>
+  ${ACCOUNT_STATUS_DISPLAY_ORDER.map(status => {
+    const accounts = data.accounts.filter(a => a.status === status);
+    if(!accounts.length) return '';
+    const [icon, color] = ACCOUNT_STATUS_META[status] || ['ti-building', 'inherit'];
+    return `<div class="card" style="margin-bottom:14px;">
+      <div class="section-title" style="color:${color};"><i class="ti ${icon}"></i> ${esc(status)} (${accounts.length})</div>
+      ${accounts.map(a => `
+        <div style="padding:8px 0;border-bottom:1px solid var(--border-light);">
+          <div style="font-weight:600;">${esc(a.companyName || 'Unknown company')}</div>
+          ${a.matches.length ? `<div class="muted" style="font-size:12px;">${a.matches.map(m=>`${esc(m.name)} (${esc(m.jobTitle)}) — ${esc(m.stage)}`).join(', ')}</div>` : ''}
+          ${a.nonMatches.length ? `<div class="muted" style="font-size:11.5px;">Reached but not a match: ${a.nonMatches.map(m=>`${esc(m.name)} (${esc(m.jobTitle||'no title on file')})`).join(', ')}</div>` : ''}
+        </div>
+      `).join('')}
+    </div>`;
+  }).join('')}
+  `;
+}
+
 function renderCampaignStrategyTab(campaign){
   return `
   <div class="card" style="margin-bottom:16px;">
@@ -12202,6 +12364,7 @@ function renderCampaignStrategyTab(campaign){
     <div class="field"><label>Objection handling</label><textarea id="stratObjections" rows="3">${esc(campaign.objectionHandling||'')}</textarea></div>
     <div class="field"><label>Success metric</label><input id="stratSuccessMetric" value="${esc(campaign.successMetric||'')}"></div>
     <div class="field"><label>CTAs (one per line)</label><textarea id="stratCtas" rows="3" placeholder="e.g. Change Value Check&#10;Free session&#10;Community Connect event">${esc(campaign.ctas||'')}</textarea><div class="muted" style="font-size:11px;margin-top:4px;">Used by the Sales tab's "CTA converting to bookings" chart - match these labels when logging touch points for best results.</div></div>
+    <div class="field"><label>Decision Maker Criteria (one keyword per line)</label><textarea id="stratDecisionMakerCriteria" rows="3" placeholder="e.g. CEO&#10;Director&#10;Head of">${esc(campaign.decisionMakerCriteria||'')}</textarea><div class="muted" style="font-size:11px;margin-top:4px;">Case-insensitive substring match against a contact's Job Title - defines who counts as "the right person" for this campaign's Pipeline tab. A fixed mechanical rule, not Engine-judged, so the bar can't drift.</div></div>
     ${(campaign.type||'linkedin')!=='email' ? `
     <div class="field">
       <label>Connection request note</label>
@@ -12576,6 +12739,7 @@ function saveCampaignStrategy(campaignId){
   campaign.objectionHandling = document.getElementById('stratObjections').value.trim();
   campaign.successMetric = document.getElementById('stratSuccessMetric').value.trim();
   campaign.ctas = document.getElementById('stratCtas').value.trim();
+  campaign.decisionMakerCriteria = document.getElementById('stratDecisionMakerCriteria').value.trim();
   const typeEl = document.getElementById('stratCampaignType');
   if(typeEl) campaign.type = typeEl.value === 'email' ? 'email' : 'linkedin';
   const noteModeEl = document.getElementById('stratNoteMode');
@@ -14173,7 +14337,8 @@ function syncCampaignToAirtable(campaign, onSynced){
       sequenceLength: campaign.sequenceLength || 3,
       ctaMessage: campaign.ctaMessage || (campaign.sequenceLength || 3),
       angleLibrary: campaign.angleLibrary || [],
-      framingMode: campaign.framingMode || 'Auto'
+      framingMode: campaign.framingMode || 'Auto',
+      decisionMakerCriteria: campaign.decisionMakerCriteria || ''
     })
   })
     .then(res => res.json())

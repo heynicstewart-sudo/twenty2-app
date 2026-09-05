@@ -466,7 +466,9 @@ const OPTIONAL_LATE_ADDED_FIELDS = [
   // Draft trust / generalized variant A/B.
   'Message Variant',
   // Risk-vs-upside framing.
-  'Framing Used', 'Framing Reasoning', 'Framing Mode'
+  'Framing Used', 'Framing Reasoning', 'Framing Mode',
+  // Account-as-pipeline (redesign plan §4) — Campaigns table.
+  'Decision Maker Criteria'
 ];
 const optionalFieldsMissing = new Set();
 function stripMissingOptionalFields(body) {
@@ -1710,7 +1712,7 @@ app.post('/api/airtable/campaign', async (req, res) => {
   // so they're folded into the existing "Strategy Notes" field as
   // labelled sections rather than dropped - that field already exists and
   // is semantically the right home for them.
-  const { name, goal, product, targetIcp, contactIds, gridIds, sequenceTemplates, strategyNotes, pitchAngle, objectionHandling, successMetric, startDate, status, ctas, contentContext, campaignType, connectionNoteMode, sequenceLength, ctaMessage, angleLibrary, framingMode } = req.body;
+  const { name, goal, product, targetIcp, contactIds, gridIds, sequenceTemplates, strategyNotes, pitchAngle, objectionHandling, successMetric, startDate, status, ctas, contentContext, campaignType, connectionNoteMode, sequenceLength, ctaMessage, angleLibrary, framingMode, decisionMakerCriteria } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
   const normalizedType = (campaignType || '').toLowerCase() === 'email' ? 'Email' : ((campaignType || '').toLowerCase() === 'linkedin' ? 'LinkedIn' : '');
   const normalizedNoteMode = ['Note', 'No note', 'Split test'].includes(connectionNoteMode) ? connectionNoteMode : '';
@@ -1758,6 +1760,7 @@ app.post('/api/airtable/campaign', async (req, res) => {
       if (ctaMsg !== null) patchFields['CTA Message'] = ctaMsg;
       if (Array.isArray(angleLibrary) && angleLibrary.length) patchFields['Angle Library'] = JSON.stringify(angleLibrary);
       if (['Auto', 'Always Risk', 'Always Upside'].includes(framingMode)) patchFields['Framing Mode'] = framingMode;
+      if (decisionMakerCriteria !== undefined) patchFields['Decision Maker Criteria'] = decisionMakerCriteria;
 
       // Change markers for the scorecard - "since when" a delta might be
       // explained by a config change, not just performance drift. Angle
@@ -1812,6 +1815,7 @@ app.post('/api/airtable/campaign', async (req, res) => {
     if (ctaMsg !== null) fields['CTA Message'] = ctaMsg;
     if (Array.isArray(angleLibrary) && angleLibrary.length) fields['Angle Library'] = JSON.stringify(angleLibrary);
     if (['Auto', 'Always Risk', 'Always Upside'].includes(framingMode)) fields['Framing Mode'] = framingMode;
+    if (decisionMakerCriteria) fields['Decision Maker Criteria'] = decisionMakerCriteria;
     const data = await airtableWriteAllowingMissingCtaFields('POST', 'Campaigns', { records: [{ fields }] });
     res.json({ success: true, updated: false, recordId: data.records[0].id });
   } catch (err) {
@@ -9397,6 +9401,135 @@ app.get('/api/campaign/:id/segmentation', async (req, res) => {
     res.json({ companies, totalCompanies: companies.length, scoredCount: companies.filter(c => c.scored).length });
   } catch (err) {
     console.error('Segmentation error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===================== ACCOUNT-AS-PIPELINE (redesign plan §4) =====================
+// The account is the pipeline unit, not the contact - a company isn't
+// "worked" until the *right* person has been reached, not just anyone.
+// "Right person" is a fixed, mechanical rule per campaign (Decision Maker
+// Criteria: one keyword per line, case-insensitive substring match against
+// Job Title) - deliberately not Engine-judged, so the bar can't quietly
+// drift to make a number look better.
+function parseDecisionMakerCriteria(text) {
+  return String(text || '').split('\n').map(s => s.trim()).filter(Boolean);
+}
+function jobTitleMatchesCriteria(jobTitle, criteria) {
+  const t = (jobTitle || '').toLowerCase();
+  return criteria.some(k => t.includes(k.toLowerCase()));
+}
+// Priority order when a company has multiple contacts at different points -
+// the company's status is the furthest any one of them has reached.
+const ACCOUNT_STATUS_RANK = ['Not yet mapped', 'Wrong persona(s) only', 'Right person reached', 'Engaged', 'Booked'];
+
+// campaignRows: this campaign's Campaign Contacts rows (already filtered to
+// one campaign) whose Contact resolves to this company. contactById: full
+// Contacts records, keyed by id (for Job Title). criteria: parsed decision-
+// maker keyword list (parseDecisionMakerCriteria). dealsByContactId:
+// optional map of contactId -> deal outcomes for this campaign (Outcome
+// "Won" -> Booked), same shape variant-performance builds above - a
+// mechanical extra a plain 4-arg version can't see, so it's accepted here
+// as a 5th param rather than omitted.
+function accountStatusForCompany(companyId, campaignRows, contactById, criteria, dealsByContactId) {
+  const rowsHere = campaignRows.filter(r => {
+    const contactId = (r.fields['Contact'] || [])[0];
+    const contact = contactId ? contactById[contactId] : null;
+    return contact && (contact.fields['Company'] || [])[0] === companyId;
+  });
+  if (!rowsHere.length) return { status: 'Not yet mapped', matches: [], nonMatches: [] };
+
+  const matches = [];
+  const nonMatches = [];
+  let best = 'Not yet mapped';
+  const bump = s => { if (ACCOUNT_STATUS_RANK.indexOf(s) > ACCOUNT_STATUS_RANK.indexOf(best)) best = s; };
+
+  rowsHere.forEach(row => {
+    const contactId = (row.fields['Contact'] || [])[0];
+    const contact = contactById[contactId];
+    const cf = contact.fields || {};
+    const name = cf['Full Name'] || '';
+    const jobTitle = cf['Job Title'] || '';
+    const isMatch = jobTitleMatchesCriteria(jobTitle, criteria);
+    if (!isMatch) { nonMatches.push({ contactId, name, jobTitle }); return; }
+
+    const stage = collapseLegacyStage(normalizeSequenceStage(row.fields['Sequence Stage']));
+    const stageHistory = row.fields['Stage History'] || '';
+    const won = (dealsByContactId && dealsByContactId[contactId] || []).some(d => d.outcome === 'Won');
+    const meetingBooked = stage === 'Meeting Booked' || /Meeting Booked/.test(stageHistory);
+    const replied = rowReplyReceived(row);
+    const connectedPlus = linkedInStageRank(stage) >= linkedInStageRank('Connected');
+
+    let contactStatus = 'Wrong persona(s) only'; // unreachable here (isMatch true), kept for clarity
+    if (won || meetingBooked) contactStatus = 'Booked';
+    else if (replied) contactStatus = 'Engaged';
+    else if (connectedPlus) contactStatus = 'Right person reached';
+    else contactStatus = 'Not yet mapped'; // matched persona, but not connected yet - not "wrong", just not there yet
+
+    matches.push({ contactId, name, jobTitle, stage, status: contactStatus });
+    bump(contactStatus);
+  });
+
+  // Every linked contact was checked against criteria; none matched at all.
+  if (!matches.length) best = 'Wrong persona(s) only';
+  // A matched contact who hasn't connected yet shouldn't silently read as
+  // "Not yet mapped" (that's reserved for "no one linked at all") - surface
+  // it as the weakest positive state once at least one persona match exists.
+  if (best === 'Not yet mapped' && matches.length) best = 'Right person reached';
+
+  return { status: best, matches, nonMatches };
+}
+
+app.get('/api/campaign/:id/account-pipeline', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const campaignName = decodeURIComponent(req.params.id);
+  try {
+    const campaignRecord = await findRecordByFieldName('Campaigns', 'Name', campaignName);
+    if (!campaignRecord) return res.status(404).json({ error: `Campaign "${campaignName}" not found` });
+
+    const criteria = parseDecisionMakerCriteria(campaignRecord.fields['Decision Maker Criteria']);
+
+    const [rows, contactRecords, companyRecords, dealRecords] = await Promise.all([
+      fetchCampaignContactsRows(), airtableFetchAllRecords('Contacts'), airtableFetchAllRecords('Companies'), airtableFetchAllRecords('Deals').catch(() => [])
+    ]);
+    const contactById = {}; contactRecords.forEach(r => { contactById[r.id] = r; });
+    const companyById = {}; companyRecords.forEach(r => { companyById[r.id] = r; });
+    const myRows = rows.filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id));
+
+    const dealsByContactId = {};
+    dealRecords.filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id)).forEach(r => {
+      const cid = (r.fields['Contact'] || [])[0];
+      if (cid) (dealsByContactId[cid] = dealsByContactId[cid] || []).push({ outcome: r.fields['Outcome'] || 'Pending' });
+    });
+
+    const companyIds = new Set();
+    myRows.forEach(r => {
+      const contactId = (r.fields['Contact'] || [])[0];
+      const contact = contactId ? contactById[contactId] : null;
+      const companyId = contact ? (contact.fields['Company'] || [])[0] : null;
+      if (companyId) companyIds.add(companyId);
+    });
+
+    const accounts = [...companyIds].map(companyId => {
+      const company = companyById[companyId];
+      const result = accountStatusForCompany(companyId, myRows, contactById, criteria, dealsByContactId);
+      return {
+        companyId,
+        companyName: company ? (company.fields['Company Name'] || '') : '',
+        status: result.status,
+        matches: result.matches,
+        nonMatches: result.nonMatches
+      };
+    });
+
+    const hasCriteria = criteria.length > 0;
+    res.json({
+      hasCriteria,
+      accounts,
+      counts: ACCOUNT_STATUS_RANK.reduce((acc, s) => { acc[s] = accounts.filter(a => a.status === s).length; return acc; }, {})
+    });
+  } catch (err) {
+    console.error('Account-pipeline error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
