@@ -5121,6 +5121,15 @@ app.get('/api/campaign/:id/variant-performance', async (req, res) => {
 // unedited. A snapshot across the campaign's current Draft Outcome values,
 // not date-ranged - that field only ever holds the most recent send per row,
 // so a per-window slice would just be noise.
+// Jeanne DeWitt Grosser's "track the same KPIs you'd hold a human to, and
+// only loosen review once the agent holds them flat or better" - the
+// campaign-wide number PLUS a per-stage breakdown, since trust should build
+// (and be judged) stage by stage, not as one blended figure. A stage's
+// CURRENT Sequence Stage is a reasonable proxy for "which message was last
+// sent" - Draft Outcome only ever holds the most recent send per row, so
+// this is a snapshot, not date-ranged.
+const DRAFT_TRUST_THRESHOLD_PCT = 85;
+const DRAFT_TRUST_MIN_SAMPLE = 10;
 app.get('/api/campaign/:id/draft-trust', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   const campaignName = decodeURIComponent(req.params.id);
@@ -5129,11 +5138,28 @@ app.get('/api/campaign/:id/draft-trust', async (req, res) => {
     if (!campaignRecord) return res.status(404).json({ error: 'Campaign not found' });
     const rows = await fetchCampaignContactsRows();
     const myRows = rows.filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id) && r.fields['Draft Outcome']);
-    const counts = { 'Sent verbatim': 0, 'Sent edited': 0, 'Discarded': 0 };
-    myRows.forEach(r => { const o = r.fields['Draft Outcome']; if (counts[o] !== undefined) counts[o]++; });
-    const total = counts['Sent verbatim'] + counts['Sent edited'] + counts['Discarded'];
-    const verbatimRatePct = total ? Math.round((counts['Sent verbatim'] / total) * 100) : null;
-    res.json({ total, counts, verbatimRatePct });
+
+    const tally = () => ({ 'Sent verbatim': 0, 'Sent edited': 0, 'Discarded': 0 });
+    const toStats = counts => {
+      const total = counts['Sent verbatim'] + counts['Sent edited'] + counts['Discarded'];
+      const verbatimRatePct = total ? Math.round((counts['Sent verbatim'] / total) * 100) : null;
+      const trusted = total >= DRAFT_TRUST_MIN_SAMPLE && verbatimRatePct !== null && verbatimRatePct >= DRAFT_TRUST_THRESHOLD_PCT;
+      return { total, counts, verbatimRatePct, trusted };
+    };
+
+    const overallCounts = tally();
+    const byStage = {};
+    myRows.forEach(r => {
+      const stage = collapseLegacyStage(normalizeSequenceStage(r.fields['Sequence Stage'])) || 'Unknown';
+      const o = r.fields['Draft Outcome'];
+      if (overallCounts[o] === undefined) return;
+      overallCounts[o]++;
+      byStage[stage] = byStage[stage] || tally();
+      byStage[stage][o]++;
+    });
+
+    const stages = Object.entries(byStage).map(([stage, counts]) => ({ stage, ...toStats(counts) }));
+    res.json({ ...toStats(overallCounts), stages });
   } catch (err) {
     console.error('Draft trust error:', err.message);
     res.status(500).json({ error: err.message });

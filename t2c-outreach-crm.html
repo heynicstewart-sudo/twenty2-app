@@ -12321,25 +12321,50 @@ async function scoreIcpBulk(campaignId){
   if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-sparkles"></i> Score ICP'; }
 }
 
+// The actual X/Y read Jeanne DeWitt Grosser described - size on one axis,
+// momentum on the other, not a scrolling list. Same GET .../segmentation
+// data as before, just laid out as a grid instead of a table.
+const SEGMENTATION_SIZE_COLS = ['Micro', 'Small', 'Mid', 'Large'];
+const SEGMENTATION_MOMENTUM_ROWS = ['Hiring', 'Funded', 'Leadership Change', 'Flat'];
+
 function renderSegmentationGrid(campaign){
   const data = window.__campaignSegmentation && window.__campaignSegmentation[campaign.id];
+  const body = () => {
+    if(!data) return '<div class="muted" style="font-size:12.5px;">Not loaded yet.</div>';
+    if(data.error) return `<div class="muted">Could not load: ${esc(data.error)}</div>`;
+    if(!data.companies.length) return '<div class="empty-state">No companies linked to this campaign yet.</div>';
+
+    const unscored = data.companies.filter(c => !c.scored);
+    const cellFor = (size, momentum) => data.companies.filter(c => c.sizeBand === size && c.momentum === momentum);
+
+    return `
+      <div class="muted" style="font-size:11.5px;margin-bottom:8px;">${data.scoredCount} of ${data.totalCompanies} scored.</div>
+      <div style="overflow-x:auto;">
+        <div style="display:grid;grid-template-columns:90px repeat(${SEGMENTATION_SIZE_COLS.length},minmax(120px,1fr));gap:4px;min-width:560px;">
+          <div></div>
+          ${SEGMENTATION_SIZE_COLS.map(s => `<div class="muted" style="font-size:10.5px;font-weight:700;text-align:center;padding:4px;">${s}</div>`).join('')}
+          ${SEGMENTATION_MOMENTUM_ROWS.map(m => `
+            <div class="muted" style="font-size:10.5px;font-weight:700;display:flex;align-items:center;">${esc(m)}</div>
+            ${SEGMENTATION_SIZE_COLS.map(s => {
+              const cos = cellFor(s, m);
+              return `<div style="background:var(--surface-2);border:1px solid var(--border-light);border-radius:6px;padding:6px;min-height:44px;font-size:11px;">
+                ${cos.length ? cos.map(c=>esc(c.companyName)).join(', ') : '<span class="muted">—</span>'}
+              </div>`;
+            }).join('')}
+          `).join('')}
+        </div>
+      </div>
+      ${unscored.length ? `<div class="muted" style="font-size:11px;margin-top:10px;">${unscored.length} not yet scored: ${unscored.slice(0,8).map(c=>esc(c.companyName)).join(', ')}${unscored.length>8?'…':''}</div>` : ''}
+    `;
+  };
   return `
   <div class="card" style="margin-bottom:16px;">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-grid-dots"></i> ICP segmentation</div>
       <button class="btn btn-secondary btn-sm" id="scoreIcpBtn-${campaign.id}" onclick="scoreIcpBulk('${campaign.id}')"><i class="ti ti-sparkles"></i> Score ICP</button>
     </div>
-    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every company reachable from this campaign, scored on 3 attributes (size, momentum, workload type). Costs Engine tokens; already-scored companies are skipped automatically.</div>
-    ${!data ? '<div class="muted" style="font-size:12.5px;">Not loaded yet.</div>' :
-      data.error ? `<div class="muted">Could not load: ${esc(data.error)}</div>` :
-      !data.companies.length ? '<div class="empty-state">No companies linked to this campaign yet.</div>' : `
-      <div class="muted" style="font-size:11.5px;margin-bottom:8px;">${data.scoredCount} of ${data.totalCompanies} scored.</div>
-      <div class="perf-table-wrap"><table class="perf-table">
-        <thead><tr><th>Company</th><th>Size</th><th>Momentum</th><th>Workload type</th></tr></thead>
-        <tbody>${data.companies.map(c => `
-          <tr><td class="perf-name">${esc(c.companyName)}</td><td>${esc(c.sizeBand||'—')}</td><td>${esc(c.momentum||'—')}</td><td>${esc(c.workloadType||'—')}</td></tr>
-        `).join('')}</tbody>
-      </table></div>`}
+    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Size x momentum - every company reachable from this campaign, scored on 3 attributes. Costs Engine tokens; already-scored companies are skipped automatically.</div>
+    ${body()}
   </div>`;
 }
 
@@ -12662,11 +12687,16 @@ function renderDraftTrustCard(campaign){
     ${!data ? '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading…</div>' :
       data.error ? `<div class="muted">Could not load: ${esc(data.error)}</div>` :
       !data.total ? '<div class="empty-state">No sent drafts logged yet.</div>' : `
-      <div class="mini-cards" style="grid-template-columns:repeat(3,1fr);margin-bottom:0;">
+      <div class="mini-cards" style="grid-template-columns:repeat(3,1fr);margin-bottom:${(data.stages&&data.stages.length)?'10px':'0'};">
         <div class="mini-card"><div class="num">${data.verbatimRatePct}%</div><div class="label">Sent verbatim</div></div>
         <div class="mini-card"><div class="num">${data.counts['Sent edited']}</div><div class="label">Edited before sending</div></div>
         <div class="mini-card"><div class="num">${data.counts['Discarded']}</div><div class="label">Discarded</div></div>
-      </div>`}
+      </div>
+      ${(data.stages||[]).filter(s=>s.trusted).map(s => `
+        <div class="scorecard-diag" style="background:#dcfce7;border-color:#bbf7d0;color:#166534;">
+          <i class="ti ti-shield-check"></i> <strong>${esc(s.stage)}</strong> is trusted - ${s.verbatimRatePct}% sent verbatim over ${s.total} sends. Reviewing every draft here may be optional.
+        </div>`).join('')}
+      `}
   </div>`;
 }
 
