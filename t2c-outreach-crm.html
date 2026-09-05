@@ -13021,23 +13021,28 @@ function renderCampaignAnalyticsTab(campaign){
 
   ${renderCampaignMessagePerformance()}
 
-  ${renderDraftTrustCard(campaign)}
+  <details class="card" style="padding:0;">
+    <summary style="cursor:pointer;padding:14px 16px;font-weight:600;"><i class="ti ti-cpu"></i> Engine performance</summary>
+    <div style="padding:0 16px 16px;">
+      ${renderDraftTrustCard(campaign)}
 
-  ${renderVariantPerformanceCard(campaign)}
+      ${renderVariantPerformanceCard(campaign)}
 
-  ${renderAutopsyDigestCard(campaign)}
+      ${renderAutopsyDigestCard(campaign)}
 
-  <div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-bulb-filled"></i> Engine Insights</div>
-      <button class="btn btn-secondary btn-sm" onclick="refreshCampaignInsights()"><i class="ti ti-refresh"></i> Refresh insights</button>
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+          <div class="section-title" style="margin-bottom:0;"><i class="ti ti-bulb-filled"></i> Engine Insights</div>
+          <button class="btn btn-secondary btn-sm" onclick="refreshCampaignInsights()"><i class="ti ti-refresh"></i> Refresh insights</button>
+        </div>
+        ${insights === null && !insightsErr ? '<div class="muted"><i class="ti ti-loader-2"></i> Loading insights...</div>' :
+          insightsErr ? `<div class="muted">Could not load insights: ${esc(insightsErr)}</div>` :
+          insights.length ? `<ul style="padding-left:18px;font-size:12.5px;line-height:1.7;">${insights.map(i=>`<li>${esc(i)}</li>`).join('')}</ul>` :
+          window.__campaignInsightsNotGenerated ? '<div class="muted" style="font-size:12.5px;">No insights generated yet. Press Refresh insights when you want the Engine to analyse this campaign.</div>' :
+          '<div class="empty-state">No insights yet for this campaign.</div>'}
+      </div>
     </div>
-    ${insights === null && !insightsErr ? '<div class="muted"><i class="ti ti-loader-2"></i> Loading insights...</div>' :
-      insightsErr ? `<div class="muted">Could not load insights: ${esc(insightsErr)}</div>` :
-      insights.length ? `<ul style="padding-left:18px;font-size:12.5px;line-height:1.7;">${insights.map(i=>`<li>${esc(i)}</li>`).join('')}</ul>` :
-      window.__campaignInsightsNotGenerated ? '<div class="muted" style="font-size:12.5px;">No insights generated yet. Press Refresh insights when you want the Engine to analyse this campaign.</div>' :
-      '<div class="empty-state">No insights yet for this campaign.</div>'}
-  </div>
+  </details>
   `;
 }
 
