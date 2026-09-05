@@ -12431,6 +12431,76 @@ app.post('/api/campaign/:id/autopsy-digest', async (req, res) => {
   }
 });
 
+// Account-wide version - the same diagnosis, across every stalled contact
+// in EVERY campaign, not just one. This is the fix for "how do we learn
+// for future campaigns" - a per-campaign digest resets with every new
+// campaign; this one accumulates, so patterns ("this objection keeps
+// coming up regardless of which campaign") are visible across the whole
+// account. Same 7-day-per-contact guard, higher cap since it spans
+// everything.
+const ACCOUNT_AUTOPSY_DIGEST_CAP = 30;
+app.post('/api/companies/autopsy-digest', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  try {
+    const [rows, contactRecords, allTps, campaignRecords] = await Promise.all([
+      fetchCampaignContactsRows(), airtableFetchAllRecords('Contacts'), airtableFetchAllRecords('Touch Points'), airtableFetchAllRecords('Campaigns')
+    ]);
+    const contactById = {}; contactRecords.forEach(r => { contactById[r.id] = r; });
+    const campaignById = {}; campaignRecords.forEach(r => { campaignById[r.id] = r; });
+
+    const today = new Date().toISOString().slice(0, 10);
+    const cutoff = addDaysIso(today, -7);
+    const candidates = rows.filter(r => {
+      if (!isStalledForAutopsy(r)) return false;
+      const lastRun = r.fields['Autopsy Run At'];
+      if (lastRun && lastRun >= cutoff) return false;
+      const contactId = (r.fields['Contact'] || [])[0];
+      if (!contactId || !contactById[contactId]) return false;
+      const campaignId = (r.fields['Campaign'] || [])[0];
+      if (!campaignId || !campaignById[campaignId]) return false;
+      const hasHistory = !!(contactById[contactId].fields || {})['Conversation Context'] || allTps.some(tp => (tp.fields['Contact'] || []).includes(contactId));
+      return hasHistory;
+    }).slice(0, ACCOUNT_AUTOPSY_DIGEST_CAP);
+
+    const results = [];
+    for (const row of candidates) {
+      const contactId = (row.fields['Contact'] || [])[0];
+      const contactRecord = contactById[contactId];
+      const campaignId = (row.fields['Campaign'] || [])[0];
+      const campaignRecord = campaignById[campaignId];
+      const myTps = allTps.filter(tp => (tp.fields['Contact'] || []).includes(contactId) && (tp.fields['Campaign'] || []).includes(campaignId));
+      try {
+        const result = await runAutopsyForRow(campaignRecord, contactRecord, row, myTps);
+        results.push({
+          campaignContactId: row.id, contactId,
+          contactName: (contactRecord.fields || {})['Full Name'] || '',
+          campaignName: campaignRecord.fields['Name'] || campaignRecord.fields['Campaign Name'] || '',
+          ...result
+        });
+      } catch (err) {
+        console.warn(`Account-wide autopsy failed for ${contactId} (non-fatal):`, err.message);
+      }
+    }
+
+    // Group by the diagnosed milestone so a recurring pattern ("most stalls
+    // happen right after Message 1") is visible at a glance, not just a
+    // flat list - this is the "learn for future campaigns" part.
+    const byMilestone = {};
+    results.forEach(r => { (byMilestone[r.milestone || 'Not started'] = byMilestone[r.milestone || 'Not started'] || []).push(r); });
+
+    if (results.length) {
+      const lines = results.map(r => `• ${r.contactName} (${r.campaignName}): ${r.realReason || '(no clear diagnosis)'}`).join('\n');
+      await postSlackNudge(`*Account-wide GTM review*\n${results.length} contact(s) across every campaign:\n${lines}`);
+    }
+
+    res.json({ success: true, reviewed: results.length, results, byMilestone });
+  } catch (err) {
+    console.error('Account-wide autopsy digest error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // "Turn into Style Correction" on an autopsy result - a thin wrapper over
 // appendStyleCorrection so the frontend doesn't need generate-message's/
 // regenerate-reply's full request shape just to save a steer.
