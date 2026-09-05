@@ -654,6 +654,19 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .gtm-loop-card svg{max-width:420px;width:100%;height:auto;}
 .gtm-loop-caption{font-size:12px;color:var(--muted);margin-top:8px;max-width:460px;margin-left:auto;margin-right:auto;line-height:1.6;}
 
+/* Profile board (Jeanne vision pivot §2 - mind-map canvas replacing the flat tree) */
+.profile-board-canvas{position:relative;height:520px;min-width:600px;background:var(--surface-2);border:1px solid var(--border-light);border-radius:var(--radius-card);overflow:auto;}
+.profile-board-lines{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;}
+.profile-board-center{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:150px;padding:12px;border-radius:var(--radius-input);background:var(--primary);color:#fff;text-align:center;z-index:2;box-shadow:var(--shadow-lg);}
+.pbc-name{font-weight:800;font-size:13px;}
+.pbc-icp{font-size:10.5px;color:rgba(255,255,255,.7);margin-top:4px;}
+.pbc-rel{font-size:10px;font-weight:700;color:#fff;background:rgba(255,255,255,.18);border-radius:var(--radius-pill);padding:2px 8px;margin-top:6px;display:inline-block;}
+.profile-board-node{position:absolute;width:128px;padding:8px 10px;border-radius:var(--radius-input);background:var(--surface);border:2px solid var(--border);cursor:grab;z-index:3;user-select:none;box-shadow:var(--shadow-sm);}
+.profile-board-node:active{cursor:grabbing;}
+.pbn-name{font-weight:700;font-size:11.5px;line-height:1.3;}
+.pbn-title{font-size:10px;line-height:1.3;margin-top:1px;}
+.pbn-badge{font-size:10px;font-weight:700;margin-top:5px;}
+
 /* Context menu */
 .ctx-menu{position:fixed;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card);box-shadow:var(--shadow-lg);z-index:300;overflow:hidden;min-width:180px;}
 .ctx-item{padding:10px 14px;font-size:12.5px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:8px;}
@@ -2442,6 +2455,12 @@ function afterRender(page){
       if(window.__marketPulse === undefined) loadMarketPulse();
     }
     if(tab === 'profiles' && window.__websiteLeads === undefined) loadWebsiteLeads();
+  }
+  if(page === 'profile' && window.__profileSelectedCompany){
+    const name = window.__profileSelectedCompany;
+    window.__profileBoardData = window.__profileBoardData || {};
+    if(window.__profileBoardData[name] === undefined) loadProfileBoard(name);
+    else layoutProfileBoard();
   }
 }
 
@@ -10220,6 +10239,72 @@ async function openCompanyDrawer(name){
   }
 }
 
+// Surfaces the Monday.com CRM backfill data (Twenty2's OWN relationship
+// with this account - active deal, past client, or warm relationship,
+// plus who to route through and any do-not-contact constraints) right on
+// the company record - previously this only appeared as a warning banner
+// buried inside message drafting, so a rep researching an account before
+// message 1 had no way to see it up front.
+function renderRelationshipFlagSection(flag){
+  if(!flag) return '';
+  const tone = flag.status === 'Active Deal In Progress' ? 'var(--danger)' : 'var(--warning, #b45309)';
+  return `
+  <div class="drawer-section" style="border-left:3px solid ${tone};padding-left:10px;">
+    <div style="font-size:11px;font-weight:700;margin-bottom:4px;color:${tone};"><i class="ti ti-alert-triangle"></i> TWENTY2's OWN RELATIONSHIP: ${esc(flag.status.toUpperCase())}</div>
+    ${flag.tier ? `<div class="muted" style="font-size:11px;margin-bottom:4px;">Tier ${esc(flag.tier)}</div>` : ''}
+    ${flag.notes ? `<div style="font-size:12px;white-space:pre-wrap;">${esc(flag.notes)}</div>` : ''}
+    ${flag.accountMap ? `<div class="muted" style="font-size:11px;font-weight:700;margin-top:8px;margin-bottom:2px;">ACCOUNT MAP</div><div style="font-size:12px;white-space:pre-wrap;">${esc(flag.accountMap)}</div>` : ''}
+    ${flag.liveSyncLog ? `<div class="muted" style="font-size:11px;font-weight:700;margin-top:8px;margin-bottom:2px;">RECENT MONDAY ACTIVITY</div><div style="font-size:11.5px;white-space:pre-wrap;">${esc(flag.liveSyncLog.split('\n').slice(-4).join('\n'))}</div>` : ''}
+  </div>`;
+}
+
+// "Who are we talking to, who do we NEED to talk to" - every known contact
+// at this account, whether they actually match a Decision Maker Criteria
+// keyword from any campaign touching the account, and their reach status.
+// This is the account-level view the per-campaign Pipeline tab doesn't
+// give: a persona gap ("6 contacts here, 0 decision-makers") is visible
+// looking at the company alone, before opening any specific campaign.
+function renderAccountContactsSection(contacts){
+  if(!contacts || !contacts.length) return '';
+  const dmCount = contacts.filter(c => c.isDecisionMaker === true).length;
+  const anyCriteria = contacts.some(c => c.isDecisionMaker !== null);
+  return `
+  <div class="drawer-section">
+    <div class="section-title" style="font-size:13px;"><i class="ti ti-users-group"></i> Account coverage</div>
+    ${anyCriteria ? `<div class="muted" style="font-size:11.5px;margin-bottom:8px;">${dmCount} of ${contacts.length} known contact${contacts.length===1?'':'s'} match${dmCount===1?'es':''} a Decision Maker Criteria keyword from a campaign touching this account.</div>` : `<div class="muted" style="font-size:11.5px;margin-bottom:8px;">${contacts.length} known contact${contacts.length===1?'':'s'} at this company.</div>`}
+    ${contacts.map(c => `
+      <div class="tp-item" style="cursor:pointer;" onclick="closeDrawer();openContactDrawer('${esc(c.name)}', null)">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+          <strong>${esc(c.name)}</strong>
+          ${c.isDecisionMaker===true ? '<span class="badge" style="background:var(--success-bg,#dcfce7);color:var(--success,#16a34a);font-size:10px;">Decision maker</span>' : ''}
+        </div>
+        <div class="muted" style="font-size:11.5px;">${esc(c.jobTitle||'No title on file')}</div>
+        ${c.campaignStatuses.length ? c.campaignStatuses.map(s=>`<div class="muted" style="font-size:11px;margin-top:2px;">${esc(s.campaignName)} — ${esc(s.stage)}${s.replyReceived?' · replied':''}</div>`).join('') : '<div class="muted" style="font-size:11px;margin-top:2px;font-style:italic;">Not yet targeted in any campaign</div>'}
+      </div>
+    `).join('')}
+  </div>`;
+}
+
+// Relevant proof from Twenty2's own delivery history (99-entry case study
+// library pulled from Monday's Project Register), matched by sector - the
+// concrete "here's what we did for a company just like you" a rep can lead
+// with instead of a generic pitch.
+function renderMatchingCaseStudiesSection(studies){
+  if(!studies || !studies.length) return '';
+  return `
+  <div class="drawer-section">
+    <div class="section-title" style="font-size:13px;"><i class="ti ti-award"></i> Relevant case studies</div>
+    <div class="muted" style="font-size:11px;margin-bottom:8px;">Twenty2's own past work in this sector - worth referencing in outreach.</div>
+    ${studies.map(s => `
+      <div class="tp-item">
+        <div style="display:flex;justify-content:space-between;"><strong>${esc(s.client||'')}</strong><span class="muted">${esc(s.year||'')}</span></div>
+        <div class="muted" style="font-size:11px;">${esc(s.sector||'')}${s.service?' · '+esc(s.service):''}</div>
+        <div style="font-size:12px;margin-top:2px;">${esc(s.outcome||'')}</div>
+      </div>
+    `).join('')}
+  </div>`;
+}
+
 function renderCompanyEnrichmentSection(c, fresh){
   if(fresh){
     return `
@@ -10258,6 +10343,8 @@ function renderCompanyDrawerContent(data){
     ${renderCompanyEnrichmentSection(c)}
   </div>
 
+  ${renderRelationshipFlagSection(data.relationshipFlag)}
+
   ${c.latestSignal ? `<div class="drawer-section">
     <div class="muted" style="font-size:11px;font-weight:700;margin-bottom:4px;">LATEST SIGNAL</div>
     <div style="font-size:12px;">${esc(c.latestSignal)}${c.signalDate?` <span class="muted">(${fmtDate(c.signalDate)})</span>`:''}</div>
@@ -10272,6 +10359,10 @@ function renderCompanyDrawerContent(data){
     <div class="muted" style="font-size:11px;font-weight:700;margin-bottom:6px;">CAMPAIGNS TOUCHING THIS ACCOUNT</div>
     ${data.campaignsTouching.map(camp=>`<div class="tp-item" style="cursor:pointer;" onclick="closeDrawer();navigate('campaigns');openCampaignDetail('${camp.id}','pipeline')"><strong>${esc(camp.name)}</strong></div>`).join('')}
   </div>` : ''}
+
+  ${renderAccountContactsSection(data.accountContacts)}
+
+  ${renderMatchingCaseStudiesSection(data.matchingCaseStudies)}
 
   ${(data.keyContacts||[]).length ? `<div class="drawer-section">
     <div class="muted" style="font-size:11px;font-weight:700;margin-bottom:6px;">KEY CONTACTS</div>
@@ -12833,7 +12924,7 @@ function renderProfilePage(){
       </div>
     ` : ''}
   </div>
-  ${selectedCompany ? renderProfileCompanyTree(selectedCompany, scopeCampaignId) : ''}
+  ${selectedCompany ? renderProfileCompanyBoard(selectedCompany, scopeCampaignId) : ''}
   `;
 }
 
@@ -12852,20 +12943,64 @@ function selectProfileCompany(name){
   renderPage();
 }
 
-function renderProfileCompanyTree(companyName, scopeCampaignId){
-  const scopeCampaign = scopeCampaignId ? state.campaigns.find(c => c.id === scopeCampaignId) : null;
-  const inScope = scopeCampaign ? new Set(campaignContacts(scopeCampaign).map(c => c.id)) : null;
-  const contacts = state.contacts.filter(c => c.company === companyName && (!inScope || inScope.has(c.id)));
+// ---- Visual Profile board (Jeanne vision pivot §2) ----
+// Replaces the old flat job-title tree with a mind-map-style canvas: the
+// company in the center, contacts auto-arranged in rings by seniority
+// around it, draggable within the session, colour-coded by how far each
+// has gotten (rolled up across every campaign that touches them - see
+// GET /api/companies/:name/profile-board in search-server.js). Depth still
+// lives in the existing contact drawer; the board itself stays a map.
 
-  const groups = {};
-  contacts.forEach(c => {
-    const title = c.role || 'No title on file';
-    (groups[title] = groups[title] || []).push(c);
+async function loadProfileBoard(companyName){
+  window.__profileBoardData = window.__profileBoardData || {};
+  try {
+    const res = await fetch(`/api/companies/${encodeURIComponent(companyName)}/profile-board`);
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__profileBoardData[companyName] = data;
+  } catch(err){
+    window.__profileBoardData[companyName] = { error: err.message };
+  }
+  if(window.__profileSelectedCompany === companyName) renderPage();
+}
+
+function profileSeniorityTier(jobTitle){
+  const t = (jobTitle || '').toLowerCase();
+  if(/chief|\bceo\b|\bcfo\b|\bcoo\b|\bcto\b|president|owner|founder|director|head of|\bvp\b|vice president/.test(t)) return 0;
+  if(/manager|\blead\b|principal|superintendent/.test(t)) return 1;
+  return 2;
+}
+
+function profileStatusColor(status){
+  return {
+    'Not yet mapped': 'var(--muted)',
+    'Right person reached': 'var(--tint-blue-fg)',
+    'Engaged': 'var(--tint-green-fg)',
+    'Booked': 'var(--tint-gold-fg)'
+  }[status] || 'var(--muted)';
+}
+
+// Fixed pixel offsets from the center, independent of the canvas's actual
+// on-screen size (converted to absolute left/top by layoutProfileBoard once
+// the canvas is in the DOM and measurable) - so this can run once per data
+// load rather than on every resize.
+function computeProfileBoardAutoLayout(contacts){
+  const tiers = [[], [], []];
+  contacts.forEach(c => tiers[profileSeniorityTier(c.jobTitle)].push(c));
+  const radii = [90, 150, 205];
+  const offsets = {};
+  tiers.forEach((list, tier) => {
+    list.forEach((c, i) => {
+      const angle = (-90 + (360 / list.length) * i) * Math.PI / 180;
+      offsets[c.id] = { dx: Math.cos(angle) * radii[tier], dy: Math.sin(angle) * radii[tier] };
+    });
   });
-  const titles = Object.keys(groups).sort((a,b) => groups[b].length - groups[a].length);
+  return offsets;
+}
 
-  return `
-  <div class="card">
+function renderProfileCompanyBoard(companyName, scopeCampaignId){
+  const scopeCampaign = scopeCampaignId ? state.campaigns.find(c => c.id === scopeCampaignId) : null;
+  const header = `
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:4px;">
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-building"></i> ${esc(companyName)}</div>
       <div class="field" style="max-width:240px;margin-bottom:0;">
@@ -12874,21 +13009,149 @@ function renderProfileCompanyTree(companyName, scopeCampaignId){
           ${state.campaigns.map(c => `<option value="${c.id}" ${scopeCampaignId===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}
         </select>
       </div>
-    </div>
-    <div class="muted" style="font-size:11.5px;margin-bottom:12px;">${contacts.length} contact${contacts.length===1?'':'s'}${scopeCampaign ? ` in ${esc(scopeCampaign.name)}` : ' across all campaigns'}, grouped by job title.</div>
-    ${titles.length ? `
-      <div style="display:flex;flex-direction:column;gap:14px;">
-        ${titles.map(title => `
-          <div style="display:flex;gap:12px;align-items:flex-start;">
-            <div style="min-width:160px;font-weight:600;font-size:12.5px;padding-top:4px;"><i class="ti ti-corner-down-right"></i> ${esc(title)}</div>
-            <div style="flex:1;display:flex;flex-wrap:wrap;gap:8px;">
-              ${groups[title].map(c => `<span class="tp-item" style="cursor:pointer;padding:6px 10px;" onclick="openContactDrawer('${esc(c.name)}', null)">${esc(c.name)}</span>`).join('')}
-            </div>
-          </div>
-        `).join('')}
+    </div>`;
+
+  const data = window.__profileBoardData && window.__profileBoardData[companyName];
+  if(!data) return `<div class="card">${header}<div class="muted" style="padding:40px;text-align:center;"><i class="ti ti-loader-2"></i> Loading account board...</div></div>`;
+  if(data.error) return `<div class="card">${header}<div class="empty-state">Could not load: ${esc(data.error)}</div></div>`;
+
+  let contacts = data.contacts || [];
+  if(scopeCampaign) contacts = contacts.filter(c => c.campaigns.includes(scopeCampaign.name));
+  if(!contacts.length){
+    return `<div class="card">${header}<div class="empty-state">No contacts on file at this company${scopeCampaign ? ' for this campaign' : ''}.</div></div>`;
+  }
+
+  window.__profileBoardAutoLayout = window.__profileBoardAutoLayout || {};
+  window.__profileBoardAutoLayout[companyName] = computeProfileBoardAutoLayout(contacts);
+
+  const company = data.company;
+  const relFlag = company.relationshipFlag;
+
+  const nodesHtml = contacts.map(c => {
+    const badgeText = scopeCampaign ? (c.stageByCampaign[scopeCampaign.name] || '—') : c.status;
+    const color = scopeCampaign ? 'var(--accent)' : profileStatusColor(c.status);
+    return `
+    <div class="profile-board-node" id="pbNode-${c.id}" style="border-color:${color};" onmousedown="startProfileNodeDrag(event,'${c.id}')" onclick="handleProfileNodeClick(event,'${esc(c.name)}')">
+      <div class="pbn-name">${esc(c.name)}</div>
+      <div class="pbn-title muted">${esc(c.jobTitle||'No title on file')}</div>
+      <div class="pbn-badge" style="color:${color};">${esc(badgeText)}${c.won ? ' <i class="ti ti-trophy"></i>' : ''}</div>
+    </div>`;
+  }).join('');
+
+  return `
+  <div class="card">
+    ${header}
+    <div class="muted" style="font-size:11.5px;margin:6px 0 12px;">${contacts.length} contact${contacts.length===1?'':'s'}${scopeCampaign ? ` in ${esc(scopeCampaign.name)}` : ' across all campaigns'} - drag to rearrange, click to open.</div>
+    <div id="profileBoardCanvas" class="profile-board-canvas">
+      <svg id="profileBoardLines" class="profile-board-lines"></svg>
+      <div class="profile-board-center">
+        <div class="pbc-name">${esc(company.name)}</div>
+        ${company.icpSizeBand ? `<div class="pbc-icp">${esc(company.icpSizeBand)} size · ${esc(company.icpMomentum||'')}</div>` : ''}
+        ${relFlag ? `<div class="pbc-rel">${esc(relFlag.status)}</div>` : ''}
       </div>
-    ` : '<div class="empty-state">No contacts on file at this company' + (scopeCampaign ? ' for this campaign' : '') + '.</div>'}
+      ${nodesHtml}
+    </div>
   </div>`;
+}
+
+// Positions every node (dragged position if the user moved it this session,
+// else the auto-layout offset) and draws the hub-and-spoke lines back to the
+// center. Runs after every render of the profile page while a company is
+// selected (afterRender) since re-rendering rebuilds the DOM from scratch.
+function layoutProfileBoard(){
+  const canvas = document.getElementById('profileBoardCanvas');
+  const companyName = window.__profileSelectedCompany;
+  if(!canvas || !companyName) return;
+  const autoLayout = (window.__profileBoardAutoLayout && window.__profileBoardAutoLayout[companyName]) || {};
+  const saved = (window.__profileBoardPositions && window.__profileBoardPositions[companyName]) || {};
+  const cx = canvas.clientWidth / 2, cy = canvas.clientHeight / 2;
+  const svg = document.getElementById('profileBoardLines');
+  const lines = [];
+
+  const maxLeft = Math.max(0, canvas.clientWidth - 128);
+
+  canvas.querySelectorAll('.profile-board-node').forEach(node => {
+    const contactId = node.id.replace('pbNode-', '');
+    const nodeHeight = node.offsetHeight || 54;
+    const maxTop = Math.max(0, canvas.clientHeight - nodeHeight);
+    let left, top;
+    if(saved[contactId]){
+      left = saved[contactId].left; top = saved[contactId].top;
+    } else {
+      const off = autoLayout[contactId] || { dx:0, dy:0 };
+      left = cx + off.dx - 64; top = cy + off.dy - nodeHeight / 2; // center the node on the offset point
+    }
+    left = Math.max(0, Math.min(maxLeft, left));
+    top = Math.max(0, Math.min(maxTop, top));
+    node.style.left = left + 'px';
+    node.style.top = top + 'px';
+    const ncx = left + 64, ncy = top + nodeHeight / 2;
+    lines.push(`<line x1="${cx}" y1="${cy}" x2="${ncx}" y2="${ncy}" stroke="var(--accent-2)" stroke-width="1.5" stroke-dasharray="4,3"/>`);
+  });
+  if(svg) svg.innerHTML = lines.join('');
+}
+
+let __profileDrag = null;
+
+function startProfileNodeDrag(e, contactId){
+  e.preventDefault();
+  const canvas = document.getElementById('profileBoardCanvas');
+  const node = document.getElementById('pbNode-'+contactId);
+  if(!canvas || !node) return;
+  const canvasRect = canvas.getBoundingClientRect();
+  const nodeRect = node.getBoundingClientRect();
+  __profileDrag = {
+    contactId, node, canvasRect,
+    grabX: e.clientX - nodeRect.left, grabY: e.clientY - nodeRect.top,
+    moved: false
+  };
+  document.onmousemove = dragProfileNode;
+  document.onmouseup = endProfileNodeDrag;
+}
+
+function dragProfileNode(e){
+  const d = __profileDrag;
+  if(!d) return;
+  d.moved = true;
+  const maxLeft = d.canvasRect.width - d.node.offsetWidth;
+  const maxTop = d.canvasRect.height - d.node.offsetHeight;
+  const left = Math.max(0, Math.min(maxLeft, e.clientX - d.canvasRect.left - d.grabX));
+  const top = Math.max(0, Math.min(maxTop, e.clientY - d.canvasRect.top - d.grabY));
+  d.node.style.left = left + 'px';
+  d.node.style.top = top + 'px';
+  const svg = document.getElementById('profileBoardLines');
+  const line = svg && svg.querySelector(`line[data-cid="${d.contactId}"]`);
+  const cx = d.canvasRect.width/2, cy = d.canvasRect.height/2;
+  if(svg){
+    // Cheap redraw - only this one line needs to move during the drag.
+    const others = [...svg.querySelectorAll('line')].filter(l => l !== line);
+    const ncx = left + d.node.offsetWidth/2, ncy = top + d.node.offsetHeight/2;
+    const thisLine = `<line data-cid="${d.contactId}" x1="${cx}" y1="${cy}" x2="${ncx}" y2="${ncy}" stroke="var(--accent-2)" stroke-width="1.5" stroke-dasharray="4,3"/>`;
+    svg.innerHTML = others.map(l => l.outerHTML).join('') + thisLine;
+  }
+}
+
+function endProfileNodeDrag(e){
+  const d = __profileDrag;
+  document.onmousemove = null;
+  document.onmouseup = null;
+  if(!d) return;
+  if(d.moved){
+    const companyName = window.__profileSelectedCompany;
+    window.__profileBoardPositions = window.__profileBoardPositions || {};
+    window.__profileBoardPositions[companyName] = window.__profileBoardPositions[companyName] || {};
+    window.__profileBoardPositions[companyName][d.contactId] = {
+      left: parseFloat(d.node.style.left), top: parseFloat(d.node.style.top)
+    };
+    window.__pbSuppressClick = true;
+  }
+  __profileDrag = null;
+}
+
+function handleProfileNodeClick(e, contactName){
+  if(window.__pbSuppressClick){ window.__pbSuppressClick = false; return; }
+  const scopeCampaign = window.__profileCampaignScope ? state.campaigns.find(c => c.id === window.__profileCampaignScope) : null;
+  openContactDrawer(contactName, scopeCampaign ? scopeCampaign.name : null);
 }
 
 function setProfileCampaignScope(campaignId){

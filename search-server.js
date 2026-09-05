@@ -9154,6 +9154,12 @@ app.get('/api/companies/profile', async (req, res) => {
 
     const enrichMatch = (cf['AI Summary'] || '').match(/^\[Enriched:\s*(\d{4}-\d{2}-\d{2})\]/);
 
+    const [relationshipFlag, matchingCaseStudies] = await Promise.all([
+      Promise.resolve(twenty2RelationshipFlag(companyRecord)),
+      matchCaseStudiesForCompany(companyRecord)
+    ]);
+    const accountContacts = buildAccountContacts(companyRecord, contactRecords, campaignContactRows, campaignsById, touchingCampaignIds);
+
     res.json({
       company: {
         id: companyRecord.id,
@@ -9171,6 +9177,9 @@ app.get('/api/companies/profile', async (req, res) => {
         icpWorkloadType: cf['ICP Workload Type'] || null,
         icpScoredAt: cf['ICP Scored At'] || null
       },
+      relationshipFlag,
+      matchingCaseStudies,
+      accountContacts,
       keyContacts,
       touchPoints,
       deals,
@@ -9304,6 +9313,74 @@ function twenty2RelationshipFlag(companyRecord) {
     tier: cf['Tier'] || '',
     liveSyncLog: cf['Monday Live Sync Log'] || ''
   };
+}
+
+// The 99-entry case-study library pulled from Monday's Project Register
+// during the CRM backfill (Settings.'Twenty2 Case Studies (JSON)') was
+// never actually read by anything after that one-off write - this is the
+// fix: match it against a company so a rep drafting outreach can lead with
+// real, relevant proof ("we did X for a company just like you") instead of
+// a generic pitch. Matches on sector (case-insensitive substring, either
+// direction so "Energy" matches "Energy" and "Utilities" matches
+// "Utilities Provider") against the company's own Industry/Sector - the
+// same fields ICP scoring already reads. Most recent outcomes first.
+async function matchCaseStudiesForCompany(companyRecord) {
+  if (!companyRecord) return [];
+  try {
+    const settingsRecord = await getSettingsRecord();
+    const raw = settingsRecord && settingsRecord.fields['Twenty2 Case Studies (JSON)'];
+    if (!raw) return [];
+    const library = JSON.parse(raw);
+    const cf = companyRecord.fields || {};
+    const targetSectors = [cf['Industry'], cf['Sector']].filter(Boolean).map(s => s.toLowerCase());
+    if (!targetSectors.length) return [];
+    const matches = library.filter(entry => {
+      const sector = (entry.sector || '').toLowerCase();
+      if (!sector) return false;
+      return targetSectors.some(t => t.includes(sector) || sector.includes(t));
+    });
+    return matches.sort((a, b) => String(b.year || '').localeCompare(String(a.year || ''))).slice(0, 5);
+  } catch (err) {
+    console.warn('Case study match failed (non-fatal):', err.message);
+    return [];
+  }
+}
+
+// "Who are we talking to, who do we NEED to talk to" for one account -
+// every known contact at this company, their reach status per campaign,
+// and whether they actually match ANY touching campaign's Decision Maker
+// Criteria - so a thin persona ("we've messaged 3 people, none of them the
+// right one") is visible on the account itself, not just buried in a
+// per-campaign Pipeline tab.
+function buildAccountContacts(companyRecord, contactRecords, campaignContactRows, campaignsById, touchingCampaignIds) {
+  const allCriteria = [...touchingCampaignIds]
+    .map(id => campaignsById[id])
+    .filter(Boolean)
+    .flatMap(c => parseDecisionMakerCriteria(c.fields['Decision Maker Criteria']));
+
+  return contactRecords
+    .filter(r => (r.fields['Company'] || [])[0] === companyRecord.id)
+    .map(r => {
+      const cf = r.fields || {};
+      const rowsForContact = campaignContactRows.filter(row => (row.fields['Contact'] || [])[0] === r.id);
+      const campaignStatuses = rowsForContact.map(row => {
+        const campaign = campaignsById[(row.fields['Campaign'] || [])[0]];
+        return {
+          campaignName: campaign ? (campaign.fields['Name'] || campaign.fields['Campaign Name'] || '') : '',
+          stage: collapseLegacyStage(normalizeSequenceStage(row.fields['Sequence Stage'])),
+          replyReceived: rowReplyReceived(row)
+        };
+      });
+      return {
+        id: r.id,
+        name: cf['Full Name'] || '',
+        jobTitle: cf['Job Title'] || '',
+        isDecisionMaker: allCriteria.length ? jobTitleMatchesCriteria(cf['Job Title'], allCriteria) : null,
+        campaignStatuses,
+        everContacted: campaignStatuses.length > 0
+      };
+    })
+    .sort((a, b) => (b.isDecisionMaker === true) - (a.isDecisionMaker === true));
 }
 
 async function scoreIcpForCompany(companyRecord) {
@@ -9499,6 +9576,80 @@ app.get('/api/companies/segmentation', async (req, res) => {
   }
 });
 
+// ===================== ACCOUNT-WIDE GTM PERFORMANCE =====================
+// The point the user made directly: ICP segmentation, Angle Library etc.
+// already went account-wide, but the actual "which ICP/campaign is
+// converting" answer never got built - each campaign's numbers only ever
+// lived inside that campaign. This is a mechanical rollup (no Engine call,
+// so it's free to run on every page load) across EVERY Campaign Contacts
+// row on file, bucketed by the contact's company's ICP segment, so the
+// NEXT campaign can be designed on evidence ("Large/Hiring/Engineering
+// accounts convert best, via the PO Course campaign") instead of guessing.
+app.get('/api/companies/gtm-performance', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const [rows, contactRecords, companyRecords, campaignRecords, dealRecords] = await Promise.all([
+      fetchCampaignContactsRows(),
+      airtableFetchAllRecords('Contacts'),
+      airtableFetchAllRecords('Companies'),
+      airtableFetchAllRecords('Campaigns'),
+      airtableFetchAllRecords('Deals')
+    ]);
+    const contactById = {}; contactRecords.forEach(r => { contactById[r.id] = r; });
+    const companyById = {}; companyRecords.forEach(r => { companyById[r.id] = r; });
+    const campaignById = {}; campaignRecords.forEach(r => { campaignById[r.id] = r; });
+    const wonContactIds = new Set(
+      dealRecords.filter(d => (d.fields['Outcome'] || '') === 'Won').flatMap(d => d.fields['Contact'] || [])
+    );
+
+    const buckets = {};
+    rows.forEach(row => {
+      const contactId = (row.fields['Contact'] || [])[0];
+      const contact = contactId ? contactById[contactId] : null;
+      const companyId = contact ? (contact.fields['Company'] || [])[0] : null;
+      const company = companyId ? companyById[companyId] : null;
+      if (!company || !company.fields['ICP Scored At']) return; // only scored companies carry a segment
+      const cf = company.fields;
+      const key = `${cf['ICP Size Band'] || '?'}|${cf['ICP Momentum'] || '?'}|${cf['ICP Workload Type'] || '?'}`;
+      if (!buckets[key]) {
+        buckets[key] = {
+          sizeBand: cf['ICP Size Band'] || '?', momentum: cf['ICP Momentum'] || '?', workloadType: cf['ICP Workload Type'] || '?',
+          totalContacted: 0, connectedPlus: 0, replied: 0, meetingsBooked: 0, won: 0, campaignNames: new Set(), winningCampaignNames: new Set()
+        };
+      }
+      const b = buckets[key];
+      const campaignId = (row.fields['Campaign'] || [])[0];
+      const campaign = campaignId ? campaignById[campaignId] : null;
+      const campaignName = campaign ? (campaign.fields['Name'] || campaign.fields['Campaign Name'] || '') : '';
+      const stage = collapseLegacyStage(normalizeSequenceStage(row.fields['Sequence Stage']));
+      const stageHistory = row.fields['Stage History'] || '';
+      const meetingBooked = stage === 'Meeting Booked' || /Meeting Booked/.test(stageHistory);
+      const won = wonContactIds.has(contactId);
+
+      b.totalContacted += 1;
+      if (campaignName) b.campaignNames.add(campaignName);
+      if (linkedInStageRank(stage) >= linkedInStageRank('Connected')) b.connectedPlus += 1;
+      if (rowReplyReceived(row)) b.replied += 1;
+      if (meetingBooked) { b.meetingsBooked += 1; if (campaignName) b.winningCampaignNames.add(campaignName); }
+      if (won) { b.won += 1; if (campaignName) b.winningCampaignNames.add(campaignName); }
+    });
+
+    const bySegment = Object.values(buckets).map(b => ({
+      sizeBand: b.sizeBand, momentum: b.momentum, workloadType: b.workloadType,
+      totalContacted: b.totalContacted, connectedPlus: b.connectedPlus, replied: b.replied,
+      meetingsBooked: b.meetingsBooked, won: b.won,
+      replyRatePct: b.connectedPlus ? Math.round((b.replied / b.connectedPlus) * 100) : null,
+      campaignNames: [...b.campaignNames],
+      winningCampaignNames: [...b.winningCampaignNames]
+    })).sort((a, b) => (b.won - a.won) || (b.meetingsBooked - a.meetingsBooked) || (b.replied - a.replied));
+
+    res.json({ bySegment, unscoredNote: 'Only companies with an ICP score are included - run "Score ICP" on Company Universe to widen coverage.' });
+  } catch (err) {
+    console.error('GTM performance rollup error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ===================== ACCOUNT-AS-PIPELINE (redesign plan §4) =====================
 // The account is the pipeline unit, not the contact - a company isn't
 // "worked" until the *right* person has been reached, not just anyone.
@@ -9624,6 +9775,89 @@ app.get('/api/campaign/:id/account-pipeline', async (req, res) => {
     });
   } catch (err) {
     console.error('Account-pipeline error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Jeanne-vision pivot §2 (visual Profile board): a contact's status rolled
+// up ACROSS every campaign that touches them, not scoped to one campaign's
+// Decision Maker Criteria like accountStatusForCompany above - there's no
+// single campaign's criteria to judge personas against for a whole
+// account's board, so this drops the "wrong persona" bucket and just asks
+// "how far has this contact gotten, anywhere."
+function contactBoardStatus(contactRows, deals) {
+  if (!contactRows.length) return 'Not yet mapped';
+  let best = 'Not yet mapped';
+  const bump = s => { if (ACCOUNT_STATUS_RANK.indexOf(s) > ACCOUNT_STATUS_RANK.indexOf(best)) best = s; };
+  contactRows.forEach(row => {
+    const stage = collapseLegacyStage(normalizeSequenceStage(row.fields['Sequence Stage']));
+    const stageHistory = row.fields['Stage History'] || '';
+    const won = (deals || []).some(d => d.outcome === 'Won');
+    const meetingBooked = stage === 'Meeting Booked' || /Meeting Booked/.test(stageHistory);
+    const replied = rowReplyReceived(row);
+    const connectedPlus = linkedInStageRank(stage) >= linkedInStageRank('Connected');
+    let status = 'Not yet mapped';
+    if (won || meetingBooked) status = 'Booked';
+    else if (replied) status = 'Engaged';
+    else if (connectedPlus) status = 'Right person reached';
+    bump(status);
+  });
+  return best;
+}
+
+// Backs the Profile page's visual board (mind-map canvas, replacing the old
+// flat tree) - every contact at this company, their rolled-up status, which
+// campaign(s) touch them, and their stage within each one so the client can
+// switch between "all campaigns" (rolled-up status) and a single campaign's
+// scope (that campaign's own stage) without a second round trip.
+app.get('/api/companies/:name/profile-board', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const companyName = decodeURIComponent(req.params.name);
+  try {
+    const companyRecord = await findRecordByFieldName('Companies', 'Company Name', companyName);
+    if (!companyRecord) return res.status(404).json({ error: `Company "${companyName}" not found` });
+
+    const [rows, contactRecords, campaignRecords, dealRecords] = await Promise.all([
+      fetchCampaignContactsRows(), airtableFetchAllRecords('Contacts'), airtableFetchAllRecords('Campaigns'), airtableFetchAllRecords('Deals').catch(() => [])
+    ]);
+    const campaignById = {}; campaignRecords.forEach(r => { campaignById[r.id] = r; });
+    const contactsHere = contactRecords.filter(r => (r.fields['Company'] || [])[0] === companyRecord.id);
+
+    const contacts = contactsHere.map(c => {
+      const contactRows = rows.filter(r => (r.fields['Contact'] || []).includes(c.id));
+      const deals = dealRecords.filter(d => (d.fields['Contact'] || [])[0] === c.id)
+        .map(d => ({ outcome: d.fields['Outcome'] || 'Pending', dealValue: d.fields['Deal Value'], date: d.fields['Date'] }));
+      const stageByCampaign = {};
+      contactRows.forEach(r => {
+        const campaignId = (r.fields['Campaign'] || [])[0];
+        const campaign = campaignId && campaignById[campaignId];
+        if (!campaign) return;
+        stageByCampaign[campaign.fields['Name']] = collapseLegacyStage(normalizeSequenceStage(r.fields['Sequence Stage']));
+      });
+      return {
+        id: c.id,
+        name: c.fields['Full Name'] || '',
+        jobTitle: c.fields['Job Title'] || '',
+        status: contactBoardStatus(contactRows, deals),
+        campaigns: Object.keys(stageByCampaign),
+        stageByCampaign,
+        won: deals.some(d => d.outcome === 'Won')
+      };
+    });
+
+    res.json({
+      company: {
+        id: companyRecord.id,
+        name: companyRecord.fields['Company Name'] || '',
+        icpSizeBand: companyRecord.fields['ICP Size Band'] || null,
+        icpMomentum: companyRecord.fields['ICP Momentum'] || null,
+        icpWorkloadType: companyRecord.fields['ICP Workload Type'] || null,
+        relationshipFlag: twenty2RelationshipFlag(companyRecord)
+      },
+      contacts
+    });
+  } catch (err) {
+    console.error('Profile-board error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
