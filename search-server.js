@@ -11960,8 +11960,13 @@ async function postSlackNudge(text) {
 //      }
 //    Run once per board in MONDAY_WATCHED_BOARDS below with
 //    event: change_column_value, and once more per board with
-//    event: create_pulse (to also catch brand new deals, not just changes
-//    to existing ones). Four calls total for the two watched boards.
+//    event: create_item (to also catch brand new deals, not just changes
+//    to existing ones - Monday's API calls this create_item, not the older
+//    "create_pulse" terminology). Four calls total for the two watched
+//    boards. Note: creating a webhook needs at least Full-access board
+//    permission for the token's identity, not just Viewer - confirmed by
+//    trial (Viewer got "User unauthorized to perform action" on
+//    create_webhook even though it can read the board fine).
 const MONDAY_WATCHED_BOARDS = {
   '2045166966': { kind: 'deal' },     // Deals (CRM workspace)
   '5027918836': { kind: 'pipeline' }  // Twenty2 Business Pipeline
