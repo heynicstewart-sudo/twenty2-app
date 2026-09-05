@@ -1488,16 +1488,34 @@ function goToRunIntelligence(){
 // Marketing, Settings) lives inside the Marketing page's own seq-tab bar
 // (CONTENT_SUBTABS), not the sidebar. `settings`, `contentcalendar` and
 // `grid` stay in NAV as hidden entries so page dispatch still resolves them.
+// Redesign plan §1 (snuggly-foraging-glacier.md): nav ordered to match the
+// actual GTM sequence - profile the universe and define the funnel before a
+// campaign exists - not click-frequency. Removed as top-level destinations,
+// functionality preserved by relocating (see the plan's §1 for the full
+// rationale per item):
+//   replies    -> folded into Today's Actions (§2); page kept, hidden, as a
+//                 fallback for the rare case a reply row hasn't loaded yet.
+//   logger,
+//   calendar   -> reachable from a sub-nav at the top of the Campaigns list
+//                 page instead (renderCampaigns) - same pages, unchanged.
+//   intelligence (untagged) -> its Context sub-tab moved into Company
+//                 Universe (§3); the tagged per-campaign Intelligence tab is
+//                 unaffected (CAMPAIGN_DETAIL_TABS). Page kept, hidden - the
+//                 Home "Run Engine" quick-action card still opens it.
+//   agency     -> nav item removed; its content relocated into Settings
+//                 (renderSettings). The topbar client-switcher already
+//                 switches clients independent of this nav item.
+//   research   -> deleted outright, per the user - removed from the render
+//                 dispatch entirely, not just hidden.
 const NAV = [
-  { id:'home', label:'Home', icon:'ti-home' },
+  { id:'home', label:'Today\'s Actions', icon:'ti-list-check' },
   { id:'companyuniverse', label:'Company Universe', icon:'ti-building-skyscraper' },
-  { id:'replies', label:'Replies', icon:'ti-message-reply' },
-  { id:'logger', label:'Logger', icon:'ti-clipboard-text' },
+  { id:'content', label:'Funnel', icon:'ti-news' },
   { id:'campaigns', label:'Campaigns', icon:'ti-rocket' },
-  { id:'calendar', label:'Sales', icon:'ti-calendar' },
-  { id:'content', label:'Marketing', icon:'ti-news' },
-  { id:'intelligence', label:'Engine', icon:'ti-brain' },
-  { id:'research', label:'Research', icon:'ti-microscope' },
+  { id:'replies', label:'Replies', icon:'ti-message-reply', hidden:true },
+  { id:'logger', label:'Logger', icon:'ti-clipboard-text', hidden:true },
+  { id:'calendar', label:'Sales', icon:'ti-calendar', hidden:true },
+  { id:'intelligence', label:'Engine', icon:'ti-brain', hidden:true },
   { id:'settings', label:'Settings', icon:'ti-settings', hidden:true },
   { id:'contentcalendar', label:'Calendar', icon:'ti-calendar-month', hidden:true },
   { id:'grid', label:'Grid', icon:'ti-grid-dots', hidden:true }
@@ -1505,9 +1523,11 @@ const NAV = [
 
 function renderSidebar(){
   const nav = document.getElementById('sidebarNav');
+  // Replies is folded into Today's Actions (redesign plan §2) - its badge
+  // count moves onto the "home" nav item instead of its own (now hidden) one.
   const repliesCount = window.__repliesQueue ? window.__repliesQueue.length : null;
   nav.innerHTML = NAV.filter(n => !n.hidden).map(n => {
-    const badge = (n.id === 'replies' && repliesCount)
+    const badge = (n.id === 'home' && repliesCount)
       ? ' <span class="count-pill has" style="margin-left:auto;">'+repliesCount+'</span>'
       : '';
     return '<button class="nav-item '+(state.currentPage===n.id?'active':'')+'" onclick="navigate(\''+n.id+'\')"><i class="ti '+n.icon+'"></i><span>'+n.label+badge+'</span></button>';
@@ -1549,13 +1569,13 @@ function applyClientBranding(c){
   if(state.currentPage === 'home') renderPage();
 }
 
-function ensureAgencyNav(s){
-  const multi = s && (s.controlPlane || (s.clients && s.clients.length > 1));
-  if(multi && !NAV.some(n => n.id === 'agency')){
-    NAV.unshift({ id:'agency', label:'Agency', icon:'ti-building-community' });
-    renderSidebar();
-  }
-}
+// Redesign plan §1: the Agency nav item is retired - the topbar client-
+// switcher (renderClientSwitcher, right below) already fully switches
+// clients on its own, and renderAgencyPage's other content (overview grid,
+// weekly report, extension status, new-client button) relocated into
+// Settings (renderSettings). Left as a no-op call site rather than removed,
+// so hydrateSession's call doesn't need touching too.
+function ensureAgencyNav(s){}
 
 function renderClientSwitcher(s){
   const host = document.getElementById('clientSwitcher');
@@ -2246,7 +2266,9 @@ function renderPage(){
   const gs = document.getElementById('gridScroll');
   const savedGridScroll = gs ? { left: gs.scrollLeft, top: gs.scrollTop } : null;
 
-  const renderers = { home: renderHome, companyuniverse: renderCompanyUniverse, replies: renderReplies, logger: renderLoggerPage, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, contentcalendar: renderContentCalendarPage, research: renderResearch, settings: renderSettings, agency: renderAgencyPage };
+  // 'research' deleted outright (redesign plan §1) - renderResearch() is
+  // left defined (harmless dead code) but no longer reachable via dispatch.
+  const renderers = { home: renderHome, companyuniverse: renderCompanyUniverse, replies: renderReplies, logger: renderLoggerPage, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, contentcalendar: renderContentCalendarPage, settings: renderSettings, agency: renderAgencyPage };
   el.innerHTML = renderers[state.currentPage]();
   afterRender(state.currentPage);
 
@@ -2277,8 +2299,12 @@ function ensureContextDataLoaded(){
 }
 
 function afterRender(page){
-  if(page === 'agency' && window.__agencyOverview === undefined) loadAgencyOverview();
-  if(page === 'agency') refreshExtensionStatus();
+  // Agency content relocated into Settings (redesign plan §1) - the 'agency'
+  // page id/renderer are kept only as the source of this markup, unreachable
+  // via nav (ensureAgencyNav is now a no-op).
+  const isMultiClientSession = !!(window.__session && (window.__session.controlPlane || (window.__session.clients && window.__session.clients.length > 1)));
+  if(page === 'settings' && isMultiClientSession && window.__agencyOverview === undefined) loadAgencyOverview();
+  if(page === 'settings' && isMultiClientSession) refreshExtensionStatus();
   if(page === 'campaigns' && (window.__campaignView || 'list') === 'list'){
     loadAllCampaignFunnels();
   }
@@ -2390,7 +2416,16 @@ async function loadRepliesQueue(){
     window.__repliesError = null;
     window.__repliesQueue = Array.isArray(data.rows) ? data.rows : [];
     window.__repliesById = {};
-    window.__repliesQueue.forEach(r => { r.__original = r.draft; window.__repliesById[r.campaignContactId] = r; });
+    // Also keyed by contactId::campaignName (redesign plan §2 - fold Replies
+    // into Today's Actions) - getContactAction's isReplyQueue branch only has
+    // a state.contacts entry + campaign name to work with, not this row's own
+    // campaignContactId, so computeTodaysActions matches on this key instead.
+    window.__repliesByContactCampaign = {};
+    window.__repliesQueue.forEach(r => {
+      r.__original = r.draft;
+      window.__repliesById[r.campaignContactId] = r;
+      window.__repliesByContactCampaign[r.contactId + '::' + r.campaignName] = r;
+    });
   } catch(err){
     console.warn('Could not load replies queue:', err.message);
     window.__repliesQueue = window.__repliesQueue || [];
@@ -2398,7 +2433,7 @@ async function loadRepliesQueue(){
   }
   window.__repliesLoading = false;
   renderSidebar();
-  if(state.currentPage === 'replies') renderPage();
+  if(state.currentPage === 'replies' || state.currentPage === 'home') renderPage();
 }
 
 function renderReplies(){
@@ -3514,6 +3549,7 @@ function renderLoggerPage(){
   if(!window.__loggerConnections) initLoggerConnections();
   const mode = window.__loggerMode || 'manual';
   return `
+  ${renderCampaignsAreaSubNav('logger')}
   <div class="section-title" style="font-size:20px;margin-bottom:2px;">Logger</div>
   <div class="muted" style="margin-bottom:16px;">Quickly capture any touch point - LinkedIn messages, calls, meetings, proposals, research and more - straight into your database.</div>
   <div class="logger-type-grid" style="grid-template-columns:repeat(3,minmax(140px,180px));margin-bottom:16px;">
@@ -5114,6 +5150,17 @@ function computeTodaysActions(){
     .concat(wrongPersonaTodaysActions())
     .sort((a,b) => (b.daysSinceTouch||0) - (a.daysSinceTouch||0));
 
+  // Fold Replies into Today's Actions (redesign plan §2): attach the full
+  // reply-queue row to every isReplyQueue action so renderTodaysActionItem
+  // can show the actual draft (renderReplyCard) inline, one bespoke thing on
+  // today's list, instead of a bare "Open in Replies" pointer - the direct
+  // fix for "bulk replies is spray and pray." Falls back to the pointer card
+  // gracefully if the queue hasn't loaded yet or this row isn't in it.
+  const repliesByKey = window.__repliesByContactCampaign || {};
+  actions.forEach(a => {
+    if(a.isReplyQueue) a.replyRow = repliesByKey[a.contact.id + '::' + a.campaignName] || null;
+  });
+
   // Diagnostic: every contact above is sourced via campaignContactRecordFor,
   // i.e. a real Campaign Contacts Airtable row with a valid Campaign link -
   // never grid/contactIds membership alone. Logs the gap between the two so
@@ -5241,7 +5288,7 @@ function renderTodaysActionItem(a){
   window.__todaysActions = window.__todaysActions || {};
   window.__todaysActions[a.contact.id] = a;
   if(a.isReminder) return renderReminderActionCard(a);
-  if(a.isReplyQueue) return renderReplyBackActionCard(a);
+  if(a.isReplyQueue) return a.replyRow ? renderReplyCard(a.replyRow) : renderReplyBackActionCard(a);
   if(a.isWrongPersona) return renderWrongPersonaActionCard(a);
   if(a.isFastAction) return renderFastActionCard(a);
 
@@ -11137,6 +11184,20 @@ function renderCampaigns(){
   return renderCampaignListView();
 }
 
+// Redesign plan §1: logger and calendar (Sales/Pipeline) lost their own
+// sidebar entries - reached from inside Campaigns instead. Same 3 pages as
+// before (renderCampaignListView/renderSalesPage/renderLoggerPage,
+// unchanged), just fronted by this small sub-nav so all three are one click
+// from each other instead of only reachable from a sidebar item each used
+// to have. `navigate()` still works with these ids - they're hidden from
+// the sidebar (NAV entries marked hidden:true), not removed from dispatch.
+function renderCampaignsAreaSubNav(activeId){
+  const items = [['campaigns','All Campaigns'],['calendar','Pipeline'],['logger','Log an interaction']];
+  return `<div class="seq-tabs" style="margin-bottom:16px;">
+    ${items.map(([id,label]) => `<div class="seq-tab ${activeId===id?'active':''}" onclick="navigate('${id}')">${label}</div>`).join('')}
+  </div>`;
+}
+
 // Canonical funnel for one campaign, from GET /api/campaign/:id/funnel
 // (Campaign Contacts + Stage History + Deals - see the server module).
 // Cached on window.__campaignFunnels[campaign.id] until a hard refresh;
@@ -11207,6 +11268,7 @@ function campaignContactStatus(c){
 function renderCampaignListView(){
   const campaigns = state.campaigns.slice().sort((a,b) => new Date(b.updatedAt||b.createdAt) - new Date(a.updatedAt||a.createdAt));
   return `
+  ${renderCampaignsAreaSubNav('campaigns')}
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-rocket"></i> Campaigns</div>
@@ -14573,6 +14635,7 @@ function setSalesSubTab(tab){
 function renderSalesPage(){
   const tab = window.__salesSubTab || 'overview';
   return `
+  ${renderCampaignsAreaSubNav('calendar')}
   <div class="seq-tabs">
     ${SALES_SUBTABS.map(([key,label]) => `<div class="seq-tab ${tab===key?'active':''}" onclick="setSalesSubTab('${key}')">${label}</div>`).join('')}
   </div>
@@ -20925,7 +20988,10 @@ function openCvcModal(cvc, name){
 
 function renderSettings(){
   const s = state.settings;
+  const session = window.__session;
+  const isMultiClient = !!(session && (session.controlPlane || (session.clients && session.clients.length > 1)));
   return `
+  ${isMultiClient ? renderAgencyPage() : ''}
   <div class="settings-section card">
     <div class="section-title"><i class="ti ti-brand-linkedin"></i> LinkedIn accounts</div>
     ${s.accounts.map((a,i) => `
@@ -21254,6 +21320,20 @@ function toggleSidebar(){
 
 loadPersistedState();
 state = makeReactive(rawState, persistState);
+// currentPage is restored above (LOCAL_ONLY_STATE_KEYS) but activeNavKey and
+// the topbar title text aren't - normally only navigate() keeps those three
+// in sync, so a reload landing on any page other than the 'home' default
+// showed the right content under a stale "Home" title. Pre-existing gap,
+// noticed while verifying the nav restructure below; same sync navigate()
+// does, just without calling it (no reason to re-run its side effects here).
+(function syncTopbarToRestoredPage(){
+  const navEntry = NAV.find(n => n.id === rawState.currentPage);
+  rawState.activeNavKey = navEntry ? navEntry.id : rawState.currentPage;
+  const titleEl = document.getElementById('topbarTitle');
+  if(!titleEl) return;
+  const grid = rawState.currentPage === 'grid' ? currentGrid() : null;
+  titleEl.textContent = grid ? grid.name : (navEntry ? navEntry.label : '');
+})();
 renderSidebar();
 syncSidebarCollapseBtn();
 renderPage();
