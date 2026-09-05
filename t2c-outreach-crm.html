@@ -1010,6 +1010,26 @@ function firstName(name){ return name.split(' ')[0]; }
 function uid(prefix){ return prefix + '_' + Math.random().toString(36).slice(2,9); }
 function esc(str){ return (str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
+// Renders the "Twenty2 already knows this company" warning banner from a
+// generate-message response's relationshipFlag (see twenty2RelationshipFlag
+// in search-server.js) - shared by the Today's Actions fast-action card and
+// the Write & copy message modal, the two places a rep actually drafts and
+// sends. Written from the one-off Monday.com CRM backfill (5 Sep 2026):
+// 38+ prospects turned out to already have an active deal, past engagement
+// or warm relationship with Twenty2 itself, some with explicit do-not-
+// contact constraints - this is the point where a human sees that before
+// sending a cold campaign message that could cross wires with it. Returns
+// '' when there's no flag, so callers can splice it in unconditionally.
+function relationshipFlagHtml(flag){
+  if(!flag || !flag.status) return '';
+  const isActive = flag.status === 'Active Deal In Progress';
+  return `<div style="font-size:12px;color:var(--danger);background:var(--tint-red-bg);border:1px solid var(--danger);border-radius:6px;padding:8px 10px;margin-bottom:8px;">
+    <div style="font-weight:600;margin-bottom:3px;"><i class="ti ti-alert-triangle"></i> Twenty2 already has ${isActive ? 'an ACTIVE DEAL' : 'a relationship'} with this company - ${esc(flag.status)}</div>
+    ${flag.notes ? `<div style="white-space:pre-wrap;">${esc(flag.notes)}</div>` : ''}
+    <div class="muted" style="margin-top:4px;">Check with Marcus/Nic before sending - this backfill is a one-off snapshot from 5 Sep 2026, not live.</div>
+  </div>`;
+}
+
 // Refuses to fire an Airtable write whose required identifying field(s) are
 // blank - a blank name/company is either a caller bug or a race against
 // still-loading state, and would otherwise let the server upsert logic
@@ -5636,9 +5656,11 @@ async function handleGenerateFastMessage(cid){
     const profiledNoteHtml = data.profiled
       ? `<div class="muted" style="font-size:11px;margin-bottom:8px;"><i class="ti ti-search"></i> Profiled this contact/company before drafting - had nothing on file to ground the first message in yet.</div>`
       : '';
+    const relationshipWarningHtml = relationshipFlagHtml(data.relationshipFlag);
     const ruleCount = campaign ? campaignStyleRules(campaign, stageKey).length : 0;
     const stageLabel = { connect:'Connection request', m1:'Message 1', m2:'Message 2', cta:'CTA' }[stageKey] || stageKey;
     area.innerHTML = `
+      ${relationshipWarningHtml}
       <textarea id="fastActionDraft-${cid}" rows="4" style="width:100%;margin-bottom:8px;">${esc(data.message)}</textarea>
       ${ctaNoteHtml}${framingNoteHtml}${profiledNoteHtml}
       <div style="width:100%;margin-bottom:8px;padding:8px;border:1px dashed var(--border);border-radius:6px;">
@@ -10627,6 +10649,7 @@ function openGenerateModal(cid, stageKey, onDone){
       <label>${isEmailCamp ? 'Their reply so far' : 'Conversation history'}</label>
       ${screenshotBoxHtml('convo', isEmailCamp ? "Got a reply already? Send a screenshot and I'll draft a response." : "Got a reply already? Send a screenshot of your conversation history and I'll generate a reply.")}
     </div>
+    <div id="genRelationshipWarning"></div>
     <div class="field"><label>Generated ${isEmailCamp ? 'email' : 'message'}</label><textarea id="genOutput" rows="${isEmailCamp ? 9 : 6}" placeholder="Add profile notes or screenshots above first, then press Generate ${isEmailCamp ? 'email' : 'message'}."></textarea></div>
     <div id="genCtaNote" style="display:none;font-size:12px;color:var(--warning,#b45309);background:var(--warning-bg,#fef3c7);border-radius:6px;padding:7px 10px;margin-top:-4px;"></div>
     ${steerBoxHtml(genModalCampaign, stageKey, 'gen')}
@@ -10838,6 +10861,8 @@ async function generateMessageForModal(cid, stageKey){
     const data = await res.json();
     if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
     result = data.message;
+    const relWarnEl = document.getElementById('genRelationshipWarning');
+    if(relWarnEl) relWarnEl.innerHTML = relationshipFlagHtml(data.relationshipFlag);
     // Whether the drafter chose to bring a CTA forward earlier than the
     // configured cadence, and its one-line reasoning - carried into the
     // mark-sent call so it lands on the Campaign Contacts row and Touch
@@ -10859,6 +10884,8 @@ async function generateMessageForModal(cid, stageKey){
     console.warn('Message generation unavailable, using local fallback:', err.message);
     result = fillTemplate(template, c, stageKey);
     if(window.__genCtx){ window.__genCtx.ctaBroughtForward = false; window.__genCtx.ctaReasoning = ''; }
+    const relWarnEl = document.getElementById('genRelationshipWarning');
+    if(relWarnEl) relWarnEl.innerHTML = '';
   }
   const out = document.getElementById('genOutput');
   if(out) out.value = result;

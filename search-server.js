@@ -9247,6 +9247,29 @@ function hasSufficientProfile(contactRecord, companyRecord) {
   return false;
 }
 
+// Twenty2's own existing-relationship flag on a Companies record - written
+// by the one-off Monday.com CRM backfill (5 Sep 2026, see
+// project_monday_backfill in the repo's session memory) and kept live by
+// the Monday.com webhook below. 38+ of this account's outreach prospects
+// turned out to already have an active deal, past engagement, or warm
+// relationship with Twenty2 itself - including explicit do-not-contact
+// constraints (e.g. a live consulting freeze) discovered during that
+// backfill. Surfaced wherever a human is about to draft/send outreach to a
+// contact at this company, so a cold campaign message doesn't cross wires
+// with a live BD conversation.
+function twenty2RelationshipFlag(companyRecord) {
+  if (!companyRecord) return null;
+  const cf = companyRecord.fields || {};
+  const status = cf['Twenty2 Relationship Status'];
+  if (!status) return null;
+  return {
+    status,
+    notes: cf['Twenty2 Relationship Notes'] || '',
+    accountMap: cf['Account Map (Key Stakeholders)'] || '',
+    tier: cf['Tier'] || ''
+  };
+}
+
 async function scoreIcpForCompany(companyRecord) {
   const parsed = await callClaudeJson(buildIcpScoringPrompt(companyRecord), 300);
   const sizeBand = ICP_SIZE_BANDS.includes(parsed.sizeBand) ? parsed.sizeBand : 'Small';
@@ -10849,6 +10872,23 @@ app.post('/api/messages/generate', async (req, res) => {
     }
     const enrichmentNote = buildEnrichmentNote(enrichmentProfile);
 
+    // Twenty2's own existing-relationship flag (see twenty2RelationshipFlag
+    // above) - same check as the fast-action generate-message route, added
+    // here too since this modal is the other place a rep actually drafts
+    // and sends a message.
+    let relationshipFlag = null;
+    if (contactRecord) {
+      const companyId = (contactRecord.fields['Company'] || [])[0];
+      if (companyId) {
+        try {
+          const companyRecord = await airtableGetRecord('Companies', companyId);
+          relationshipFlag = twenty2RelationshipFlag(companyRecord);
+        } catch (lookupErr) {
+          console.warn('Could not load company for relationship flag (non-fatal):', lookupErr.message);
+        }
+      }
+    }
+
     // The campaign record carries this campaign's own Sequence Templates, offer,
     // CTAs and per-stage Style Corrections - resolve it whenever the client says
     // this contact is in a campaign.
@@ -10918,7 +10958,7 @@ app.post('/api/messages/generate', async (req, res) => {
       }
     }
 
-    res.json({ success: true, message, ctaBroughtForward, ctaReasoning, steerRemembered, styleCorrections: updatedCorrections });
+    res.json({ success: true, message, ctaBroughtForward, ctaReasoning, steerRemembered, styleCorrections: updatedCorrections, relationshipFlag });
   } catch (err) {
     console.error('Message generate error:', err.message);
     res.status(500).json({ error: err.message });
@@ -10991,14 +11031,20 @@ app.post('/api/campaign/:id/contacts/:contactId/generate-message', async (req, r
 
     const camp = campaignRecord.fields || {};
 
+    // Resolved once regardless of message number - the profiling gate below
+    // only fires on message 1, but the Twenty2 relationship flag needs to
+    // surface on every message so a rep doesn't cross wires with a live BD
+    // deal partway through a sequence, not just at the first touch.
+    const companyId = (cf['Company'] || [])[0];
+    const companyRecord = companyId ? await airtableGetRecord('Companies', companyId) : null;
+    const relationshipFlag = twenty2RelationshipFlag(companyRecord);
+
     // Profile-before-you-speak gate: message 1 is the highest-stakes, most
     // spray-and-pray-prone touch, so if there's nothing on file to ground it
     // in yet, profile the contact/company first. Best-effort - each step
     // degrades silently without its API key, never blocks drafting.
     let profiled = false;
     if (messageNumber === 1 && !isEmailCampaign(campaignRecord)) {
-      const companyId = (cf['Company'] || [])[0];
-      const companyRecord = companyId ? await airtableGetRecord('Companies', companyId) : null;
       if (!hasSufficientProfile(contactRecord, companyRecord)) {
         if (process.env.SERPER_API_KEY && cf['LinkedIn URL']) {
           try {
@@ -11056,7 +11102,7 @@ app.post('/api/campaign/:id/contacts/:contactId/generate-message', async (req, r
       }
     }
 
-    res.json({ success: true, message, messageNumber, stage, stageKey, ctaBroughtForward, ctaReasoning, framingUsed: envelope.framingUsed, framingReasoning: envelope.framingReasoning, profiled, steerRemembered, styleCorrections: updatedCorrections });
+    res.json({ success: true, message, messageNumber, stage, stageKey, ctaBroughtForward, ctaReasoning, framingUsed: envelope.framingUsed, framingReasoning: envelope.framingReasoning, profiled, steerRemembered, styleCorrections: updatedCorrections, relationshipFlag });
   } catch (err) {
     console.error('Generate message error:', err.message);
     res.status(500).json({ error: err.message });
