@@ -486,7 +486,9 @@ const OPTIONAL_LATE_ADDED_FIELDS = [
   // No-tender procurement ceiling (Companies table).
   'Procurement Threshold ($)',
   // Resources ICP report, 7 Sep 2026 (Companies + Contacts tables).
-  'ICP Tag', 'Account Priority'
+  'ICP Tag', 'Account Priority',
+  // User-managed GTM Motion templates (Settings table).
+  'GTM Motion Templates (JSON)'
 ];
 const optionalFieldsMissing = new Set();
 function stripMissingOptionalFields(body) {
@@ -9418,6 +9420,42 @@ app.post('/api/gtm-motion', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('Save gtm-motion error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- GTM Motion templates (user-managed) ----
+// The template dropdown on the GTM Motion page used to offer two
+// hard-coded, generic templates alongside Blank. The user wants to save
+// their own real templates (starting with the actual Resources GTM built
+// from the ICP report) and delete ones they don't want - so this list now
+// lives in Airtable, not in the frontend source, and is fully editable
+// from the page itself. Blank stays a frontend-only built-in (not stored,
+// not deletable) since it's the reset option, not a real template.
+app.get('/api/gtm-motion-templates', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const record = await getSettingsRecord();
+    const templates = record ? parseJsonSafe(record.fields['GTM Motion Templates (JSON)']) : null;
+    res.json({ templates: Array.isArray(templates) ? templates : [] });
+  } catch (err) {
+    console.error('Get gtm-motion-templates error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/gtm-motion-templates', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { templates } = req.body || {};
+  if (!Array.isArray(templates)) return res.status(400).json({ error: 'templates array is required' });
+  try {
+    const settingsRecord = await getOrCreateSettingsRecord();
+    await airtableWriteAllowingMissingCtaFields('PATCH', SETTINGS_TABLE, {
+      records: [{ id: settingsRecord.id, fields: { 'GTM Motion Templates (JSON)': JSON.stringify(templates) } }]
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Save gtm-motion-templates error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

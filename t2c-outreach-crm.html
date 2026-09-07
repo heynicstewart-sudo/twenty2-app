@@ -2449,6 +2449,7 @@ function afterRender(page){
     ensureContextDataLoaded();
   }
   if(page === 'gtmmotion' && window.__gtmMotion === undefined && !window.__gtmMotionLoading) loadGtmMotion();
+  if(page === 'gtmmotion' && window.__gtmMotionTemplates === undefined && !window.__gtmMotionTemplatesLoading) loadGtmMotionTemplates();
   if(page === 'icpbuilder' && window.__icpProfile === undefined && !window.__icpProfileLoading) loadIcpProfile();
   if(page === 'competitormap'){
     if(window.__competitorMap === undefined && !window.__competitorMapLoading) loadCompetitorMap();
@@ -6284,39 +6285,14 @@ function renderHowItWorks(){
 // before until someone hits Edit.
 
 // Built-in starting points. Stages get ids assigned by normalizeGtmMotion().
+// Only "blank" is a built-in template now - the two generic starter
+// templates that used to live here (a 5-stage engine walkthrough and a
+// 6-step strategy framework) were deleted at the user's request in favour
+// of real, user-managed templates stored in Airtable (see
+// loadGtmMotionTemplates/gtmSaveAsTemplate/gtmDeleteTemplate below) -
+// starting with the actual Resources GTM built from the ICP report, which
+// they can now save, rename and delete themselves from the page.
 const GTM_MOTION_TEMPLATES = {
-  twenty2Engine: {
-    label: 'Twenty2 GTM Engine (5-stage loop)',
-    title: "Twenty2's GTM Engine",
-    intro: 'Not a funnel with a start and an end - a loop the Engine drives every cycle, and it gets sharper each time it turns. Five stages, each already live in this app.',
-    loop: true,
-    loopCaption: 'Every close sharpens the Angle Library. Every stall becomes a style correction. Every re-engaged signal starts the loop again - the account gets better profiled, not just re-contacted.',
-    stages: [
-      { icon:'ti-target-arrow', title:'Profile the account', body:'Score every company on size, momentum and workload before anyone drafts a word - and check whether Twenty2 already has a relationship there.', tag:'ICP segmentation · Angle Library · relationship flag' },
-      { icon:'ti-route-2', title:'Sequence with judgment', body:'The Engine decides cadence, when to bring a CTA forward, and whether to frame the message as risk or upside - per contact, not a fixed script.', tag:'Early-CTA judgment · risk/upside framing' },
-      { icon:'ti-message-2-heart', title:'Engage as a person', body:'Humanized drafts, a collaborative "map the gap" session instead of a pitch, and call prep grounded in the real thread.', tag:'Reply queue · map the gap · call prep' },
-      { icon:'ti-trophy', title:'Close and deepen', body:'See the whole account’s status, not one contact’s - who’s reached, who’s engaged, who’s booked - and track it through to a closed deal.', tag:'Account-as-pipeline · scorecard' },
-      { icon:'ti-refresh', title:'Learn, never go cold', body:'Every stall gets diagnosed into a style correction. Every cold contact with a fresh signal gets a reason to re-engage. Both feed back into stage 1.', tag:'Deal Autopsy · signal re-engagement' }
-    ]
-  },
-  // The six-step strategy framework from the "Unstoppable" GTM breakdown:
-  // steps 1-4 are strategy, 5-6 are execution, and step 6 feeds back into
-  // step 1 - so it's a loop too.
-  gtmStrategy6: {
-    label: '6-Step GTM Strategy (Unstoppable framework)',
-    title: 'Go-to-Market Strategy',
-    intro: 'Strategy first, execution second. Steps 1-4 set the strategy; 5-6 run it and sharpen it. Skip the strategy work and every execution move - agency, junior marketer or founder - burns months for nothing.',
-    loop: true,
-    loopCaption: 'Step 6 feeds the data back into step 1. Each turn of the loop tightens the target market, the segment, the positioning and the message - that compounding is how growth happens.',
-    stages: [
-      { icon:'ti-world-search', title:'1. Total addressable market', body:'Map the whole market, then whittle it down to the target market you actually want for the next stage of growth. The riches are in the niches - run a proper ICP exercise instead of speaking to everyone.', tag:'Strategy · TAM → target market · ICP' },
-      { icon:'ti-chart-pie', title:'2. Segmentation', body:'Break the target market into parts you can win - SMB / mid-market / enterprise, geography, industry - then commit to one segment where you can genuinely compete and can target the message.', tag:'Strategy · size · geo · industry' },
-      { icon:'ti-map-2', title:'3. Positioning', body:'Map the competitors across each segment and see who is winning where. Plenty of competitors means the market is validated; none usually means a graveyard. Decide: compete head-on, or take the white space.', tag:'Strategy · competitor map · white space' },
-      { icon:'ti-flag', title:'4. Manifesto', body:'Not a soapbox page on your website. An exercise that pulls TAM, segmentation, positioning and value proposition into one strategic narrative and the messaging you take to market.', tag:'Strategy · narrative · messaging' },
-      { icon:'ti-masks-theater', title:'5. Broadway show', body:'A consistent set of sales and marketing activities that bring the manifesto to your ICP on a few chosen channels. Channel mastery and repetition - not a scattergun of half-tried tactics.', tag:'Execution · channel mastery · consistency' },
-      { icon:'ti-chart-dots', title:'6. Instrument & iterate', body:'Decide the metrics that tell you what is working. Collect the data as the Broadway show runs, then feed it back into the strategy and adjust. That feedback loop is how you scale.', tag:'Execution · metrics · feedback loop' }
-    ]
-  },
   blank: {
     label: 'Blank - build from scratch',
     title: 'Our GTM motion',
@@ -6406,9 +6382,46 @@ function saveGtmMotion(){
 
 function gtmToggleEdit(){ window.__gtmMotionEdit = !window.__gtmMotionEdit; renderPage(); }
 
+// User-managed templates (Airtable-backed) - loaded alongside the single
+// built-in "blank" option so the dropdown always has a reset option even
+// with zero saved templates.
+async function loadGtmMotionTemplates(){
+  if(window.__gtmMotionTemplatesLoading) return;
+  window.__gtmMotionTemplatesLoading = true;
+  try {
+    const res = await fetch('/api/gtm-motion-templates');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__gtmMotionTemplates = Array.isArray(data.templates) ? data.templates : [];
+  } catch(err){
+    window.__gtmMotionTemplates = [];
+  }
+  window.__gtmMotionTemplatesLoading = false;
+  if(state.currentPage === 'gtmmotion') renderPage();
+}
+
+async function saveGtmMotionTemplatesList(){
+  try {
+    await fetch('/api/gtm-motion-templates', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ templates: window.__gtmMotionTemplates || [] })
+    });
+  } catch(err){
+    toast('Could not save templates: ' + err.message, 'warn');
+  }
+}
+
+// Dropdown values are prefixed to disambiguate the one built-in template
+// from user-saved ones sharing the underlying JSON blob shape.
 function gtmApplyTemplate(key){
   const sel = document.getElementById('gtmTemplateSelect');
-  const t = GTM_MOTION_TEMPLATES[key];
+  if(!key){ return; }
+  let t = null;
+  if(key === 'blank') t = GTM_MOTION_TEMPLATES.blank;
+  else if(key.startsWith('custom:')){
+    const id = key.slice(7);
+    t = (window.__gtmMotionTemplates || []).find(x => x.id === id);
+  }
   if(!t){ if(sel) sel.value = ''; return; }
   if(!confirm('Replace the GTM motion for ' + gtmClientName() + ' with the "' + t.label + '" template? This overwrites the stages and copy on this page.')){
     if(sel) sel.value = '';
@@ -6419,6 +6432,33 @@ function gtmApplyTemplate(key){
   saveGtmMotion();
   renderPage();
   toast('Template applied - edit the stages to fit', 'success');
+}
+
+// Saves the motion currently on screen as a new named template the user
+// can re-apply (or delete) later - the mechanism for "create my own
+// templates" the built-in two used to stand in for.
+function gtmSaveAsTemplate(){
+  const m = window.__gtmMotion;
+  if(!m) return;
+  const label = prompt('Name this template:', m.title || 'New template');
+  if(!label || !label.trim()) return;
+  window.__gtmMotionTemplates = window.__gtmMotionTemplates || [];
+  const tmpl = Object.assign(gtmDeepClone(m), { id: 'tmpl' + Date.now() + Math.floor(Math.random() * 1000), label: label.trim() });
+  window.__gtmMotionTemplates.push(tmpl);
+  saveGtmMotionTemplatesList();
+  renderPage();
+  toast('Saved as a template', 'success');
+}
+
+function gtmDeleteTemplate(id){
+  const list = window.__gtmMotionTemplates || [];
+  const t = list.find(x => x.id === id);
+  if(!t) return;
+  if(!confirm('Delete the template "' + t.label + '"? This only removes the template, not the motion currently on screen.')) return;
+  window.__gtmMotionTemplates = list.filter(x => x.id !== id);
+  saveGtmMotionTemplatesList();
+  renderPage();
+  toast('Template deleted', 'success');
 }
 
 function gtmAddStage(){
@@ -6509,13 +6549,21 @@ function renderGtmMotionPage(){
       ${edit ? `
         <select id="gtmTemplateSelect" onchange="gtmApplyTemplate(this.value)" style="font-size:12px;max-width:230px;">
           <option value="">Start from a template…</option>
-          ${Object.keys(GTM_MOTION_TEMPLATES).map(k => `<option value="${k}">${esc(GTM_MOTION_TEMPLATES[k].label)}</option>`).join('')}
-        </select>` : ''}
+          <option value="blank">${esc(GTM_MOTION_TEMPLATES.blank.label)}</option>
+          ${(window.__gtmMotionTemplates||[]).map(t => `<option value="custom:${esc(t.id)}">${esc(t.label)}</option>`).join('')}
+        </select>
+        <button class="btn btn-ghost btn-sm" onclick="gtmSaveAsTemplate()" title="Save the current motion as a reusable template"><i class="ti ti-device-floppy"></i> Save as template</button>` : ''}
       <button class="btn ${edit ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="gtmToggleEdit()">
         <i class="ti ti-${edit ? 'check' : 'pencil'}"></i> ${edit ? 'Done' : 'Edit'}
       </button>
     </div>
   </div>
+
+  ${edit && (window.__gtmMotionTemplates||[]).length ? `
+    <div class="muted" style="font-size:11px;margin:-2px 0 12px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+      <span>Your templates:</span>
+      ${window.__gtmMotionTemplates.map(t => `<span style="display:inline-flex;align-items:center;gap:4px;background:var(--surface-2);border:1px solid var(--border-light);border-radius:999px;padding:2px 4px 2px 10px;">${esc(t.label)}<button class="btn btn-ghost btn-sm" style="padding:2px 6px;" title="Delete this template" onclick="gtmDeleteTemplate('${esc(t.id)}')"><i class="ti ti-trash" style="font-size:12px;"></i></button></span>`).join('')}
+    </div>` : ''}
 
   <div class="howto-hero">
     <h2 ${ceMeta('title')} style="${edit ? 'outline:none;border-bottom:1px dashed rgba(255,255,255,.4);' : ''}">${esc(m.title)}</h2>
