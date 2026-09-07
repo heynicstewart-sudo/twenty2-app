@@ -14080,11 +14080,48 @@ async function loadGtmPerformance(){
   }
 }
 
+function renderGtmSectorTable(bySector){
+  if(!bySector || !bySector.length) return '';
+  return `
+    <div class="muted" style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin:2px 0 6px;">By sector</div>
+    <div style="overflow-x:auto;margin-bottom:16px;">
+      <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:600px;">
+        <thead><tr style="text-align:left;border-bottom:1px solid var(--border-light);">
+          <th style="padding:6px 8px;">Sector</th>
+          <th style="padding:6px 8px;">Contacted</th>
+          <th style="padding:6px 8px;">Connected+</th>
+          <th style="padding:6px 8px;">Reply rate</th>
+          <th style="padding:6px 8px;">Meetings</th>
+          <th style="padding:6px 8px;">Won</th>
+          <th style="padding:6px 8px;">Concentration</th>
+        </tr></thead>
+        <tbody>
+        ${bySector.map(s => `
+          <tr style="border-bottom:1px solid var(--border-light);">
+            <td style="padding:6px 8px;font-weight:600;">${esc(s.sector)}</td>
+            <td style="padding:6px 8px;">${s.totalContacted}</td>
+            <td style="padding:6px 8px;">${s.connectedPlus}</td>
+            <td style="padding:6px 8px;">${s.replyRatePct!==null ? s.replyRatePct+'%' : '—'}</td>
+            <td style="padding:6px 8px;">${s.meetingsBooked}</td>
+            <td style="padding:6px 8px;font-weight:${s.won?'700':'400'};color:${s.won?'var(--success)':'inherit'};">${s.won}</td>
+            <td style="padding:6px 8px;">${s.topCompany ? `<span class="${s.topCompanyConcentrationPct>=70?'muted':''}" style="${s.topCompanyConcentrationPct>=70?'color:var(--warning,#b45309);font-weight:600;':''}">${s.topCompanyConcentrationPct}% from ${esc(s.topCompany)}</span>` : '—'}</td>
+          </tr>
+        `).join('')}
+        </tbody>
+      </table>
+    </div>
+    <div class="muted" style="font-size:10.5px;margin-bottom:12px;">Concentration = share of this sector's wins+meetings coming from its single top company - a sector can look strong while really being one account's story (this is the "most profitable but most volatile" check).</div>
+  `;
+}
+
 function renderGtmPerformanceSection(data){
   if(!data) return '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading...</div>';
   if(data.error) return `<div class="muted">Could not load: ${esc(data.error)}</div>`;
-  if(!data.bySegment || !data.bySegment.length) return '<div class="empty-state">No scored companies with campaign activity yet - score ICP above, then run some outreach.</div>';
+  const sectorTable = renderGtmSectorTable(data.bySector);
+  if(!data.bySegment || !data.bySegment.length) return sectorTable || '<div class="empty-state">No scored companies with campaign activity yet - score ICP above, then run some outreach.</div>';
   return `
+    ${sectorTable}
+    <div class="muted" style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin:2px 0 6px;">By ICP segment</div>
     <div style="overflow-x:auto;">
       <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:640px;">
         <thead><tr style="text-align:left;border-bottom:1px solid var(--border-light);">

@@ -482,7 +482,9 @@ const OPTIONAL_LATE_ADDED_FIELDS = [
   // Per-client editable GTM motion / ICP profile / competitor map (Settings table).
   'GTM Motion (JSON)',
   'ICP Profile (JSON)',
-  'Competitor Map (JSON)'
+  'Competitor Map (JSON)',
+  // No-tender procurement ceiling (Companies table).
+  'Procurement Threshold ($)'
 ];
 const optionalFieldsMissing = new Set();
 function stripMissingOptionalFields(body) {
@@ -9857,21 +9859,25 @@ app.get('/api/companies/gtm-performance', async (req, res) => {
     );
 
     const buckets = {};
+    // Sector cut - a second, independent grouping alongside the ICP-segment
+    // one below. Gated only on Companies.Sector being set (not on an ICP
+    // score), since Sector is now backfilled account-wide and answers a
+    // different question: not "which ICP profile converts" but "which
+    // sector of the outreach target list actually converts" - the
+    // account-wide learning-loop rollup requested after the Resources ICP
+    // analysis. Tracks per-company contribution too, so a sector's numbers
+    // can be checked for the same "is this one account's story, not the
+    // sector's" concentration risk that showed up in the real Monday deal
+    // data (Woodside carrying ~94% of Resources' won revenue there).
+    const sectorBuckets = {};
     rows.forEach(row => {
       const contactId = (row.fields['Contact'] || [])[0];
       const contact = contactId ? contactById[contactId] : null;
       const companyId = contact ? (contact.fields['Company'] || [])[0] : null;
       const company = companyId ? companyById[companyId] : null;
-      if (!company || !company.fields['ICP Scored At']) return; // only scored companies carry a segment
+      if (!company) return;
       const cf = company.fields;
-      const key = `${cf['ICP Size Band'] || '?'}|${cf['ICP Momentum'] || '?'}|${cf['ICP Workload Type'] || '?'}`;
-      if (!buckets[key]) {
-        buckets[key] = {
-          sizeBand: cf['ICP Size Band'] || '?', momentum: cf['ICP Momentum'] || '?', workloadType: cf['ICP Workload Type'] || '?',
-          totalContacted: 0, connectedPlus: 0, replied: 0, meetingsBooked: 0, won: 0, campaignNames: new Set(), winningCampaignNames: new Set()
-        };
-      }
-      const b = buckets[key];
+
       const campaignId = (row.fields['Campaign'] || [])[0];
       const campaign = campaignId ? campaignById[campaignId] : null;
       const campaignName = campaign ? (campaign.fields['Name'] || campaign.fields['Campaign Name'] || '') : '';
@@ -9879,13 +9885,40 @@ app.get('/api/companies/gtm-performance', async (req, res) => {
       const stageHistory = row.fields['Stage History'] || '';
       const meetingBooked = stage === 'Meeting Booked' || /Meeting Booked/.test(stageHistory);
       const won = wonContactIds.has(contactId);
+      const connectedPlus = linkedInStageRank(stage) >= linkedInStageRank('Connected');
+      const replied = rowReplyReceived(row);
 
-      b.totalContacted += 1;
-      if (campaignName) b.campaignNames.add(campaignName);
-      if (linkedInStageRank(stage) >= linkedInStageRank('Connected')) b.connectedPlus += 1;
-      if (rowReplyReceived(row)) b.replied += 1;
-      if (meetingBooked) { b.meetingsBooked += 1; if (campaignName) b.winningCampaignNames.add(campaignName); }
-      if (won) { b.won += 1; if (campaignName) b.winningCampaignNames.add(campaignName); }
+      if (company.fields['ICP Scored At']) {
+        const key = `${cf['ICP Size Band'] || '?'}|${cf['ICP Momentum'] || '?'}|${cf['ICP Workload Type'] || '?'}`;
+        if (!buckets[key]) {
+          buckets[key] = {
+            sizeBand: cf['ICP Size Band'] || '?', momentum: cf['ICP Momentum'] || '?', workloadType: cf['ICP Workload Type'] || '?',
+            totalContacted: 0, connectedPlus: 0, replied: 0, meetingsBooked: 0, won: 0, campaignNames: new Set(), winningCampaignNames: new Set()
+          };
+        }
+        const b = buckets[key];
+        b.totalContacted += 1;
+        if (campaignName) b.campaignNames.add(campaignName);
+        if (connectedPlus) b.connectedPlus += 1;
+        if (replied) b.replied += 1;
+        if (meetingBooked) { b.meetingsBooked += 1; if (campaignName) b.winningCampaignNames.add(campaignName); }
+        if (won) { b.won += 1; if (campaignName) b.winningCampaignNames.add(campaignName); }
+      }
+
+      if (cf['Sector']) {
+        const sKey = cf['Sector'];
+        if (!sectorBuckets[sKey]) sectorBuckets[sKey] = { sector: sKey, totalContacted: 0, connectedPlus: 0, replied: 0, meetingsBooked: 0, won: 0, byCompany: {} };
+        const sb = sectorBuckets[sKey];
+        sb.totalContacted += 1;
+        if (connectedPlus) sb.connectedPlus += 1;
+        if (replied) sb.replied += 1;
+        if (meetingBooked) sb.meetingsBooked += 1;
+        if (won) sb.won += 1;
+        const companyName = cf['Company Name'] || 'Unknown';
+        if (!sb.byCompany[companyName]) sb.byCompany[companyName] = { won: 0, meetingsBooked: 0 };
+        if (won) sb.byCompany[companyName].won += 1;
+        if (meetingBooked) sb.byCompany[companyName].meetingsBooked += 1;
+      }
     });
 
     const bySegment = Object.values(buckets).map(b => ({
@@ -9897,7 +9930,32 @@ app.get('/api/companies/gtm-performance', async (req, res) => {
       winningCampaignNames: [...b.winningCampaignNames]
     })).sort((a, b) => (b.won - a.won) || (b.meetingsBooked - a.meetingsBooked) || (b.replied - a.replied));
 
-    res.json({ bySegment, unscoredNote: 'Only companies with an ICP score are included - run "Score ICP" on Company Universe to widen coverage.' });
+    // Concentration: what share of this sector's wins+meetings sit with its
+    // single top-contributing company - the "is this really the sector
+    // winning, or just one account" check Marcus's own "most profitable but
+    // most volatile" comment about Resources/Woodside prompted.
+    const bySector = Object.values(sectorBuckets).map(sb => {
+      const totalSuccess = sb.won + sb.meetingsBooked;
+      let topCompany = null, topShare = null;
+      if (totalSuccess > 0) {
+        const ranked = Object.entries(sb.byCompany)
+          .map(([name, c]) => ({ name, success: c.won + c.meetingsBooked }))
+          .filter(c => c.success > 0)
+          .sort((a, b) => b.success - a.success);
+        if (ranked.length) { topCompany = ranked[0].name; topShare = Math.round((ranked[0].success / totalSuccess) * 100); }
+      }
+      return {
+        sector: sb.sector, totalContacted: sb.totalContacted, connectedPlus: sb.connectedPlus, replied: sb.replied,
+        meetingsBooked: sb.meetingsBooked, won: sb.won,
+        replyRatePct: sb.connectedPlus ? Math.round((sb.replied / sb.connectedPlus) * 100) : null,
+        topCompany, topCompanyConcentrationPct: topShare
+      };
+    }).sort((a, b) => (b.won - a.won) || (b.meetingsBooked - a.meetingsBooked) || (b.replied - a.replied));
+
+    res.json({
+      bySegment, bySector,
+      unscoredNote: 'bySegment only includes companies with an ICP score - run "Score ICP" on Company Universe to widen coverage. bySector uses the Sector field directly and needs no scoring.'
+    });
   } catch (err) {
     console.error('GTM performance rollup error:', err.message);
     res.status(500).json({ error: err.message });
