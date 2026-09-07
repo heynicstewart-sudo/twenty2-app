@@ -10400,7 +10400,7 @@ function renderCompanyDrawerContent(data){
     </div>
     <select id="dealLossReason-${esc(c.name)}" style="width:100%;margin-bottom:6px;">
       <option value="">Loss reason (if lost)</option>
-      <option>Funding withdrawn</option><option>Lost to competitor</option><option>Timing / priority</option><option>Budget too low</option><option>Went cold / no response</option><option>Other</option>
+      ${LOSS_REASON_OPTIONS.map(o=>`<option>${o}</option>`).join('')}
     </select>
     <textarea id="dealNotes-${esc(c.name)}" rows="2" placeholder="What happened, in your own words..."></textarea>
     <button class="btn btn-secondary btn-sm" style="margin-top:8px;" onclick="logAccountDeal('${esc(c.name)}')"><i class="ti ti-plus"></i> Log deal</button>
@@ -10532,6 +10532,72 @@ async function logAccountDeal(name){
     toast('Deal logged', 'success');
     window.__lostDeals = undefined; // force the Company Universe rollup to refetch next visit
     openCompanyDrawer(name);
+  } catch(err){
+    toast('Could not log deal: ' + err.message, 'warn');
+  }
+}
+
+/* ---- Monday.com loss-context scan (Settings) ---- */
+
+async function runMondayLossScan(){
+  window.__mondayLossScanLoading = true;
+  renderPage();
+  try {
+    const res = await fetch('/api/monday/loss-scan');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__mondayLossScan = data.findings || [];
+    toast(`${window.__mondayLossScan.length} item(s) with loss context found`, 'success');
+  } catch(err){
+    window.__mondayLossScan = { error: err.message };
+    toast('Could not scan Monday: ' + err.message, 'warn');
+  }
+  window.__mondayLossScanLoading = false;
+  renderPage();
+}
+
+function renderMondayLossScanSection(data){
+  if(!data) return '';
+  if(data.error) return `<div class="muted" style="font-size:12px;margin-top:10px;">Could not scan: ${esc(data.error)}</div>`;
+  if(!data.length) return '<div class="muted" style="font-size:12px;margin-top:10px;">Scanned - nothing with loss-context language found this pass.</div>';
+  return `
+  <div style="margin-top:12px;display:flex;flex-direction:column;gap:10px;">
+    ${data.map((f,i) => `
+      <div style="border:1px solid var(--border-light);border-radius:var(--radius-input);padding:10px 12px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;">
+          <div>
+            <div style="font-weight:700;font-size:12.5px;">${esc(f.itemName)}</div>
+            <div class="muted" style="font-size:11px;">${esc(f.companyName)}${f.companyMatched?'':' (no matching company on file)'}${f.dealValue?' · $'+Number(f.dealValue).toLocaleString():''}</div>
+          </div>
+          ${f.companyMatched ? `
+            <div style="display:flex;gap:6px;align-items:center;flex:none;">
+              <select id="mondayScanReason-${i}" style="font-size:11.5px;">${LOSS_REASON_OPTIONS.map(o=>`<option ${o===f.suggestedLossReason?'selected':''}>${o}</option>`).join('')}</select>
+              <button class="btn btn-secondary btn-sm" onclick="logMondayScanFinding(${i})"><i class="ti ti-plus"></i> Log this loss</button>
+            </div>
+          ` : '<span class="muted" style="font-size:11px;">Add the company in Airtable first to log this one.</span>'}
+        </div>
+        ${f.updates.map(u => `<div class="muted" style="font-size:11px;margin-top:6px;padding-top:6px;border-top:1px solid var(--border-light);">${u.creator?esc(u.creator)+' · ':''}${u.createdAt?fmtDate(u.createdAt):''}<div style="color:var(--text);margin-top:2px;">${esc((u.text||'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim().slice(0,300))}${(u.text||'').length>300?'…':''}</div></div>`).join('')}
+      </div>
+    `).join('')}
+  </div>`;
+}
+
+async function logMondayScanFinding(i){
+  const f = window.__mondayLossScan[i];
+  if(!f) return;
+  const lossReason = document.getElementById('mondayScanReason-'+i).value;
+  const notes = f.updates.map(u => (u.text||'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim()).join('\n\n') + '\n\n(Recovered from Monday.com item updates timeline via Settings > Scan Monday for loss context.)';
+  try {
+    const res = await fetch(`/api/companies/${encodeURIComponent(f.companyName)}/deals`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ outcome:'Lost', dealValue: f.dealValue || 0, lossReason, notes, source: 'Monday (client pipeline)' })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Save failed');
+    toast('Logged as a lost deal', 'success');
+    window.__lostDeals = undefined;
+    window.__mondayLossScan.splice(i, 1);
+    renderPage();
   } catch(err){
     toast('Could not log deal: ' + err.message, 'warn');
   }
@@ -12818,6 +12884,10 @@ function renderCampaignStrategyTab(campaign){
 // time. Empty library = zero change to existing drafting behaviour.
 const ICP_SIZE_BANDS = ['any', 'Micro', 'Small', 'Mid', 'Large'];
 const ICP_MOMENTUM_OPTIONS = ['any', 'Hiring', 'Funded', 'Leadership Change', 'Flat'];
+// Matches Deals.'Loss Reason' choices in Airtable (search-server.js mapMondayLossReason
+// keeps the Monday-scan side of this list in sync) - kept as one shared list so a
+// hand-logged deal and a Monday-scan finding never drift into different vocabularies.
+const LOSS_REASON_OPTIONS = ['Funding withdrawn', 'Lost to competitor', 'Timing / priority', 'Budget too low', 'Went cold / no response', 'Went internal / self-executed', 'Other'];
 
 /* ===================== COMPANY UNIVERSE (redesign plan §3) ===================== */
 // New top-level page: account-wide segmentation (every company, not just
@@ -22015,6 +22085,16 @@ function renderSettings(){
       <div class="muted" style="font-size:12px;">The 5-stage loop this app runs - profile, sequence, engage, close, learn.</div>
     </div>
     <button class="btn btn-secondary btn-sm" onclick="navigate('gtmmotion')"><i class="ti ti-arrow-right"></i> View</button>
+  </div>
+  <div class="settings-section card">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:4px;">
+      <div>
+        <div class="section-title" style="margin-bottom:2px;"><i class="ti ti-timeline"></i> Scan Monday for loss context</div>
+        <div class="muted" style="font-size:12px;">Reads every item's activity/comments timeline on the two watched Monday boards (not just its columns) looking for why a deal broke down. Needs MONDAY_API_KEY configured - read-only, nothing is written until you click "Log this loss" on a result.</div>
+      </div>
+      <button class="btn btn-secondary btn-sm" id="mondayLossScanBtn" ${window.__mondayLossScanLoading?'disabled':''} onclick="runMondayLossScan()"><i class="ti ${window.__mondayLossScanLoading?'ti-loader-2':'ti-search'}"></i> ${window.__mondayLossScanLoading?'Scanning…':'Scan Monday'}</button>
+    </div>
+    ${renderMondayLossScanSection(window.__mondayLossScan)}
   </div>
   <div class="settings-section card">
     <div class="section-title"><i class="ti ti-brand-linkedin"></i> LinkedIn accounts</div>

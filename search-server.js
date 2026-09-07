@@ -12534,6 +12534,100 @@ async function findAirtableCompanyByMondayName(rawName) {
   return companies.find(c => mondayNormalizeCompanyName(c.fields['Company Name']) === key) || null;
 }
 
+// ---- Monday.com timeline scan (why-deals-are-lost infra, on-demand only) ----
+// The webhook/backfill above only ever read column_values - never an item's
+// "updates" (the activity/comments feed a rep actually writes the real story
+// into: what happened, who said what, the lesson learned). This is the gap a
+// one-off local scan closed once by hand (see project_jeanne_vision_pivot
+// memory); this is that same scan made into real, repeatable infrastructure -
+// no cron (matches this account's "no new cron jobs" convention), triggered
+// on demand from Settings once MONDAY_API_KEY is configured.
+const MONDAY_LOSS_SIGNAL_RE = /\b(lost|lose|losing|cancel|cancell?ed|terminat|not proceed|didn'?t proceed|went with|chose (a|another)|competitor|budget (was )?(cut|withdrawn|pulled)|paused|on hold|decided not to|no longer|walked away|ghosted|went cold|declined|pull(ed)? the (deal|plug)|churn(ed)?|went internal)\b/i;
+
+// Maps Monday's own free-text "Lost Reason" column (when a rep has actually
+// filled it in - the whole point of this infra is that this gets more
+// reliable as Twenty2 populates it more consistently) onto this app's fixed
+// Deals.'Loss Reason' choices. Falls back to 'Other' for anything unmapped -
+// never invents a reason the source data doesn't support.
+function mapMondayLossReason(text) {
+  const t = (text || '').toLowerCase();
+  if (!t) return 'Other';
+  if (/internal|in.?house|self.?(execut|deliver|build)/.test(t)) return 'Went internal / self-executed';
+  if (/competitor|went with|chose (a|another)/.test(t)) return 'Lost to competitor';
+  if (/budget|price|cost|too expensive|fee/.test(t)) return 'Budget too low';
+  if (/fund(ing)?/.test(t)) return 'Funding withdrawn';
+  if (/timing|delay|priorit|not (the )?right time/.test(t)) return 'Timing / priority';
+  if (/cold|no response|ghost|unresponsive/.test(t)) return 'Went cold / no response';
+  return 'Other';
+}
+
+async function mondayFetchBoardItemsWithUpdates(boardId) {
+  const items = [];
+  let cursor = null;
+  do {
+    const cursorArg = cursor ? `, cursor: ${JSON.stringify(cursor)}` : '';
+    const data = await mondayGraphQL(`{
+      boards(ids: [${boardId}]) {
+        items_page(limit: 50${cursorArg}) {
+          cursor
+          items {
+            id
+            name
+            column_values { column { title } text }
+            updates(limit: 25) { text_body created_at creator { name } }
+          }
+        }
+      }
+    }`);
+    const page = data.boards[0].items_page;
+    items.push(...page.items);
+    cursor = page.cursor;
+  } while (cursor);
+  return items;
+}
+
+// Read-only - never writes to Airtable itself. Returns candidates for a
+// human (or the "Log this loss" button on each result) to confirm, since
+// this data can be actively edited by someone else at the same time (a real
+// collision hit during this feature's own build - see the memory note).
+app.get('/api/monday/loss-scan', async (req, res) => {
+  if (!process.env.MONDAY_API_KEY) return res.status(500).json({ error: 'MONDAY_API_KEY not configured' });
+  try {
+    const findings = [];
+    for (const [boardId, meta] of Object.entries(MONDAY_WATCHED_BOARDS)) {
+      let items;
+      try { items = await mondayFetchBoardItemsWithUpdates(boardId); }
+      catch (err) { console.warn(`Monday loss-scan: board ${boardId} failed (non-fatal):`, err.message); continue; }
+
+      for (const item of items) {
+        const matched = (item.updates || []).filter(u => MONDAY_LOSS_SIGNAL_RE.test(u.text_body || ''));
+        if (!matched.length) continue;
+
+        const cols = {}; (item.column_values || []).forEach(cv => { cols[cv.column.title] = cv.text; });
+        const companyNameRaw = meta.kind === 'pipeline' ? (cols['Client'] || item.name) : item.name.split(' — ')[0].split(' - ')[0].split(' –')[0].trim();
+        const companyRecord = await findAirtableCompanyByMondayName(companyNameRaw);
+        const mondayLostReasonText = cols['Lost Reason'] || '';
+
+        findings.push({
+          itemId: item.id,
+          itemName: item.name,
+          boardKind: meta.kind,
+          companyName: companyRecord ? companyRecord.fields['Company Name'] : companyNameRaw,
+          companyMatched: !!companyRecord,
+          dealValue: Number(cols['Deal Value'] || cols['Estimated Value ($)'] || 0) || null,
+          mondayLostReasonText,
+          suggestedLossReason: mapMondayLossReason(mondayLostReasonText || matched.map(u => u.text_body).join(' ')),
+          updates: matched.map(u => ({ text: u.text_body, createdAt: u.created_at, creator: u.creator ? u.creator.name : null }))
+        });
+      }
+    }
+    res.json({ findings });
+  } catch (err) {
+    console.error('Monday loss-scan error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Reads/writes Settings.Monday Sync Health (JSON: {lastSuccessAt, lastErrorAt,
 // lastErrorMessage}) so a stale/revoked MONDAY_API_KEY shows up as a visible
 // warning in Settings instead of failing silently forever.
