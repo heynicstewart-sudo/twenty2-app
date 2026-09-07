@@ -2400,6 +2400,7 @@ function afterRender(page){
     if(window.__globalAngleLibrary === undefined) loadGlobalAngleLibrary();
     if(window.__gtmPerformance === undefined) loadGtmPerformance();
     if(window.__lostDeals === undefined) loadLostDeals();
+    if(window.__stalledRelationships === undefined) loadStalledRelationships();
     ensureContextDataLoaded();
   }
   if(page === 'replies' && window.__repliesQueue === undefined && !window.__repliesLoading) loadRepliesQueue();
@@ -10387,7 +10388,7 @@ function renderCompanyDrawerContent(data){
   <div class="drawer-section">
     <div class="section-title" style="font-size:13px;"><i class="ti ti-history"></i> Account history</div>
     ${(data.touchPoints||[]).length ? data.touchPoints.map(tp=>`<div class="tp-item"><div style="display:flex;justify-content:space-between;"><strong>${esc(tp.contactName)}</strong><span class="muted">${fmtDate(tp.date)}</span></div><div style="margin-top:2px;">${esc((tp.notes||'').slice(0,140))}${(tp.notes||'').length>140?'…':''}</div></div>`).join('') : '<div class="muted" style="font-size:12px;">No touch points logged yet.</div>'}
-    ${(data.deals||[]).length ? `<div class="muted" style="font-size:11px;font-weight:700;margin-top:12px;margin-bottom:6px;">DEALS</div>${data.deals.map(d=>`<div class="tp-item">${esc(d.outcome)}${d.dealValue?' · $'+Number(d.dealValue).toLocaleString():''}${d.date?' · '+fmtDate(d.date):''}${d.lossReason?' · <span class="tag tag-opened" style="font-size:10px;">'+esc(d.lossReason)+'</span>':''}${d.notes?'<div class="muted" style="font-size:11px;margin-top:2px;">'+esc(d.notes)+'</div>':''}</div>`).join('')}` : ''}
+    ${(data.deals||[]).length ? `<div class="muted" style="font-size:11px;font-weight:700;margin-top:12px;margin-bottom:6px;">DEALS</div>${data.deals.map(d=>`<div class="tp-item">${esc(d.outcome)}${d.dealValue?' · $'+Number(d.dealValue).toLocaleString():''}${d.date?' · '+fmtDate(d.date):''}${d.lossReason?' · <span class="tag tag-opened" style="font-size:10px;">'+esc(d.lossReason)+'</span>':''}${d.stallReason?' · <span class="tag tag-messaging" style="font-size:10px;">'+esc(d.stallReason)+'</span>':''}${d.notes?'<div class="muted" style="font-size:11px;margin-top:2px;">'+esc(d.notes)+'</div>':''}</div>`).join('')}` : ''}
     ${(data.contentSignals||[]).length ? `<div class="muted" style="font-size:11px;font-weight:700;margin-top:12px;margin-bottom:6px;">CONTENT SIGNALS</div>${data.contentSignals.map(s=>`<div class="tp-item">${esc(s.theme)}</div>`).join('')}` : ''}
   </div>
 
@@ -10395,12 +10396,16 @@ function renderCompanyDrawerContent(data){
     <div class="section-title" style="font-size:13px;"><i class="ti ti-mood-sad"></i> Log account deal</div>
     <div class="muted" style="font-size:11.5px;margin-bottom:8px;">For a client-services deal (Twenty2's own pipeline, e.g. from Monday) rather than an outreach-generated one - no campaign/contact needed.</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
-      <select id="dealOutcome-${esc(c.name)}" style="flex:1;min-width:100px;"><option value="Won">Won</option><option value="Lost" selected>Lost</option><option value="Pending">Pending</option></select>
+      <select id="dealOutcome-${esc(c.name)}" style="flex:1;min-width:100px;"><option value="Won">Won</option><option value="Lost" selected>Lost</option><option value="Paused">Paused / stalled</option><option value="Pending">Pending</option></select>
       <input id="dealValue-${esc(c.name)}" type="number" placeholder="Value ($)" style="flex:1;min-width:100px;">
     </div>
     <select id="dealLossReason-${esc(c.name)}" style="width:100%;margin-bottom:6px;">
       <option value="">Loss reason (if lost)</option>
       ${LOSS_REASON_OPTIONS.map(o=>`<option>${o}</option>`).join('')}
+    </select>
+    <select id="dealStallReason-${esc(c.name)}" style="width:100%;margin-bottom:6px;">
+      <option value="">Stall reason (if paused)</option>
+      ${STALL_REASON_OPTIONS.map(o=>`<option>${o}</option>`).join('')}
     </select>
     <textarea id="dealNotes-${esc(c.name)}" rows="2" placeholder="What happened, in your own words..."></textarea>
     <button class="btn btn-secondary btn-sm" style="margin-top:8px;" onclick="logAccountDeal('${esc(c.name)}')"><i class="ti ti-plus"></i> Log deal</button>
@@ -10521,16 +10526,18 @@ async function logAccountDeal(name){
   const outcome = document.getElementById('dealOutcome-'+name).value;
   const dealValue = parseFloat(document.getElementById('dealValue-'+name).value) || 0;
   const lossReason = document.getElementById('dealLossReason-'+name).value;
+  const stallReason = document.getElementById('dealStallReason-'+name).value;
   const notes = document.getElementById('dealNotes-'+name).value.trim();
   try {
     const res = await fetch(`/api/companies/${encodeURIComponent(name)}/deals`, {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ outcome, dealValue, lossReason, notes, source: 'Monday (client pipeline)' })
+      body: JSON.stringify({ outcome, dealValue, lossReason, stallReason, notes, source: 'Monday (client pipeline)' })
     });
     const data = await res.json();
     if(!res.ok || !data.success) throw new Error(data.error || 'Save failed');
     toast('Deal logged', 'success');
-    window.__lostDeals = undefined; // force the Company Universe rollup to refetch next visit
+    window.__lostDeals = undefined; // force the Company Universe rollups to refetch next visit
+    window.__stalledRelationships = undefined;
     openCompanyDrawer(name);
   } catch(err){
     toast('Could not log deal: ' + err.message, 'warn');
@@ -10600,6 +10607,72 @@ async function logMondayScanFinding(i){
     renderPage();
   } catch(err){
     toast('Could not log deal: ' + err.message, 'warn');
+  }
+}
+
+/* ---- Monday.com stalled-relationship scan (Settings) ---- */
+
+async function runMondayStallScan(){
+  window.__mondayStallScanLoading = true;
+  renderPage();
+  try {
+    const res = await fetch('/api/monday/stall-scan');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__mondayStallScan = data.findings || [];
+    toast(`${window.__mondayStallScan.length} thread(s) with stall context found`, 'success');
+  } catch(err){
+    window.__mondayStallScan = { error: err.message };
+    toast('Could not scan Monday: ' + err.message, 'warn');
+  }
+  window.__mondayStallScanLoading = false;
+  renderPage();
+}
+
+function renderMondayStallScanSection(data){
+  if(!data) return '';
+  if(data.error) return `<div class="muted" style="font-size:12px;margin-top:10px;">Could not scan: ${esc(data.error)}</div>`;
+  if(!data.length) return '<div class="muted" style="font-size:12px;margin-top:10px;">Scanned - nothing with stall-context language found this pass.</div>';
+  return `
+  <div style="margin-top:12px;display:flex;flex-direction:column;gap:10px;">
+    ${data.map((f,i) => `
+      <div style="border:1px solid var(--border-light);border-radius:var(--radius-input);padding:10px 12px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;">
+          <div>
+            <div style="font-weight:700;font-size:12.5px;">${esc(f.contactName)}</div>
+            <div class="muted" style="font-size:11px;">${esc(f.companyName)}${f.companyMatched?'':' (no matching company on file)'}</div>
+          </div>
+          ${f.companyMatched ? `
+            <div style="display:flex;gap:6px;align-items:center;flex:none;">
+              <select id="mondayStallReason-${i}" style="font-size:11.5px;">${STALL_REASON_OPTIONS.map(o=>`<option ${o===f.suggestedStallReason?'selected':''}>${o}</option>`).join('')}</select>
+              <button class="btn btn-secondary btn-sm" onclick="logMondayStallFinding(${i})"><i class="ti ti-plus"></i> Log this</button>
+            </div>
+          ` : '<span class="muted" style="font-size:11px;">Add the company in Airtable first to log this one.</span>'}
+        </div>
+        <div class="muted" style="font-size:11px;margin-top:6px;padding-top:6px;border-top:1px solid var(--border-light);color:var(--text);">${esc((f.notes||'').slice(0,400))}${(f.notes||'').length>400?'…':''}</div>
+      </div>
+    `).join('')}
+  </div>`;
+}
+
+async function logMondayStallFinding(i){
+  const f = window.__mondayStallScan[i];
+  if(!f) return;
+  const stallReason = document.getElementById('mondayStallReason-'+i).value;
+  const notes = (f.notes || '') + '\n\n(Recovered from Monday.com Relationship Radar via Settings > Scan Monday for stalled relationships.)';
+  try {
+    const res = await fetch(`/api/companies/${encodeURIComponent(f.companyName)}/deals`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ outcome:'Paused', stallReason, notes, source: 'Monday (client pipeline)' })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Save failed');
+    toast('Logged as a stalled relationship', 'success');
+    window.__stalledRelationships = undefined;
+    window.__mondayStallScan.splice(i, 1);
+    renderPage();
+  } catch(err){
+    toast('Could not log: ' + err.message, 'warn');
   }
 }
 
@@ -12888,6 +12961,10 @@ const ICP_MOMENTUM_OPTIONS = ['any', 'Hiring', 'Funded', 'Leadership Change', 'F
 // keeps the Monday-scan side of this list in sync) - kept as one shared list so a
 // hand-logged deal and a Monday-scan finding never drift into different vocabularies.
 const LOSS_REASON_OPTIONS = ['Funding withdrawn', 'Lost to competitor', 'Timing / priority', 'Budget too low', 'Went cold / no response', 'Went internal / self-executed', 'Other'];
+// Matches Deals.'Stall Reason' choices in Airtable (search-server.js mapMondayStallReason
+// keeps the Monday-scan side in sync). Separate from LOSS_REASON_OPTIONS above on purpose -
+// a stall isn't a confirmed loss, just gone quiet or hit a snag.
+const STALL_REASON_OPTIONS = ['Went cold / no response', 'Paused - reorg or budget freeze', 'Waiting on another thread', 'Early warning signal', 'Other'];
 
 /* ===================== COMPANY UNIVERSE (redesign plan §3) ===================== */
 // New top-level page: account-wide segmentation (every company, not just
@@ -13037,6 +13114,52 @@ function renderLostDealsSection(data){
       `).join('')}
     </div>
     ${data.lost.length > 20 ? `<div class="muted" style="font-size:11px;margin-top:8px;">+${data.lost.length-20} more.</div>` : ''}
+  `;
+}
+
+// ---- Stalled relationships (softer than a Lost deal - gone quiet, paused, or an early warning) ----
+
+async function loadStalledRelationships(){
+  try {
+    const res = await fetch('/api/companies/stalled-relationships');
+    const json = await res.json();
+    if(!res.ok) throw new Error(json.error || 'Request failed');
+    window.__stalledRelationships = json;
+  } catch(err){
+    window.__stalledRelationships = { error: err.message };
+  }
+  if(state.currentPage === 'companyuniverse'){
+    const el = document.getElementById('stalledRelationshipsSection');
+    if(el) el.innerHTML = renderStalledRelationshipsSection(window.__stalledRelationships);
+  }
+}
+
+function renderStalledRelationshipsSection(data){
+  if(!data) return '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading...</div>';
+  if(data.error) return `<div class="muted">Could not load: ${esc(data.error)}</div>`;
+  if(!data.stalled || !data.stalled.length) return '<div class="empty-state">No stalled relationships logged yet - use "Log account deal" in a company\'s drawer, or Settings > Scan Monday, to start building this out.</div>';
+  return `
+    <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
+      ${data.byReason.map(r => `
+        <div style="flex:1;min-width:150px;border:1px solid var(--border-light);border-radius:var(--radius-input);padding:10px 12px;">
+          <div style="font-weight:700;font-size:13px;">${r.count}</div>
+          <div class="muted" style="font-size:11px;">${esc(r.reason)}</div>
+        </div>
+      `).join('')}
+    </div>
+    <div style="display:flex;flex-direction:column;gap:0;">
+      ${data.stalled.slice(0, 20).map(d => `
+        <div style="padding:8px 0;border-bottom:1px solid var(--border-light);cursor:pointer;" onclick="navigate('profile');selectProfileCompany('${esc(d.companyName)}')">
+          <div style="display:flex;justify-content:space-between;gap:8px;">
+            <strong style="font-size:12.5px;">${esc(d.companyName||'Unknown company')}</strong>
+            <span class="muted" style="font-size:11px;flex:none;">${d.dealValue ? '$'+d.dealValue.toLocaleString() : ''} ${d.date ? '· '+fmtDate(d.date) : ''}</span>
+          </div>
+          <div style="font-size:11.5px;margin-top:2px;"><span class="tag tag-messaging" style="font-size:10px;">${esc(d.stallReason)}</span> <span class="muted" style="font-size:10.5px;">${esc(d.source)}</span></div>
+          ${d.notes ? `<div class="muted" style="font-size:11.5px;margin-top:3px;">${esc(d.notes.slice(0,160))}${d.notes.length>160?'…':''}</div>` : ''}
+        </div>
+      `).join('')}
+    </div>
+    ${data.stalled.length > 20 ? `<div class="muted" style="font-size:11px;margin-top:8px;">+${data.stalled.length-20} more.</div>` : ''}
   `;
 }
 
@@ -13213,6 +13336,12 @@ function renderCompanyUniverse(){
     <div class="section-title" style="margin-bottom:4px;"><i class="ti ti-mood-sad"></i> Why deals are lost</div>
     <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every Lost deal on file, structured by reason - client-services deals from Twenty2's own pipeline as well as outreach-generated ones. Log a new one from a company's drawer or Profile board.</div>
     <div id="lostDealsSection">${renderLostDealsSection(window.__lostDeals)}</div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title" style="margin-bottom:4px;"><i class="ti ti-cloud-pause"></i> Stalled relationships</div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Gone quiet, paused, or an early warning - not a confirmed loss, but worth knowing before it becomes one. Log one from a company's drawer or Settings > Scan Monday.</div>
+    <div id="stalledRelationshipsSection">${renderStalledRelationshipsSection(window.__stalledRelationships)}</div>
   </div>
 
   ${renderGlobalAngleLibrarySection()}
@@ -22095,6 +22224,16 @@ function renderSettings(){
       <button class="btn btn-secondary btn-sm" id="mondayLossScanBtn" ${window.__mondayLossScanLoading?'disabled':''} onclick="runMondayLossScan()"><i class="ti ${window.__mondayLossScanLoading?'ti-loader-2':'ti-search'}"></i> ${window.__mondayLossScanLoading?'Scanning…':'Scan Monday'}</button>
     </div>
     ${renderMondayLossScanSection(window.__mondayLossScan)}
+  </div>
+  <div class="settings-section card">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:4px;">
+      <div>
+        <div class="section-title" style="margin-bottom:2px;"><i class="ti ti-cloud-pause"></i> Scan Monday for stalled relationships</div>
+        <div class="muted" style="font-size:12px;">Reads Relationship Radar's notes for gone-quiet/paused/early-warning language - separate from the loss scan above, since a stall isn't a confirmed loss. Read-only until you click "Log this" on a result.</div>
+      </div>
+      <button class="btn btn-secondary btn-sm" id="mondayStallScanBtn" ${window.__mondayStallScanLoading?'disabled':''} onclick="runMondayStallScan()"><i class="ti ${window.__mondayStallScanLoading?'ti-loader-2':'ti-search'}"></i> ${window.__mondayStallScanLoading?'Scanning…':'Scan Monday'}</button>
+    </div>
+    ${renderMondayStallScanSection(window.__mondayStallScan)}
   </div>
   <div class="settings-section card">
     <div class="section-title"><i class="ti ti-brand-linkedin"></i> LinkedIn accounts</div>

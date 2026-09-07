@@ -9151,7 +9151,7 @@ app.get('/api/companies/profile', async (req, res) => {
 
     const deals = dealRecords
       .filter(r => (r.fields['Company'] || []).includes(companyRecord.id))
-      .map(r => ({ id: r.id, outcome: r.fields['Outcome'] || '', dealValue: r.fields['Deal Value'] || 0, date: r.fields['Date'] || '', notes: r.fields['Notes'] || '', lossReason: r.fields['Loss Reason'] || '', source: r.fields['Source'] || '' }));
+      .map(r => ({ id: r.id, outcome: r.fields['Outcome'] || '', dealValue: r.fields['Deal Value'] || 0, date: r.fields['Date'] || '', notes: r.fields['Notes'] || '', lossReason: r.fields['Loss Reason'] || '', stallReason: r.fields['Stall Reason'] || '', source: r.fields['Source'] || '' }));
 
     const contentSignals = signalRecords
       .filter(r => (r.fields['Related Companies'] || []).includes(companyRecord.id))
@@ -9807,7 +9807,7 @@ app.get('/api/companies/gtm-performance', async (req, res) => {
 app.post('/api/companies/:name/deals', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   const companyName = decodeURIComponent(req.params.name);
-  const { outcome, dealValue, lossReason, notes, date, source } = req.body;
+  const { outcome, dealValue, lossReason, stallReason, notes, date, source } = req.body;
   if (!outcome) return res.status(400).json({ error: 'outcome is required' });
   try {
     const companyRecord = await findRecordByFieldName('Companies', 'Company Name', companyName);
@@ -9821,6 +9821,7 @@ app.post('/api/companies/:name/deals', async (req, res) => {
     };
     if (dealValue) fields['Deal Value'] = dealValue;
     if (lossReason) fields['Loss Reason'] = lossReason;
+    if (stallReason) fields['Stall Reason'] = stallReason;
     const data = await airtableRequest('POST', 'Deals', { records: [{ fields }], typecast: true });
     res.json({ success: true, deal: data.records[0] });
   } catch (err) {
@@ -9866,6 +9867,47 @@ app.get('/api/companies/lost-deals', async (req, res) => {
     res.json({ lost, byReason: Object.values(byReason).sort((a, b) => b.count - a.count) });
   } catch (err) {
     console.error('Lost-deals rollup error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Same shape as lost-deals above, but for Deals.Outcome = 'Paused' - a
+// relationship that's gone quiet or hit a snag (no response, a budget
+// freeze, a sequencing wait), not a confirmed loss. Kept as a distinct
+// Outcome + Stall Reason field rather than overloading Loss Reason, since
+// writing "Lost" over something that's genuinely just stalled would
+// overstate what's actually known.
+app.get('/api/companies/stalled-relationships', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const [dealRecords, companyRecords] = await Promise.all([
+      airtableFetchAllRecords('Deals'), airtableFetchAllRecords('Companies')
+    ]);
+    const companyById = {}; companyRecords.forEach(r => { companyById[r.id] = r; });
+    const stalled = dealRecords.filter(d => (d.fields['Outcome'] || '') === 'Paused').map(d => {
+      const companyId = (d.fields['Company'] || [])[0];
+      const company = companyId ? companyById[companyId] : null;
+      return {
+        id: d.id,
+        companyName: company ? (company.fields['Company Name'] || '') : '',
+        dealValue: d.fields['Deal Value'] || 0,
+        stallReason: d.fields['Stall Reason'] || 'Not yet recorded',
+        source: d.fields['Source'] || 'Outreach',
+        notes: d.fields['Notes'] || '',
+        date: d.fields['Date'] || ''
+      };
+    }).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+    const byReason = {};
+    stalled.forEach(d => {
+      (byReason[d.stallReason] = byReason[d.stallReason] || { reason: d.stallReason, count: 0, deals: [] });
+      byReason[d.stallReason].count += 1;
+      byReason[d.stallReason].deals.push(d);
+    });
+
+    res.json({ stalled, byReason: Object.values(byReason).sort((a, b) => b.count - a.count) });
+  } catch (err) {
+    console.error('Stalled-relationships rollup error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -12624,6 +12666,87 @@ app.get('/api/monday/loss-scan', async (req, res) => {
     res.json({ findings });
   } catch (err) {
     console.error('Monday loss-scan error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Monday.com stalled-relationship scan ----
+// A relationship going quiet is a different, softer signal than a
+// confirmed Lost deal - this reads Relationship Radar's free-text
+// "Context Notes" (a normal readable column, no permission issue) rather
+// than an item's Updates feed. The Contacts board's own Updates/Activities
+// feed turned out to be unreadable with the current Monday token's board
+// permissions (confirmed via multiple query shapes, including plain
+// `items(ids:[...]){ updates }` on a known-populated contact) - a genuine
+// board-level access gap, not a query bug. Widening that identity's
+// permissions on the Contacts board (Board settings > Members) would be
+// needed before that richer per-contact feed can be read at all.
+const RELATIONSHIP_RADAR_BOARD_ID = '5027907051';
+const MONDAY_STALL_SIGNAL_RE = /\b(paused|pause|on hold|no reply|no response|gone quiet|went quiet|went cold|no longer responding|reorg(anisation)?|budget freeze|freeze|waiting on|sequencing|not yet|holding off|stalled|quiet since|chased (once|twice)|declined)\b/i;
+
+function mapMondayStallReason(text) {
+  const t = (text || '').toLowerCase();
+  if (!t) return 'Other';
+  if (/reorg|budget freeze|freeze/.test(t)) return 'Paused - reorg or budget freeze';
+  if (/no reply|no response|went cold|gone quiet|went quiet|chased/.test(t)) return 'Went cold / no response';
+  if (/waiting on|sequencing|until .* (lands|responds)/.test(t)) return 'Waiting on another thread';
+  return 'Other';
+}
+
+async function mondayFetchRelationshipRadarNotes() {
+  const items = [];
+  let cursor = null;
+  do {
+    const cursorArg = cursor ? `, cursor: ${JSON.stringify(cursor)}` : '';
+    const data = await mondayGraphQL(`{
+      boards(ids: [${RELATIONSHIP_RADAR_BOARD_ID}]) {
+        items_page(limit: 100${cursorArg}) {
+          cursor
+          items {
+            id
+            name
+            column_values(ids: ["long_text_mm2hgjk4", "text_mm2hhwph"]) { column { title } text }
+          }
+        }
+      }
+    }`);
+    const page = data.boards[0].items_page;
+    items.push(...page.items);
+    cursor = page.cursor;
+  } while (cursor);
+  return items;
+}
+
+// Read-only, same "review before logging" pattern as loss-scan - a stall is
+// a softer claim than a loss and shouldn't get auto-written without a look.
+app.get('/api/monday/stall-scan', async (req, res) => {
+  if (!process.env.MONDAY_API_KEY) return res.status(500).json({ error: 'MONDAY_API_KEY not configured' });
+  try {
+    let items;
+    try { items = await mondayFetchRelationshipRadarNotes(); }
+    catch (err) { return res.status(500).json({ error: `Relationship Radar fetch failed: ${err.message}` }); }
+
+    const findings = [];
+    for (const item of items) {
+      const cols = {}; (item.column_values || []).forEach(cv => { cols[cv.column.title] = cv.text; });
+      const notes = cols['Context Notes'] || '';
+      if (!notes || !MONDAY_STALL_SIGNAL_RE.test(notes)) continue;
+
+      const orgRaw = cols['Organisation'] || '';
+      const companyRecord = orgRaw ? await findAirtableCompanyByMondayName(orgRaw) : null;
+
+      findings.push({
+        itemId: item.id,
+        contactName: item.name,
+        companyName: companyRecord ? companyRecord.fields['Company Name'] : orgRaw,
+        companyMatched: !!companyRecord,
+        suggestedStallReason: mapMondayStallReason(notes),
+        notes
+      });
+    }
+    res.json({ findings });
+  } catch (err) {
+    console.error('Monday stall-scan error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
