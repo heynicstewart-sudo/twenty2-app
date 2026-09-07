@@ -478,7 +478,11 @@ const OPTIONAL_LATE_ADDED_FIELDS = [
   // Deep company research (Companies table).
   'Deep Research (JSON)',
   // Manual change-architecture whiteboard (Companies table).
-  'Change Architecture (JSON)'
+  'Change Architecture (JSON)',
+  // Per-client editable GTM motion / ICP profile / competitor map (Settings table).
+  'GTM Motion (JSON)',
+  'ICP Profile (JSON)',
+  'Competitor Map (JSON)'
 ];
 const optionalFieldsMissing = new Set();
 function stripMissingOptionalFields(body) {
@@ -9368,6 +9372,112 @@ app.post('/api/companies/:name/change-architecture', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('Change architecture save error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Per-client GTM motion (GTM Motion page) ----
+// One editable "go-to-market motion" document per client: the stages, the
+// flywheel/funnel toggle and the copy shown on the GTM Motion page. Stored
+// as a JSON blob on the singleton Settings record, same convention as
+// last-analysis / angle-library. When the field is missing from a client's
+// base the read returns null (the browser then seeds from its built-in
+// Twenty2 template) and the write degrades to a no-op via
+// airtableWriteAllowingMissingCtaFields. Whole-document replace on save -
+// single-editor doc, no merge needed.
+app.get('/api/gtm-motion', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const record = await getSettingsRecord();
+    const motion = record ? parseJsonSafe(record.fields['GTM Motion (JSON)']) : null;
+    res.json({ motion: motion || null });
+  } catch (err) {
+    console.error('Get gtm-motion error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/gtm-motion', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { motion } = req.body || {};
+  if (!motion || typeof motion !== 'object' || !Array.isArray(motion.stages)) {
+    return res.status(400).json({ error: 'motion object with a stages array is required' });
+  }
+  try {
+    const settingsRecord = await getOrCreateSettingsRecord();
+    await airtableWriteAllowingMissingCtaFields('PATCH', SETTINGS_TABLE, {
+      records: [{ id: settingsRecord.id, fields: { 'GTM Motion (JSON)': JSON.stringify(motion) } }]
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Save gtm-motion error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Per-client ICP profile (ICP Builder page) ----
+// The structured "initial customer profile" workbook - fit test, 10x edge,
+// revenue signal, funnel tracking, attributes. Same storage contract as
+// gtm-motion above (JSON blob on the Settings singleton, graceful when the
+// field is missing).
+app.get('/api/icp-profile', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const record = await getSettingsRecord();
+    const profile = record ? parseJsonSafe(record.fields['ICP Profile (JSON)']) : null;
+    res.json({ profile: profile || null });
+  } catch (err) {
+    console.error('Get icp-profile error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/icp-profile', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { profile } = req.body || {};
+  if (!profile || typeof profile !== 'object') {
+    return res.status(400).json({ error: 'profile object is required' });
+  }
+  try {
+    const settingsRecord = await getOrCreateSettingsRecord();
+    await airtableWriteAllowingMissingCtaFields('PATCH', SETTINGS_TABLE, {
+      records: [{ id: settingsRecord.id, fields: { 'ICP Profile (JSON)': JSON.stringify(profile) } }]
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Save icp-profile error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Per-client competitor map (Competitor Map board) ----
+// Free-form Whimsical-style canvas: competitor nodes plus pinned notes and
+// the edges between them. { nodes, edges } whole-document replace, exactly
+// like the change-architecture whiteboard.
+app.get('/api/competitor-map', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const record = await getSettingsRecord();
+    const saved = record ? parseJsonSafe(record.fields['Competitor Map (JSON)']) : null;
+    res.json(saved && Array.isArray(saved.nodes) ? saved : { nodes: [], edges: [] });
+  } catch (err) {
+    console.error('Get competitor-map error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/competitor-map', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { nodes, edges } = req.body || {};
+  if (!Array.isArray(nodes) || !Array.isArray(edges)) return res.status(400).json({ error: 'nodes and edges arrays are required' });
+  try {
+    const settingsRecord = await getOrCreateSettingsRecord();
+    await airtableWriteAllowingMissingCtaFields('PATCH', SETTINGS_TABLE, {
+      records: [{ id: settingsRecord.id, fields: { 'Competitor Map (JSON)': JSON.stringify({ nodes, edges }) } }]
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Save competitor-map error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

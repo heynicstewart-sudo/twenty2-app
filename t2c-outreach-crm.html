@@ -653,6 +653,49 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .gtm-loop-card{border:1px solid var(--border);border-radius:var(--radius-card);background:var(--surface);padding:20px;text-align:center;}
 .gtm-loop-card svg{max-width:420px;width:100%;height:auto;}
 .gtm-loop-caption{font-size:12px;color:var(--muted);margin-top:8px;max-width:460px;margin-left:auto;margin-right:auto;line-height:1.6;}
+.gtm-motion-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;}
+.gtm-stage h4[contenteditable],.gtm-stage p[contenteditable],.howto-hero h2[contenteditable],.howto-hero p[contenteditable]{cursor:text;}
+.gtm-tag-edit{cursor:text;min-width:70px;display:inline-block;outline:none;}
+.gtm-tag-edit:empty::before{content:'tag…';opacity:.55;}
+.gtm-caption-edit{cursor:text;outline:none;border:1px dashed var(--border);border-radius:6px;padding:6px 8px;}
+.gtm-caption-edit:empty::before{content:'Describe how the loop compounds…';opacity:.55;}
+.gtm-stage-add{display:flex;align-items:center;justify-content:center;border-style:dashed;cursor:pointer;min-height:150px;}
+.gtm-stage-add:hover{border-color:var(--accent);}
+
+/* ICP builder */
+.icp-ce:empty::before{content:attr(data-ph);opacity:.5;}
+.pill.tint-green{background:var(--tint-green-bg);color:var(--tint-green-fg);}
+.pill.tint-amber{background:var(--tint-amber-bg);color:var(--tint-amber-fg);}
+.pill.tint-red{background:var(--tint-red-bg);color:var(--tint-red-fg);}
+.pill.tint-grey{background:var(--tint-grey-bg);color:var(--tint-grey-fg);}
+.icp-fit-grid{display:grid;grid-template-columns:320px 1fr;gap:18px;align-items:start;}
+.icp-venn{text-align:center;}
+.icp-venn svg{max-width:300px;width:100%;height:auto;}
+.icp-fit-verdict{font-size:12.5px;font-weight:800;margin-top:6px;display:flex;align-items:center;gap:6px;justify-content:center;}
+.icp-fit-cards{display:flex;flex-direction:column;gap:10px;}
+.icp-fit-card{border:1px solid var(--border-light);border-radius:var(--radius-card);padding:10px 12px;background:var(--surface);}
+.icp-rating-pills{display:inline-flex;gap:3px;}
+.icp-pill{border:1px solid var(--border);background:var(--surface);color:var(--muted);font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:20px;cursor:pointer;}
+.icp-pill[disabled]{cursor:default;opacity:.55;}
+.icp-pill.on.tint-green{background:var(--tint-green-bg);color:var(--tint-green-fg);border-color:var(--tint-green-fg);}
+.icp-pill.on.tint-amber{background:var(--tint-amber-bg);color:var(--tint-amber-fg);border-color:var(--tint-amber-fg);}
+.icp-pill.on.tint-red{background:var(--tint-red-bg);color:var(--tint-red-fg);border-color:var(--tint-red-fg);}
+.icp-attr-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border-light);}
+.icp-attr-row:last-of-type{border-bottom:none;}
+
+/* Competitor map (Whimsical-style board) */
+.cm-layout{display:grid;grid-template-columns:230px 1fr;gap:16px;align-items:start;}
+.cm-rail{border:1px solid var(--border-light);border-radius:var(--radius-card);background:var(--surface);padding:12px;box-shadow:var(--shadow-sm);position:sticky;top:12px;}
+.cm-rail-item{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:600;padding:6px 7px;border-radius:6px;cursor:pointer;}
+.cm-rail-item:hover{background:var(--surface-2);}
+.cm-rail-item.on{background:var(--accent-dim);color:var(--accent-strong);}
+.cm-board-wrap{min-width:0;}
+.cm-board{border:1px solid var(--border-light);border-radius:10px;background:var(--surface-2);overflow:auto;height:620px;background-image:radial-gradient(var(--border-light) 1px,transparent 1px);background-size:22px 22px;}
+@media (max-width:1024px){
+  .icp-fit-grid{grid-template-columns:1fr;}
+  .cm-layout{grid-template-columns:1fr;}
+  .cm-rail{position:static;}
+}
 
 /* Profile board (Jeanne vision pivot §2 - mind-map canvas replacing the flat tree) */
 .profile-board-canvas{position:relative;height:520px;min-width:600px;background:var(--surface-2);border:1px solid var(--border-light);border-radius:var(--radius-card);overflow:auto;}
@@ -1548,6 +1591,8 @@ const NAV = [
   { id:'campaigns', label:'Campaigns', icon:'ti-rocket' },
   { id:'profile', label:'Profile', icon:'ti-hierarchy-2' },
   { id:'gtmmotion', label:'GTM Motion', icon:'ti-topology-star-3', hidden:true },
+  { id:'icpbuilder', label:'ICP Builder', icon:'ti-crosshair', hidden:true },
+  { id:'competitormap', label:'Competitor Map', icon:'ti-affiliate', hidden:true },
   { id:'replies', label:'Replies', icon:'ti-message-reply', hidden:true },
   { id:'logger', label:'Logger', icon:'ti-clipboard-text', hidden:true },
   { id:'calendar', label:'Sales', icon:'ti-calendar', hidden:true },
@@ -2336,7 +2381,7 @@ function renderPage(){
 
   // 'research' deleted outright (redesign plan §1) - renderResearch() is
   // left defined (harmless dead code) but no longer reachable via dispatch.
-  const renderers = { home: renderHome, companyuniverse: renderCompanyUniverse, profile: renderProfilePage, gtmmotion: renderGtmMotionPage, replies: renderReplies, logger: renderLoggerPage, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, contentcalendar: renderContentCalendarPage, settings: renderSettings, agency: renderAgencyPage };
+  const renderers = { home: renderHome, companyuniverse: renderCompanyUniverse, profile: renderProfilePage, gtmmotion: renderGtmMotionPage, icpbuilder: renderIcpBuilderPage, competitormap: renderCompetitorMapPage, replies: renderReplies, logger: renderLoggerPage, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, contentcalendar: renderContentCalendarPage, settings: renderSettings, agency: renderAgencyPage };
   el.innerHTML = renderers[state.currentPage]();
   afterRender(state.currentPage);
 
@@ -2402,6 +2447,12 @@ function afterRender(page){
     if(window.__lostDeals === undefined) loadLostDeals();
     if(window.__stalledRelationships === undefined) loadStalledRelationships();
     ensureContextDataLoaded();
+  }
+  if(page === 'gtmmotion' && window.__gtmMotion === undefined && !window.__gtmMotionLoading) loadGtmMotion();
+  if(page === 'icpbuilder' && window.__icpProfile === undefined && !window.__icpProfileLoading) loadIcpProfile();
+  if(page === 'competitormap'){
+    if(window.__competitorMap === undefined && !window.__competitorMapLoading) loadCompetitorMap();
+    else if(window.__competitorMap) redrawCmLines();
   }
   if(page === 'replies' && window.__repliesQueue === undefined && !window.__repliesLoading) loadRepliesQueue();
   if(page === 'home') ensureTodaysActionsSequenceStagesLoaded();
@@ -6222,69 +6273,338 @@ function renderHowItWorks(){
 }
 
 /* ===================== GTM MOTION (Jeanne vision pivot §1) ===================== */
-// A static visual explaining Twenty2's own go-to-market motion - not a
-// funnel with a start and end, but a loop the Engine drives every cycle,
-// getting sharper each time it turns. Each stage below names the real,
-// already-shipped feature that powers it (see project_gtm_engineer_nuggets
-// and project_profile_gate_and_remaining_gaps memory) - this page is a
-// story over existing capability, not new functionality.
+// The GTM Motion page. Originally a fixed visual of Twenty2's own
+// go-to-market loop; now a per-client editable document - the stages, the
+// flywheel/funnel toggle and the surrounding copy - saved to the client's
+// Settings record via /api/gtm-motion (see project_gtm_engineer_nuggets and
+// project_profile_gate_and_remaining_gaps memory for the feature names the
+// Twenty2 template still points at). Nothing is destroyed: the Twenty2
+// Engine is one of the built-in templates below and is the default seed
+// when a client has never saved a motion, so the page looks identical to
+// before until someone hits Edit.
 
-const GTM_STAGES = [
-  { icon:'ti-target-arrow', title:'Profile the account', body:'Score every company on size, momentum and workload before anyone drafts a word - and check whether Twenty2 already has a relationship there.', tag:'ICP segmentation · Angle Library · relationship flag' },
-  { icon:'ti-route-2', title:'Sequence with judgment', body:'The Engine decides cadence, when to bring a CTA forward, and whether to frame the message as risk or upside - per contact, not a fixed script.', tag:'Early-CTA judgment · risk/upside framing' },
-  { icon:'ti-message-2-heart', title:'Engage as a person', body:'Humanized drafts, a collaborative "map the gap" session instead of a pitch, and call prep grounded in the real thread.', tag:'Reply queue · map the gap · call prep' },
-  { icon:'ti-trophy', title:'Close and deepen', body:'See the whole account’s status, not one contact’s - who’s reached, who’s engaged, who’s booked - and track it through to a closed deal.', tag:'Account-as-pipeline · scorecard' },
-  { icon:'ti-refresh', title:'Learn, never go cold', body:'Every stall gets diagnosed into a style correction. Every cold contact with a fresh signal gets a reason to re-engage. Both feed back into stage 1.', tag:'Deal Autopsy · signal re-engagement' }
+// Built-in starting points. Stages get ids assigned by normalizeGtmMotion().
+const GTM_MOTION_TEMPLATES = {
+  twenty2Engine: {
+    label: 'Twenty2 GTM Engine (5-stage loop)',
+    title: "Twenty2's GTM Engine",
+    intro: 'Not a funnel with a start and an end - a loop the Engine drives every cycle, and it gets sharper each time it turns. Five stages, each already live in this app.',
+    loop: true,
+    loopCaption: 'Every close sharpens the Angle Library. Every stall becomes a style correction. Every re-engaged signal starts the loop again - the account gets better profiled, not just re-contacted.',
+    stages: [
+      { icon:'ti-target-arrow', title:'Profile the account', body:'Score every company on size, momentum and workload before anyone drafts a word - and check whether Twenty2 already has a relationship there.', tag:'ICP segmentation · Angle Library · relationship flag' },
+      { icon:'ti-route-2', title:'Sequence with judgment', body:'The Engine decides cadence, when to bring a CTA forward, and whether to frame the message as risk or upside - per contact, not a fixed script.', tag:'Early-CTA judgment · risk/upside framing' },
+      { icon:'ti-message-2-heart', title:'Engage as a person', body:'Humanized drafts, a collaborative "map the gap" session instead of a pitch, and call prep grounded in the real thread.', tag:'Reply queue · map the gap · call prep' },
+      { icon:'ti-trophy', title:'Close and deepen', body:'See the whole account’s status, not one contact’s - who’s reached, who’s engaged, who’s booked - and track it through to a closed deal.', tag:'Account-as-pipeline · scorecard' },
+      { icon:'ti-refresh', title:'Learn, never go cold', body:'Every stall gets diagnosed into a style correction. Every cold contact with a fresh signal gets a reason to re-engage. Both feed back into stage 1.', tag:'Deal Autopsy · signal re-engagement' }
+    ]
+  },
+  // The six-step strategy framework from the "Unstoppable" GTM breakdown:
+  // steps 1-4 are strategy, 5-6 are execution, and step 6 feeds back into
+  // step 1 - so it's a loop too.
+  gtmStrategy6: {
+    label: '6-Step GTM Strategy (Unstoppable framework)',
+    title: 'Go-to-Market Strategy',
+    intro: 'Strategy first, execution second. Steps 1-4 set the strategy; 5-6 run it and sharpen it. Skip the strategy work and every execution move - agency, junior marketer or founder - burns months for nothing.',
+    loop: true,
+    loopCaption: 'Step 6 feeds the data back into step 1. Each turn of the loop tightens the target market, the segment, the positioning and the message - that compounding is how growth happens.',
+    stages: [
+      { icon:'ti-world-search', title:'1. Total addressable market', body:'Map the whole market, then whittle it down to the target market you actually want for the next stage of growth. The riches are in the niches - run a proper ICP exercise instead of speaking to everyone.', tag:'Strategy · TAM → target market · ICP' },
+      { icon:'ti-chart-pie', title:'2. Segmentation', body:'Break the target market into parts you can win - SMB / mid-market / enterprise, geography, industry - then commit to one segment where you can genuinely compete and can target the message.', tag:'Strategy · size · geo · industry' },
+      { icon:'ti-map-2', title:'3. Positioning', body:'Map the competitors across each segment and see who is winning where. Plenty of competitors means the market is validated; none usually means a graveyard. Decide: compete head-on, or take the white space.', tag:'Strategy · competitor map · white space' },
+      { icon:'ti-flag', title:'4. Manifesto', body:'Not a soapbox page on your website. An exercise that pulls TAM, segmentation, positioning and value proposition into one strategic narrative and the messaging you take to market.', tag:'Strategy · narrative · messaging' },
+      { icon:'ti-masks-theater', title:'5. Broadway show', body:'A consistent set of sales and marketing activities that bring the manifesto to your ICP on a few chosen channels. Channel mastery and repetition - not a scattergun of half-tried tactics.', tag:'Execution · channel mastery · consistency' },
+      { icon:'ti-chart-dots', title:'6. Instrument & iterate', body:'Decide the metrics that tell you what is working. Collect the data as the Broadway show runs, then feed it back into the strategy and adjust. That feedback loop is how you scale.', tag:'Execution · metrics · feedback loop' }
+    ]
+  },
+  blank: {
+    label: 'Blank - build from scratch',
+    title: 'Our GTM motion',
+    intro: 'Describe how this client goes to market, one stage at a time.',
+    loop: true,
+    loopCaption: '',
+    stages: [
+      { icon:'ti-circle-1', title:'First stage', body:'What happens first.', tag:'' }
+    ]
+  }
+};
+
+// Tabler icon names offered in the per-stage icon picker.
+const GTM_ICON_CHOICES = [
+  'ti-target-arrow','ti-route-2','ti-message-2-heart','ti-trophy','ti-refresh',
+  'ti-world-search','ti-chart-pie','ti-map-2','ti-flag','ti-masks-theater','ti-chart-dots',
+  'ti-bulb','ti-rocket','ti-users-group','ti-search','ti-speakerphone','ti-mail',
+  'ti-calendar-event','ti-coin','ti-chart-arrows-vertical','ti-affiliate','ti-adjustments',
+  'ti-circle-1','ti-circle-2','ti-circle-3','ti-circle-4','ti-circle-5','ti-circle-6'
 ];
 
+function gtmDeepClone(o){ return JSON.parse(JSON.stringify(o)); }
+
+function gtmClientName(){
+  const c = (typeof activeClient === 'function' && activeClient()) || null;
+  return (c && c.name) || 'this client';
+}
+
+// Fill in ids and defaults so a template, a saved blob or a half-formed
+// object all render safely.
+function normalizeGtmMotion(m){
+  if(!m || !Array.isArray(m.stages) || !m.stages.length) return null;
+  return {
+    title: (m.title || 'Our GTM motion').toString(),
+    intro: (m.intro || '').toString(),
+    loop: m.loop !== false,
+    loopCaption: (m.loopCaption || '').toString(),
+    stages: m.stages.map((s, i) => ({
+      id: s.id || ('gs' + Date.now() + '_' + i + '_' + Math.floor(Math.random() * 1000)),
+      icon: s.icon || ('ti-circle-' + Math.min(i + 1, 9)),
+      title: (s.title || ('Stage ' + (i + 1))).toString(),
+      body: (s.body || '').toString(),
+      tag: (s.tag || '').toString()
+    }))
+  };
+}
+
+function gtmMotionDefault(){ return normalizeGtmMotion(gtmDeepClone(GTM_MOTION_TEMPLATES.twenty2Engine)); }
+
+async function loadGtmMotion(){
+  if(window.__gtmMotionLoading) return;
+  window.__gtmMotionLoading = true;
+  try {
+    const res = await fetch('/api/gtm-motion');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__gtmMotion = normalizeGtmMotion(data.motion) || gtmMotionDefault();
+  } catch(err){
+    window.__gtmMotion = gtmMotionDefault();
+    window.__gtmMotionLoadError = err.message;
+  }
+  window.__gtmMotionLoading = false;
+  if(state.currentPage === 'gtmmotion') renderPage();
+}
+
+let __gtmMotionSaveTimer = null;
+function saveGtmMotion(){
+  const el = document.getElementById('gtmMotionSaveStatus');
+  if(el) el.textContent = 'Saving…';
+  clearTimeout(__gtmMotionSaveTimer);
+  __gtmMotionSaveTimer = setTimeout(async () => {
+    try {
+      const res = await fetch('/api/gtm-motion', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ motion: window.__gtmMotion })
+      });
+      const body = await res.json().catch(() => ({}));
+      if(!res.ok) throw new Error(body.error || ('Request failed (' + res.status + ')'));
+      const el2 = document.getElementById('gtmMotionSaveStatus');
+      if(el2) el2.textContent = 'Saved';
+    } catch(err){
+      const el2 = document.getElementById('gtmMotionSaveStatus');
+      if(el2) el2.textContent = 'Could not save - ' + err.message;
+    }
+  }, 700);
+}
+
+function gtmToggleEdit(){ window.__gtmMotionEdit = !window.__gtmMotionEdit; renderPage(); }
+
+function gtmApplyTemplate(key){
+  const sel = document.getElementById('gtmTemplateSelect');
+  const t = GTM_MOTION_TEMPLATES[key];
+  if(!t){ if(sel) sel.value = ''; return; }
+  if(!confirm('Replace the GTM motion for ' + gtmClientName() + ' with the "' + t.label + '" template? This overwrites the stages and copy on this page.')){
+    if(sel) sel.value = '';
+    return;
+  }
+  window.__gtmMotion = normalizeGtmMotion(gtmDeepClone(t));
+  window.__gtmMotionEdit = true;
+  saveGtmMotion();
+  renderPage();
+  toast('Template applied - edit the stages to fit', 'success');
+}
+
+function gtmAddStage(){
+  const m = window.__gtmMotion;
+  if(!m) return;
+  m.stages.push({
+    id: 'gs' + Date.now() + '_' + Math.floor(Math.random() * 1000),
+    icon: 'ti-circle-' + Math.min(m.stages.length + 1, 9),
+    title: 'New stage', body: 'What happens at this stage.', tag: ''
+  });
+  saveGtmMotion();
+  renderPage();
+}
+
+function gtmDeleteStage(id){
+  const m = window.__gtmMotion;
+  if(!m) return;
+  if(m.stages.length <= 1){ toast('Keep at least one stage', 'warn'); return; }
+  m.stages = m.stages.filter(s => s.id !== id);
+  saveGtmMotion();
+  renderPage();
+}
+
+function gtmMoveStage(id, dir){
+  const m = window.__gtmMotion;
+  if(!m) return;
+  const i = m.stages.findIndex(s => s.id === id);
+  const j = i + dir;
+  if(i < 0 || j < 0 || j >= m.stages.length) return;
+  const tmp = m.stages[i]; m.stages[i] = m.stages[j]; m.stages[j] = tmp;
+  saveGtmMotion();
+  renderPage();
+}
+
+function gtmEditStageField(id, field, el){
+  const m = window.__gtmMotion;
+  const s = m && m.stages.find(x => x.id === id);
+  if(!s) return;
+  const v = (el.textContent || '').trim();
+  if(s[field] === v) return;
+  s[field] = v;
+  saveGtmMotion();
+  if(field === 'title') renderPage();
+}
+
+function gtmSetStageIcon(id, icon){
+  const m = window.__gtmMotion;
+  const s = m && m.stages.find(x => x.id === id);
+  if(!s) return;
+  s.icon = icon;
+  saveGtmMotion();
+  renderPage();
+}
+
+function gtmEditMeta(field, el){
+  const m = window.__gtmMotion;
+  if(!m) return;
+  const v = (el.textContent || '').trim();
+  if(m[field] === v) return;
+  m[field] = v;
+  saveGtmMotion();
+}
+
+function gtmToggleLoop(){
+  const m = window.__gtmMotion;
+  if(!m) return;
+  m.loop = !m.loop;
+  saveGtmMotion();
+  renderPage();
+}
+
 function renderGtmMotionPage(){
+  const m = window.__gtmMotion;
+  if(!m){
+    return `<div class="howto-hero"><h2>GTM Motion</h2><p><i class="ti ti-loader-2"></i> Loading…</p></div>`;
+  }
+  const edit = !!window.__gtmMotionEdit;
+  const ceMeta = f => edit ? `contenteditable="true" spellcheck="false" onblur="gtmEditMeta('${f}',this)"` : '';
+  const ceStage = (id,f) => edit ? `contenteditable="true" spellcheck="false" onblur="gtmEditStageField('${id}','${f}',this)"` : '';
+
   return `
+  <div class="gtm-motion-bar">
+    <div class="muted" style="font-size:12px;">GTM motion for <strong>${esc(gtmClientName())}</strong>${edit ? ' · <span style="color:var(--accent-strong);">editing</span>' : ''}</div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <span id="gtmMotionSaveStatus" class="muted" style="font-size:11px;"></span>
+      <button class="btn btn-ghost btn-sm" onclick="navigate('icpbuilder')"><i class="ti ti-crosshair"></i> ICP builder</button>
+      <button class="btn btn-ghost btn-sm" onclick="navigate('competitormap')"><i class="ti ti-affiliate"></i> Competitor map</button>
+      ${edit ? `
+        <select id="gtmTemplateSelect" onchange="gtmApplyTemplate(this.value)" style="font-size:12px;max-width:230px;">
+          <option value="">Start from a template…</option>
+          ${Object.keys(GTM_MOTION_TEMPLATES).map(k => `<option value="${k}">${esc(GTM_MOTION_TEMPLATES[k].label)}</option>`).join('')}
+        </select>` : ''}
+      <button class="btn ${edit ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="gtmToggleEdit()">
+        <i class="ti ti-${edit ? 'check' : 'pencil'}"></i> ${edit ? 'Done' : 'Edit'}
+      </button>
+    </div>
+  </div>
+
   <div class="howto-hero">
-    <h2>Twenty2's GTM Engine</h2>
-    <p>Not a funnel with a start and an end - a loop the Engine drives every cycle, and it gets sharper each time it turns. Five stages, each already live in this app.</p>
+    <h2 ${ceMeta('title')} style="${edit ? 'outline:none;border-bottom:1px dashed rgba(255,255,255,.4);' : ''}">${esc(m.title)}</h2>
+    <p ${ceMeta('intro')} style="${edit ? 'outline:none;' : ''}">${esc(m.intro)}</p>
+    ${edit ? `<div style="margin-top:14px;display:flex;align-items:center;gap:10px;">
+      <span class="toggle-switch ${m.loop ? 'on' : ''}" onclick="gtmToggleLoop()"><span class="knob"></span></span>
+      <span style="font-size:12px;color:rgba(255,255,255,.82);">${m.loop ? 'Flywheel — the last stage loops back to the first' : 'Linear funnel — stages run start to finish'}</span>
+    </div>` : ''}
   </div>
 
   <div class="gtm-stages">
-    ${GTM_STAGES.map((s,i) => `
+    ${m.stages.map((s,i) => `
       <div class="gtm-stage">
-        <div class="gtm-stage-num">${i+1}</div>
-        <i class="ti ${s.icon} gtm-stage-icon"></i>
-        <h4>${esc(s.title)}</h4>
-        <p>${esc(s.body)}</p>
-        <span class="gtm-tag">${esc(s.tag)}</span>
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;">
+          <div class="gtm-stage-num">${i+1}</div>
+          ${edit ? `<div style="display:flex;gap:1px;">
+            <button class="btn btn-ghost btn-sm" title="Move up" onclick="gtmMoveStage('${s.id}',-1)" ${i===0 ? 'disabled' : ''}><i class="ti ti-chevron-up"></i></button>
+            <button class="btn btn-ghost btn-sm" title="Move down" onclick="gtmMoveStage('${s.id}',1)" ${i===m.stages.length-1 ? 'disabled' : ''}><i class="ti ti-chevron-down"></i></button>
+            <button class="btn btn-ghost btn-sm" title="Delete stage" onclick="gtmDeleteStage('${s.id}')"><i class="ti ti-trash"></i></button>
+          </div>` : ''}
+        </div>
+        ${edit
+          ? `<select onchange="gtmSetStageIcon('${s.id}',this.value)" style="font-size:12px;margin:8px 0;width:100%;">${GTM_ICON_CHOICES.map(ic => `<option value="${ic}" ${ic===s.icon ? 'selected' : ''}>${ic.replace('ti-','')}</option>`).join('')}</select>`
+          : `<i class="ti ${esc(s.icon)} gtm-stage-icon"></i>`}
+        <h4 ${ceStage(s.id,'title')} style="${edit ? 'outline:none;border-bottom:1px dashed var(--border);' : ''}">${esc(s.title)}</h4>
+        <p ${ceStage(s.id,'body')} style="${edit ? 'outline:none;' : ''}">${esc(s.body)}</p>
+        ${(s.tag || edit) ? `<span class="gtm-tag ${edit ? 'gtm-tag-edit' : ''}" ${ceStage(s.id,'tag')}>${esc(s.tag)}</span>` : ''}
       </div>
     `).join('')}
+    ${edit ? `<div class="gtm-stage gtm-stage-add" onclick="gtmAddStage()">
+      <div style="text-align:center;color:var(--muted);font-size:12.5px;"><i class="ti ti-plus" style="font-size:22px;display:block;margin-bottom:4px;"></i>Add stage</div>
+    </div>` : ''}
   </div>
 
   <div class="gtm-loop-card">
-    <div class="section-title" style="justify-content:center;"><i class="ti ti-recycle"></i> The flywheel</div>
-    ${renderGtmFlywheelSvg()}
-    <div class="gtm-loop-caption">Every close sharpens the Angle Library. Every stall becomes a style correction. Every re-engaged signal starts the loop again - the account gets better profiled, not just re-contacted.</div>
+    <div class="section-title" style="justify-content:center;"><i class="ti ti-${m.loop ? 'recycle' : 'arrow-narrow-right'}"></i> ${m.loop ? 'The flywheel' : 'The funnel'}</div>
+    ${renderGtmFlywheelSvg(m.stages, m.loop)}
+    ${(m.loopCaption || edit) ? `<div class="gtm-loop-caption ${edit ? 'gtm-caption-edit' : ''}" ${ceMeta('loopCaption')}>${esc(m.loopCaption)}</div>` : ''}
   </div>
   `;
 }
 
-function renderGtmFlywheelSvg(){
-  const nodes = [
-    { x:300, y:70,  label:'1 Profile',  anchor:'middle', lx:300, ly:38  },
-    { x:481, y:201, label:'2 Sequence', anchor:'start',  lx:500, ly:190 },
-    { x:412, y:414, label:'3 Engage',   anchor:'start',  lx:430, ly:445 },
-    { x:188, y:414, label:'4 Close',    anchor:'end',    lx:170, ly:445 },
-    { x:119, y:201, label:'5 Learn',    anchor:'end',    lx:100, ly:190 }
-  ];
-  const edges = [
-    { end:[472,186], control:[418,98]  },
-    { end:[424,400], control:[491,322] },
-    { end:[205,421], control:[300,460] },
-    { end:[118,219], control:[110,322] },
-    { end:[282,74],  control:[182,98]  }
-  ];
-  const paths = nodes.map((n,i) => {
-    const e = edges[i];
-    return `<path d="M${n.x},${n.y} Q${e.control[0]},${e.control[1]} ${e.end[0]},${e.end[1]}" fill="none" stroke="var(--accent-2)" stroke-width="2.5" marker-end="url(#gtmArrow)"/>`;
+// Generic layout for any number of stages. loop=true arranges them on a
+// circle with arrows all the way round; loop=false is a left-to-right
+// chip flow. Titles are truncated in the diagram - the cards above carry
+// the full text.
+function renderGtmFlywheelSvg(stages, loop){
+  const n = stages.length;
+  if(n < 2){
+    return `<div class="muted" style="font-size:12px;padding:20px;">Add at least two stages to see the ${loop ? 'flywheel' : 'funnel'}.</div>`;
+  }
+  const shortTitle = t => { t = (t || '').replace(/^\d+\.\s*/,''); return t.length > 20 ? t.slice(0,19) + '…' : t; };
+
+  if(!loop){
+    return `<div style="display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:wrap;padding:14px 4px;">
+      ${stages.map((s,i) => `
+        <span style="display:inline-flex;align-items:center;gap:7px;background:var(--accent-dim);color:var(--accent-strong);border-radius:20px;padding:6px 13px;font-size:12px;font-weight:700;">
+          <span style="width:19px;height:19px;border-radius:50%;background:var(--accent);color:var(--accent-ink);display:inline-flex;align-items:center;justify-content:center;font-size:10px;">${i+1}</span>${esc(shortTitle(s.title))}
+        </span>
+        ${i < n-1 ? '<i class="ti ti-arrow-narrow-right" style="color:var(--muted);font-size:16px;"></i>' : ''}
+      `).join('')}
+    </div>`;
+  }
+
+  const cx = 300, cy = 250;
+  const r = n <= 3 ? 135 : (n <= 5 ? 165 : 185);
+  const pts = stages.map((s,i) => {
+    const a = -Math.PI/2 + i * 2 * Math.PI / n;
+    return { x: cx + r * Math.cos(a), y: cy + r * Math.sin(a), a };
+  });
+  const segs = [];
+  for(let i = 0; i < n; i++){
+    const p = pts[i], q = pts[(i+1) % n];
+    const dx = q.x - p.x, dy = q.y - p.y, d = Math.hypot(dx,dy) || 1;
+    const ux = dx/d, uy = dy/d;
+    const sx = p.x + ux*30, sy = p.y + uy*30;
+    const ex = q.x - ux*34, ey = q.y - uy*34;
+    const mx = (sx+ex)/2, my = (sy+ey)/2;
+    let ox = mx - cx, oy = my - cy; const od = Math.hypot(ox,oy) || 1;
+    const ccx = mx + (ox/od)*26, ccy = my + (oy/od)*26;
+    segs.push(`<path d="M${sx.toFixed(1)},${sy.toFixed(1)} Q${ccx.toFixed(1)},${ccy.toFixed(1)} ${ex.toFixed(1)},${ey.toFixed(1)}" fill="none" stroke="var(--accent-2)" stroke-width="2.5" marker-end="url(#gtmArrow)"/>`);
+  }
+  const circles = pts.map((p,i) => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="24" fill="var(--accent)" stroke="var(--surface)" stroke-width="3"/><text x="${p.x.toFixed(1)}" y="${(p.y+5).toFixed(1)}" text-anchor="middle" font-size="14" font-weight="800" fill="var(--accent-ink)">${i+1}</text>`).join('');
+  const labels = pts.map((p,i) => {
+    const lx = cx + (r+30) * Math.cos(p.a);
+    const ly = cy + (r+30) * Math.sin(p.a) + 4;
+    const anchor = Math.abs(lx - cx) < 24 ? 'middle' : (lx > cx ? 'start' : 'end');
+    return `<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="${anchor}" font-size="12" font-weight="700" fill="var(--text)">${esc(shortTitle(stages[i].title))}</text>`;
   }).join('');
-  const circles = nodes.map(n => `<circle cx="${n.x}" cy="${n.y}" r="26" fill="var(--accent)" stroke="var(--surface)" stroke-width="3"/><text x="${n.x}" y="${n.y+5}" text-anchor="middle" font-size="15" font-weight="800" fill="var(--accent-ink)">${n.label.slice(0,1)}</text>`).join('');
-  const labels = nodes.map(n => `<text x="${n.lx}" y="${n.ly}" text-anchor="${n.anchor}" font-size="13" font-weight="700" fill="var(--text)">${n.label.slice(2)}</text>`).join('');
   return `
   <svg viewBox="0 0 600 500" xmlns="http://www.w3.org/2000/svg">
     <defs>
@@ -6292,10 +6612,740 @@ function renderGtmFlywheelSvg(){
         <path d="M0,0L10,5L0,10z" fill="var(--accent-2)"/>
       </marker>
     </defs>
-    ${paths}
+    ${segs.join('')}
     ${circles}
     ${labels}
   </svg>`;
+}
+
+/* ===================== ICP BUILDER ===================== */
+// A per-client "initial customer profile" workbook, structured around the
+// three principles from the Unstoppable ICP framework:
+//   Fit test  - the green spot in the Venn: urgent problem x has budget x underserved
+//   Principle 1 - where are you 10x better than the default competitor (incl. "a spreadsheet / do nothing")
+//   Principle 2 - inform the ICP with revenue data (where you win, why, what's different)
+//   Principle 3 - track ICP vs non-ICP through leads -> opportunities -> customers, feed it back
+// Saved to the client's Settings record via /api/icp-profile (same
+// convention as the GTM Motion doc above). Sections are fixed; the content
+// in them is fully editable, and templates seed a starting point.
+
+const ICP_TEMPLATES = {
+  blank: {
+    label: 'Blank - build from scratch',
+    headline: '',
+    framing: 'Initial customer profile, not "ideal" forever - the segment that takes revenue from where it is now to the next level. Reviewed each quarter, expanded as momentum builds.',
+    fit: {
+      problem: { note: '', rating: '' },
+      budget: { note: '', rating: '' },
+      underserved: { note: '', rating: '' }
+    },
+    edge: { defaultCompetitor: '', tenXAngle: '' },
+    revenue: { stage: 'pre-revenue', thesis: '', winsWhere: '', winsWhy: '', whatsDifferent: '' },
+    tracking: {
+      leadsIcp: null, leadsTotal: null, oppsIcp: null, oppsTotal: null, customersIcp: null, customersTotal: null,
+      winRateIcp: '', winRateNonIcp: '', churnIcp: '', churnNonIcp: '', note: ''
+    },
+    attributes: [
+      { id: 'a1', label: 'Industry / vertical', value: '' },
+      { id: 'a2', label: 'Company size', value: '' },
+      { id: 'a3', label: 'Geography', value: '' },
+      { id: 'a4', label: 'Buyer role', value: '' },
+      { id: 'a5', label: 'Trigger / when they need us', value: '' }
+    ]
+  },
+  twenty2: {
+    label: 'Twenty2 Collective (worked example)',
+    headline: 'Perth / WA resources and utilities organisations with a transformation already underway, where the delivery rhythm is slipping.',
+    framing: 'Initial customer profile: the segment that gets us from the current book to the next level. Not forever - reviewed each quarter and widened as reputation compounds in the WA market.',
+    fit: {
+      problem: { note: 'A funded transformation is in flight but delivery cadence, ways of working and change adoption are lagging - leaders can feel time being lost but cannot point at where. Urgent because the program clock is running.', rating: 'strong' },
+      budget: { note: 'Transformation and digital programs are already funded at seven figures; a diagnostic or Sprint Zero is a rounding error against that budget and often comes from existing program contingency.', rating: 'strong' },
+      underserved: { note: 'The big-4 consultancies are too heavy and too slow for this; internal PMOs are stretched. Few local firms offer a hands-on, senior, change-led delivery fix. The default is "muddle through".', rating: 'partial' }
+    },
+    edge: {
+      defaultCompetitor: 'Doing nothing / an internal PMO with a spreadsheet, or a big-4 firm on a long engagement.',
+      tenXAngle: 'We map their own change architecture with them - current state, pain, the change, the future state and the risk of not acting - as free value in the first session, then embed senior practitioners who have run these programs in resources before. Faster to value than a big-4 SOW, deeper than a contractor.'
+    },
+    revenue: {
+      stage: 'revenue',
+      thesis: '',
+      winsWhere: 'Mining, energy and utilities operators in WA mid-transformation; strongest where an existing relationship or a warm intro exists (Rio Tinto, Woodside pattern).',
+      winsWhy: 'Senior people who have done it before, local presence, and a low-risk first step (Change Value Check) that de-risks the bigger engagement.',
+      whatsDifferent: 'Change-led rather than process-led; artefact in the first meeting; no army of juniors.'
+    },
+    tracking: {
+      leadsIcp: null, leadsTotal: null, oppsIcp: null, oppsTotal: null, customersIcp: null, customersTotal: null,
+      winRateIcp: '', winRateNonIcp: '', churnIcp: '', churnNonIcp: '',
+      note: 'Tag every new prospect ICP / non-ICP on the Companies board. Review win rate by tag each quarter and feed surprises back into the fit test above.'
+    },
+    attributes: [
+      { id: 'a1', label: 'Industry / vertical', value: 'Mining, Energy, Utilities (WA resources)' },
+      { id: 'a2', label: 'Company size', value: '1,000+ staff / major project owners' },
+      { id: 'a3', label: 'Geography', value: 'Perth & Western Australia' },
+      { id: 'a4', label: 'Buyer role', value: 'Transformation Lead, Head of Digital & Technology, Program Director, senior Product Owner' },
+      { id: 'a5', label: 'Trigger / when they need us', value: 'Funded transformation in year 1-2 and delivery milestones starting to slip; new delivery leader in seat; SAFe / agile rollout stalling' }
+    ]
+  }
+};
+
+const ICP_RATINGS = [
+  { key: 'strong', label: 'Strong', tint: 'green' },
+  { key: 'partial', label: 'Partial', tint: 'amber' },
+  { key: 'weak', label: 'Weak', tint: 'red' }
+];
+const ICP_FIT_CIRCLES = [
+  { key: 'problem', label: 'Urgent, important problem', hint: 'They feel it now, and it matters to someone senior.' },
+  { key: 'budget', label: 'Has budget to fix it', hint: 'Money already exists to solve this.' },
+  { key: 'underserved', label: 'Underserved', hint: 'Little real competition - room to be 10x better.' }
+];
+
+function icpDeepClone(o){ return JSON.parse(JSON.stringify(o)); }
+function icpClientName(){
+  const c = (typeof activeClient === 'function' && activeClient()) || null;
+  return (c && c.name) || 'this client';
+}
+
+function normalizeIcpProfile(m){
+  if(!m || typeof m !== 'object') return null;
+  const base = icpDeepClone(ICP_TEMPLATES.blank);
+  const out = {
+    headline: (m.headline || '').toString(),
+    framing: (m.framing || base.framing).toString(),
+    fit: {},
+    edge: {
+      defaultCompetitor: ((m.edge && m.edge.defaultCompetitor) || '').toString(),
+      tenXAngle: ((m.edge && m.edge.tenXAngle) || '').toString()
+    },
+    revenue: {
+      stage: (m.revenue && m.revenue.stage === 'revenue') ? 'revenue' : 'pre-revenue',
+      thesis: ((m.revenue && m.revenue.thesis) || '').toString(),
+      winsWhere: ((m.revenue && m.revenue.winsWhere) || '').toString(),
+      winsWhy: ((m.revenue && m.revenue.winsWhy) || '').toString(),
+      whatsDifferent: ((m.revenue && m.revenue.whatsDifferent) || '').toString()
+    },
+    tracking: Object.assign({}, base.tracking, m.tracking || {}),
+    attributes: Array.isArray(m.attributes) && m.attributes.length
+      ? m.attributes.map((a, i) => ({ id: a.id || ('a' + Date.now() + i), label: (a.label || '').toString(), value: (a.value || '').toString() }))
+      : icpDeepClone(base.attributes)
+  };
+  ICP_FIT_CIRCLES.forEach(c => {
+    const src = (m.fit && m.fit[c.key]) || {};
+    out.fit[c.key] = { note: (src.note || '').toString(), rating: ['strong','partial','weak'].includes(src.rating) ? src.rating : '' };
+  });
+  return out;
+}
+
+function icpProfileDefault(){ return normalizeIcpProfile(icpDeepClone(ICP_TEMPLATES.blank)); }
+
+async function loadIcpProfile(){
+  if(window.__icpProfileLoading) return;
+  window.__icpProfileLoading = true;
+  try {
+    const res = await fetch('/api/icp-profile');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__icpProfile = normalizeIcpProfile(data.profile) || icpProfileDefault();
+  } catch(err){
+    window.__icpProfile = icpProfileDefault();
+    window.__icpProfileLoadError = err.message;
+  }
+  window.__icpProfileLoading = false;
+  if(state.currentPage === 'icpbuilder') renderPage();
+}
+
+let __icpSaveTimer = null;
+function saveIcpProfile(){
+  const el = document.getElementById('icpSaveStatus');
+  if(el) el.textContent = 'Saving…';
+  clearTimeout(__icpSaveTimer);
+  __icpSaveTimer = setTimeout(async () => {
+    try {
+      const res = await fetch('/api/icp-profile', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profile: window.__icpProfile })
+      });
+      const body = await res.json().catch(() => ({}));
+      if(!res.ok) throw new Error(body.error || ('Request failed (' + res.status + ')'));
+      const el2 = document.getElementById('icpSaveStatus');
+      if(el2) el2.textContent = 'Saved';
+    } catch(err){
+      const el2 = document.getElementById('icpSaveStatus');
+      if(el2) el2.textContent = 'Could not save - ' + err.message;
+    }
+  }, 700);
+}
+
+function icpToggleEdit(){ window.__icpEdit = !window.__icpEdit; renderPage(); }
+
+function icpApplyTemplate(key){
+  const sel = document.getElementById('icpTemplateSelect');
+  const t = ICP_TEMPLATES[key];
+  if(!t){ if(sel) sel.value = ''; return; }
+  if(!confirm('Replace the ICP profile for ' + icpClientName() + ' with the "' + t.label + '" template? This overwrites everything on this page.')){
+    if(sel) sel.value = '';
+    return;
+  }
+  window.__icpProfile = normalizeIcpProfile(icpDeepClone(t));
+  window.__icpEdit = true;
+  saveIcpProfile();
+  renderPage();
+  toast('Template applied - edit each section to fit', 'success');
+}
+
+function icpSet(path, value, rerender){
+  const m = window.__icpProfile;
+  if(!m) return;
+  const parts = path.split('.');
+  let o = m;
+  for(let i = 0; i < parts.length - 1; i++){ o[parts[i]] = o[parts[i]] || {}; o = o[parts[i]]; }
+  o[parts[parts.length - 1]] = value;
+  saveIcpProfile();
+  if(rerender) renderPage();
+}
+
+function icpEditField(path, el){
+  const m = window.__icpProfile;
+  if(!m) return;
+  const parts = path.split('.');
+  let o = m;
+  for(let i = 0; i < parts.length - 1; i++){ o = o[parts[i]]; }
+  const cur = o[parts[parts.length - 1]];
+  const v = (el.textContent || '').trim();
+  if(cur === v) return;
+  o[parts[parts.length - 1]] = v;
+  saveIcpProfile();
+}
+
+function icpSetRating(circle, rating){
+  const m = window.__icpProfile;
+  if(!m) return;
+  m.fit[circle].rating = (m.fit[circle].rating === rating) ? '' : rating;
+  saveIcpProfile();
+  renderPage();
+}
+
+function icpSetRevenueStage(stage){ icpSet('revenue.stage', stage, true); }
+
+function icpSetTracking(field, raw){
+  const m = window.__icpProfile;
+  if(!m) return;
+  const numeric = ['leadsIcp','leadsTotal','oppsIcp','oppsTotal','customersIcp','customersTotal'].includes(field);
+  m.tracking[field] = numeric ? (raw === '' ? null : Math.max(0, parseInt(raw, 10) || 0)) : raw;
+  saveIcpProfile();
+  if(numeric) renderPage();
+}
+
+function icpAddAttr(){
+  const m = window.__icpProfile;
+  if(!m) return;
+  m.attributes.push({ id: 'a' + Date.now() + Math.floor(Math.random() * 1000), label: 'New attribute', value: '' });
+  saveIcpProfile();
+  renderPage();
+}
+function icpDeleteAttr(id){
+  const m = window.__icpProfile;
+  if(!m) return;
+  m.attributes = m.attributes.filter(a => a.id !== id);
+  saveIcpProfile();
+  renderPage();
+}
+function icpEditAttr(id, field, el){
+  const m = window.__icpProfile;
+  const a = m && m.attributes.find(x => x.id === id);
+  if(!a) return;
+  const v = (el.textContent || '').trim();
+  if(a[field] === v) return;
+  a[field] = v;
+  saveIcpProfile();
+}
+
+function icpFitStatus(m){
+  const rs = ICP_FIT_CIRCLES.map(c => m.fit[c.key].rating);
+  if(rs.some(r => r === 'weak')) return { key: 'stop', label: 'Not a fit yet', color: 'var(--danger)', tint: 'red' };
+  if(rs.every(r => r === 'strong')) return { key: 'go', label: 'Strong ICP fit', color: 'var(--success)', tint: 'green' };
+  if(rs.some(r => !r)) return { key: 'unknown', label: 'Still mapping', color: 'var(--muted)', tint: 'grey' };
+  return { key: 'caution', label: 'Partial fit — sharpen it', color: 'var(--tint-amber-fg)', tint: 'amber' };
+}
+
+function icpPct(a, b){
+  if(b === null || b === undefined || b === '' || !b) return '—';
+  if(a === null || a === undefined || a === '') return '—';
+  return Math.round((a / b) * 100) + '%';
+}
+
+function renderIcpVennSvg(m){
+  const status = icpFitStatus(m);
+  const circ = [
+    { key:'problem', cx:200, cy:180, fill:'var(--accent)' },
+    { key:'budget', cx:330, cy:180, fill:'var(--accent-2)' },
+    { key:'underserved', cx:265, cy:290, fill:'#6444bd' }
+  ];
+  const ratingDot = k => {
+    const r = m.fit[k].rating;
+    const col = r === 'strong' ? 'var(--success)' : r === 'partial' ? 'var(--tint-amber-fg)' : r === 'weak' ? 'var(--danger)' : 'var(--border)';
+    return col;
+  };
+  return `
+  <svg viewBox="0 0 530 430" xmlns="http://www.w3.org/2000/svg">
+    ${circ.map(c => `<circle cx="${c.cx}" cy="${c.cy}" r="98" fill="${c.fill}" fill-opacity="0.13" stroke="${c.fill}" stroke-width="1.5"/>`).join('')}
+    <circle cx="265" cy="217" r="30" fill="${status.color}" fill-opacity="0.9"/>
+    <text x="265" y="222" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">FIT</text>
+    ${circ.map((c,i) => {
+      const cfg = ICP_FIT_CIRCLES.find(x => x.key === c.key);
+      const lx = c.key === 'problem' ? 150 : c.key === 'budget' ? 380 : 265;
+      const ly = c.key === 'underserved' ? 405 : 70;
+      const anchor = c.key === 'problem' ? 'end' : c.key === 'budget' ? 'start' : 'middle';
+      return `<circle cx="${lx + (anchor==='end'?8:anchor==='start'?-8:0)}" cy="${ly-4}" r="4" fill="${ratingDot(c.key)}"/>
+        <text x="${lx + (anchor==='end'?-2:anchor==='start'?2:0)}" y="${ly}" text-anchor="${anchor}" font-size="12" font-weight="700" fill="var(--text)">${esc(cfg.label)}</text>`;
+    }).join('')}
+  </svg>`;
+}
+
+function renderIcpBuilderPage(){
+  const m = window.__icpProfile;
+  if(!m){
+    return `<div class="howto-hero"><h2>ICP Builder</h2><p><i class="ti ti-loader-2"></i> Loading…</p></div>`;
+  }
+  const edit = !!window.__icpEdit;
+  const status = icpFitStatus(m);
+  const ce = (path, ph) => edit
+    ? `contenteditable="true" spellcheck="false" data-ph="${esc(ph||'')}" onblur="icpEditField('${path}',this)" class="icp-ce"`
+    : '';
+  const show = v => esc(v || (edit ? '' : '—'));
+
+  const trk = m.tracking;
+
+  return `
+  <div class="gtm-motion-bar">
+    <div class="muted" style="font-size:12px;">ICP profile for <strong>${esc(icpClientName())}</strong>${edit ? ' · <span style="color:var(--accent-strong);">editing</span>' : ''}</div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <span id="icpSaveStatus" class="muted" style="font-size:11px;"></span>
+      <button class="btn btn-ghost btn-sm" onclick="navigate('gtmmotion')"><i class="ti ti-topology-star-3"></i> GTM motion</button>
+      ${edit ? `
+        <select id="icpTemplateSelect" onchange="icpApplyTemplate(this.value)" style="font-size:12px;max-width:230px;">
+          <option value="">Start from a template…</option>
+          ${Object.keys(ICP_TEMPLATES).map(k => `<option value="${k}">${esc(ICP_TEMPLATES[k].label)}</option>`).join('')}
+        </select>` : ''}
+      <button class="btn ${edit ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="icpToggleEdit()">
+        <i class="ti ti-${edit ? 'check' : 'pencil'}"></i> ${edit ? 'Done' : 'Edit'}
+      </button>
+    </div>
+  </div>
+
+  <div class="howto-hero">
+    <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:rgba(255,255,255,.6);margin-bottom:6px;">Initial customer profile</div>
+    <h2 ${ce('headline','Who exactly - one sentence. e.g. Perth resources orgs mid-transformation where delivery is slipping.')} style="${edit ? 'outline:none;border-bottom:1px dashed rgba(255,255,255,.4);min-height:24px;' : ''}">${show(m.headline)}</h2>
+    <p ${ce('framing','')} style="${edit ? 'outline:none;' : ''}">${show(m.framing)}</p>
+  </div>
+
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title" style="margin-bottom:2px;"><i class="ti ti-venn-diagram-2"></i> The fit test — the green spot</div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:12px;">An ICP is the overlap: an <strong>urgent, important problem</strong> you solve, a segment with <strong>budget</strong> to fix it, and a space that's <strong>underserved</strong> enough for you to be 10&times; better. Rate each, then read the centre.</div>
+    <div class="icp-fit-grid">
+      <div class="icp-venn">
+        ${renderIcpVennSvg(m)}
+        <div class="icp-fit-verdict" style="color:${status.color};"><i class="ti ti-${status.key==='go'?'circle-check':status.key==='stop'?'alert-triangle':status.key==='caution'?'adjustments':'help-circle'}"></i> ${esc(status.label)}</div>
+      </div>
+      <div class="icp-fit-cards">
+        ${ICP_FIT_CIRCLES.map(c => `
+          <div class="icp-fit-card">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+              <strong style="font-size:12.5px;">${esc(c.label)}</strong>
+              <div class="icp-rating-pills">
+                ${ICP_RATINGS.map(r => `<button class="icp-pill tint-${r.tint} ${m.fit[c.key].rating===r.key?'on':''}" ${edit?'':'disabled'} onclick="icpSetRating('${c.key}','${r.key}')">${r.label}</button>`).join('')}
+              </div>
+            </div>
+            <div class="muted" style="font-size:10.5px;margin:3px 0 6px;">${esc(c.hint)}</div>
+            <div ${ce('fit.'+c.key+'.note','Notes / evidence…')} style="font-size:12px;line-height:1.55;${edit?'outline:none;border:1px dashed var(--border);border-radius:6px;padding:6px 8px;min-height:34px;':''}">${show(m.fit[c.key].note)}</div>
+            ${c.key === 'underserved' ? `<button class="btn btn-ghost btn-sm" style="margin-top:6px;font-size:10.5px;padding:3px 7px;" onclick="navigate('competitormap')"><i class="ti ti-affiliate"></i> Map the competitors</button>` : ''}
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title" style="margin-bottom:2px;"><i class="ti ti-arrows-diff"></i> Where you're 10&times; better</div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:12px;">The default competitor is usually "a spreadsheet" or "do nothing" — and that's a real competitor. Name it, then name the one segment, angle or feature where you beat it by 10&times;.</div>
+    <div class="two-col" style="gap:14px;">
+      <div class="field"><label>The default competitor</label>
+        <div ${ce('edge.defaultCompetitor','e.g. an internal PMO with a spreadsheet / a big-4 firm on a 9-month SOW')} style="font-size:12.5px;line-height:1.55;${edit?'outline:none;border:1px dashed var(--border);border-radius:6px;padding:8px;min-height:40px;':''}">${show(m.edge.defaultCompetitor)}</div>
+      </div>
+      <div class="field"><label>Our 10&times; angle</label>
+        <div ${ce('edge.tenXAngle','The one thing we do dramatically better for this segment')} style="font-size:12.5px;line-height:1.55;${edit?'outline:none;border:1px dashed var(--border);border-radius:6px;padding:8px;min-height:40px;':''}">${show(m.edge.tenXAngle)}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:2px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-cash"></i> Informed by revenue</div>
+      ${edit ? `<div class="view-toggle">
+        <button class="view-toggle-btn ${m.revenue.stage==='pre-revenue'?'active':''}" onclick="icpSetRevenueStage('pre-revenue')">Pre-revenue</button>
+        <button class="view-toggle-btn ${m.revenue.stage==='revenue'?'active':''}" onclick="icpSetRevenueStage('revenue')">Have revenue</button>
+      </div>` : `<span class="pill tint-grey">${m.revenue.stage==='revenue'?'Have revenue':'Pre-revenue'}</span>`}
+    </div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:12px;">${m.revenue.stage==='revenue'
+      ? 'Mine the revenue data: where do you actually win, why, and what makes you different? Beat that back into the profile above.'
+      : 'No revenue data yet — write the thesis, then test it as fast as possible and revisit this once deals land.'}</div>
+    ${m.revenue.stage==='revenue' ? `
+      <div class="field"><label>Where we win</label><div ${ce('revenue.winsWhere','Which segments / deal types close')} style="font-size:12.5px;${edit?'outline:none;border:1px dashed var(--border);border-radius:6px;padding:8px;min-height:34px;':''}">${show(m.revenue.winsWhere)}</div></div>
+      <div class="field"><label>Why we win there</label><div ${ce('revenue.winsWhy','What tips those deals to us')} style="font-size:12.5px;${edit?'outline:none;border:1px dashed var(--border);border-radius:6px;padding:8px;min-height:34px;':''}">${show(m.revenue.winsWhy)}</div></div>
+      <div class="field"><label>What's different about us</label><div ${ce('revenue.whatsDifferent','The through-line across the wins')} style="font-size:12.5px;${edit?'outline:none;border:1px dashed var(--border);border-radius:6px;padding:8px;min-height:34px;':''}">${show(m.revenue.whatsDifferent)}</div></div>
+    ` : `
+      <div class="field"><label>The thesis to test</label><div ${ce('revenue.thesis','Our best guess at the ICP, stated so it can be proven or killed')} style="font-size:12.5px;${edit?'outline:none;border:1px dashed var(--border);border-radius:6px;padding:8px;min-height:44px;':''}">${show(m.revenue.thesis)}</div></div>
+    `}
+  </div>
+
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title" style="margin-bottom:2px;"><i class="ti ti-route"></i> Track it through the funnel</div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:12px;">Don't file the ICP and forget it. Tag every lead, opportunity and customer ICP / non-ICP, and watch the rates diverge — that's the evidence that mobilises the whole motion.</div>
+    <div class="spreadsheet-wrap" style="margin-bottom:12px;">
+      <table class="spreadsheet-table" style="min-width:520px;">
+        <thead><tr><th>Stage</th><th style="text-align:right;">ICP</th><th style="text-align:right;">Total</th><th style="text-align:right;">ICP share</th></tr></thead>
+        <tbody>
+          ${[['Leads','leadsIcp','leadsTotal'],['Opportunities','oppsIcp','oppsTotal'],['Customers','customersIcp','customersTotal']].map(([label,ik,tk]) => `
+            <tr>
+              <td class="ss-name">${label}</td>
+              <td class="ss-num">${edit?`<input type="number" min="0" value="${trk[ik]??''}" onchange="icpSetTracking('${ik}',this.value)" style="width:64px;text-align:right;">`:(trk[ik]??'—')}</td>
+              <td class="ss-num">${edit?`<input type="number" min="0" value="${trk[tk]??''}" onchange="icpSetTracking('${tk}',this.value)" style="width:64px;text-align:right;">`:(trk[tk]??'—')}</td>
+              <td class="ss-num" style="font-weight:700;">${icpPct(trk[ik],trk[tk])}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+    <div class="two-col" style="gap:14px;">
+      <div class="field"><label>Win rate — ICP vs non-ICP</label>
+        <div style="display:flex;gap:8px;">
+          <div ${ce('tracking.winRateIcp','ICP %')} style="flex:1;font-size:12.5px;${edit?'outline:none;border:1px dashed var(--border);border-radius:6px;padding:7px;':''}">${show(trk.winRateIcp)}</div>
+          <div ${ce('tracking.winRateNonIcp','non-ICP %')} style="flex:1;font-size:12.5px;${edit?'outline:none;border:1px dashed var(--border);border-radius:6px;padding:7px;':''}">${show(trk.winRateNonIcp)}</div>
+        </div>
+      </div>
+      <div class="field"><label>Churn — ICP vs non-ICP</label>
+        <div style="display:flex;gap:8px;">
+          <div ${ce('tracking.churnIcp','ICP %')} style="flex:1;font-size:12.5px;${edit?'outline:none;border:1px dashed var(--border);border-radius:6px;padding:7px;':''}">${show(trk.churnIcp)}</div>
+          <div ${ce('tracking.churnNonIcp','non-ICP %')} style="flex:1;font-size:12.5px;${edit?'outline:none;border:1px dashed var(--border);border-radius:6px;padding:7px;':''}">${show(trk.churnNonIcp)}</div>
+        </div>
+      </div>
+    </div>
+    <div class="field" style="margin-top:4px;"><label>How we tag &amp; review</label>
+      <div ${ce('tracking.note','e.g. tag on the Companies board; review by tag each quarter')} style="font-size:12.5px;${edit?'outline:none;border:1px dashed var(--border);border-radius:6px;padding:8px;min-height:34px;':''}">${show(trk.note)}</div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title" style="margin-bottom:2px;"><i class="ti ti-list-details"></i> The attributes</div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:12px;">The concrete filters — what you screen a company against before anyone drafts a word.</div>
+    ${m.attributes.map(a => `
+      <div class="icp-attr-row">
+        <div ${edit?`contenteditable="true" spellcheck="false" onblur="icpEditAttr('${a.id}','label',this)" class="icp-ce"`:''} style="font-weight:700;font-size:12px;width:190px;flex:none;${edit?'outline:none;border-bottom:1px dashed var(--border);':''}">${esc(a.label)}</div>
+        <div ${edit?`contenteditable="true" spellcheck="false" onblur="icpEditAttr('${a.id}','value',this)" class="icp-ce"`:''} data-ph="${edit?'value…':''}" style="flex:1;font-size:12.5px;${edit?'outline:none;border-bottom:1px dashed var(--border);':''}">${esc(a.value)}</div>
+        ${edit?`<button class="btn btn-ghost btn-sm" title="Remove" onclick="icpDeleteAttr('${a.id}')"><i class="ti ti-trash"></i></button>`:''}
+      </div>
+    `).join('')}
+    ${edit?`<button class="btn btn-secondary btn-sm" style="margin-top:10px;" onclick="icpAddAttr()"><i class="ti ti-plus"></i> Add attribute</button>`:''}
+  </div>
+  `;
+}
+
+/* ===================== COMPETITOR MAP (Whimsical-style board) ===================== */
+// A free-form canvas for the "positioning" work in the GTM motion and the
+// "underserved" test in the ICP. You list your competitors, drop each one
+// on the board, then pin notes around them - what they do, where they're
+// strong, where they're weak, pricing, which segment they own - and draw
+// connections. Same interaction model and whole-document autosave as the
+// change-architecture whiteboard; stored per client via /api/competitor-map.
+const COMPETITOR_MAP_TYPES = {
+  competitor: { label: 'Competitor', color: '#2A6B7C' },
+  offering:   { label: 'What they do', color: '#71717a' },
+  strength:   { label: 'Strength', color: '#16a34a' },
+  weakness:   { label: 'Weakness', color: '#dc2626' },
+  price:      { label: 'Pricing / model', color: '#d97706' },
+  segment:    { label: 'Segment they own', color: '#6444bd' }
+};
+const COMPETITOR_MAP_TYPE_ORDER = ['competitor','offering','strength','weakness','price','segment'];
+const CM_INNER_W = 1600, CM_INNER_H = 1100;
+
+async function loadCompetitorMap(){
+  if(window.__competitorMapLoading) return;
+  window.__competitorMapLoading = true;
+  try {
+    const res = await fetch('/api/competitor-map');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__competitorMap = (data && Array.isArray(data.nodes) && Array.isArray(data.edges)) ? data : { nodes: [], edges: [] };
+  } catch(err){
+    window.__competitorMap = { nodes: [], edges: [], error: err.message };
+  }
+  window.__competitorMapLoading = false;
+  if(state.currentPage === 'competitormap') renderPage();
+}
+
+let __cmSaveTimer = null;
+function saveCompetitorMap(){
+  const el = document.getElementById('competitorMapSaveStatus');
+  if(el) el.textContent = 'Saving…';
+  clearTimeout(__cmSaveTimer);
+  __cmSaveTimer = setTimeout(async () => {
+    const data = window.__competitorMap;
+    if(!data) return;
+    try {
+      const res = await fetch('/api/competitor-map', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nodes: data.nodes, edges: data.edges })
+      });
+      const body = await res.json().catch(() => ({}));
+      if(!res.ok) throw new Error(body.error || ('Request failed (' + res.status + ')'));
+      const el2 = document.getElementById('competitorMapSaveStatus');
+      if(el2) el2.textContent = 'Saved';
+    } catch(err){
+      const el2 = document.getElementById('competitorMapSaveStatus');
+      if(el2) el2.textContent = 'Could not save - ' + err.message;
+    }
+  }, 700);
+}
+
+function cmCompetitors(){ return (window.__competitorMap && window.__competitorMap.nodes.filter(n => n.type === 'competitor')) || []; }
+
+function cmAddCompetitor(){
+  const data = window.__competitorMap;
+  if(!data) return;
+  const count = cmCompetitors().length;
+  const id = 'c' + Date.now() + Math.floor(Math.random() * 1000);
+  data.nodes.push({ id, x: 60 + (count % 4) * 300, y: 60 + Math.floor(count / 4) * 220, text: 'New competitor', type: 'competitor' });
+  window.__cmSelected = id;
+  saveCompetitorMap();
+  renderPage();
+}
+
+function cmAddPin(type){
+  const data = window.__competitorMap;
+  if(!data) return;
+  const parent = window.__cmSelected && data.nodes.find(n => n.id === window.__cmSelected && n.type === 'competitor');
+  const px = parent ? parent.x : CM_INNER_W / 2 - 70;
+  const py = parent ? parent.y : CM_INNER_H / 2 - 24;
+  const id = 'p' + Date.now() + Math.floor(Math.random() * 1000);
+  const near = data.nodes.filter(n => n.parentHint === (parent && parent.id)).length;
+  data.nodes.push({
+    id,
+    x: Math.max(10, Math.min(CM_INNER_W - 160, px + 170 + (near % 2) * 12)),
+    y: Math.max(10, Math.min(CM_INNER_H - 60, py + (near * 62))),
+    text: COMPETITOR_MAP_TYPES[type].label,
+    type,
+    parentHint: parent ? parent.id : undefined
+  });
+  if(parent){
+    data.edges.push({ id: 'e' + Date.now() + Math.floor(Math.random() * 1000), from: parent.id, to: id });
+  }
+  saveCompetitorMap();
+  renderPage();
+}
+
+function cmSelectCompetitor(id){
+  window.__cmSelected = (window.__cmSelected === id) ? null : id;
+  renderPage();
+  const el = document.getElementById('cmNode-' + id);
+  if(el && el.scrollIntoView) el.scrollIntoView({ block: 'center', inline: 'center' });
+}
+
+function cmCycleNodeType(nodeId){
+  const data = window.__competitorMap;
+  const node = data && data.nodes.find(n => n.id === nodeId);
+  if(!node) return;
+  const i = COMPETITOR_MAP_TYPE_ORDER.indexOf(node.type);
+  node.type = COMPETITOR_MAP_TYPE_ORDER[(i + 1) % COMPETITOR_MAP_TYPE_ORDER.length];
+  saveCompetitorMap();
+  renderPage();
+}
+
+function cmEditNodeText(nodeId, el){
+  const data = window.__competitorMap;
+  const node = data && data.nodes.find(n => n.id === nodeId);
+  if(!node) return;
+  const text = (el.textContent || '').trim() || COMPETITOR_MAP_TYPES[node.type].label;
+  if(text !== node.text){ node.text = text; saveCompetitorMap(); if(node.type === 'competitor') renderPage(); }
+}
+
+function cmDeleteNode(nodeId){
+  const data = window.__competitorMap;
+  if(!data) return;
+  data.nodes = data.nodes.filter(n => n.id !== nodeId);
+  data.edges = data.edges.filter(e => e.from !== nodeId && e.to !== nodeId);
+  if(window.__cmSelected === nodeId) window.__cmSelected = null;
+  saveCompetitorMap();
+  renderPage();
+}
+
+function cmToggleConnect(){
+  window.__cmConnectMode = !window.__cmConnectMode;
+  window.__cmConnectFrom = null;
+  renderPage();
+}
+
+function cmHandleNodeClick(nodeId){
+  if(window.__cmSuppressClick){ window.__cmSuppressClick = false; return; }
+  if(!window.__cmConnectMode){
+    const n = window.__competitorMap && window.__competitorMap.nodes.find(x => x.id === nodeId);
+    if(n && n.type === 'competitor') cmSelectCompetitor(nodeId);
+    return;
+  }
+  if(!window.__cmConnectFrom){ window.__cmConnectFrom = nodeId; renderPage(); return; }
+  if(window.__cmConnectFrom === nodeId){ window.__cmConnectFrom = null; renderPage(); return; }
+  const data = window.__competitorMap;
+  if(data){
+    const exists = data.edges.some(e => (e.from === window.__cmConnectFrom && e.to === nodeId) || (e.from === nodeId && e.to === window.__cmConnectFrom));
+    if(!exists) data.edges.push({ id: 'e' + Date.now(), from: window.__cmConnectFrom, to: nodeId });
+    saveCompetitorMap();
+  }
+  window.__cmConnectFrom = null;
+  renderPage();
+}
+
+function cmDeleteEdge(edgeId){
+  const data = window.__competitorMap;
+  if(!data) return;
+  data.edges = data.edges.filter(e => e.id !== edgeId);
+  saveCompetitorMap();
+  renderPage();
+}
+
+let __cmDrag = null;
+function startCmNodeDrag(e, nodeId){
+  e.preventDefault();
+  e.stopPropagation();
+  const inner = document.getElementById('competitorMapInner');
+  const node = document.getElementById('cmNode-' + nodeId);
+  if(!inner || !node) return;
+  const innerRect = inner.getBoundingClientRect();
+  const nodeRect = node.getBoundingClientRect();
+  __cmDrag = { nodeId, node, innerRect, grabX: e.clientX - nodeRect.left, grabY: e.clientY - nodeRect.top, moved: false };
+  document.onmousemove = dragCmNode;
+  document.onmouseup = endCmNodeDrag;
+}
+function dragCmNode(e){
+  const d = __cmDrag;
+  if(!d) return;
+  d.moved = true;
+  const left = Math.max(0, Math.min(CM_INNER_W - d.node.offsetWidth, e.clientX - d.innerRect.left - d.grabX));
+  const top = Math.max(0, Math.min(CM_INNER_H - d.node.offsetHeight, e.clientY - d.innerRect.top - d.grabY));
+  d.node.style.left = left + 'px';
+  d.node.style.top = top + 'px';
+  const node = window.__competitorMap && window.__competitorMap.nodes.find(n => n.id === d.nodeId);
+  if(node){ node.x = left; node.y = top; }
+  redrawCmLines();
+}
+function endCmNodeDrag(){
+  const d = __cmDrag;
+  document.onmousemove = null;
+  document.onmouseup = null;
+  if(!d) return;
+  if(d.moved){ window.__cmSuppressClick = true; saveCompetitorMap(); }
+  __cmDrag = null;
+}
+
+function redrawCmLines(){
+  const svg = document.getElementById('competitorMapLines');
+  const badges = document.getElementById('competitorMapEdgeBadges');
+  const data = window.__competitorMap;
+  if(!svg || !data) return;
+  const centerOf = nodeId => {
+    const el = document.getElementById('cmNode-' + nodeId);
+    if(!el) return null;
+    return { x: el.offsetLeft + el.offsetWidth / 2, y: el.offsetTop + el.offsetHeight / 2 };
+  };
+  const lines = [];
+  const badgeEls = [];
+  data.edges.forEach(edge => {
+    const a = centerOf(edge.from), b = centerOf(edge.to);
+    if(!a || !b) return;
+    lines.push(`<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="var(--border)" stroke-width="2"/>`);
+    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+    badgeEls.push(`<div class="change-arch-edge-badge" style="position:absolute;left:${mx-8}px;top:${my-8}px;" onclick="cmDeleteEdge('${edge.id}')" title="Remove connection">×</div>`);
+  });
+  svg.innerHTML = lines.join('');
+  if(badges) badges.innerHTML = badgeEls.join('');
+}
+
+function renderCompetitorMapPage(){
+  const data = window.__competitorMap;
+  if(!data){
+    return `<div class="howto-hero"><h2>Competitor map</h2><p><i class="ti ti-loader-2"></i> Loading…</p></div>`;
+  }
+  const connectMode = !!window.__cmConnectMode;
+  const connectFrom = window.__cmConnectFrom;
+  const selected = window.__cmSelected;
+  const competitors = cmCompetitors();
+
+  return `
+  <div class="gtm-motion-bar">
+    <div class="muted" style="font-size:12px;">Competitor map for <strong>${esc(icpClientName())}</strong></div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <span id="competitorMapSaveStatus" class="muted" style="font-size:11px;"></span>
+      <button class="btn btn-ghost btn-sm" onclick="navigate('gtmmotion')"><i class="ti ti-topology-star-3"></i> GTM motion</button>
+      <button class="btn btn-ghost btn-sm" onclick="navigate('icpbuilder')"><i class="ti ti-crosshair"></i> ICP builder</button>
+    </div>
+  </div>
+
+  <div class="howto-hero">
+    <h2>Competitor map</h2>
+    <p>List who you're really up against — including "a spreadsheet" and "do nothing" — then pin what each one does, where they're strong, where they're weak, and which segment they own. This is the positioning picture behind the GTM motion and the "underserved" test in the ICP.</p>
+  </div>
+
+  <div class="cm-layout">
+    <div class="cm-rail">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <strong style="font-size:12px;">Competitors <span class="muted">(${competitors.length})</span></strong>
+        <button class="btn btn-secondary btn-sm" onclick="cmAddCompetitor()"><i class="ti ti-plus"></i></button>
+      </div>
+      ${competitors.length ? competitors.map(c => {
+        const pins = data.edges.filter(e => e.from === c.id || e.to === c.id).length;
+        return `<div class="cm-rail-item ${selected===c.id?'on':''}" onclick="cmSelectCompetitor('${c.id}')">
+          <span style="width:8px;height:8px;border-radius:50%;background:${COMPETITOR_MAP_TYPES.competitor.color};flex:none;"></span>
+          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(c.text)}</span>
+          <span class="muted" style="font-size:10px;">${pins}</span>
+        </div>`;
+      }).join('') : '<div class="muted" style="font-size:11.5px;">No competitors yet. Add the first one, then pin notes onto it.</div>'}
+      ${selected ? `
+        <div style="border-top:1px solid var(--border-light);margin-top:10px;padding-top:10px;">
+          <div class="muted" style="font-size:10.5px;margin-bottom:6px;">Pin onto "${esc((competitors.find(c=>c.id===selected)||{}).text||'')}"</div>
+          <div style="display:flex;flex-wrap:wrap;gap:4px;">
+            ${['offering','strength','weakness','price','segment'].map(t => `<button class="btn btn-ghost btn-sm" style="font-size:10.5px;padding:4px 7px;" onclick="cmAddPin('${t}')"><span style="width:7px;height:7px;border-radius:50%;background:${COMPETITOR_MAP_TYPES[t].color};display:inline-block;margin-right:4px;"></span>${COMPETITOR_MAP_TYPES[t].label}</button>`).join('')}
+          </div>
+        </div>` : ''}
+    </div>
+
+    <div class="cm-board-wrap">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          ${COMPETITOR_MAP_TYPE_ORDER.map(t => `<span style="font-size:10px;display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:50%;background:${COMPETITOR_MAP_TYPES[t].color};display:inline-block;"></span>${esc(COMPETITOR_MAP_TYPES[t].label)}</span>`).join('')}
+        </div>
+        <button class="btn ${connectMode?'btn-primary':'btn-secondary'} btn-sm" onclick="cmToggleConnect()"><i class="ti ti-arrows-join"></i> ${connectMode ? (connectFrom ? 'Click a node to connect…' : 'Click two nodes') : 'Connect'}</button>
+      </div>
+      <div class="cm-board">
+        <div id="competitorMapInner" style="position:relative;width:${CM_INNER_W}px;height:${CM_INNER_H}px;">
+          <svg id="competitorMapLines" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;"></svg>
+          <div id="competitorMapEdgeBadges" style="position:absolute;top:0;left:0;width:100%;height:100%;"></div>
+          ${!data.nodes.length ? '<div class="empty-state" style="position:absolute;top:120px;left:50%;transform:translateX(-50%);">Add a competitor from the left to start the board.</div>' : ''}
+          ${data.nodes.map(n => {
+            const t = COMPETITOR_MAP_TYPES[n.type] || COMPETITOR_MAP_TYPES.offering;
+            const isComp = n.type === 'competitor';
+            return `
+            <div id="cmNode-${n.id}" class="profile-board-node" style="position:absolute;left:${n.x}px;top:${n.y}px;width:${isComp?180:150}px;min-height:${isComp?46:44}px;cursor:${connectMode?'pointer':'grab'};border-left:4px solid ${t.color};${isComp?'background:var(--surface);font-weight:700;':''}${connectFrom===n.id?'outline:2px solid var(--accent-2);':''}${selected===n.id?'box-shadow:0 0 0 2px var(--accent);':''}"
+                 onmousedown="${connectMode?'':`startCmNodeDrag(event,'${n.id}')`}"
+                 onclick="cmHandleNodeClick('${n.id}')">
+              <div style="display:flex;align-items:flex-start;gap:6px;padding:6px 8px;">
+                <span ${connectMode?'':`onclick="event.stopPropagation();cmCycleNodeType('${n.id}')"`} title="${esc(t.label)} - click to change" style="width:10px;height:10px;border-radius:50%;background:${t.color};flex-shrink:0;margin-top:3px;cursor:pointer;"></span>
+                <div contenteditable="${connectMode?'false':'true'}" spellcheck="false" ${connectMode?'':'onmousedown="event.stopPropagation();" onclick="event.stopPropagation();"'} onblur="cmEditNodeText('${n.id}',this)" style="flex:1;font-size:${isComp?'12.5px':'11.5px'};outline:none;word-break:break-word;">${esc(n.text)}</div>
+                <span ${connectMode?'':`onclick="event.stopPropagation();cmDeleteNode('${n.id}')"`} style="cursor:pointer;color:var(--muted);font-size:13px;line-height:1;" title="Delete">×</span>
+              </div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+    </div>
+  </div>
+  `;
 }
 
 /* ===================== GRID PAGE ===================== */
@@ -13305,7 +14355,9 @@ async function removeGlobalAngleLibraryEntry(idx){
 function renderCompanyUniverse(){
   window.__ctxCampaignTag = null;
   return `
-  <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+  <div style="display:flex;justify-content:flex-end;gap:6px;margin-bottom:12px;">
+    <button class="btn btn-ghost btn-sm" onclick="navigate('icpbuilder')"><i class="ti ti-crosshair"></i> ICP builder</button>
+    <button class="btn btn-ghost btn-sm" onclick="navigate('competitormap')"><i class="ti ti-affiliate"></i> Competitor map</button>
     <button class="btn btn-ghost btn-sm" onclick="navigate('gtmmotion')"><i class="ti ti-topology-star-3"></i> See our GTM motion</button>
   </div>
   <div class="card" style="margin-bottom:16px;">
