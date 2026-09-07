@@ -484,7 +484,9 @@ const OPTIONAL_LATE_ADDED_FIELDS = [
   'ICP Profile (JSON)',
   'Competitor Map (JSON)',
   // No-tender procurement ceiling (Companies table).
-  'Procurement Threshold ($)'
+  'Procurement Threshold ($)',
+  // Resources ICP report, 7 Sep 2026 (Companies + Contacts tables).
+  'ICP Tag', 'Account Priority'
 ];
 const optionalFieldsMissing = new Set();
 function stripMissingOptionalFields(body) {
@@ -9187,7 +9189,10 @@ app.get('/api/companies/profile', async (req, res) => {
         icpMomentum: cf['ICP Momentum'] || null,
         icpWorkloadType: cf['ICP Workload Type'] || null,
         icpScoredAt: cf['ICP Scored At'] || null,
-        deepResearch: parseJsonSafe(cf['Deep Research (JSON)'])
+        deepResearch: parseJsonSafe(cf['Deep Research (JSON)']),
+        icpTag: cf['ICP Tag'] || null,
+        accountPriority: cf['Account Priority'] || null,
+        procurementThreshold: cf['Procurement Threshold ($)'] || null
       },
       relationshipFlag,
       matchingCaseStudies,
