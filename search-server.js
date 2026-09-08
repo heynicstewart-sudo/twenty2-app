@@ -475,6 +475,8 @@ const OPTIONAL_LATE_ADDED_FIELDS = [
   'Framing Used', 'Framing Reasoning', 'Framing Mode',
   // Account-as-pipeline (redesign plan §4) — Campaigns table.
   'Decision Maker Criteria',
+  // ICP-coverage snapshot from campaign build (Phase 2) — Campaigns table.
+  'ICP Alignment (JSON)',
   // Deep company research (Companies table).
   'Deep Research (JSON)',
   // Manual change-architecture whiteboard / freeform account canvas (Companies table).
@@ -489,6 +491,8 @@ const OPTIONAL_LATE_ADDED_FIELDS = [
   'Procurement Threshold ($)',
   // Resources ICP report, 7 Sep 2026 (Companies + Contacts tables).
   'ICP Tag', 'Account Priority',
+  // ICP fit scoring against the codified profile (Phase 2) — Companies table.
+  'ICP Fit Score', 'ICP Trigger Detected',
   // User-managed GTM Motion templates (Settings table).
   'GTM Motion Templates (JSON)'
 ];
@@ -1734,7 +1738,7 @@ app.post('/api/airtable/campaign', async (req, res) => {
   // so they're folded into the existing "Strategy Notes" field as
   // labelled sections rather than dropped - that field already exists and
   // is semantically the right home for them.
-  const { name, goal, product, targetIcp, contactIds, gridIds, sequenceTemplates, strategyNotes, pitchAngle, objectionHandling, successMetric, startDate, status, ctas, contentContext, campaignType, connectionNoteMode, sequenceLength, ctaMessage, angleLibrary, framingMode, decisionMakerCriteria } = req.body;
+  const { name, goal, product, targetIcp, contactIds, gridIds, sequenceTemplates, strategyNotes, pitchAngle, objectionHandling, successMetric, startDate, status, ctas, contentContext, campaignType, connectionNoteMode, sequenceLength, ctaMessage, angleLibrary, framingMode, decisionMakerCriteria, icpAlignment } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
   const normalizedType = (campaignType || '').toLowerCase() === 'email' ? 'Email' : ((campaignType || '').toLowerCase() === 'linkedin' ? 'LinkedIn' : '');
   const normalizedNoteMode = ['Note', 'No note', 'Split test'].includes(connectionNoteMode) ? connectionNoteMode : '';
@@ -1783,6 +1787,7 @@ app.post('/api/airtable/campaign', async (req, res) => {
       if (Array.isArray(angleLibrary) && angleLibrary.length) patchFields['Angle Library'] = JSON.stringify(angleLibrary);
       if (['Auto', 'Always Risk', 'Always Upside'].includes(framingMode)) patchFields['Framing Mode'] = framingMode;
       if (decisionMakerCriteria !== undefined) patchFields['Decision Maker Criteria'] = decisionMakerCriteria;
+      if (icpAlignment && typeof icpAlignment === 'object') patchFields['ICP Alignment (JSON)'] = JSON.stringify(icpAlignment);
 
       // Change markers for the scorecard - "since when" a delta might be
       // explained by a config change, not just performance drift. Angle
@@ -1838,6 +1843,7 @@ app.post('/api/airtable/campaign', async (req, res) => {
     if (Array.isArray(angleLibrary) && angleLibrary.length) fields['Angle Library'] = JSON.stringify(angleLibrary);
     if (['Auto', 'Always Risk', 'Always Upside'].includes(framingMode)) fields['Framing Mode'] = framingMode;
     if (decisionMakerCriteria) fields['Decision Maker Criteria'] = decisionMakerCriteria;
+    if (icpAlignment && typeof icpAlignment === 'object') fields['ICP Alignment (JSON)'] = JSON.stringify(icpAlignment);
     const data = await airtableWriteAllowingMissingCtaFields('POST', 'Campaigns', { records: [{ fields }] });
     res.json({ success: true, updated: false, recordId: data.records[0].id });
   } catch (err) {
@@ -1856,6 +1862,34 @@ app.get('/api/airtable/campaign', async (req, res) => {
     res.json(records);
   } catch (err) {
     console.error('Airtable campaign list error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ICP health for every campaign - what share of each campaign's linked
+// contacts sit at companies tagged as Twenty2's codified ICP. Feeds the
+// drift badge on the Campaigns list and a tile on the scorecard. Pure read,
+// no AI. Keyed by campaign record id AND by name so the client can match
+// either way.
+app.get('/api/campaigns/icp-health', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const [campaigns, contactRecords, rows, icpProfile] = await Promise.all([
+      airtableFetchAllRecords('Campaigns'),
+      airtableFetchAllRecords('Contacts'),
+      fetchCampaignContactsRows(),
+      getIcpProfile()
+    ]);
+    const health = {};
+    campaigns.forEach(c => {
+      const h = campaignIcpHealth(c, contactRecords, rows);
+      const name = c.fields['Name'] || c.fields['Campaign Name'] || '';
+      health[c.id] = h;
+      if (name) health[name] = h;
+    });
+    res.json({ health, icpConfigured: !!icpProfile });
+  } catch (err) {
+    console.error('Campaign ICP health error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -3671,7 +3705,11 @@ async function fetchCampaignContext() {
     company: Array.isArray(r.fields['Company']) ? '' : (r.fields['Company'] || ''),
     role: r.fields['Job Title'] || '',
     journeyStage: r.fields['Journey Stage'] || '',
-    notes: r.fields['Notes'] || ''
+    notes: r.fields['Notes'] || '',
+    // Inherited from the contact's company via lookup - the codified Resources
+    // ICP tag baked in from the 7 Sep 2026 report. Used for campaign ICP-coverage.
+    icpTag: (Array.isArray(r.fields['ICP Tag']) ? r.fields['ICP Tag'][0] : r.fields['ICP Tag']) || '',
+    accountPriority: (Array.isArray(r.fields['Account Priority']) ? r.fields['Account Priority'][0] : r.fields['Account Priority']) || ''
   })).filter(c => c.name);
 
   const touchPoints = touchPointRecords.map(r => ({
@@ -3686,6 +3724,92 @@ async function fetchCampaignContext() {
   return { contacts, touchPoints, bookedCount, conversionRate };
 }
 
+// ===================== ICP / GTM integration (Phase 2) =====================
+// The codified ICP profile (ICP Builder page) and GTM motion (GTM Motion page)
+// are stored as JSON blobs on the Settings singleton. Phase 2 wires them into
+// campaign build, message drafting, scoring and the surfaces that were flying
+// blind to the strategy before.
+
+async function getIcpProfile() {
+  try {
+    const record = await getSettingsRecord();
+    return record ? parseJsonSafe(record.fields['ICP Profile (JSON)']) : null;
+  } catch (e) { return null; }
+}
+async function getGtmMotion() {
+  try {
+    const record = await getSettingsRecord();
+    return record ? parseJsonSafe(record.fields['GTM Motion (JSON)']) : null;
+  } catch (e) { return null; }
+}
+
+// Compact, prompt-ready description of who the ICP is and the 10x edge, so
+// drafts and the campaign builder lead with the strategic wedge rather than
+// improvising. Returns '' when no profile has been filled in yet (drafting
+// then behaves exactly as it did before Phase 2).
+function icpProfilePromptBlock(profile) {
+  if (!profile || typeof profile !== 'object') return '';
+  const parts = [];
+  if (profile.headline) parts.push(`ICP headline: ${profile.headline}`);
+  const attrs = (profile.attributes || []).filter(a => a && a.value).map(a => `${a.label}: ${a.value}`);
+  if (attrs.length) parts.push(`ICP attributes - ${attrs.join('; ')}`);
+  const fit = profile.fit || {};
+  if (fit.problem && fit.problem.note) parts.push(`The urgent problem they feel: ${fit.problem.note}`);
+  const edge = profile.edge || {};
+  if (edge.defaultCompetitor) parts.push(`What they do instead of hiring us (the real competitor): ${edge.defaultCompetitor}`);
+  if (edge.tenXAngle) parts.push(`Our 10x edge / how we open: ${edge.tenXAngle}`);
+  const rev = profile.revenue || {};
+  if (rev.winsWhere) parts.push(`Where we win: ${rev.winsWhere}`);
+  if (rev.whatsDifferent) parts.push(`What's different about us: ${rev.whatsDifferent}`);
+  if (!parts.length) return '';
+  return `\n\nTWENTY2'S CODIFIED ICP & EDGE (from the ICP Builder - lead with this, do not contradict it):\n${parts.map(p => '- ' + p).join('\n')}`;
+}
+
+// The Stage 1 play from the GTM motion: offer to map the prospect's own change
+// architecture as free value before any pitch. Used to steer the CTA-message ask.
+function gtmStageOneArtefactNote(profile) {
+  const edge = (profile && profile.edge) || {};
+  if (edge.tenXAngle && /map|architecture|diagnostic|session|artefact|artifact/i.test(edge.tenXAngle)) {
+    return `\n\nWhen this message is the ask, the strongest CTA is Twenty2's Stage 1 free-value offer: propose mapping their own change architecture with them (current state, pain, the change, the future state, and the risk of not acting) in a short working session - an artefact they keep - rather than a generic "quick call". Only use a plainer ask if the conversation clearly calls for it.`;
+  }
+  return '';
+}
+
+// Classify a set of matched contact names against the codified ICP using the
+// company ICP Tag already on each contact (no AI, no extra calls). "onIcp" =
+// the Resources ICP tag; anything else (incl. blank) counts as off / unknown.
+function icpCoverageFor(matchedNames, contacts) {
+  const wanted = new Set((matchedNames || []).map(n => (n || '').trim().toLowerCase()));
+  const matched = (contacts || []).filter(c => wanted.has((c.name || '').trim().toLowerCase()));
+  const onIcp = matched.filter(c => /resources icp/i.test(c.icpTag || ''));
+  const offIcp = matched.filter(c => !/resources icp/i.test(c.icpTag || ''));
+  return {
+    total: matched.length,
+    onIcp: onIcp.length,
+    offIcp: offIcp.length,
+    onIcpPct: matched.length ? Math.round((onIcp.length / matched.length) * 100) : null,
+    offIcpNames: offIcp.map(c => c.name).slice(0, 40),
+    checkedAt: new Date().toISOString().slice(0, 10)
+  };
+}
+
+// Campaign ICP health - what share of a campaign's linked contacts sit on-ICP,
+// for the drift badge on the Campaigns list and the scorecard. Pure read.
+function campaignIcpHealth(campaignRecord, contactRecords, campaignContactRows) {
+  const rows = campaignContactRows.filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id));
+  const contactById = {};
+  contactRecords.forEach(c => { contactById[c.id] = c; });
+  const linkedContacts = rows
+    .map(r => contactById[(r.fields['Contact'] || [])[0]])
+    .filter(Boolean);
+  if (!linkedContacts.length) return { total: 0, onIcp: 0, onIcpPct: null };
+  const onIcp = linkedContacts.filter(c => {
+    const tag = c.fields['ICP Tag'];
+    return /resources icp/i.test((Array.isArray(tag) ? tag[0] : tag) || '');
+  }).length;
+  return { total: linkedContacts.length, onIcp, onIcpPct: Math.round((onIcp / linkedContacts.length) * 100) };
+}
+
 app.post('/api/campaign/chat', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
@@ -3696,10 +3820,13 @@ app.post('/api/campaign/chat', async (req, res) => {
   }
 
   try {
-    const { contacts, touchPoints, conversionRate } = await fetchCampaignContext();
+    const [{ contacts, touchPoints, conversionRate }, icpProfile] = await Promise.all([
+      fetchCampaignContext(), getIcpProfile()
+    ]);
 
     const roles = [...new Set(contacts.map(c => c.role).filter(Boolean))];
     const companies = [...new Set(contacts.map(c => c.company).filter(Boolean))];
+    const icpContactCount = contacts.filter(c => /resources icp/i.test(c.icpTag || '')).length;
     const painPointCounts = {};
     touchPoints.forEach(tp => {
       const points = Array.isArray(tp.painPoints) ? tp.painPoints : [tp.painPoints];
@@ -3711,7 +3838,8 @@ app.post('/api/campaign/chat', async (req, res) => {
 - Roles present: ${roles.join(', ') || 'none recorded'}.
 - Companies present: ${companies.join(', ') || 'none recorded'}.
 - Pain points logged across touch points: ${Object.entries(painPointCounts).map(([p,n]) => `${p} (${n})`).join(', ') || 'none recorded'}.
-- Overall historical conversion rate (booked / total contacts): ${conversionRate}%.`;
+- Overall historical conversion rate (booked / total contacts): ${conversionRate}%.
+- ${icpContactCount} of ${contacts.length} contacts sit at companies tagged as Twenty2's codified ICP (Resources ICP).${icpProfile && icpProfile.headline ? ` The ICP is: ${icpProfile.headline}` : ''}`;
 
     const requiredFields = `A complete campaign needs: a clear goal, the product/service being promoted, a description of who to target, whether there's an existing strategy/script to build from (and what it is if so), a success metric (bookings, replies, or meetings), and a rough timeline.`;
 
@@ -3727,6 +3855,8 @@ Conversation so far:
 ${conversationText}
 
 Read Marcus's latest message and the conversation so far. Work out what you already know and what's still genuinely missing. Never ask about something already covered, even if he only mentioned it in passing. Ask about at most one or two missing things at a time, in a natural conversational tone, UK English, no em dashes.
+
+If the audience Marcus describes looks like it sits mostly outside Twenty2's codified ICP (see the data above), gently flag that once and ask whether that's deliberate - don't nag, and don't block the campaign, just make sure he's chosen it on purpose.
 
 If you now have enough to build the campaign (goal, product, audience, strategy yes/no, success metric and timeline all reasonably covered, even briefly), respond with exactly: "I have everything I need to build this campaign." and nothing else.
 
@@ -3796,14 +3926,18 @@ app.post('/api/campaign/build', async (req, res) => {
   }
 
   try {
-    const { contacts, bookedCount, conversionRate } = await fetchCampaignContext();
+    const [{ contacts, bookedCount, conversionRate }, icpProfile] = await Promise.all([
+      fetchCampaignContext(), getIcpProfile()
+    ]);
     const conversationText = conversationHistory.map(m => `${m.role === 'assistant' ? 'Assistant' : 'Marcus'}: ${m.content}`).join('\n');
+    const icpBlock = icpProfilePromptBlock(icpProfile);
 
     const prompt = `You are building an outreach campaign for T2C Outreach, a LinkedIn outreach CRM for Twenty2 Collective, a Perth-based Agile and change consultancy, based on this setup conversation with Marcus:
 
 ${conversationText}
+${icpBlock}
 
-Here is the full contact list synced from Airtable to match against the target audience described above:
+Here is the full contact list synced from Airtable to match against the target audience described above. Each contact carries "icpTag" ("Resources ICP" = fits Twenty2's codified ICP, anything else does not) and "accountPriority":
 ${JSON.stringify(contacts, null, 2)}
 
 Historical data: ${bookedCount} of ${contacts.length} contacts overall have converted to a booking (${conversionRate}% historical conversion rate). Use this as the basis for an honest estimate, don't invent a different number.
@@ -3830,8 +3964,8 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 Guidance:
 - goal: one short sentence summarising the campaign's goal, drawn from the conversation.
 - product: the product or service being promoted, drawn from the conversation.
-- pitchAngle: 2-3 sentences on the specific angle/hook this campaign leads with and why it should land with this audience.
-- objectionHandling: 2-3 sentences on the most likely objection this audience will raise and how to handle it.
+- pitchAngle: 2-3 sentences on the specific angle/hook this campaign leads with and why it should land with this audience. If a codified ICP & edge is given above, lead the angle with the 10x edge rather than improvising a new one.
+- objectionHandling: 2-3 sentences on the most likely objection this audience will raise and how to handle it. If the codified edge names what they do instead of hiring us, treat that as the objection to overcome.
 - successMetric: one short phrase for what counts as success (e.g. "Booked discovery calls", "Workshop bookings").
 - matchedContactNames: full names of contacts from the list above whose role, company or notes plausibly match the audience described in the conversation. Only include contacts that actually appear in the list above. Return an empty array if nothing matches rather than inventing names.
 - sequence: three outreach stages. "type" is one of "LinkedIn message", "Email", "Call" - pick whatever fits the conversation, default to "LinkedIn message" if nothing was specified. If an existing strategy/script was mentioned in the conversation, adapt it rather than starting from scratch. Otherwise write fresh copy. UK English, no em dashes, peer to peer tone, one observation and one question per message, 3-4 sentences, signed off as "Marcus" (first name only, never the company name). "timing" is when to send relative to the previous step, e.g. "Day 0", "3 days after message 1", "7 days after follow-up 1".
@@ -3869,6 +4003,7 @@ Guidance:
       throw new Error('Could not parse Claude response as JSON');
     }
 
+    const matchedContactNames = campaign.matchedContactNames || [];
     res.json({
       campaignName: campaign.campaignName || 'Untitled campaign',
       goal: campaign.goal || '',
@@ -3877,11 +4012,14 @@ Guidance:
       pitchAngle: campaign.pitchAngle || '',
       objectionHandling: campaign.objectionHandling || '',
       successMetric: campaign.successMetric || '',
-      matchedContactNames: campaign.matchedContactNames || [],
+      matchedContactNames,
       sequence: campaign.sequence || {},
       strategyBrief: campaign.strategyBrief || '',
       estimatedConversions: campaign.estimatedConversions || '',
-      contactPoolSize: contacts.length
+      contactPoolSize: contacts.length,
+      // ICP-coverage of the matched set, for the preview card's coverage bar.
+      icpAlignment: icpProfile ? icpCoverageFor(matchedContactNames, contacts) : null,
+      icpProfileHeadline: icpProfile ? (icpProfile.headline || '') : ''
     });
   } catch (err) {
     console.error('Campaign build error:', err.message);
@@ -9605,12 +9743,73 @@ app.get('/api/icp-profile', async (req, res) => {
   try {
     const record = await getSettingsRecord();
     const profile = record ? parseJsonSafe(record.fields['ICP Profile (JSON)']) : null;
-    res.json({ profile: profile || null });
+    // Real funnel numbers computed from the pipeline, ICP vs non-ICP - shown
+    // alongside the profile's manual `tracking` block so "reviewed each
+    // quarter" stops being a form to fill in by hand. Best-effort; on any
+    // failure the client just falls back to the manual block.
+    let computed = null;
+    try { computed = await computeIcpTrackingFromPipeline(); } catch (e) { computed = null; }
+    res.json({ profile: profile || null, computed });
   } catch (err) {
     console.error('Get icp-profile error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
+
+// leads = distinct contacts ever in a campaign; opps = those that replied or
+// have a live/won deal; customers = won deals. Split by the contact's company
+// ICP Tag. Win rate = won / (won + lost) within each tag.
+async function computeIcpTrackingFromPipeline() {
+  const [contactRecords, rows, deals] = await Promise.all([
+    airtableFetchAllRecords('Contacts'),
+    fetchCampaignContactsRows(),
+    airtableFetchAllRecords('Deals').catch(() => [])
+  ]);
+  const contactById = {};
+  contactRecords.forEach(c => { contactById[c.id] = c; });
+  const isIcpContact = c => {
+    const t = c && c.fields['ICP Tag'];
+    return /resources icp/i.test((Array.isArray(t) ? t[0] : t) || '');
+  };
+
+  const leadIds = new Set();
+  const oppIds = new Set();
+  rows.forEach(r => {
+    const cid = (r.fields['Contact'] || [])[0];
+    if (!cid) return;
+    leadIds.add(cid);
+    if (rowReplyReceived(r) || r.fields['Reply Received']) oppIds.add(cid);
+  });
+
+  let wonIcp = 0, wonNon = 0, lostIcp = 0, lostNon = 0;
+  deals.forEach(d => {
+    const cid = (d.fields['Contact'] || [])[0];
+    const c = contactById[cid];
+    const icp = isIcpContact(c);
+    const outcome = (d.fields['Outcome'] || '').toLowerCase();
+    if (cid) oppIds.add(cid);
+    if (outcome === 'won') { icp ? wonIcp++ : wonNon++; }
+    else if (outcome === 'lost') { icp ? lostIcp++ : lostNon++; }
+  });
+
+  const countSplit = idSet => {
+    let icp = 0, total = 0;
+    idSet.forEach(id => { total++; if (isIcpContact(contactById[id])) icp++; });
+    return { icp, total };
+  };
+  const leads = countSplit(leadIds);
+  const opps = countSplit(oppIds);
+  const winRate = (won, lost) => (won + lost) ? Math.round((won / (won + lost)) * 100) : null;
+
+  return {
+    leadsIcp: leads.icp, leadsTotal: leads.total,
+    oppsIcp: opps.icp, oppsTotal: opps.total,
+    customersIcp: wonIcp, customersTotal: wonIcp + wonNon,
+    winRateIcp: winRate(wonIcp, lostIcp),
+    winRateNonIcp: winRate(wonNon, lostNon),
+    computedAt: new Date().toISOString().slice(0, 10)
+  };
+}
 
 app.post('/api/icp-profile', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
@@ -9689,22 +9888,36 @@ app.post('/api/companies/enrich', async (req, res) => {
 const ICP_SIZE_BANDS = ['Micro', 'Small', 'Mid', 'Large'];
 const ICP_MOMENTUM = ['Hiring', 'Funded', 'Leadership Change', 'Flat'];
 
-function buildIcpScoringPrompt(companyRecord) {
+function buildIcpScoringPrompt(companyRecord, icpProfile) {
   const f = companyRecord.fields || {};
-  return `You are scoring one company for T2C Outreach, Twenty2 Collective's outreach CRM, against a 3-attribute segmentation model.
+  const attrs = icpProfile && Array.isArray(icpProfile.attributes)
+    ? icpProfile.attributes.filter(a => a && a.value).map(a => `- ${a.label}: ${a.value}`).join('\n')
+    : '';
+  const trigger = icpProfile && icpProfile.attributes
+    ? (icpProfile.attributes.find(a => /trigger/i.test(a.label || '')) || {}).value || ''
+    : '';
+  const icpSection = attrs ? `
+
+Twenty2's codified ICP (from the ICP Builder):
+${attrs}
+${icpProfile && icpProfile.headline ? `Headline: ${icpProfile.headline}` : ''}` : '';
+
+  return `You are scoring one company for T2C Outreach, Twenty2 Collective's outreach CRM.
 
 Company: ${f['Company Name'] || 'Unknown'}
 Industry: ${f['Industry'] || 'not recorded'}. Sector: ${f['Sector'] || 'not recorded'}.
 Overview: ${f['Company Overview (AI)'] || f['AI Summary'] || 'none on file'}
-Latest signal: ${f['Latest Signal'] || 'none'}${f['Signal Date'] ? ` (${f['Signal Date']})` : ''}
+Latest signal: ${f['Latest Signal'] || 'none'}${f['Signal Date'] ? ` (${f['Signal Date']})` : ''}${icpSection}
 
-Score exactly these 3 attributes from what's above - do not invent detail that isn't supported by it:
-1. sizeBand - one of: ${ICP_SIZE_BANDS.join(', ')}. If genuinely unclear, use "Small" as the conservative default.
-2. momentum - one of: ${ICP_MOMENTUM.join(', ')}. Only pick Hiring/Funded/Leadership Change if the overview or latest signal actually supports it; otherwise "Flat".
-3. workloadType - a short 1-3 word label for this company's business model or vertical (e.g. "Professional Services", "Trades", "SaaS", "Manufacturing") - your own judgement, not a fixed list.
+Score from what's above - do not invent detail that isn't supported by it:
+1. sizeBand - one of: ${ICP_SIZE_BANDS.join(', ')}. If genuinely unclear, use "Small".
+2. momentum - one of: ${ICP_MOMENTUM.join(', ')}. Only pick Hiring/Funded/Leadership Change if the overview or latest signal supports it; otherwise "Flat".
+3. workloadType - a short 1-3 word label for this company's business model or vertical - your own judgement.
+${attrs ? `4. icpFitScore - integer 0-100: how well this company matches Twenty2's codified ICP above (industry/vertical, size, geography, and whether a buying trigger looks present). Be strict: 80+ only if it clearly fits on the major axes.
+5. icpTriggerDetected - if the overview or latest signal shows the company hitting the ICP's trigger (${trigger || 'a funded transformation slipping, a new delivery leader, a stalling agile rollout'}), name it in a short phrase; otherwise empty string "".` : ''}
 
 Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
-{"sizeBand": "string", "momentum": "string", "workloadType": "string"}`;
+{"sizeBand": "string", "momentum": "string", "workloadType": "string"${attrs ? ', "icpFitScore": 0, "icpTriggerDetected": "string"' : ''}}`;
 }
 
 // "Profile before you speak" (Jeanne DeWitt Grosser: research every account
@@ -9818,18 +10031,35 @@ function buildAccountContacts(companyRecord, contactRecords, campaignContactRows
 }
 
 async function scoreIcpForCompany(companyRecord) {
-  const parsed = await callClaudeJson(buildIcpScoringPrompt(companyRecord), 300);
+  const icpProfile = await getIcpProfile();
+  const parsed = await callClaudeJson(buildIcpScoringPrompt(companyRecord, icpProfile), 350);
   const sizeBand = ICP_SIZE_BANDS.includes(parsed.sizeBand) ? parsed.sizeBand : 'Small';
   const momentum = ICP_MOMENTUM.includes(parsed.momentum) ? parsed.momentum : 'Flat';
   const workloadType = (parsed.workloadType || 'Other').trim().slice(0, 60) || 'Other';
   const today = new Date().toISOString().slice(0, 10);
+  const fields = {
+    'ICP Size Band': sizeBand, 'ICP Momentum': momentum, 'ICP Workload Type': workloadType, 'ICP Scored At': today
+  };
+
+  let fitScore = null, trigger = '';
+  if (icpProfile) {
+    fitScore = Number.isFinite(+parsed.icpFitScore) ? Math.max(0, Math.min(100, Math.round(+parsed.icpFitScore))) : null;
+    trigger = (parsed.icpTriggerDetected || '').toString().trim().slice(0, 120);
+    if (fitScore !== null) fields['ICP Fit Score'] = fitScore;
+    if (trigger) fields['ICP Trigger Detected'] = trigger;
+    // Keep the coarse Resources-ICP tag in step with the fit score, but never
+    // overwrite a tag a human has already set by hand.
+    const currentTag = companyRecord.fields['ICP Tag'];
+    if (!currentTag && fitScore !== null) {
+      fields['ICP Tag'] = fitScore >= 60 ? 'Resources ICP' : 'Non-ICP';
+    }
+  }
+
   await airtableWriteAllowingMissingCtaFields('PATCH', 'Companies', {
-    records: [{ id: companyRecord.id, fields: {
-      'ICP Size Band': sizeBand, 'ICP Momentum': momentum, 'ICP Workload Type': workloadType, 'ICP Scored At': today
-    } }],
+    records: [{ id: companyRecord.id, fields }],
     typecast: true
   });
-  return { sizeBand, momentum, workloadType };
+  return { sizeBand, momentum, workloadType, fitScore, trigger };
 }
 
 // Explicit clear - POST /api/airtable/campaign only ever writes Angle
@@ -9890,6 +10120,77 @@ app.post('/api/companies/:id/score-icp', async (req, res) => {
     res.json({ success: true, companyId: companyRecord.id, companyName: companyRecord.fields['Company Name'] || '', ...result });
   } catch (err) {
     console.error('Score ICP error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ICP prospecting worklist (Phase 2, features 7 + 8): turn the codified ICP
+// and the Account Priority column into an actual list of what to do next.
+// - untouched: ICP-tagged / priority companies with zero contacts in any
+//   campaign - "who we should be talking to and aren't".
+// - triggers: ICP companies where scoreIcpForCompany flagged a buying trigger.
+// Pure read, no AI.
+app.get('/api/icp/worklist', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const [companyRecords, contactRecords, rows, icpProfile] = await Promise.all([
+      airtableFetchAllRecords('Companies'),
+      airtableFetchAllRecords('Contacts'),
+      fetchCampaignContactsRows(),
+      getIcpProfile()
+    ]);
+
+    const contactsByCompany = {};
+    contactRecords.forEach(c => {
+      const cid = (c.fields['Company'] || [])[0];
+      if (cid) (contactsByCompany[cid] = contactsByCompany[cid] || []).push(c.id);
+    });
+    const contactsInACampaign = new Set();
+    rows.forEach(r => { const cid = (r.fields['Contact'] || [])[0]; if (cid) contactsInACampaign.add(cid); });
+
+    const isIcpCompany = c => /resources icp/i.test(c.fields['ICP Tag'] || '') || (Number(c.fields['ICP Fit Score']) >= 60);
+    const priorityRank = p => {
+      const s = (p || '').toLowerCase();
+      if (s.includes('deepen')) return 0;
+      if (s.includes('convert')) return 1;
+      if (s.includes('clarify')) return 2;
+      if (s.includes('prospect')) return 3;
+      return 9;
+    };
+
+    const icpCompanies = companyRecords.filter(isIcpCompany);
+    const untouched = icpCompanies.filter(c => {
+      const cids = contactsByCompany[c.id] || [];
+      return !cids.some(id => contactsInACampaign.has(id));
+    }).map(c => ({
+      id: c.id,
+      name: c.fields['Company Name'] || '',
+      priority: c.fields['Account Priority'] || '',
+      fitScore: Number.isFinite(Number(c.fields['ICP Fit Score'])) ? Number(c.fields['ICP Fit Score']) : null,
+      knownContacts: (contactsByCompany[c.id] || []).length,
+      trigger: c.fields['ICP Trigger Detected'] || ''
+    })).sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority) || (b.fitScore || 0) - (a.fitScore || 0));
+
+    const triggers = icpCompanies
+      .filter(c => (c.fields['ICP Trigger Detected'] || '').trim())
+      .map(c => ({
+        id: c.id,
+        name: c.fields['Company Name'] || '',
+        trigger: c.fields['ICP Trigger Detected'],
+        priority: c.fields['Account Priority'] || '',
+        inCampaign: (contactsByCompany[c.id] || []).some(id => contactsInACampaign.has(id))
+      }));
+
+    res.json({
+      icpConfigured: !!icpProfile,
+      icpCompanyCount: icpCompanies.length,
+      inCampaignCount: icpCompanies.length - untouched.length,
+      untouched: untouched.slice(0, 60),
+      untouchedTotal: untouched.length,
+      triggers: triggers.slice(0, 30)
+    });
+  } catch (err) {
+    console.error('ICP worklist error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -11751,12 +12052,17 @@ async function buildCampaignOutreachPrompt({ campaignRecord, contactRecord, mess
   const recentPosts = recentPostsPromptSnippet(cf['Recent Posts'], 30);
   // Only weave the offer in from message 2 on - pitching on the first touch
   // reads as a cold sales blast rather than a peer-to-peer opener.
-  const [offer, voice, touchPoints, rows] = await Promise.all([
+  const [offer, voice, touchPoints, rows, icpProfile] = await Promise.all([
     messageNumber >= 2 ? getActiveOfferForCampaign(campaignRecord.id) : Promise.resolve(null),
     getStrategyVoiceSettings(),
     airtableFetchAllRecords('Touch Points'),
-    campaignContactsRows ? Promise.resolve(campaignContactsRows) : fetchCampaignContactsRows()
+    campaignContactsRows ? Promise.resolve(campaignContactsRows) : fetchCampaignContactsRows(),
+    getIcpProfile()
   ]);
+  const icpBlock = icpProfilePromptBlock(icpProfile);
+  // The Stage-1 "map their change architecture" artefact only makes sense as
+  // the ask once this message IS the ask.
+  const stageOneNote = (messageNumber === campaignCtaMessage(campaignRecord)) ? gtmStageOneArtefactNote(icpProfile) : '';
 
   // Marcus's own edits are the best signal for what "good" looks like for
   // *this* campaign - his 5 most recent "Sent edited" rows in it, AI draft
@@ -11809,13 +12115,13 @@ async function buildCampaignOutreachPrompt({ campaignRecord, contactRecord, mess
 
   const promptText = `${preamble}
 
-Campaign: "${resolvedName}". Goal: ${camp['Goal'] || 'not recorded'}. Product: ${camp['Product'] || 'not recorded'}. Target ICP: ${camp['Target ICP'] || 'not recorded'}. Strategy notes: ${camp['Strategy Notes'] || 'none recorded'}.
+Campaign: "${resolvedName}". Goal: ${camp['Goal'] || 'not recorded'}. Product: ${camp['Product'] || 'not recorded'}. Target ICP: ${camp['Target ICP'] || 'not recorded'}. Strategy notes: ${camp['Strategy Notes'] || 'none recorded'}.${icpBlock}
 ${template ? `\nTemplate for this stage:\n${template}\n` : ''}
 Contact: ${cf['Full Name'] || 'Unknown'}, ${cf['Job Title'] || ''}. Profile notes: ${cf['Notes'] || 'none'}. AI summary: ${aiSummaryNarrative || 'none yet'}. Conversation so far: ${cf['Conversation Context'] || 'none yet - this is the first message'}.
 Recent posts (last 30 days only): ${recentPosts}${enrichmentNote}${imageNote ? '\n' + imageNote : ''}
 ${offerNote}${await angleLibraryNote(campaignRecord, contactRecord)}${await accountEnrichmentPromptNote(contactRecord, rows)}
 
-${ctaStrategyNoteText(stageKey, messageNumber, ctaMessage)}${ctaOptionsPromptText(ctaOptions)}
+${ctaStrategyNoteText(stageKey, messageNumber, ctaMessage)}${stageOneNote}${ctaOptionsPromptText(ctaOptions)}
 
 ${voiceRulesPromptText(voice, emailMode)}${styleCorrectionsPromptText(styleCorrections, stageKey)}${steerPromptText(steer)}
 
@@ -11843,11 +12149,14 @@ async function buildCampaignReplyPrompt({ campaignRecord, contactRecord, steer }
   const cf = contactRecord.fields || {};
   const resolvedName = camp['Name'] || camp['Campaign Name'] || '';
 
-  const [offer, voice, rows] = await Promise.all([
+  const [offer, voice, rows, icpProfile] = await Promise.all([
     getActiveOfferForCampaign(campaignRecord.id),
     getStrategyVoiceSettings(),
-    fetchCampaignContactsRows()
+    fetchCampaignContactsRows(),
+    getIcpProfile()
   ]);
+  const icpBlock = icpProfilePromptBlock(icpProfile);
+  const stageOneNote = gtmStageOneArtefactNote(icpProfile);
 
   // Marcus's own edits in this campaign - the strongest available signal for
   // the tone he wants. Not stage-scoped here (a reply has no message number),
@@ -11874,7 +12183,7 @@ async function buildCampaignReplyPrompt({ campaignRecord, contactRecord, steer }
 
   const promptText = `You are Marcus, writing the next LinkedIn message in an ongoing conversation for T2C Outreach, Twenty2 Collective's LinkedIn outreach CRM. The contact has replied and it's your turn to respond.
 
-Campaign: "${resolvedName}". Goal: ${camp['Goal'] || 'not recorded'}. Product: ${camp['Product'] || 'not recorded'}. Target ICP: ${camp['Target ICP'] || 'not recorded'}. Strategy notes: ${camp['Strategy Notes'] || 'none recorded'}.
+Campaign: "${resolvedName}". Goal: ${camp['Goal'] || 'not recorded'}. Product: ${camp['Product'] || 'not recorded'}. Target ICP: ${camp['Target ICP'] || 'not recorded'}. Strategy notes: ${camp['Strategy Notes'] || 'none recorded'}.${icpBlock}
 
 Contact: ${cf['Full Name'] || 'Unknown'}, ${cf['Job Title'] || ''}. Profile notes: ${cf['Notes'] || 'none'}. AI summary: ${aiSummaryNarrative || 'none yet'}.${enrichmentNote}
 ${offerNote}${await angleLibraryNote(campaignRecord, contactRecord)}${await accountEnrichmentPromptNote(contactRecord, rows)}
@@ -11882,7 +12191,7 @@ ${offerNote}${await angleLibraryNote(campaignRecord, contactRecord)}${await acco
 Full conversation so far (most recent entry first if dated; "Marcus:" is you, the other name is them):
 ${cf['Conversation Context'] || '(no thread captured - treat their most recent message as a short positive reply and move things forward)'}
 
-Your job: reply to what they actually said in their most recent message. Move the conversation one concrete step toward ${ctaOptions.length ? 'one of this campaign\'s CTAs' : 'a short call or coffee'}, but only as hard as their reply has earned - if they asked a question, answer it plainly first; if they're warm and it's time, make the ask; if they raised an objection, address it without being defensive. Never reintroduce yourself or repeat an earlier message.${ctaOptionsPromptText(ctaOptions)}
+Your job: reply to what they actually said in their most recent message. Move the conversation one concrete step toward ${ctaOptions.length ? 'one of this campaign\'s CTAs' : 'a short call or coffee'}, but only as hard as their reply has earned - if they asked a question, answer it plainly first; if they're warm and it's time, make the ask; if they raised an objection, address it without being defensive. Never reintroduce yourself or repeat an earlier message.${stageOneNote}${ctaOptionsPromptText(ctaOptions)}
 
 ${voiceRulesPromptText(voice, false)}${styleCorrectionsPromptText(styleCorrections, 'reply')}${steerPromptText(steer)}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${examplesNote}
 
