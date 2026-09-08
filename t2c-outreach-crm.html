@@ -2505,6 +2505,7 @@ function afterRender(page){
     ensureContextDataLoaded();
   }
   if(page === 'gtmmotion' && window.__gtmMotion === undefined && !window.__gtmMotionLoading) loadGtmMotion();
+  if(page === 'gtmmotion' && window.__icpProfile === undefined && !window.__icpProfileLoading) loadIcpProfile();
   if(page === 'gtmmotion' && window.__gtmMotionTemplates === undefined && !window.__gtmMotionTemplatesLoading) loadGtmMotionTemplates();
   if(page === 'icpbuilder' && window.__icpProfile === undefined && !window.__icpProfileLoading) loadIcpProfile();
   if(page === 'competitormap'){
@@ -2560,6 +2561,7 @@ function afterRender(page){
   }
   if(page === 'contentcalendar' && window.__contentCalendarItems === undefined) loadContentCalendarItems();
   if(page === 'home' && window.__homeContactSignals === undefined) loadHomeContactSignals();
+  if(page === 'home') loadIcpWorklist();
   if(page === 'research'){
     const tab = window.__researchSubTab || 'market';
     if(tab === 'market'){
@@ -2870,6 +2872,7 @@ function renderHome(){
   <div class="section-title" style="font-size:24px;margin-bottom:2px;">Hey ${esc(__name)}, ready to get started?</div>
   <div class="muted" style="margin-bottom:22px;">${esc(__tagline)}</div>
 
+  ${renderIcpWorklistStrip()}
   ${renderContactSignalsStrip()}
   ${renderTodaysActions()}
 
@@ -6580,8 +6583,29 @@ function gtmToggleLoop(){
   renderPage();
 }
 
+// Live account numbers under the motion (Phase 2) - the ICP funnel from
+// GET /api/icp-profile.computed + the ICP worklist counts, so the motion
+// page shows where accounts actually sit, not just the story.
+function renderGtmLiveStrip(){
+  const c = window.__icpComputed;
+  const w = window.__icpWorklist;
+  if(!c && !(w && !w.error && w.icpConfigured)) return '';
+  const tile = (label, value) => `<div style="flex:1;min-width:110px;background:var(--surface-2);border:1px solid var(--border-light);border-radius:10px;padding:10px 12px;">
+    <div style="font-size:18px;font-weight:800;">${value}</div>
+    <div class="muted" style="font-size:10.5px;">${label}</div></div>`;
+  return `
+  <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px;">
+    ${w && w.icpConfigured ? tile('ICP accounts in a campaign', `${w.inCampaignCount}/${w.icpCompanyCount}`) : ''}
+    ${c ? tile('ICP leads', `${c.leadsIcp}/${c.leadsTotal}`) : ''}
+    ${c ? tile('ICP opportunities', `${c.oppsIcp}/${c.oppsTotal}`) : ''}
+    ${c ? tile('ICP customers', `${c.customersIcp}/${c.customersTotal}`) : ''}
+    ${c && c.winRateIcp != null ? tile('Win rate ICP vs non', `${c.winRateIcp}% / ${c.winRateNonIcp == null ? '–' : c.winRateNonIcp + '%'}`) : ''}
+  </div>`;
+}
+
 function renderGtmMotionPage(){
   const m = window.__gtmMotion;
+  if(window.__icpWorklist === undefined) loadIcpWorklist();
   if(!m){
     return `<div class="howto-hero"><h2>GTM Motion</h2><p><i class="ti ti-loader-2"></i> Loading…</p></div>`;
   }
@@ -6623,6 +6647,8 @@ function renderGtmMotionPage(){
       <span style="font-size:12px;color:rgba(255,255,255,.82);">${m.loop ? 'Flywheel — the last stage loops back to the first' : 'Linear funnel — stages run start to finish'}</span>
     </div>` : ''}
   </div>
+
+  ${renderGtmLiveStrip()}
 
   <div class="gtm-stages">
     ${m.stages.map((s,i) => `
@@ -23928,6 +23954,52 @@ function downloadOmnisendLowEngagementCsv(){
 // surfaces content-marketing theme ideas from the Content Signals Airtable
 // table, this one surfaces job change activity. Unrelated data, kept
 // separate on purpose.
+
+// ICP prospecting worklist (Phase 2) - GET /api/icp/worklist. Turns the
+// codified ICP + Account Priority into "who we should be talking to and
+// aren't", plus ICP accounts that have hit a buying trigger.
+async function loadIcpWorklist(){
+  if(window.__icpWorklist !== undefined) return;
+  window.__icpWorklist = null;
+  try {
+    const res = await fetch('/api/icp/worklist');
+    const json = await res.json();
+    window.__icpWorklist = res.ok ? json : { error: true };
+  } catch(err){
+    window.__icpWorklist = { error: true };
+  }
+  if(['home','gtmmotion'].includes(state.currentPage)) renderPage();
+}
+function renderIcpWorklistStrip(){
+  const w = window.__icpWorklist;
+  if(w === undefined || w === null || w.error || !w.icpConfigured) return '';
+  if(!w.icpCompanyCount) return '';
+  const triggers = w.triggers || [];
+  const untouched = w.untouched || [];
+  return `
+  <div class="card" style="margin-bottom:22px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-crosshair"></i> ICP worklist</div>
+      <button class="btn btn-ghost btn-sm" onclick="navigate('companyuniverse')">Company Universe <i class="ti ti-arrow-right"></i></button>
+    </div>
+    <div class="muted" style="font-size:11.5px;margin:6px 0 12px;">${w.inCampaignCount} of ${w.icpCompanyCount} ICP accounts are in a campaign. ${w.untouchedTotal} are not.</div>
+    ${triggers.length ? `
+      <div style="font-size:11px;font-weight:700;color:var(--warning);margin-bottom:4px;"><i class="ti ti-bolt"></i> Buying trigger detected</div>
+      ${triggers.slice(0,5).map(t => `
+        <div class="tp-item" style="cursor:pointer;" onclick="navigate('profile');selectProfileCompany('${esc(t.name)}')">
+          <strong>${esc(t.name)}</strong>${t.priority ? ` <span class="muted">· ${esc(t.priority)}</span>` : ''}${t.inCampaign ? '' : ' <span class="badge" style="background:var(--danger-bg,#fee);color:var(--danger);font-size:10px;">not in a campaign</span>'}
+          <div class="muted" style="font-size:11px;">${esc(t.trigger)}</div>
+        </div>`).join('')}
+      <div style="height:8px;"></div>
+    ` : ''}
+    ${untouched.length ? `
+      <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:4px;">ICP accounts with no one in a campaign${w.untouchedTotal > untouched.length ? ` (top ${untouched.length} of ${w.untouchedTotal})` : ''}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;">
+        ${untouched.slice(0,14).map(c => `<span class="badge" style="background:var(--surface-2);cursor:pointer;font-size:11px;" onclick="navigate('profile');selectProfileCompany('${esc(c.name)}')">${esc(c.name)}${c.priority ? ` · ${esc(c.priority.replace(/\\s*\\(.*\\)/,''))}` : ''}${c.knownContacts ? ` · ${c.knownContacts} known` : ''}</span>`).join('')}
+      </div>
+    ` : '<div class="muted" style="font-size:12px;">Every ICP account has someone in a campaign. Nice.</div>'}
+  </div>`;
+}
 
 function renderContactSignalsStrip(){
   const signals = window.__homeContactSignals;

@@ -10124,6 +10124,77 @@ app.post('/api/companies/:id/score-icp', async (req, res) => {
   }
 });
 
+// ICP prospecting worklist (Phase 2, features 7 + 8): turn the codified ICP
+// and the Account Priority column into an actual list of what to do next.
+// - untouched: ICP-tagged / priority companies with zero contacts in any
+//   campaign - "who we should be talking to and aren't".
+// - triggers: ICP companies where scoreIcpForCompany flagged a buying trigger.
+// Pure read, no AI.
+app.get('/api/icp/worklist', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const [companyRecords, contactRecords, rows, icpProfile] = await Promise.all([
+      airtableFetchAllRecords('Companies'),
+      airtableFetchAllRecords('Contacts'),
+      fetchCampaignContactsRows(),
+      getIcpProfile()
+    ]);
+
+    const contactsByCompany = {};
+    contactRecords.forEach(c => {
+      const cid = (c.fields['Company'] || [])[0];
+      if (cid) (contactsByCompany[cid] = contactsByCompany[cid] || []).push(c.id);
+    });
+    const contactsInACampaign = new Set();
+    rows.forEach(r => { const cid = (r.fields['Contact'] || [])[0]; if (cid) contactsInACampaign.add(cid); });
+
+    const isIcpCompany = c => /resources icp/i.test(c.fields['ICP Tag'] || '') || (Number(c.fields['ICP Fit Score']) >= 60);
+    const priorityRank = p => {
+      const s = (p || '').toLowerCase();
+      if (s.includes('deepen')) return 0;
+      if (s.includes('convert')) return 1;
+      if (s.includes('clarify')) return 2;
+      if (s.includes('prospect')) return 3;
+      return 9;
+    };
+
+    const icpCompanies = companyRecords.filter(isIcpCompany);
+    const untouched = icpCompanies.filter(c => {
+      const cids = contactsByCompany[c.id] || [];
+      return !cids.some(id => contactsInACampaign.has(id));
+    }).map(c => ({
+      id: c.id,
+      name: c.fields['Company Name'] || '',
+      priority: c.fields['Account Priority'] || '',
+      fitScore: Number.isFinite(Number(c.fields['ICP Fit Score'])) ? Number(c.fields['ICP Fit Score']) : null,
+      knownContacts: (contactsByCompany[c.id] || []).length,
+      trigger: c.fields['ICP Trigger Detected'] || ''
+    })).sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority) || (b.fitScore || 0) - (a.fitScore || 0));
+
+    const triggers = icpCompanies
+      .filter(c => (c.fields['ICP Trigger Detected'] || '').trim())
+      .map(c => ({
+        id: c.id,
+        name: c.fields['Company Name'] || '',
+        trigger: c.fields['ICP Trigger Detected'],
+        priority: c.fields['Account Priority'] || '',
+        inCampaign: (contactsByCompany[c.id] || []).some(id => contactsInACampaign.has(id))
+      }));
+
+    res.json({
+      icpConfigured: !!icpProfile,
+      icpCompanyCount: icpCompanies.length,
+      inCampaignCount: icpCompanies.length - untouched.length,
+      untouched: untouched.slice(0, 60),
+      untouchedTotal: untouched.length,
+      triggers: triggers.slice(0, 30)
+    });
+  } catch (err) {
+    console.error('ICP worklist error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Bulk-scores every company reachable from this campaign's Campaign Contacts
 // rows (via each contact's linked Company) that hasn't been scored yet.
 // Capped per call so one click can't fire an unbounded number of Claude calls.
