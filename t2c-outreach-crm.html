@@ -683,18 +683,8 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .icp-attr-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border-light);}
 .icp-attr-row:last-of-type{border-bottom:none;}
 
-/* Competitor map (Whimsical-style board) */
-.cm-layout{display:grid;grid-template-columns:230px 1fr;gap:16px;align-items:start;}
-.cm-rail{border:1px solid var(--border-light);border-radius:var(--radius-card);background:var(--surface);padding:12px;box-shadow:var(--shadow-sm);position:sticky;top:12px;}
-.cm-rail-item{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:600;padding:6px 7px;border-radius:6px;cursor:pointer;}
-.cm-rail-item:hover{background:var(--surface-2);}
-.cm-rail-item.on{background:var(--accent-dim);color:var(--accent-strong);}
-.cm-board-wrap{min-width:0;}
-.cm-board{border:1px solid var(--border-light);border-radius:10px;background:var(--surface-2);overflow:auto;height:620px;background-image:radial-gradient(var(--border-light) 1px,transparent 1px);background-size:22px 22px;}
 @media (max-width:1024px){
   .icp-fit-grid{grid-template-columns:1fr;}
-  .cm-layout{grid-template-columns:1fr;}
-  .cm-rail{position:static;}
 }
 
 /* ---- Freeform account canvas ---- */
@@ -2509,8 +2499,10 @@ function afterRender(page){
   if(page === 'gtmmotion' && window.__gtmMotionTemplates === undefined && !window.__gtmMotionTemplatesLoading) loadGtmMotionTemplates();
   if(page === 'icpbuilder' && window.__icpProfile === undefined && !window.__icpProfileLoading) loadIcpProfile();
   if(page === 'competitormap'){
-    if(window.__competitorMap === undefined && !window.__competitorMapLoading) loadCompetitorMap();
-    else if(window.__competitorMap) redrawCmLines();
+    window.__archKey = ARCH_COMPETITOR_KEY;
+    window.__arch = window.__arch || {};
+    if(window.__arch[ARCH_COMPETITOR_KEY] === undefined) loadChangeArchitecture(ARCH_COMPETITOR_KEY);
+    else archAfterRender(ARCH_COMPETITOR_KEY);
   }
   if(page === 'replies' && window.__repliesQueue === undefined && !window.__repliesLoading) loadRepliesQueue();
   if(page === 'home') ensureTodaysActionsSequenceStagesLoaded();
@@ -2572,6 +2564,7 @@ function afterRender(page){
   }
   if(page === 'profile' && window.__profileSelectedCompany){
     const name = window.__profileSelectedCompany;
+    window.__archKey = name;
     window.__arch = window.__arch || {};
     if(window.__arch[name] === undefined) loadChangeArchitecture(name);
     else archAfterRender(name);
@@ -7207,239 +7200,16 @@ function renderIcpBuilderPage(){
   `;
 }
 
-/* ===================== COMPETITOR MAP (Whimsical-style board) ===================== */
-// A free-form canvas for the "positioning" work in the GTM motion and the
-// "underserved" test in the ICP. You list your competitors, drop each one
-// on the board, then pin notes around them - what they do, where they're
-// strong, where they're weak, pricing, which segment they own - and draw
-// connections. Same interaction model and whole-document autosave as the
-// change-architecture whiteboard; stored per client via /api/competitor-map.
-const COMPETITOR_MAP_TYPES = {
-  competitor: { label: 'Competitor', color: '#2A6B7C' },
-  offering:   { label: 'What they do', color: '#71717a' },
-  strength:   { label: 'Strength', color: '#16a34a' },
-  weakness:   { label: 'Weakness', color: '#dc2626' },
-  price:      { label: 'Pricing / model', color: '#d97706' },
-  segment:    { label: 'Segment they own', color: '#6444bd' }
-};
-const COMPETITOR_MAP_TYPE_ORDER = ['competitor','offering','strength','weakness','price','segment'];
-const CM_INNER_W = 1600, CM_INNER_H = 1100;
-
-async function loadCompetitorMap(){
-  if(window.__competitorMapLoading) return;
-  window.__competitorMapLoading = true;
-  try {
-    const res = await fetch('/api/competitor-map');
-    const data = await res.json();
-    if(!res.ok) throw new Error(data.error || 'Request failed');
-    window.__competitorMap = (data && Array.isArray(data.nodes) && Array.isArray(data.edges)) ? data : { nodes: [], edges: [] };
-  } catch(err){
-    window.__competitorMap = { nodes: [], edges: [], error: err.message };
-  }
-  window.__competitorMapLoading = false;
-  if(state.currentPage === 'competitormap') renderPage();
-}
-
-let __cmSaveTimer = null;
-function saveCompetitorMap(){
-  const el = document.getElementById('competitorMapSaveStatus');
-  if(el) el.textContent = 'Saving…';
-  clearTimeout(__cmSaveTimer);
-  __cmSaveTimer = setTimeout(async () => {
-    const data = window.__competitorMap;
-    if(!data) return;
-    try {
-      const res = await fetch('/api/competitor-map', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nodes: data.nodes, edges: data.edges })
-      });
-      const body = await res.json().catch(() => ({}));
-      if(!res.ok) throw new Error(body.error || ('Request failed (' + res.status + ')'));
-      const el2 = document.getElementById('competitorMapSaveStatus');
-      if(el2) el2.textContent = 'Saved';
-    } catch(err){
-      const el2 = document.getElementById('competitorMapSaveStatus');
-      if(el2) el2.textContent = 'Could not save - ' + err.message;
-    }
-  }, 700);
-}
-
-function cmCompetitors(){ return (window.__competitorMap && window.__competitorMap.nodes.filter(n => n.type === 'competitor')) || []; }
-
-function cmAddCompetitor(){
-  const data = window.__competitorMap;
-  if(!data) return;
-  const count = cmCompetitors().length;
-  const id = 'c' + Date.now() + Math.floor(Math.random() * 1000);
-  data.nodes.push({ id, x: 60 + (count % 4) * 300, y: 60 + Math.floor(count / 4) * 220, text: 'New competitor', type: 'competitor' });
-  window.__cmSelected = id;
-  saveCompetitorMap();
-  renderPage();
-}
-
-function cmAddPin(type){
-  const data = window.__competitorMap;
-  if(!data) return;
-  const parent = window.__cmSelected && data.nodes.find(n => n.id === window.__cmSelected && n.type === 'competitor');
-  const px = parent ? parent.x : CM_INNER_W / 2 - 70;
-  const py = parent ? parent.y : CM_INNER_H / 2 - 24;
-  const id = 'p' + Date.now() + Math.floor(Math.random() * 1000);
-  const near = data.nodes.filter(n => n.parentHint === (parent && parent.id)).length;
-  data.nodes.push({
-    id,
-    x: Math.max(10, Math.min(CM_INNER_W - 160, px + 170 + (near % 2) * 12)),
-    y: Math.max(10, Math.min(CM_INNER_H - 60, py + (near * 62))),
-    text: COMPETITOR_MAP_TYPES[type].label,
-    type,
-    parentHint: parent ? parent.id : undefined
-  });
-  if(parent){
-    data.edges.push({ id: 'e' + Date.now() + Math.floor(Math.random() * 1000), from: parent.id, to: id });
-  }
-  saveCompetitorMap();
-  renderPage();
-}
-
-function cmSelectCompetitor(id){
-  window.__cmSelected = (window.__cmSelected === id) ? null : id;
-  renderPage();
-  const el = document.getElementById('cmNode-' + id);
-  if(el && el.scrollIntoView) el.scrollIntoView({ block: 'center', inline: 'center' });
-}
-
-function cmCycleNodeType(nodeId){
-  const data = window.__competitorMap;
-  const node = data && data.nodes.find(n => n.id === nodeId);
-  if(!node) return;
-  const i = COMPETITOR_MAP_TYPE_ORDER.indexOf(node.type);
-  node.type = COMPETITOR_MAP_TYPE_ORDER[(i + 1) % COMPETITOR_MAP_TYPE_ORDER.length];
-  saveCompetitorMap();
-  renderPage();
-}
-
-function cmEditNodeText(nodeId, el){
-  const data = window.__competitorMap;
-  const node = data && data.nodes.find(n => n.id === nodeId);
-  if(!node) return;
-  const text = (el.textContent || '').trim() || COMPETITOR_MAP_TYPES[node.type].label;
-  if(text !== node.text){ node.text = text; saveCompetitorMap(); if(node.type === 'competitor') renderPage(); }
-}
-
-function cmDeleteNode(nodeId){
-  const data = window.__competitorMap;
-  if(!data) return;
-  data.nodes = data.nodes.filter(n => n.id !== nodeId);
-  data.edges = data.edges.filter(e => e.from !== nodeId && e.to !== nodeId);
-  if(window.__cmSelected === nodeId) window.__cmSelected = null;
-  saveCompetitorMap();
-  renderPage();
-}
-
-function cmToggleConnect(){
-  window.__cmConnectMode = !window.__cmConnectMode;
-  window.__cmConnectFrom = null;
-  renderPage();
-}
-
-function cmHandleNodeClick(nodeId){
-  if(window.__cmSuppressClick){ window.__cmSuppressClick = false; return; }
-  if(!window.__cmConnectMode){
-    const n = window.__competitorMap && window.__competitorMap.nodes.find(x => x.id === nodeId);
-    if(n && n.type === 'competitor') cmSelectCompetitor(nodeId);
-    return;
-  }
-  if(!window.__cmConnectFrom){ window.__cmConnectFrom = nodeId; renderPage(); return; }
-  if(window.__cmConnectFrom === nodeId){ window.__cmConnectFrom = null; renderPage(); return; }
-  const data = window.__competitorMap;
-  if(data){
-    const exists = data.edges.some(e => (e.from === window.__cmConnectFrom && e.to === nodeId) || (e.from === nodeId && e.to === window.__cmConnectFrom));
-    if(!exists) data.edges.push({ id: 'e' + Date.now(), from: window.__cmConnectFrom, to: nodeId });
-    saveCompetitorMap();
-  }
-  window.__cmConnectFrom = null;
-  renderPage();
-}
-
-function cmDeleteEdge(edgeId){
-  const data = window.__competitorMap;
-  if(!data) return;
-  data.edges = data.edges.filter(e => e.id !== edgeId);
-  saveCompetitorMap();
-  renderPage();
-}
-
-let __cmDrag = null;
-function startCmNodeDrag(e, nodeId){
-  e.preventDefault();
-  e.stopPropagation();
-  const inner = document.getElementById('competitorMapInner');
-  const node = document.getElementById('cmNode-' + nodeId);
-  if(!inner || !node) return;
-  const innerRect = inner.getBoundingClientRect();
-  const nodeRect = node.getBoundingClientRect();
-  __cmDrag = { nodeId, node, innerRect, grabX: e.clientX - nodeRect.left, grabY: e.clientY - nodeRect.top, moved: false };
-  document.onmousemove = dragCmNode;
-  document.onmouseup = endCmNodeDrag;
-}
-function dragCmNode(e){
-  const d = __cmDrag;
-  if(!d) return;
-  d.moved = true;
-  const left = Math.max(0, Math.min(CM_INNER_W - d.node.offsetWidth, e.clientX - d.innerRect.left - d.grabX));
-  const top = Math.max(0, Math.min(CM_INNER_H - d.node.offsetHeight, e.clientY - d.innerRect.top - d.grabY));
-  d.node.style.left = left + 'px';
-  d.node.style.top = top + 'px';
-  const node = window.__competitorMap && window.__competitorMap.nodes.find(n => n.id === d.nodeId);
-  if(node){ node.x = left; node.y = top; }
-  redrawCmLines();
-}
-function endCmNodeDrag(){
-  const d = __cmDrag;
-  document.onmousemove = null;
-  document.onmouseup = null;
-  if(!d) return;
-  if(d.moved){ window.__cmSuppressClick = true; saveCompetitorMap(); }
-  __cmDrag = null;
-}
-
-function redrawCmLines(){
-  const svg = document.getElementById('competitorMapLines');
-  const badges = document.getElementById('competitorMapEdgeBadges');
-  const data = window.__competitorMap;
-  if(!svg || !data) return;
-  const centerOf = nodeId => {
-    const el = document.getElementById('cmNode-' + nodeId);
-    if(!el) return null;
-    return { x: el.offsetLeft + el.offsetWidth / 2, y: el.offsetTop + el.offsetHeight / 2 };
-  };
-  const lines = [];
-  const badgeEls = [];
-  data.edges.forEach(edge => {
-    const a = centerOf(edge.from), b = centerOf(edge.to);
-    if(!a || !b) return;
-    lines.push(`<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="var(--border)" stroke-width="2"/>`);
-    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
-    badgeEls.push(`<div class="change-arch-edge-badge" style="position:absolute;left:${mx-8}px;top:${my-8}px;" onclick="cmDeleteEdge('${edge.id}')" title="Remove connection">×</div>`);
-  });
-  svg.innerHTML = lines.join('');
-  if(badges) badges.innerHTML = badgeEls.join('');
-}
-
+/* ===================== COMPETITOR MAP ===================== */
+// The competitor map runs on the same freeform canvas engine as the account
+// canvas (arch* module), keyed by ARCH_COMPETITOR_KEY and stored via
+// /api/competitor-map. Old { nodes, edges } docs migrate to a v3 canvas on
+// first load (competitor / strength / weakness / etc. -> tinted preset shapes).
 function renderCompetitorMapPage(){
-  const data = window.__competitorMap;
-  if(!data){
-    return `<div class="howto-hero"><h2>Competitor map</h2><p><i class="ti ti-loader-2"></i> Loading…</p></div>`;
-  }
-  const connectMode = !!window.__cmConnectMode;
-  const connectFrom = window.__cmConnectFrom;
-  const selected = window.__cmSelected;
-  const competitors = cmCompetitors();
-
   return `
   <div class="gtm-motion-bar">
     <div class="muted" style="font-size:12px;">Competitor map for <strong>${esc(icpClientName())}</strong></div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-      <span id="competitorMapSaveStatus" class="muted" style="font-size:11px;"></span>
       <button class="btn btn-ghost btn-sm" onclick="navigate('gtmmotion')"><i class="ti ti-topology-star-3"></i> GTM motion</button>
       <button class="btn btn-ghost btn-sm" onclick="navigate('icpbuilder')"><i class="ti ti-crosshair"></i> ICP builder</button>
     </div>
@@ -7447,64 +7217,13 @@ function renderCompetitorMapPage(){
 
   <div class="howto-hero">
     <h2>Competitor map</h2>
-    <p>List who you're really up against — including "a spreadsheet" and "do nothing" — then pin what each one does, where they're strong, where they're weak, and which segment they own. This is the positioning picture behind the GTM motion and the "underserved" test in the ICP.</p>
+    <p>List who you're really up against \u2014 including "a spreadsheet" and "do nothing" \u2014 then pin what each one does, where they're strong, where they're weak, and which segment they own. Use the <b>Competitor map</b> shapes in the Insert menu. This is the positioning picture behind the GTM motion and the "underserved" test in the ICP.</p>
   </div>
 
-  <div class="cm-layout">
-    <div class="cm-rail">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-        <strong style="font-size:12px;">Competitors <span class="muted">(${competitors.length})</span></strong>
-        <button class="btn btn-secondary btn-sm" onclick="cmAddCompetitor()"><i class="ti ti-plus"></i></button>
-      </div>
-      ${competitors.length ? competitors.map(c => {
-        const pins = data.edges.filter(e => e.from === c.id || e.to === c.id).length;
-        return `<div class="cm-rail-item ${selected===c.id?'on':''}" onclick="cmSelectCompetitor('${c.id}')">
-          <span style="width:8px;height:8px;border-radius:50%;background:${COMPETITOR_MAP_TYPES.competitor.color};flex:none;"></span>
-          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(c.text)}</span>
-          <span class="muted" style="font-size:10px;">${pins}</span>
-        </div>`;
-      }).join('') : '<div class="muted" style="font-size:11.5px;">No competitors yet. Add the first one, then pin notes onto it.</div>'}
-      ${selected ? `
-        <div style="border-top:1px solid var(--border-light);margin-top:10px;padding-top:10px;">
-          <div class="muted" style="font-size:10.5px;margin-bottom:6px;">Pin onto "${esc((competitors.find(c=>c.id===selected)||{}).text||'')}"</div>
-          <div style="display:flex;flex-wrap:wrap;gap:4px;">
-            ${['offering','strength','weakness','price','segment'].map(t => `<button class="btn btn-ghost btn-sm" style="font-size:10.5px;padding:4px 7px;" onclick="cmAddPin('${t}')"><span style="width:7px;height:7px;border-radius:50%;background:${COMPETITOR_MAP_TYPES[t].color};display:inline-block;margin-right:4px;"></span>${COMPETITOR_MAP_TYPES[t].label}</button>`).join('')}
-          </div>
-        </div>` : ''}
-    </div>
-
-    <div class="cm-board-wrap">
-      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
-        <div style="display:flex;gap:10px;flex-wrap:wrap;">
-          ${COMPETITOR_MAP_TYPE_ORDER.map(t => `<span style="font-size:10px;display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:50%;background:${COMPETITOR_MAP_TYPES[t].color};display:inline-block;"></span>${esc(COMPETITOR_MAP_TYPES[t].label)}</span>`).join('')}
-        </div>
-        <button class="btn ${connectMode?'btn-primary':'btn-secondary'} btn-sm" onclick="cmToggleConnect()"><i class="ti ti-arrows-join"></i> ${connectMode ? (connectFrom ? 'Click a node to connect…' : 'Click two nodes') : 'Connect'}</button>
-      </div>
-      <div class="cm-board">
-        <div id="competitorMapInner" style="position:relative;width:${CM_INNER_W}px;height:${CM_INNER_H}px;">
-          <svg id="competitorMapLines" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;"></svg>
-          <div id="competitorMapEdgeBadges" style="position:absolute;top:0;left:0;width:100%;height:100%;"></div>
-          ${!data.nodes.length ? '<div class="empty-state" style="position:absolute;top:120px;left:50%;transform:translateX(-50%);">Add a competitor from the left to start the board.</div>' : ''}
-          ${data.nodes.map(n => {
-            const t = COMPETITOR_MAP_TYPES[n.type] || COMPETITOR_MAP_TYPES.offering;
-            const isComp = n.type === 'competitor';
-            return `
-            <div id="cmNode-${n.id}" class="profile-board-node" style="position:absolute;left:${n.x}px;top:${n.y}px;width:${isComp?180:150}px;min-height:${isComp?46:44}px;cursor:${connectMode?'pointer':'grab'};border-left:4px solid ${t.color};${isComp?'background:var(--surface);font-weight:700;':''}${connectFrom===n.id?'outline:2px solid var(--accent-2);':''}${selected===n.id?'box-shadow:0 0 0 2px var(--accent);':''}"
-                 onmousedown="${connectMode?'':`startCmNodeDrag(event,'${n.id}')`}"
-                 onclick="cmHandleNodeClick('${n.id}')">
-              <div style="display:flex;align-items:flex-start;gap:6px;padding:6px 8px;">
-                <span ${connectMode?'':`onclick="event.stopPropagation();cmCycleNodeType('${n.id}')"`} title="${esc(t.label)} - click to change" style="width:10px;height:10px;border-radius:50%;background:${t.color};flex-shrink:0;margin-top:3px;cursor:pointer;"></span>
-                <div contenteditable="${connectMode?'false':'true'}" spellcheck="false" ${connectMode?'':'onmousedown="event.stopPropagation();" onclick="event.stopPropagation();"'} onblur="cmEditNodeText('${n.id}',this)" style="flex:1;font-size:${isComp?'12.5px':'11.5px'};outline:none;word-break:break-word;">${esc(n.text)}</div>
-                <span ${connectMode?'':`onclick="event.stopPropagation();cmDeleteNode('${n.id}')"`} style="cursor:pointer;color:var(--muted);font-size:13px;line-height:1;" title="Delete">×</span>
-              </div>
-            </div>`;
-          }).join('')}
-        </div>
-      </div>
-    </div>
-  </div>
+  ${renderChangeArchitectureCanvas(ARCH_COMPETITOR_KEY)}
   `;
 }
+
 
 /* ===================== GRID PAGE ===================== */
 
@@ -14883,11 +14602,33 @@ const ARCH_SHAPES = [
   { key: 'pill', label: 'Pill', icon: 'ti-capsule-horizontal' },
   { key: 'parallelogram', label: 'Parallelogram', icon: 'ti-rectangle' }
 ];
-// Legacy v1 node.type -> preset, for migrating old { nodes, edges } docs.
+// Competitor-map preset shapes (the board also runs on this engine).
+const ARCH_COMPETITOR_PRESETS = [
+  { key: 'competitor', label: 'Competitor', fill: '#d3e8e4', stroke: '#2A6B7C' },
+  { key: 'offering',   label: 'What they do', fill: '#e8e9ec', stroke: '#71717a' },
+  { key: 'strength',   label: 'Strength', fill: '#d9efe1', stroke: '#16a34a' },
+  { key: 'weakness',   label: 'Weakness', fill: '#f6ded9', stroke: '#dc2626' },
+  { key: 'price',      label: 'Pricing / model', fill: '#f7eccf', stroke: '#d97706' },
+  { key: 'segment',    label: 'Segment they own', fill: '#ece3f7', stroke: '#6444bd' }
+];
+// Legacy v1 node.type -> preset, for migrating old { nodes, edges } docs
+// (both the change-architecture and competitor-map legacy shapes).
 const ARCH_LEGACY_TYPE = {
   current: ARCH_PRESETS[0], pain: ARCH_PRESETS[1], change: ARCH_PRESETS[2],
-  future: ARCH_PRESETS[3], risk: ARCH_PRESETS[4]
+  future: ARCH_PRESETS[3], risk: ARCH_PRESETS[4],
+  competitor: ARCH_COMPETITOR_PRESETS[0], offering: ARCH_COMPETITOR_PRESETS[1],
+  strength: ARCH_COMPETITOR_PRESETS[2], weakness: ARCH_COMPETITOR_PRESETS[3],
+  price: ARCH_COMPETITOR_PRESETS[4], segment: ARCH_COMPETITOR_PRESETS[5]
 };
+
+// The competitor map is a second board on the same engine. This sentinel is
+// used as the board "key" (in place of a company name) and routes load/save to
+// /api/competitor-map instead of the per-company change-architecture route.
+const ARCH_COMPETITOR_KEY = '@competitor-map';
+function archIsCompetitor(key){ return key === ARCH_COMPETITOR_KEY; }
+// Which board is on screen right now - the engine's pan/zoom/keyboard handlers
+// use this instead of assuming a selected company.
+function archCurrentKey(){ return window.__archKey || window.__profileSelectedCompany || ''; }
 
 function archUid(p){ return (p||'el') + Date.now().toString(36) + Math.floor(Math.random()*1e4).toString(36); }
 
@@ -14926,7 +14667,7 @@ function archDefaultCanvas(){
 }
 // Accepts: v3 { version:3, canvases, activeCanvasId } | v2 { version:2, elements, edges, viewport }
 // | v1 { nodes, edges } | empty. Always returns a v3 container.
-function normalizeArchDoc(raw){
+function normalizeArchDoc(raw, defaultName){
   if(raw && Array.isArray(raw.canvases) && raw.canvases.length){
     const canvases = raw.canvases.map(normalizeArchCanvas);
     const activeCanvasId = canvases.some(c => c.id === raw.activeCanvasId) ? raw.activeCanvasId : canvases[0].id;
@@ -14935,16 +14676,18 @@ function normalizeArchDoc(raw){
   let firstCanvas;
   if(raw && Array.isArray(raw.elements)){
     // v2 -> single canvas
-    firstCanvas = normalizeArchCanvas({ name: 'Account canvas', elements: raw.elements, edges: raw.edges, viewport: raw.viewport });
+    firstCanvas = normalizeArchCanvas({ name: defaultName || 'Account canvas', elements: raw.elements, edges: raw.edges, viewport: raw.viewport });
   } else if(raw && Array.isArray(raw.nodes)){
-    // v1 -> single canvas, nodes become tinted rectangles
+    // v1 -> single canvas, nodes become tinted rectangles by their old type
     const elements = raw.nodes.map(n => {
       const preset = ARCH_LEGACY_TYPE[n.type] || ARCH_PRESETS[0];
-      return { id: n.id || archUid(), type: 'shape', shape: 'rectangle', x: n.x||60, y: n.y||60, w: 170, h: 64, text: n.text || '', fill: preset.fill, stroke: preset.stroke, textColor: '#18181b' };
+      const isComp = n.type === 'competitor';
+      return { id: n.id || archUid(), type: 'shape', shape: 'rectangle', x: n.x||60, y: n.y||60, w: isComp ? 190 : 170, h: 64, text: n.text || '', fill: preset.fill, stroke: preset.stroke, textColor: '#18181b' };
     });
-    firstCanvas = normalizeArchCanvas({ name: 'Change architecture', elements, edges: raw.edges });
+    firstCanvas = normalizeArchCanvas({ name: defaultName || 'Change architecture', elements, edges: raw.edges });
   } else {
-    firstCanvas = archDefaultCanvas();
+    firstCanvas = normalizeArchCanvas({ name: defaultName || 'Account map' });
+    if(!defaultName) firstCanvas.layers.orgMap = true;   // company boards default to showing the contact tree
   }
   return { version: 3, canvases: [firstCanvas], activeCanvasId: firstCanvas.id };
 }
@@ -15004,27 +14747,34 @@ function archElById(companyName, id){
 }
 function archEdgeById(companyName, id){ const d = archDoc(companyName); return d && d.edges.find(e => e.id === id); }
 
-async function loadChangeArchitecture(companyName){
-  if(!companyName) return;
+function archLoadUrl(key){
+  return archIsCompetitor(key) ? '/api/competitor-map'
+    : `/api/companies/${encodeURIComponent(key)}/change-architecture`;
+}
+async function loadChangeArchitecture(key){
+  if(!key) return;
   window.__arch = window.__arch || {};
   let raw = {};
   try {
-    const res = await fetch(`/api/companies/${encodeURIComponent(companyName)}/change-architecture`);
+    const res = await fetch(archLoadUrl(key));
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
     raw = data || {};
   } catch(err){
-    window.__arch[companyName] = normalizeArchDoc({});
-    window.__arch[companyName].error = err.message;
-    if(window.__profileSelectedCompany === companyName) rerenderArch(companyName);
+    window.__arch[key] = normalizeArchDoc({});
+    window.__arch[key].error = err.message;
+    if(archCurrentKey() === key) rerenderArch(key);
     return;
   }
   const isLegacy = !(raw && Array.isArray(raw.canvases) && raw.canvases.length);
-  const container = normalizeArchDoc(raw);
+  // Company boards: no defaultName -> a fresh one gets the live org-map layer.
+  // Competitor map: named 'Competitor map', blank freeform (no org layer).
+  const container = normalizeArchDoc(raw, archIsCompetitor(key) ? 'Competitor map' : undefined);
+  if(archIsCompetitor(key)) container.canvases.forEach(c => { c.layers.orgMap = false; });
   // One-time migration of the old Account board sticky notes into the first canvas.
-  if(isLegacy){
+  if(isLegacy && !archIsCompetitor(key)){
     try {
-      const nres = await fetch(`/api/companies/${encodeURIComponent(companyName)}/account-board-notes`);
+      const nres = await fetch(`/api/companies/${encodeURIComponent(key)}/account-board-notes`);
       const ndata = await nres.json();
       if(nres.ok && Array.isArray(ndata.notes) && ndata.notes.length){
         const c0 = container.canvases[0];
@@ -15035,21 +14785,21 @@ async function loadChangeArchitecture(companyName){
       }
     } catch(e){ /* notes are optional */ }
   }
-  window.__arch[companyName] = container;
-  if(isLegacy) saveArch(companyName);  // persist the v3 container + any migrated notes
-  if(window.__profileSelectedCompany === companyName) rerenderArch(companyName);
+  window.__arch[key] = container;
+  if(isLegacy) saveArch(key);  // persist the v3 container + any migrated notes
+  if(archCurrentKey() === key) rerenderArch(key);
 }
 
 let __archSaveTimer = null;
-function saveArch(companyName){
+function saveArch(key){
   const el = document.getElementById('archSaveStatus');
   if(el) el.textContent = 'Saving…';
   clearTimeout(__archSaveTimer);
   __archSaveTimer = setTimeout(async () => {
-    const c = archContainer(companyName);
+    const c = archContainer(key);
     if(!c) return;
     try {
-      const res = await fetch(`/api/companies/${encodeURIComponent(companyName)}/change-architecture`, {
+      const res = await fetch(archLoadUrl(key), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ version: 3, activeCanvasId: c.activeCanvasId, canvases: c.canvases })
       });
@@ -15235,8 +14985,10 @@ function archInsert(companyName, spec){
 }
 
 function archInsertPreset(companyName, presetKey){
-  const p = ARCH_PRESETS.find(x => x.key === presetKey) || ARCH_PRESETS[0];
-  archInsert(companyName, { type: 'shape', shape: 'rectangle', text: p.label, fill: p.fill, stroke: p.stroke, w: 180, h: 66 });
+  const pool = ARCH_PRESETS.concat(ARCH_COMPETITOR_PRESETS);
+  const p = pool.find(x => x.key === presetKey) || ARCH_PRESETS[0];
+  const isComp = p.key === 'competitor';
+  archInsert(companyName, { type: 'shape', shape: 'rectangle', text: p.label, fill: p.fill, stroke: p.stroke, w: isComp ? 190 : 180, h: 66 });
 }
 
 function archPickEntity(companyName, kind){
@@ -15536,7 +15288,7 @@ function archDeleteEdge(companyName, id){
 let __archPan = null;
 function archViewportMouseDown(e){
   if(e.target.closest('.arch-el') || e.target.closest('.arch-edge-hit') || e.target.closest('.arch-menu')) return;
-  const companyName = window.__profileSelectedCompany;
+  const companyName = archCurrentKey();
   const d = archDoc(companyName);
   if(!d) return;
   archDeselect(companyName);
@@ -15559,7 +15311,7 @@ function archPanEnd(){
   __archPan = null;
 }
 function archWheel(e){
-  const companyName = window.__profileSelectedCompany;
+  const companyName = archCurrentKey();
   const d = archDoc(companyName);
   if(!d) return;
   e.preventDefault();
@@ -15983,6 +15735,9 @@ function renderChangeArchitectureCanvas(companyName){
   const container = archContainer(companyName);
   const d = archDoc(companyName);
   if(!d) return `<div class="card" id="archCard"><div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading…</div></div>`;
+  const isComp = archIsCompetitor(companyName);
+  const presets = isComp ? ARCH_COMPETITOR_PRESETS : ARCH_PRESETS;
+  const presetLabel = isComp ? 'Competitor map' : 'Change architecture';
   const allEls = archAllElements(companyName);
   const els = allEls.map(el => archElHtml(companyName, el)).join('');
   return `
@@ -15997,20 +15752,20 @@ function renderChangeArchitectureCanvas(companyName){
       </div>
       <div style="display:flex;gap:6px;align-items:center;">
         <span id="archSaveStatus" class="muted" style="font-size:11px;"></span>
-        <button class="btn ${d.layers.orgMap?'btn-primary':'btn-secondary'} btn-sm" title="Show the live CRM contact map on this canvas" onclick="archToggleOrgMap('${esc(companyName)}')"><i class="ti ti-sitemap"></i> Org map</button>
+        ${isComp ? '' : `<button class="btn ${d.layers.orgMap?'btn-primary':'btn-secondary'} btn-sm" title="Show the live CRM contact map on this canvas" onclick="archToggleOrgMap('${esc(companyName)}')"><i class="ti ti-sitemap"></i> Org map</button>`}
         <div class="arch-menu" id="archInsertMenu">
           <button class="btn btn-primary btn-sm" onclick="event.stopPropagation();archToggleInsertMenu()"><i class="ti ti-plus"></i> Insert</button>
           <div class="arch-menu-list">
-            <div class="arch-menu-item" onclick="archPickEntity('${esc(companyName)}','contact')"><i class="ti ti-user"></i> Contact card</div>
-            <div class="arch-menu-item" onclick="archPickEntity('${esc(companyName)}','company')"><i class="ti ti-building"></i> Company card</div>
+            ${isComp ? '' : `<div class="arch-menu-item" onclick="archPickEntity('${esc(companyName)}','contact')"><i class="ti ti-user"></i> Contact card</div>
+            <div class="arch-menu-item" onclick="archPickEntity('${esc(companyName)}','company')"><i class="ti ti-building"></i> Company card</div>`}
             <div class="arch-menu-item" onclick="archInsert('${esc(companyName)}',{type:'sticky',w:170,h:150,text:'',fill:'#fef3c7',stroke:'transparent'})"><i class="ti ti-note"></i> Sticky note</div>
             <div class="arch-menu-item" onclick="archInsert('${esc(companyName)}',{type:'text',w:200,h:40,text:'Text',fill:'transparent',stroke:'transparent'})"><i class="ti ti-typography"></i> Text</div>
             <div class="arch-menu-sep"></div>
             <div class="arch-menu-label">Shapes</div>
             ${ARCH_SHAPES.map(s => `<div class="arch-menu-item" onclick="archInsert('${esc(companyName)}',{type:'shape',shape:'${s.key}',w:170,h:80,text:''})"><i class="ti ${s.icon}"></i> ${s.label}</div>`).join('')}
             <div class="arch-menu-sep"></div>
-            <div class="arch-menu-label">Change architecture</div>
-            ${ARCH_PRESETS.map(p => `<div class="arch-menu-item" onclick="archInsertPreset('${esc(companyName)}','${p.key}')"><span class="arch-dot" style="background:${p.stroke}"></span> ${p.label}</div>`).join('')}
+            <div class="arch-menu-label">${presetLabel}</div>
+            ${presets.map(p => `<div class="arch-menu-item" onclick="archInsertPreset('${esc(companyName)}','${p.key}')"><span class="arch-dot" style="background:${p.stroke}"></span> ${p.label}</div>`).join('')}
             <div class="arch-menu-sep"></div>
             <div class="arch-menu-label">Chart</div>
             <div class="arch-menu-item" onclick="archInsert('${esc(companyName)}',{type:'chart',w:340,h:240,chart:{kind:'bar',title:'',source:'manual',data:{labels:[],values:[]}}})"><i class="ti ti-chart-bar"></i> Bar / line / pie</div>
@@ -24873,7 +24628,7 @@ document.addEventListener('keydown', (e) => {
   if((e.key === 'Delete' || e.key === 'Backspace') && window.__archSel && !window.__archEditing){
     const t = e.target.tagName;
     if(t === 'INPUT' || t === 'TEXTAREA' || e.target.isContentEditable) return;
-    const cn = window.__profileSelectedCompany;
+    const cn = archCurrentKey();
     if(window.__archSel.kind === 'edge') archDeleteEdge(cn, window.__archSel.id);
     else archDeleteEl(cn, window.__archSel.id);
     e.preventDefault();
