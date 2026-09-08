@@ -711,6 +711,70 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .pbn-title{font-size:10px;line-height:1.3;margin-top:1px;}
 .pbn-badge{font-size:10px;font-weight:700;margin-top:5px;}
 
+/* ---- Freeform account canvas ---- */
+.arch-viewport{position:relative;width:100%;height:600px;border:1px solid var(--border-light);border-radius:12px;background:var(--surface-2);overflow:hidden;cursor:grab;background-image:radial-gradient(var(--border) 1px,transparent 1px);background-size:24px 24px;}
+.arch-viewport:active{cursor:grabbing;}
+.arch-scene{position:absolute;top:0;left:0;transform-origin:0 0;}
+.arch-edges{position:absolute;top:0;left:0;overflow:visible;}
+.arch-edge-labels{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;}
+.arch-edge-label{position:absolute;transform:translate(-50%,-50%);background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:1px 6px;font-size:11px;color:var(--text);pointer-events:auto;cursor:pointer;white-space:nowrap;}
+.arch-empty{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:12.5px;text-align:center;}
+.arch-el{position:absolute;user-select:none;box-sizing:border-box;}
+.arch-el-bg{position:absolute;inset:0;box-shadow:0 1px 3px rgba(20,20,20,.08);}
+.arch-el--text .arch-el-bg,.arch-el--sticky .arch-el-bg{box-shadow:none;}
+.arch-el--sticky .arch-el-bg{box-shadow:0 2px 6px rgba(20,20,20,.12);}
+.arch-el-text{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:8px 10px;outline:none;overflow:hidden;word-break:break-word;line-height:1.35;cursor:grab;}
+.arch-el--sticky .arch-el-text{align-items:flex-start;justify-content:flex-start;text-align:left;}
+.arch-el--text .arch-el-text{justify-content:flex-start;text-align:left;}
+.arch-el-text.editing{cursor:text;background:rgba(255,255,255,.5);}
+.arch-el.selected{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px;z-index:6;}
+.arch-el.connect-src{outline:2px dashed var(--accent-2);outline-offset:2px;}
+.arch-card-inner{position:absolute;inset:0;padding:8px 10px;display:flex;flex-direction:column;gap:2px;}
+.arch-card-kind{font-size:8.5px;font-weight:800;letter-spacing:.06em;}
+.arch-card-name{font-weight:700;line-height:1.2;}
+.arch-card-inner .arch-el-text{position:static;flex:1;display:block;padding:0;text-align:left;min-height:0;}
+.arch-card-open{position:absolute;bottom:4px;right:4px;padding:2px 6px;font-size:10px;}
+.arch-chart-wrap{position:absolute;inset:0;padding:8px 10px;display:flex;flex-direction:column;}
+.arch-chart-title{font-size:11px;font-weight:700;margin-bottom:4px;text-align:center;}
+.arch-chart-canvas{flex:1;position:relative;min-height:0;}
+.arch-chart-empty{flex:1;display:flex;align-items:center;justify-content:center;font-size:11px;text-align:center;}
+.arch-handle{position:absolute;right:-5px;bottom:-5px;width:12px;height:12px;border-radius:3px;background:var(--surface);border:1.5px solid var(--accent);cursor:nwse-resize;opacity:0;transition:opacity .1s;z-index:7;}
+.arch-el:hover .arch-handle,.arch-el.selected .arch-handle{opacity:1;}
+.arch-cdot{position:absolute;width:10px;height:10px;border-radius:50%;background:var(--accent-2);border:2px solid var(--surface);opacity:0;transition:opacity .1s;cursor:crosshair;z-index:7;}
+.arch-el:hover .arch-cdot{opacity:1;}
+.arch-cdot--left{left:-6px;top:calc(50% - 5px);}
+.arch-cdot--right{right:-6px;top:calc(50% - 5px);}
+.arch-cdot--top{top:-6px;left:calc(50% - 5px);}
+.arch-cdot--bottom{bottom:-6px;left:calc(50% - 5px);}
+.arch-inline-toolbar{position:absolute;z-index:20;display:flex;align-items:center;gap:3px;background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow-lg);padding:4px 6px;flex-wrap:wrap;max-width:92%;}
+.arch-inline-toolbar button{border:none;background:none;cursor:pointer;width:24px;height:24px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--text);padding:0;}
+.arch-inline-toolbar button:hover{background:var(--surface-2);}
+.arch-inline-toolbar button.on{background:var(--accent);color:#fff;}
+.arch-inline-toolbar .sep{width:1px;height:18px;background:var(--border);margin:0 2px;}
+.arch-inline-toolbar .swatch{width:18px;height:18px;border-radius:4px;border:1px solid var(--border) !important;padding:0;position:relative;overflow:hidden;}
+.arch-inline-toolbar .swatch.on{outline:2px solid var(--accent);outline-offset:1px;}
+.arch-inline-toolbar .swatch.custom input{position:absolute;inset:-4px;width:32px;height:32px;border:none;padding:0;cursor:pointer;}
+.arch-inline-toolbar .tswatch{font-weight:800;font-size:13px !important;}
+.arch-menu{position:relative;display:inline-block;}
+.arch-menu-list{position:absolute;right:0;top:calc(100% + 6px);min-width:210px;background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow-lg);padding:6px;z-index:30;display:none;max-height:70vh;overflow-y:auto;}
+.arch-menu.open .arch-menu-list{display:block;}
+.arch-menu-item{display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:8px;font-size:12.5px;cursor:pointer;}
+.arch-menu-item:hover{background:var(--surface-2);}
+.arch-menu-label{font-size:10px;font-weight:800;letter-spacing:.04em;color:var(--muted);text-transform:uppercase;padding:6px 9px 3px;}
+.arch-menu-sep{height:1px;background:var(--border);margin:4px 0;}
+.arch-dot{width:9px;height:9px;border-radius:50%;display:inline-block;}
+.arch-zoom{display:flex;align-items:center;gap:2px;border:1px solid var(--border);border-radius:9px;padding:2px;background:var(--surface);}
+.arch-zoom button{border:none;background:none;cursor:pointer;width:26px;height:24px;border-radius:6px;display:flex;align-items:center;justify-content:center;color:var(--text);}
+.arch-zoom button:hover{background:var(--surface-2);}
+.arch-zoom span{font-size:11px;min-width:38px;text-align:center;color:var(--muted);}
+.arch-pick-row{padding:8px 10px;border-radius:8px;cursor:pointer;font-size:12.5px;}
+.arch-pick-row:hover{background:var(--surface-2);}
+.profile-drawer--full{width:1040px;max-width:96vw;}
+.pb-note{position:absolute;width:150px;min-height:64px;padding:10px 20px 10px 10px;border-radius:3px;box-shadow:0 2px 8px rgba(20,20,20,.16);font-size:11.5px;line-height:1.4;cursor:grab;z-index:4;}
+.pb-note:active{cursor:grabbing;}
+.pb-note [contenteditable]{outline:none;word-break:break-word;min-height:20px;}
+.pb-note-del{position:absolute;top:3px;right:5px;cursor:pointer;color:rgba(0,0,0,.4);font-size:13px;line-height:1;}
+
 /* Context menu */
 .ctx-menu{position:fixed;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card);box-shadow:var(--shadow-lg);z-index:300;overflow:hidden;min-width:180px;}
 .ctx-item{padding:10px 14px;font-size:12.5px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:8px;}
@@ -2515,13 +2579,13 @@ function afterRender(page){
   if(page === 'profile' && window.__profileSelectedCompany){
     const name = window.__profileSelectedCompany;
     if((window.__profileSubTab||'board') === 'architecture'){
-      window.__changeArch = window.__changeArch || {};
-      if(window.__changeArch[name] === undefined) loadChangeArchitecture(name);
-      else redrawChangeArchLines(name);
+      window.__arch = window.__arch || {};
+      if(window.__arch[name] === undefined) loadChangeArchitecture(name);
+      else archAfterRender(name);
     } else {
       window.__profileBoardData = window.__profileBoardData || {};
       if(window.__profileBoardData[name] === undefined) loadProfileBoard(name);
-      else layoutProfileBoard();
+      else { layoutProfileBoard(); loadAccountBoardNotes(name); }
     }
   }
 }
@@ -10604,14 +10668,25 @@ function initials(name){
   return (name||'').trim().split(/\s+/).slice(0,2).map(w=>w[0]||'').join('').toUpperCase();
 }
 
+// Set transiently before openContactDrawer/openCompanyDrawer to render the
+// same profile content as a wide "full page" panel (used by the account
+// canvas / Account board click-through). Cleared on close.
+function openEntityDeep(kind, name){
+  window.__drawerFull = true;
+  if(kind === 'company') openCompanyDrawer(name);
+  else openContactDrawer(name, null);
+}
+
 function openDrawer(bodyHtml){
+  const full = window.__drawerFull;  // capture before closeDrawer() clears it
   closeDrawer();
+  window.__drawerFull = full;
   const overlay = document.createElement('div');
   overlay.className = 'drawer-overlay';
   overlay.id = 'drawerOverlay';
   overlay.onclick = (e) => { if(e.target === overlay) closeDrawer(); };
   const panel = document.createElement('div');
-  panel.className = 'profile-drawer';
+  panel.className = 'profile-drawer' + (full ? ' profile-drawer--full' : '');
   panel.id = 'profileDrawer';
   panel.innerHTML = bodyHtml;
   overlay.appendChild(panel);
@@ -10624,6 +10699,7 @@ function openDrawer(bodyHtml){
 function closeDrawer(){
   const o = document.getElementById('drawerOverlay');
   if(o) o.remove();
+  window.__drawerFull = false;
 }
 function drawerBody(html){
   const panel = document.getElementById('profileDrawer');
@@ -14544,7 +14620,7 @@ function renderProfilePage(){
   ${selectedCompany ? `
     <div style="display:flex;gap:6px;margin-bottom:12px;">
       <button class="btn ${profileSubTab==='board'?'btn-primary':'btn-secondary'} btn-sm" onclick="setProfileSubTab('board')"><i class="ti ti-hierarchy-2"></i> Account board</button>
-      <button class="btn ${profileSubTab==='architecture'?'btn-primary':'btn-secondary'} btn-sm" onclick="setProfileSubTab('architecture')"><i class="ti ti-affiliate"></i> Change architecture</button>
+      <button class="btn ${profileSubTab==='architecture'?'btn-primary':'btn-secondary'} btn-sm" onclick="setProfileSubTab('architecture')"><i class="ti ti-affiliate"></i> Account canvas</button>
     </div>
     ${profileSubTab === 'architecture' ? renderChangeArchitectureCanvas(selectedCompany) : renderProfileCompanyBoard(selectedCompany, scopeCampaignId)}
   ` : ''}
@@ -14668,20 +14744,99 @@ function renderProfileCompanyBoard(companyName, scopeCampaignId){
     </div>`;
   }).join('');
 
+  const notes = (window.__accountBoardNotes && window.__accountBoardNotes[companyName]) || [];
+  const notesHtml = notes.map(n => `
+    <div class="pb-note" id="pbNote-${n.id}" style="left:${n.x}px;top:${n.y}px;background:${esc(n.fill||'#fef3c7')};" onmousedown="startPbNoteDrag(event,'${esc(companyName)}','${n.id}')">
+      <div contenteditable="true" spellcheck="false" onmousedown="event.stopPropagation()" onblur="editPbNote('${esc(companyName)}','${n.id}',this)">${esc(n.text)}</div>
+      <span class="pb-note-del" onmousedown="event.stopPropagation()" onclick="deletePbNote('${esc(companyName)}','${n.id}')" title="Delete">×</span>
+    </div>`).join('');
+
   return `
   <div class="card">
     ${header}
-    <div class="muted" style="font-size:11.5px;margin:6px 0 12px;">${contacts.length} contact${contacts.length===1?'':'s'}${scopeCampaign ? ` in ${esc(scopeCampaign.name)}` : ' across all campaigns'} - drag to rearrange, click to open.</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+      <div class="muted" style="font-size:11.5px;margin:6px 0 12px;">${contacts.length} contact${contacts.length===1?'':'s'}${scopeCampaign ? ` in ${esc(scopeCampaign.name)}` : ' across all campaigns'} - drag to rearrange, click to open the full record.</div>
+      <button class="btn btn-secondary btn-sm" onclick="addPbNote('${esc(companyName)}')"><i class="ti ti-note"></i> Add note card</button>
+    </div>
     <div id="profileBoardCanvas" class="profile-board-canvas">
       <svg id="profileBoardLines" class="profile-board-lines"></svg>
-      <div class="profile-board-center">
+      <div class="profile-board-center" style="cursor:pointer;" onclick="openEntityDeep('company','${esc(company.name)}')" title="Open full company record">
         <div class="pbc-name">${esc(company.name)}</div>
         ${company.icpSizeBand ? `<div class="pbc-icp">${esc(company.icpSizeBand)} size · ${esc(company.icpMomentum||'')}</div>` : ''}
         ${relFlag ? `<div class="pbc-rel">${esc(relFlag.status)}</div>` : ''}
       </div>
       ${nodesHtml}
+      ${notesHtml}
     </div>
   </div>`;
+}
+
+// ---- Account board freeform note cards (persisted to Companies.'Account Board Notes (JSON)') ----
+async function loadAccountBoardNotes(companyName){
+  window.__accountBoardNotes = window.__accountBoardNotes || {};
+  if(window.__accountBoardNotes[companyName] !== undefined) return;
+  window.__accountBoardNotes[companyName] = [];
+  try {
+    const res = await fetch(`/api/companies/${encodeURIComponent(companyName)}/account-board-notes`);
+    const data = await res.json();
+    if(res.ok && Array.isArray(data.notes)) window.__accountBoardNotes[companyName] = data.notes;
+  } catch(e){}
+  if(window.__profileSelectedCompany === companyName && (window.__profileSubTab||'board') === 'board') renderPage();
+}
+let __pbNoteSaveTimer = null;
+function savePbNotes(companyName){
+  clearTimeout(__pbNoteSaveTimer);
+  __pbNoteSaveTimer = setTimeout(() => {
+    fetch(`/api/companies/${encodeURIComponent(companyName)}/account-board-notes`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notes: (window.__accountBoardNotes && window.__accountBoardNotes[companyName]) || [] })
+    }).catch(() => {});
+  }, 600);
+}
+function addPbNote(companyName){
+  window.__accountBoardNotes = window.__accountBoardNotes || {};
+  const list = window.__accountBoardNotes[companyName] || (window.__accountBoardNotes[companyName] = []);
+  list.push({ id: 'note' + Date.now().toString(36), x: 24 + (list.length%4)*20, y: 24 + (list.length%4)*20, text: 'New note', fill: '#fef3c7' });
+  savePbNotes(companyName);
+  renderPage();
+}
+function editPbNote(companyName, id, el){
+  const n = (window.__accountBoardNotes[companyName] || []).find(x => x.id === id);
+  if(!n) return;
+  const t = (el.textContent || '').trim();
+  if(t !== n.text){ n.text = t; savePbNotes(companyName); }
+}
+function deletePbNote(companyName, id){
+  window.__accountBoardNotes[companyName] = (window.__accountBoardNotes[companyName] || []).filter(x => x.id !== id);
+  savePbNotes(companyName);
+  renderPage();
+}
+let __pbNoteDrag = null;
+function startPbNoteDrag(e, companyName, id){
+  e.preventDefault();
+  const canvas = document.getElementById('profileBoardCanvas');
+  const node = document.getElementById('pbNote-' + id);
+  if(!canvas || !node) return;
+  const cr = canvas.getBoundingClientRect(), nr = node.getBoundingClientRect();
+  __pbNoteDrag = { companyName, id, node, cr, gx: e.clientX - nr.left, gy: e.clientY - nr.top };
+  document.onmousemove = dragPbNote;
+  document.onmouseup = endPbNote;
+}
+function dragPbNote(e){
+  const d = __pbNoteDrag;
+  if(!d) return;
+  const left = Math.max(0, Math.min(d.cr.width - d.node.offsetWidth, e.clientX - d.cr.left - d.gx));
+  const top = Math.max(0, Math.min(d.cr.height - d.node.offsetHeight, e.clientY - d.cr.top - d.gy));
+  d.node.style.left = left + 'px';
+  d.node.style.top = top + 'px';
+}
+function endPbNote(){
+  document.onmousemove = null; document.onmouseup = null;
+  const d = __pbNoteDrag;
+  __pbNoteDrag = null;
+  if(!d) return;
+  const n = (window.__accountBoardNotes[d.companyName] || []).find(x => x.id === d.id);
+  if(n){ n.x = parseFloat(d.node.style.left); n.y = parseFloat(d.node.style.top); savePbNotes(d.companyName); }
 }
 
 // Positions every node (dragged position if the user moved it this session,
@@ -14780,8 +14935,7 @@ function endProfileNodeDrag(e){
 
 function handleProfileNodeClick(e, contactName){
   if(window.__pbSuppressClick){ window.__pbSuppressClick = false; return; }
-  const scopeCampaign = window.__profileCampaignScope ? state.campaigns.find(c => c.id === window.__profileCampaignScope) : null;
-  openContactDrawer(contactName, scopeCampaign ? scopeCampaign.name : null);
+  openEntityDeep('contact', contactName);
 }
 
 function setProfileCampaignScope(campaignId){
@@ -14789,226 +14943,940 @@ function setProfileCampaignScope(campaignId){
   renderPage();
 }
 
-// ---- Change architecture whiteboard ----
-// A manually-authored canvas, not AI-generated - the user draws this
-// himself, typically live in a first collaborative meeting with the
-// prospect: map their CURRENT state, the PAIN POINTS in it, the CHANGE
-// initiatives being considered, the FUTURE state, and the RISK of not
-// acting. Twenty2's own Stage 1 positioning (offer this mapping as free
-// value before any pitch). Whole-canvas autosave on every change - simple
-// and correct for a single-editor whiteboard.
-const CHANGE_ARCH_TYPES = {
-  current: { label: 'Current state', color: '#71717a' },
-  pain: { label: 'Pain point', color: '#dc2626' },
-  change: { label: 'Change initiative', color: '#2A6B7C' },
-  future: { label: 'Future state', color: '#16a34a' },
-  risk: { label: 'Risk if no action', color: '#d97706' }
+// ---- Freeform account canvas ("Change architecture" tab) ----
+// A Whimsical-style freeform board, manually authored (not AI-generated).
+// Originally the "change architecture" mapping tool - current state / pain /
+// change / future / risk, drawn live with a prospect as Stage 1 free value -
+// now a general canvas: drop shapes, sticky notes, text, linked contact /
+// company cards and charts; recolour and resize everything; draw connectors;
+// pan and zoom. Whole-document autosave (single editor, no merge). The five
+// change-architecture types survive as one-click coloured shape presets.
+//
+// Document model (stored in Companies.'Change Architecture (JSON)', version 2):
+//   { version:2, elements:[{ id, type, x, y, w, h, text, shape, fill, stroke,
+//       textColor, fontSize, ref:{kind,id,name}, chart:{kind,title,source,data} }],
+//     edges:[{ id, from, to, style, arrow, color, label }],
+//     viewport:{ x, y, zoom } }
+// type: shape | sticky | text | contact | company | chart
+// shape: rectangle | ellipse | diamond | pill | parallelogram
+
+const ARCH_SCENE_W = 4000, ARCH_SCENE_H = 3000;
+const ARCH_MIN_ZOOM = 0.25, ARCH_MAX_ZOOM = 2.5;
+
+// Change-architecture semantic presets - kept as quick-insert coloured shapes.
+const ARCH_PRESETS = [
+  { key: 'current', label: 'Current state', fill: '#e8e9ec', stroke: '#71717a' },
+  { key: 'pain',    label: 'Pain point',    fill: '#f6ded9', stroke: '#dc2626' },
+  { key: 'change',  label: 'Change initiative', fill: '#d3e8e4', stroke: '#2A6B7C' },
+  { key: 'future',  label: 'Future state',  fill: '#d9efe1', stroke: '#16a34a' },
+  { key: 'risk',    label: 'Risk if no action', fill: '#f7eccf', stroke: '#d97706' }
+];
+const ARCH_FILL_SWATCHES = ['#ffffff','#fef3c7','#d3e8e4','#f6ded9','#d9efe1','#f7eccf','#dde9f5','#e8e9ec','#ece3f7'];
+const ARCH_TEXT_SWATCHES = ['#18181b','#ffffff','#5f5f68','#1b6ba6','#177a49','#bd3b28','#8f5f11'];
+const ARCH_SHAPES = [
+  { key: 'rectangle', label: 'Rectangle', icon: 'ti-square' },
+  { key: 'ellipse', label: 'Ellipse', icon: 'ti-circle' },
+  { key: 'diamond', label: 'Diamond', icon: 'ti-diamond' },
+  { key: 'pill', label: 'Pill', icon: 'ti-capsule-horizontal' },
+  { key: 'parallelogram', label: 'Parallelogram', icon: 'ti-rectangle' }
+];
+// Legacy v1 node.type -> preset, for migrating old { nodes, edges } docs.
+const ARCH_LEGACY_TYPE = {
+  current: ARCH_PRESETS[0], pain: ARCH_PRESETS[1], change: ARCH_PRESETS[2],
+  future: ARCH_PRESETS[3], risk: ARCH_PRESETS[4]
 };
-const CHANGE_ARCH_TYPE_ORDER = ['current', 'pain', 'change', 'future', 'risk'];
+
+function archUid(p){ return (p||'el') + Date.now().toString(36) + Math.floor(Math.random()*1e4).toString(36); }
+
+// v1 { nodes:[{id,x,y,text,type}], edges:[{id,from,to}] }  ->  v2 doc.
+function normalizeArchDoc(raw){
+  const vp = (raw && raw.viewport) || {};
+  const viewport = {
+    x: Number.isFinite(vp.x) ? vp.x : 40,
+    y: Number.isFinite(vp.y) ? vp.y : 40,
+    zoom: Number.isFinite(vp.zoom) ? Math.min(ARCH_MAX_ZOOM, Math.max(ARCH_MIN_ZOOM, vp.zoom)) : 1
+  };
+  if(raw && Array.isArray(raw.elements)){
+    return { version: 2, elements: raw.elements.map(normalizeArchEl).filter(Boolean), edges: (raw.edges||[]).map(normalizeArchEdge), viewport };
+  }
+  // migrate v1
+  const nodes = (raw && raw.nodes) || [];
+  const elements = nodes.map(n => {
+    const preset = ARCH_LEGACY_TYPE[n.type] || ARCH_PRESETS[0];
+    return normalizeArchEl({ id: n.id || archUid(), type: 'shape', shape: 'rectangle', x: n.x||60, y: n.y||60, w: 170, h: 64, text: n.text || '', fill: preset.fill, stroke: preset.stroke, textColor: '#18181b' });
+  });
+  return { version: 2, elements, edges: ((raw && raw.edges) || []).map(normalizeArchEdge), viewport };
+}
+function normalizeArchEl(e){
+  if(!e || typeof e !== 'object') return null;
+  const type = ['shape','sticky','text','contact','company','chart'].includes(e.type) ? e.type : 'shape';
+  return {
+    id: e.id || archUid(),
+    type,
+    shape: ARCH_SHAPES.some(s => s.key === e.shape) ? e.shape : 'rectangle',
+    x: Number.isFinite(e.x) ? e.x : 80,
+    y: Number.isFinite(e.y) ? e.y : 80,
+    w: Number.isFinite(e.w) ? Math.max(40, e.w) : (type === 'chart' ? 320 : 170),
+    h: Number.isFinite(e.h) ? Math.max(28, e.h) : (type === 'chart' ? 220 : (type === 'text' ? 40 : 64)),
+    text: (e.text || '').toString(),
+    fill: e.fill || (type === 'sticky' ? '#fef3c7' : (type === 'text' ? 'transparent' : '#ffffff')),
+    stroke: e.stroke || (type === 'sticky' || type === 'text' ? 'transparent' : '#d4d4d8'),
+    textColor: e.textColor || '#18181b',
+    fontSize: Number.isFinite(e.fontSize) ? e.fontSize : (type === 'text' ? 15 : 13),
+    ref: (e.ref && e.ref.kind) ? { kind: e.ref.kind, id: e.ref.id || '', name: e.ref.name || '' } : null,
+    chart: e.chart && e.chart.kind ? {
+      kind: ['pie','line','bar'].includes(e.chart.kind) ? e.chart.kind : 'bar',
+      title: (e.chart.title || '').toString(),
+      source: e.chart.source || 'manual',
+      data: {
+        labels: Array.isArray(e.chart.data && e.chart.data.labels) ? e.chart.data.labels : [],
+        values: Array.isArray(e.chart.data && e.chart.data.values) ? e.chart.data.values : []
+      },
+      pulledAt: e.chart.pulledAt || null
+    } : null
+  };
+}
+function normalizeArchEdge(e){
+  return {
+    id: (e && e.id) || archUid('edge'),
+    from: e && e.from, to: e && e.to,
+    style: ['solid','dashed'].includes(e && e.style) ? e.style : 'solid',
+    arrow: ['none','end','both'].includes(e && e.arrow) ? e.arrow : 'end',
+    color: (e && e.color) || '#8a8a93',
+    label: (e && e.label) || ''
+  };
+}
+
+function archDoc(companyName){ return window.__arch && window.__arch[companyName]; }
+function archElById(companyName, id){ const d = archDoc(companyName); return d && d.elements.find(el => el.id === id); }
+function archEdgeById(companyName, id){ const d = archDoc(companyName); return d && d.edges.find(e => e.id === id); }
 
 async function loadChangeArchitecture(companyName){
   if(!companyName) return;
-  window.__changeArch = window.__changeArch || {};
+  window.__arch = window.__arch || {};
   try {
     const res = await fetch(`/api/companies/${encodeURIComponent(companyName)}/change-architecture`);
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
-    window.__changeArch[companyName] = data;
+    window.__arch[companyName] = normalizeArchDoc(data);
   } catch(err){
-    window.__changeArch[companyName] = { nodes: [], edges: [], error: err.message };
+    window.__arch[companyName] = normalizeArchDoc({});
+    window.__arch[companyName].error = err.message;
   }
-  if(window.__profileSelectedCompany === companyName && window.__profileSubTab === 'architecture') renderPage();
+  if(window.__profileSelectedCompany === companyName && window.__profileSubTab === 'architecture') rerenderArch(companyName);
 }
 
-let __changeArchSaveTimer = null;
-function saveChangeArchitecture(companyName){
-  const el = document.getElementById('changeArchSaveStatus');
+let __archSaveTimer = null;
+function saveArch(companyName){
+  const el = document.getElementById('archSaveStatus');
   if(el) el.textContent = 'Saving…';
-  clearTimeout(__changeArchSaveTimer);
-  __changeArchSaveTimer = setTimeout(async () => {
-    const data = window.__changeArch && window.__changeArch[companyName];
-    if(!data) return;
+  clearTimeout(__archSaveTimer);
+  __archSaveTimer = setTimeout(async () => {
+    const d = archDoc(companyName);
+    if(!d) return;
     try {
       const res = await fetch(`/api/companies/${encodeURIComponent(companyName)}/change-architecture`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nodes: data.nodes, edges: data.edges })
+        body: JSON.stringify({ version: 2, elements: d.elements, edges: d.edges, viewport: d.viewport })
       });
       const body = await res.json().catch(() => ({}));
       if(!res.ok) throw new Error(body.error || `Request failed (${res.status})`);
-      const el2 = document.getElementById('changeArchSaveStatus');
-      if(el2) el2.textContent = 'Saved';
+      const s = document.getElementById('archSaveStatus');
+      if(s) s.textContent = 'Saved';
     } catch(err){
-      const el2 = document.getElementById('changeArchSaveStatus');
-      if(el2) el2.textContent = 'Could not save - ' + err.message;
+      const s = document.getElementById('archSaveStatus');
+      if(s) s.textContent = 'Could not save - ' + err.message;
     }
-  }, 700);
+  }, 650);
 }
 
-function addChangeArchNode(companyName){
-  const data = window.__changeArch && window.__changeArch[companyName];
-  if(!data) return;
-  const canvas = document.getElementById('changeArchCanvas');
-  const cw = canvas ? canvas.clientWidth : 700, ch = canvas ? canvas.clientHeight : 520;
-  const id = 'n' + Date.now() + Math.floor(Math.random()*1000);
-  data.nodes.push({ id, x: Math.max(20, cw/2 - 70 + (Math.random()*80-40)), y: Math.max(20, ch/2 - 24 + (Math.random()*80-40)), text: 'New node', type: 'current' });
-  saveChangeArchitecture(companyName);
-  renderPage();
+// ---- geometry ----
+function archViewportEl(){ return document.getElementById('archViewport'); }
+function archSceneEl(){ return document.getElementById('archScene'); }
+function archScreenToScene(companyName, clientX, clientY){
+  const vpEl = archViewportEl();
+  const d = archDoc(companyName);
+  if(!vpEl || !d) return { x: 0, y: 0 };
+  const r = vpEl.getBoundingClientRect();
+  const v = d.viewport;
+  return { x: (clientX - r.left - v.x) / v.zoom, y: (clientY - r.top - v.y) / v.zoom };
+}
+function archCenterOfView(companyName){
+  const vpEl = archViewportEl();
+  if(!vpEl) return { x: ARCH_SCENE_W/2, y: ARCH_SCENE_H/2 };
+  const r = vpEl.getBoundingClientRect();
+  return archScreenToScene(companyName, r.left + r.width/2, r.top + r.height/2);
 }
 
-function cycleChangeArchNodeType(companyName, nodeId){
-  const data = window.__changeArch && window.__changeArch[companyName];
-  const node = data && data.nodes.find(n => n.id === nodeId);
-  if(!node) return;
-  const i = CHANGE_ARCH_TYPE_ORDER.indexOf(node.type);
-  node.type = CHANGE_ARCH_TYPE_ORDER[(i+1) % CHANGE_ARCH_TYPE_ORDER.length];
-  saveChangeArchitecture(companyName);
-  renderPage();
+// ---- insert ----
+function archToggleInsertMenu(){
+  const m = document.getElementById('archInsertMenu');
+  if(m) m.classList.toggle('open');
+}
+function archCloseMenus(){
+  document.querySelectorAll('.arch-menu.open').forEach(m => m.classList.remove('open'));
 }
 
-function editChangeArchNodeText(companyName, nodeId, el){
-  const data = window.__changeArch && window.__changeArch[companyName];
-  const node = data && data.nodes.find(n => n.id === nodeId);
-  if(!node) return;
-  const text = (el.textContent || '').trim() || 'New node';
-  if(text !== node.text){ node.text = text; saveChangeArchitecture(companyName); }
-}
-
-function deleteChangeArchNode(companyName, nodeId){
-  const data = window.__changeArch && window.__changeArch[companyName];
-  if(!data) return;
-  data.nodes = data.nodes.filter(n => n.id !== nodeId);
-  data.edges = data.edges.filter(e => e.from !== nodeId && e.to !== nodeId);
-  saveChangeArchitecture(companyName);
-  renderPage();
-}
-
-function toggleChangeArchConnectMode(){
-  window.__changeArchConnectMode = !window.__changeArchConnectMode;
-  window.__changeArchConnectFrom = null;
-  renderPage();
-}
-
-function handleChangeArchNodeClick(companyName, nodeId){
-  if(window.__caSuppressClick){ window.__caSuppressClick = false; return; }
-  if(!window.__changeArchConnectMode) return;
-  if(!window.__changeArchConnectFrom){
-    window.__changeArchConnectFrom = nodeId;
-    renderPage();
-    return;
-  }
-  if(window.__changeArchConnectFrom === nodeId){ window.__changeArchConnectFrom = null; renderPage(); return; }
-  const data = window.__changeArch && window.__changeArch[companyName];
-  if(data){
-    const exists = data.edges.some(e => (e.from===window.__changeArchConnectFrom && e.to===nodeId) || (e.from===nodeId && e.to===window.__changeArchConnectFrom));
-    if(!exists) data.edges.push({ id: 'e'+Date.now(), from: window.__changeArchConnectFrom, to: nodeId });
-    saveChangeArchitecture(companyName);
-  }
-  window.__changeArchConnectFrom = null;
-  renderPage();
-}
-
-function deleteChangeArchEdge(companyName, edgeId){
-  const data = window.__changeArch && window.__changeArch[companyName];
-  if(!data) return;
-  data.edges = data.edges.filter(e => e.id !== edgeId);
-  saveChangeArchitecture(companyName);
-  renderPage();
-}
-
-let __caDrag = null;
-function startChangeArchNodeDrag(e, companyName, nodeId){
-  e.preventDefault();
-  e.stopPropagation();
-  const canvas = document.getElementById('changeArchCanvas');
-  const node = document.getElementById('caNode-'+nodeId);
-  if(!canvas || !node) return;
-  const canvasRect = canvas.getBoundingClientRect();
-  const nodeRect = node.getBoundingClientRect();
-  __caDrag = { companyName, nodeId, node, canvasRect, grabX: e.clientX - nodeRect.left, grabY: e.clientY - nodeRect.top, moved: false };
-  document.onmousemove = dragChangeArchNode;
-  document.onmouseup = endChangeArchNodeDrag;
-}
-function dragChangeArchNode(e){
-  const d = __caDrag;
+function archInsert(companyName, spec){
+  const d = archDoc(companyName);
   if(!d) return;
-  d.moved = true;
-  const maxLeft = d.canvasRect.width - d.node.offsetWidth;
-  const maxTop = d.canvasRect.height - d.node.offsetHeight;
-  const left = Math.max(0, Math.min(maxLeft, e.clientX - d.canvasRect.left - d.grabX));
-  const top = Math.max(0, Math.min(maxTop, e.clientY - d.canvasRect.top - d.grabY));
-  d.node.style.left = left + 'px';
-  d.node.style.top = top + 'px';
-  const data = window.__changeArch && window.__changeArch[d.companyName];
-  const node = data && data.nodes.find(n => n.id === d.nodeId);
-  if(node){ node.x = left; node.y = top; }
-  redrawChangeArchLines(d.companyName);
-}
-function endChangeArchNodeDrag(e){
-  const d = __caDrag;
-  document.onmousemove = null;
-  document.onmouseup = null;
-  if(!d) return;
-  if(d.moved){ window.__caSuppressClick = true; saveChangeArchitecture(d.companyName); }
-  __caDrag = null;
+  archCloseMenus();
+  const c = archCenterOfView(companyName);
+  const base = normalizeArchEl(Object.assign({
+    id: archUid(),
+    x: Math.round(c.x - (spec.w || 170)/2 + (Math.random()*40-20)),
+    y: Math.round(c.y - (spec.h || 64)/2 + (Math.random()*40-20))
+  }, spec));
+  d.elements.push(base);
+  saveArch(companyName);
+  rerenderArch(companyName);
+  archSelect(companyName, 'element', base.id);
+  if(base.type !== 'chart' && base.type !== 'contact' && base.type !== 'company'){
+    setTimeout(() => archBeginTextEdit(companyName, base.id), 30);
+  }
+  if(base.type === 'chart') openArchChartDialog(companyName, base.id);
 }
 
-function redrawChangeArchLines(companyName){
-  const svg = document.getElementById('changeArchLines');
-  const badges = document.getElementById('changeArchEdgeBadges');
-  const data = window.__changeArch && window.__changeArch[companyName];
-  if(!svg || !data) return;
-  const centerOf = nodeId => {
-    const el = document.getElementById('caNode-'+nodeId);
-    if(!el) return null;
-    return { x: el.offsetLeft + el.offsetWidth/2, y: el.offsetTop + el.offsetHeight/2 };
-  };
-  const lines = [];
-  const badgeEls = [];
-  data.edges.forEach(edge => {
-    const a = centerOf(edge.from), b = centerOf(edge.to);
-    if(!a || !b) return;
-    lines.push(`<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="var(--border)" stroke-width="2"/>`);
-    const mx = (a.x+b.x)/2, my = (a.y+b.y)/2;
-    badgeEls.push(`<div class="change-arch-edge-badge" style="position:absolute;left:${mx-8}px;top:${my-8}px;" onclick="deleteChangeArchEdge('${esc(companyName)}','${edge.id}')" title="Remove connection">×</div>`);
+function archInsertPreset(companyName, presetKey){
+  const p = ARCH_PRESETS.find(x => x.key === presetKey) || ARCH_PRESETS[0];
+  archInsert(companyName, { type: 'shape', shape: 'rectangle', text: p.label, fill: p.fill, stroke: p.stroke, w: 180, h: 66 });
+}
+
+function archPickEntity(companyName, kind){
+  archCloseMenus();
+  const title = kind === 'contact' ? 'Add contact card' : 'Add company card';
+  let options = [];
+  if(kind === 'contact'){
+    const here = (state.contacts || []).filter(c => (c.company || '') === companyName);
+    const rest = (state.contacts || []).filter(c => (c.company || '') !== companyName);
+    options = here.concat(rest).map(c => ({ id: c.id || c.name, name: c.name, sub: (c.role || '') + (c.company ? ' · ' + c.company : '') }));
+  } else {
+    const names = [...new Set((state.contacts || []).map(c => c.company).filter(Boolean))].sort();
+    options = names.map(n => ({ id: n, name: n, sub: '' }));
+  }
+  const rows = options.map((o, i) => `<div class="arch-pick-row" data-i="${i}" onclick="archConfirmEntity('${esc(companyName)}','${kind}',${i})"><strong>${esc(o.name)}</strong>${o.sub ? `<span class="muted"> — ${esc(o.sub)}</span>` : ''}</div>`).join('');
+  window.__archPickOptions = options;
+  openModal(title, `
+    <input id="archPickSearch" type="text" placeholder="Search…" style="width:100%;margin-bottom:10px;" oninput="archFilterPick()">
+    <div id="archPickList" style="max-height:340px;overflow-y:auto;">${rows || '<div class="muted">Nothing to pick.</div>'}</div>
+  `);
+  setTimeout(() => { const s = document.getElementById('archPickSearch'); if(s) s.focus(); }, 20);
+}
+function archFilterPick(){
+  const q = (document.getElementById('archPickSearch').value || '').toLowerCase();
+  document.querySelectorAll('#archPickList .arch-pick-row').forEach(row => {
+    row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
   });
-  svg.innerHTML = lines.join('');
-  if(badges) badges.innerHTML = badgeEls.join('');
+}
+function archConfirmEntity(companyName, kind, i){
+  const o = (window.__archPickOptions || [])[i];
+  if(!o) return;
+  closeModal();
+  archInsert(companyName, {
+    type: kind, w: 200, h: 72, text: '',
+    fill: '#ffffff', stroke: kind === 'company' ? '#2A6B7C' : '#3f9c8f',
+    ref: { kind, id: o.id, name: o.name }
+  });
+}
+
+// ---- selection ----
+function archSelect(companyName, kind, id){
+  window.__archSel = { kind, id };
+  window.__archConnectFrom = null;
+  archAfterRender(companyName);
+}
+function archDeselect(companyName){
+  window.__archSel = null;
+  window.__archConnectFrom = null;
+  const tb = document.getElementById('archInlineToolbar');
+  if(tb) tb.hidden = true;
+  document.querySelectorAll('.arch-el.selected, .arch-edge-hit.selected').forEach(n => n.classList.remove('selected'));
+}
+
+// ---- element mutation ----
+function archMutate(companyName, id, patch){
+  const el = archElById(companyName, id);
+  if(!el) return;
+  Object.assign(el, patch);
+  saveArch(companyName);
+  rerenderArch(companyName);
+}
+function archSetFill(companyName, id, color){ archMutate(companyName, id, { fill: color }); }
+function archSetStroke(companyName, id, color){ archMutate(companyName, id, { stroke: color }); }
+function archSetTextColor(companyName, id, color){ archMutate(companyName, id, { textColor: color }); }
+function archSetShape(companyName, id, shape){ archMutate(companyName, id, { shape: shape }); }
+function archFont(companyName, id, delta){
+  const el = archElById(companyName, id);
+  if(!el) return;
+  archMutate(companyName, id, { fontSize: Math.min(40, Math.max(9, (el.fontSize || 13) + delta)) });
+}
+function archZOrder(companyName, id, toFront){
+  const d = archDoc(companyName);
+  const idx = d.elements.findIndex(e => e.id === id);
+  if(idx < 0) return;
+  const [el] = d.elements.splice(idx, 1);
+  if(toFront) d.elements.push(el); else d.elements.unshift(el);
+  saveArch(companyName);
+  rerenderArch(companyName);
+}
+function archDuplicate(companyName, id){
+  const el = archElById(companyName, id);
+  if(!el) return;
+  const copy = normalizeArchEl(Object.assign(JSON.parse(JSON.stringify(el)), { id: archUid(), x: el.x + 24, y: el.y + 24 }));
+  archDoc(companyName).elements.push(copy);
+  saveArch(companyName);
+  rerenderArch(companyName);
+  archSelect(companyName, 'element', copy.id);
+}
+function archDeleteEl(companyName, id){
+  const d = archDoc(companyName);
+  if(!d) return;
+  d.elements = d.elements.filter(e => e.id !== id);
+  d.edges = d.edges.filter(e => e.from !== id && e.to !== id);
+  if(window.__archCharts && window.__archCharts[id]){ try { window.__archCharts[id].destroy(); } catch(e){} delete window.__archCharts[id]; }
+  window.__archSel = null;
+  saveArch(companyName);
+  rerenderArch(companyName);
+}
+
+// ---- text editing ----
+function archBeginTextEdit(companyName, id){
+  const node = document.querySelector(`.arch-el[data-id="${id}"] .arch-el-text`);
+  if(!node) return;
+  node.setAttribute('contenteditable', 'true');
+  node.classList.add('editing');
+  window.__archEditing = id;
+  node.focus();
+  const sel = window.getSelection();
+  if(sel){ sel.selectAllChildren(node); sel.collapseToEnd(); }
+}
+function archCommitTextEdit(companyName, id, node){
+  window.__archEditing = null;
+  node.setAttribute('contenteditable', 'false');
+  node.classList.remove('editing');
+  const text = (node.textContent || '').trim();
+  const el = archElById(companyName, id);
+  if(el && el.text !== text){ el.text = text; saveArch(companyName); }
+}
+
+// ---- drag / resize ----
+let __archDrag = null;
+function archElMouseDown(e, companyName, id){
+  if(window.__archEditing === id) return;
+  if(e.target.closest('.arch-handle') || e.target.closest('.arch-cdot')) return;
+  if(window.__archConnectFrom){ archCompleteConnect(companyName, id); return; }
+  e.stopPropagation();
+  const d = archDoc(companyName);
+  const el = archElById(companyName, id);
+  if(!d || !el) return;
+  archSelect(companyName, 'element', id);
+  __archDrag = { companyName, id, startX: e.clientX, startY: e.clientY, ox: el.x, oy: el.y, moved: false, zoom: d.viewport.zoom };
+  document.addEventListener('mousemove', archDragMove);
+  document.addEventListener('mouseup', archDragEnd);
+}
+function archDragMove(e){
+  const d = __archDrag;
+  if(!d) return;
+  const dx = (e.clientX - d.startX) / d.zoom, dy = (e.clientY - d.startY) / d.zoom;
+  if(Math.abs(dx) + Math.abs(dy) > 2) d.moved = true;
+  const el = archElById(d.companyName, d.id);
+  if(!el) return;
+  el.x = Math.round(d.ox + dx);
+  el.y = Math.round(d.oy + dy);
+  const node = document.querySelector(`.arch-el[data-id="${d.id}"]`);
+  if(node){ node.style.left = el.x + 'px'; node.style.top = el.y + 'px'; }
+  archDrawEdges(d.companyName);
+  archPositionInlineToolbar(d.companyName);
+}
+function archDragEnd(){
+  document.removeEventListener('mousemove', archDragMove);
+  document.removeEventListener('mouseup', archDragEnd);
+  const d = __archDrag;
+  __archDrag = null;
+  if(d && d.moved){ window.__archSuppressClick = true; saveArch(d.companyName); }
+}
+
+let __archResize = null;
+function archResizeDown(e, companyName, id){
+  e.stopPropagation(); e.preventDefault();
+  const d = archDoc(companyName), el = archElById(companyName, id);
+  if(!d || !el) return;
+  __archResize = { companyName, id, startX: e.clientX, startY: e.clientY, ow: el.w, oh: el.h, zoom: d.viewport.zoom };
+  document.addEventListener('mousemove', archResizeMove);
+  document.addEventListener('mouseup', archResizeEnd);
+}
+function archResizeMove(e){
+  const d = __archResize;
+  if(!d) return;
+  const el = archElById(d.companyName, d.id);
+  if(!el) return;
+  el.w = Math.max(60, Math.round(d.ow + (e.clientX - d.startX) / d.zoom));
+  el.h = Math.max(32, Math.round(d.oh + (e.clientY - d.startY) / d.zoom));
+  const node = document.querySelector(`.arch-el[data-id="${d.id}"]`);
+  if(node){ node.style.width = el.w + 'px'; node.style.height = el.h + 'px'; }
+  archDrawEdges(d.companyName);
+  archPositionInlineToolbar(d.companyName);
+  if(el.type === 'chart' && window.__archCharts && window.__archCharts[el.id]){ try { window.__archCharts[el.id].resize(); } catch(err){} }
+}
+function archResizeEnd(){
+  document.removeEventListener('mousemove', archResizeMove);
+  document.removeEventListener('mouseup', archResizeEnd);
+  const d = __archResize;
+  __archResize = null;
+  if(d) saveArch(d.companyName);
+}
+
+// ---- connectors ----
+function archStartConnect(companyName, id){
+  window.__archConnectFrom = id;
+  const tb = document.getElementById('archInlineToolbar');
+  if(tb) tb.hidden = true;
+  toast('Click another element to connect', 'success');
+}
+function archCompleteConnect(companyName, toId){
+  const fromId = window.__archConnectFrom;
+  window.__archConnectFrom = null;
+  if(!fromId || fromId === toId) return;
+  const d = archDoc(companyName);
+  if(d.edges.some(e => (e.from === fromId && e.to === toId) || (e.from === toId && e.to === fromId))) return;
+  d.edges.push(normalizeArchEdge({ from: fromId, to: toId }));
+  saveArch(companyName);
+  rerenderArch(companyName);
+}
+let __archEdgeDraw = null;
+function archDotDown(e, companyName, id){
+  e.stopPropagation(); e.preventDefault();
+  __archEdgeDraw = { companyName, from: id };
+  document.addEventListener('mousemove', archEdgeDrawMove);
+  document.addEventListener('mouseup', archEdgeDrawEnd);
+}
+function archEdgeDrawMove(e){
+  const d = __archEdgeDraw;
+  if(!d) return;
+  const from = archElById(d.companyName, d.from);
+  const svg = document.getElementById('archEdges');
+  if(!from || !svg) return;
+  const p = archScreenToScene(d.companyName, e.clientX, e.clientY);
+  let temp = document.getElementById('archTempEdge');
+  if(!temp){
+    temp = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    temp.id = 'archTempEdge';
+    temp.setAttribute('stroke', '#3f9c8f');
+    temp.setAttribute('stroke-width', '2');
+    temp.setAttribute('stroke-dasharray', '5,4');
+    svg.appendChild(temp);
+  }
+  temp.setAttribute('x1', from.x + from.w/2); temp.setAttribute('y1', from.y + from.h/2);
+  temp.setAttribute('x2', p.x); temp.setAttribute('y2', p.y);
+}
+function archEdgeDrawEnd(e){
+  document.removeEventListener('mousemove', archEdgeDrawMove);
+  document.removeEventListener('mouseup', archEdgeDrawEnd);
+  const d = __archEdgeDraw;
+  __archEdgeDraw = null;
+  const temp = document.getElementById('archTempEdge');
+  if(temp) temp.remove();
+  if(!d) return;
+  const target = e.target.closest && e.target.closest('.arch-el');
+  if(target && target.dataset.id && target.dataset.id !== d.from){
+    const doc = archDoc(d.companyName);
+    if(!doc.edges.some(x => (x.from === d.from && x.to === target.dataset.id) || (x.from === target.dataset.id && x.to === d.from))){
+      doc.edges.push(normalizeArchEdge({ from: d.from, to: target.dataset.id }));
+      saveArch(d.companyName);
+      rerenderArch(d.companyName);
+    }
+  }
+}
+function archSelectEdge(companyName, id){
+  archSelect(companyName, 'edge', id);
+}
+function archSetEdge(companyName, id, patch){
+  const e = archEdgeById(companyName, id);
+  if(!e) return;
+  Object.assign(e, patch);
+  saveArch(companyName);
+  rerenderArch(companyName);
+}
+function archEditEdgeLabel(companyName, id){
+  const e = archEdgeById(companyName, id);
+  if(!e) return;
+  const v = prompt('Connector label', e.label || '');
+  if(v === null) return;
+  archSetEdge(companyName, id, { label: v.trim() });
+}
+function archDeleteEdge(companyName, id){
+  const d = archDoc(companyName);
+  d.edges = d.edges.filter(e => e.id !== id);
+  window.__archSel = null;
+  saveArch(companyName);
+  rerenderArch(companyName);
+}
+
+// ---- pan / zoom ----
+let __archPan = null;
+function archViewportMouseDown(e){
+  if(e.target.closest('.arch-el') || e.target.closest('.arch-edge-hit') || e.target.closest('.arch-menu')) return;
+  const companyName = window.__profileSelectedCompany;
+  const d = archDoc(companyName);
+  if(!d) return;
+  archDeselect(companyName);
+  __archPan = { companyName, startX: e.clientX, startY: e.clientY, ox: d.viewport.x, oy: d.viewport.y };
+  document.addEventListener('mousemove', archPanMove);
+  document.addEventListener('mouseup', archPanEnd);
+}
+function archPanMove(e){
+  const p = __archPan;
+  if(!p) return;
+  const d = archDoc(p.companyName);
+  d.viewport.x = p.ox + (e.clientX - p.startX);
+  d.viewport.y = p.oy + (e.clientY - p.startY);
+  archApplyViewport(p.companyName);
+}
+function archPanEnd(){
+  document.removeEventListener('mousemove', archPanMove);
+  document.removeEventListener('mouseup', archPanEnd);
+  if(__archPan) saveArch(__archPan.companyName);
+  __archPan = null;
+}
+function archWheel(e){
+  const companyName = window.__profileSelectedCompany;
+  const d = archDoc(companyName);
+  if(!d) return;
+  e.preventDefault();
+  const vpEl = archViewportEl();
+  const r = vpEl.getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  const old = d.viewport.zoom;
+  const next = Math.min(ARCH_MAX_ZOOM, Math.max(ARCH_MIN_ZOOM, old * (e.deltaY < 0 ? 1.12 : 0.89)));
+  d.viewport.x = mx - (mx - d.viewport.x) * (next / old);
+  d.viewport.y = my - (my - d.viewport.y) * (next / old);
+  d.viewport.zoom = next;
+  archApplyViewport(companyName);
+  archDebouncedSaveViewport(companyName);
+}
+let __archVpSaveTimer = null;
+function archDebouncedSaveViewport(companyName){
+  clearTimeout(__archVpSaveTimer);
+  __archVpSaveTimer = setTimeout(() => saveArch(companyName), 400);
+}
+function archZoomBtn(companyName, dir){
+  const d = archDoc(companyName);
+  if(!d) return;
+  const vpEl = archViewportEl();
+  const r = vpEl.getBoundingClientRect();
+  const mx = r.width/2, my = r.height/2;
+  const old = d.viewport.zoom;
+  const next = Math.min(ARCH_MAX_ZOOM, Math.max(ARCH_MIN_ZOOM, dir === 0 ? 1 : old * (dir > 0 ? 1.2 : 0.83)));
+  d.viewport.x = mx - (mx - d.viewport.x) * (next / old);
+  d.viewport.y = my - (my - d.viewport.y) * (next / old);
+  d.viewport.zoom = next;
+  if(dir === 0){ d.viewport.x = 40; d.viewport.y = 40; }
+  archApplyViewport(companyName);
+  saveArch(companyName);
+}
+function archFit(companyName){
+  const d = archDoc(companyName);
+  const vpEl = archViewportEl();
+  if(!d || !vpEl || !d.elements.length) return;
+  const minX = Math.min(...d.elements.map(e => e.x));
+  const minY = Math.min(...d.elements.map(e => e.y));
+  const maxX = Math.max(...d.elements.map(e => e.x + e.w));
+  const maxY = Math.max(...d.elements.map(e => e.y + e.h));
+  const r = vpEl.getBoundingClientRect();
+  const pad = 60;
+  const zoom = Math.min(ARCH_MAX_ZOOM, Math.max(ARCH_MIN_ZOOM, Math.min((r.width - pad*2) / (maxX - minX || 1), (r.height - pad*2) / (maxY - minY || 1))));
+  d.viewport.zoom = zoom;
+  d.viewport.x = pad - minX * zoom + (r.width - pad*2 - (maxX - minX) * zoom) / 2;
+  d.viewport.y = pad - minY * zoom + (r.height - pad*2 - (maxY - minY) * zoom) / 2;
+  archApplyViewport(companyName);
+  saveArch(companyName);
+}
+function archApplyViewport(companyName){
+  const d = archDoc(companyName);
+  const scene = archSceneEl();
+  if(!d || !scene) return;
+  scene.style.transform = `translate(${d.viewport.x}px, ${d.viewport.y}px) scale(${d.viewport.zoom})`;
+  const zl = document.getElementById('archZoomLabel');
+  if(zl) zl.textContent = Math.round(d.viewport.zoom * 100) + '%';
+  archPositionInlineToolbar(companyName);
+}
+
+// ---- edges draw ----
+function archEdgeAnchor(a, b){
+  // point on the border of rect a facing b's centre
+  const acx = a.x + a.w/2, acy = a.y + a.h/2;
+  const bcx = b.x + b.w/2, bcy = b.y + b.h/2;
+  const dx = bcx - acx, dy = bcy - acy;
+  if(dx === 0 && dy === 0) return { x: acx, y: acy };
+  const hw = a.w/2, hh = a.h/2;
+  const sx = dx === 0 ? Infinity : hw / Math.abs(dx);
+  const sy = dy === 0 ? Infinity : hh / Math.abs(dy);
+  const s = Math.min(sx, sy);
+  return { x: acx + dx * s, y: acy + dy * s };
+}
+function archDrawEdges(companyName){
+  const d = archDoc(companyName);
+  const svg = document.getElementById('archEdges');
+  const labelLayer = document.getElementById('archEdgeLabels');
+  if(!d || !svg) return;
+  const sel = window.__archSel;
+  let markers = `<defs>
+    <marker id="archArrowEnd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="context-stroke"/></marker>
+  </defs>`;
+  const parts = [markers];
+  const labels = [];
+  d.edges.forEach(edge => {
+    const a = archElById(companyName, edge.from), b = archElById(companyName, edge.to);
+    if(!a || !b) return;
+    const p1 = archEdgeAnchor(a, b), p2 = archEdgeAnchor(b, a);
+    const isSel = sel && sel.kind === 'edge' && sel.id === edge.id;
+    const col = edge.color || '#8a8a93';
+    const dash = edge.style === 'dashed' ? 'stroke-dasharray="6,5"' : '';
+    const mEnd = (edge.arrow === 'end' || edge.arrow === 'both') ? 'marker-end="url(#archArrowEnd)"' : '';
+    const mStart = (edge.arrow === 'both') ? 'marker-start="url(#archArrowEnd)"' : '';
+    parts.push(`<line class="arch-edge-hit ${isSel ? 'selected' : ''}" data-edge="${edge.id}" x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="transparent" stroke-width="14" onclick="archSelectEdge('${esc(companyName)}','${edge.id}')" ondblclick="archEditEdgeLabel('${esc(companyName)}','${edge.id}')" style="cursor:pointer;pointer-events:stroke;"/>`);
+    parts.push(`<line x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="${col}" stroke-width="${isSel ? 3 : 2}" ${dash} ${mEnd} ${mStart} style="pointer-events:none;"/>`);
+    if(edge.label){
+      labels.push(`<div class="arch-edge-label" style="left:${(p1.x+p2.x)/2}px;top:${(p1.y+p2.y)/2}px;" onclick="archEditEdgeLabel('${esc(companyName)}','${edge.id}')">${esc(edge.label)}</div>`);
+    }
+  });
+  svg.innerHTML = parts.join('');
+  if(labelLayer) labelLayer.innerHTML = labels.join('');
+}
+
+// ---- charts ----
+function archRenderCharts(companyName){
+  const d = archDoc(companyName);
+  if(!d) return;
+  window.__archCharts = window.__archCharts || {};
+  d.elements.filter(e => e.type === 'chart' && e.chart).forEach(el => {
+    const canvas = document.getElementById('archChart-' + el.id);
+    if(!canvas) return;
+    if(window.__archCharts[el.id]){ try { window.__archCharts[el.id].destroy(); } catch(e){} }
+    const c = el.chart;
+    const palette = ['#2A6B7C','#3f9c8f','#bd7c0c','#d4472f','#6444bd','#1b6ba6','#177a49','#a65c22'];
+    const isXY = c.kind === 'line' || c.kind === 'bar';
+    window.__archCharts[el.id] = new Chart(canvas, {
+      type: c.kind,
+      data: {
+        labels: c.data.labels,
+        datasets: [{
+          label: c.title || 'Value',
+          data: c.data.values,
+          backgroundColor: isXY ? '#2A6B7C' : c.data.labels.map((_, i) => palette[i % palette.length]),
+          borderColor: c.kind === 'line' ? '#2A6B7C' : undefined,
+          fill: c.kind === 'line' ? false : undefined,
+          tension: 0.3
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: !isXY, position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } } },
+        scales: isXY ? { x: { ticks: { font: { size: 9 } } }, y: { beginAtZero: true, ticks: { font: { size: 9 } } } } : {}
+      }
+    });
+  });
+}
+async function archLoadDatasets(companyName, elId){
+  window.__archDatasets = window.__archDatasets || {};
+  const el = archElById(companyName, elId);
+  const isContact = el && el.ref && el.ref.kind === 'contact';
+  const key = isContact ? 'contact:' + el.ref.id : 'company:' + companyName;
+  if(window.__archDatasets[key]) return window.__archDatasets[key];
+  try {
+    const url = isContact
+      ? `/api/contacts/${encodeURIComponent(el.ref.id)}/board-datasets`
+      : `/api/companies/${encodeURIComponent(companyName)}/board-datasets`;
+    const res = await fetch(url);
+    const data = await res.json();
+    window.__archDatasets[key] = res.ok ? (data.datasets || []) : [];
+  } catch(e){
+    window.__archDatasets[key] = [];
+  }
+  return window.__archDatasets[key];
+}
+async function openArchChartDialog(companyName, elId){
+  const el = archElById(companyName, elId);
+  if(!el){ return; }
+  if(!el.chart) el.chart = { kind: 'bar', title: '', source: 'manual', data: { labels: [], values: [] }, pulledAt: null };
+  const c = el.chart;
+  const datasets = await archLoadDatasets(companyName, elId);
+  const manualRows = (c.data.labels.length ? c.data.labels : ['', '']).map((lab, i) => archChartRowHtml(lab, c.data.values[i] != null ? c.data.values[i] : '')).join('');
+  openModal('Chart data', `
+    <div class="field"><label>Title</label><input id="archChartTitle" value="${esc(c.title || '')}"></div>
+    <div class="field"><label>Type</label>
+      <select id="archChartKind">
+        <option value="bar" ${c.kind==='bar'?'selected':''}>Bar</option>
+        <option value="line" ${c.kind==='line'?'selected':''}>Line</option>
+        <option value="pie" ${c.kind==='pie'?'selected':''}>Pie</option>
+      </select>
+    </div>
+    <div class="field"><label>Source</label>
+      <select id="archChartSource" onchange="archChartSourceToggle()">
+        <option value="manual" ${c.source==='manual'?'selected':''}>Enter data manually</option>
+        <option value="pull" ${c.source!=='manual'?'selected':''}>Pull from app data</option>
+      </select>
+    </div>
+    <div id="archChartPull" ${c.source==='manual'?'hidden':''}>
+      <div class="field"><label>Dataset for ${esc(el.ref && el.ref.name ? el.ref.name : companyName)}</label>
+        <select id="archChartDataset">
+          ${datasets.length ? datasets.map(ds => `<option value="${esc(ds.key)}" data-kind="${esc(ds.kind)}">${esc(ds.label)}</option>`).join('') : '<option value="">No data available yet</option>'}
+        </select>
+      </div>
+    </div>
+    <div id="archChartManual" ${c.source!=='manual'?'hidden':''}>
+      <label class="muted" style="font-size:11px;font-weight:700;">Data points</label>
+      <div id="archChartRows">${manualRows}</div>
+      <button class="btn btn-ghost btn-sm" onclick="archChartAddRow()"><i class="ti ti-plus"></i> Add row</button>
+    </div>
+  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="archApplyChart('${esc(companyName)}','${elId}')">Apply</button>`);
+  window.__archChartCtx = { companyName, elId, datasets };
+}
+function archChartRowHtml(label, value){
+  return `<div class="arch-chart-row" style="display:flex;gap:6px;margin-bottom:6px;">
+    <input placeholder="Label" value="${esc(String(label))}" style="flex:2;">
+    <input type="number" placeholder="Value" value="${esc(String(value))}" style="flex:1;">
+    <button class="btn btn-ghost btn-sm" onclick="this.parentNode.remove()"><i class="ti ti-x"></i></button>
+  </div>`;
+}
+function archChartAddRow(){
+  const c = document.getElementById('archChartRows');
+  if(c) c.insertAdjacentHTML('beforeend', archChartRowHtml('', ''));
+}
+function archChartSourceToggle(){
+  const v = document.getElementById('archChartSource').value;
+  document.getElementById('archChartPull').hidden = v === 'manual';
+  document.getElementById('archChartManual').hidden = v !== 'manual';
+}
+function archApplyChart(companyName, elId){
+  const el = archElById(companyName, elId);
+  if(!el) return;
+  const ctx = window.__archChartCtx || {};
+  const kind = document.getElementById('archChartKind').value;
+  const title = (document.getElementById('archChartTitle').value || '').trim();
+  const source = document.getElementById('archChartSource').value;
+  let labels = [], values = [];
+  if(source === 'manual'){
+    document.querySelectorAll('#archChartRows .arch-chart-row').forEach(row => {
+      const ins = row.querySelectorAll('input');
+      const lab = (ins[0].value || '').trim();
+      const val = parseFloat(ins[1].value);
+      if(lab && !isNaN(val)){ labels.push(lab); values.push(val); }
+    });
+  } else {
+    const key = document.getElementById('archChartDataset').value;
+    const ds = (ctx.datasets || []).find(d => d.key === key);
+    if(ds){ labels = ds.labels.slice(); values = ds.values.slice(); }
+  }
+  el.chart = { kind, title, source: source === 'manual' ? 'manual' : 'auto:' + (document.getElementById('archChartDataset') ? document.getElementById('archChartDataset').value : ''), data: { labels, values }, pulledAt: source === 'manual' ? null : new Date().toISOString() };
+  closeModal();
+  saveArch(companyName);
+  rerenderArch(companyName);
+}
+async function archRefreshChart(companyName, elId){
+  const el = archElById(companyName, elId);
+  if(!el || !el.chart || el.chart.source === 'manual') return;
+  const key = el.chart.source.replace(/^auto:/, '');
+  const datasets = await archLoadDatasets(companyName, elId);
+  const ds = datasets.find(d => d.key === key);
+  if(!ds){ toast('That dataset is no longer available', 'warn'); return; }
+  el.chart.data = { labels: ds.labels.slice(), values: ds.values.slice() };
+  el.chart.pulledAt = new Date().toISOString();
+  saveArch(companyName);
+  rerenderArch(companyName);
+  toast('Chart data refreshed', 'success');
+}
+
+// ---- element rendering ----
+function archElInnerHtml(companyName, el){
+  const clip = el.type === 'shape' && el.shape === 'diamond' ? 'clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);'
+    : el.type === 'shape' && el.shape === 'parallelogram' ? 'clip-path:polygon(18% 0,100% 0,82% 100%,0 100%);'
+    : '';
+  const radius = el.type === 'sticky' ? '3px'
+    : el.type === 'shape' && el.shape === 'ellipse' ? '50%'
+    : el.type === 'shape' && el.shape === 'pill' ? '999px'
+    : (el.type === 'contact' || el.type === 'company') ? '12px' : '10px';
+  const bg = `<div class="arch-el-bg" style="background:${esc(el.fill)};border:1.5px solid ${esc(el.stroke)};border-radius:${radius};${clip}"></div>`;
+
+  if(el.type === 'chart'){
+    const c = el.chart;
+    return `<div class="arch-el-bg" style="background:#ffffff;border:1.5px solid ${esc(el.stroke)};border-radius:10px;"></div>
+      <div class="arch-chart-wrap">
+        ${c && c.title ? `<div class="arch-chart-title">${esc(c.title)}</div>` : ''}
+        ${c && c.data.labels.length ? `<div class="arch-chart-canvas"><canvas id="archChart-${el.id}"></canvas></div>`
+          : `<div class="arch-chart-empty muted">No data yet — double-click to add</div>`}
+      </div>`;
+  }
+  if(el.type === 'contact' || el.type === 'company'){
+    const name = (el.ref && el.ref.name) || 'Unlinked';
+    return `${bg}
+      <div class="arch-card-inner">
+        <div class="arch-card-kind muted">${el.type === 'company' ? 'COMPANY' : 'CONTACT'}</div>
+        <div class="arch-card-name" style="color:${esc(el.textColor)};font-size:${(el.fontSize||13)+1}px;">${esc(name)}</div>
+        <div class="arch-el-text" data-id="${el.id}" style="color:${esc(el.textColor)};font-size:${(el.fontSize||13)-1}px;" onblur="archCommitTextEdit('${esc(companyName)}','${el.id}',this)">${esc(el.text)}</div>
+        <button class="arch-card-open btn btn-ghost btn-sm" onmousedown="event.stopPropagation()" onclick="event.stopPropagation();archOpenEntity('${el.type}','${esc((el.ref&&el.ref.name)||'')}','${esc((el.ref&&el.ref.id)||'')}')"><i class="ti ti-external-link"></i> Open</button>
+      </div>`;
+  }
+  return `${bg}
+    <div class="arch-el-text" data-id="${el.id}" style="color:${esc(el.textColor)};font-size:${el.fontSize||13}px;${el.type==='text'?'font-weight:600;':''}" onblur="archCommitTextEdit('${esc(companyName)}','${el.id}',this)">${esc(el.text)}</div>`;
+}
+
+function archElHtml(companyName, el){
+  const sel = window.__archSel;
+  const isSel = sel && sel.kind === 'element' && sel.id === el.id;
+  const connecting = window.__archConnectFrom === el.id;
+  return `<div class="arch-el arch-el--${el.type} ${isSel ? 'selected' : ''} ${connecting ? 'connect-src' : ''}" data-id="${el.id}"
+      style="left:${el.x}px;top:${el.y}px;width:${el.w}px;height:${el.h}px;"
+      onmousedown="archElMouseDown(event,'${esc(companyName)}','${el.id}')"
+      ondblclick="event.stopPropagation();${el.type==='chart'?`openArchChartDialog('${esc(companyName)}','${el.id}')`:`archBeginTextEdit('${esc(companyName)}','${el.id}')`}"
+      onclick="archElClick(event,'${esc(companyName)}','${el.id}')">
+    ${archElInnerHtml(companyName, el)}
+    ${['left','right','top','bottom'].map(s => `<div class="arch-cdot arch-cdot--${s}" onmousedown="archDotDown(event,'${esc(companyName)}','${el.id}')" title="Drag to connect"></div>`).join('')}
+    <div class="arch-handle" onmousedown="archResizeDown(event,'${esc(companyName)}','${el.id}')"></div>
+  </div>`;
+}
+function archElClick(e, companyName, id){
+  if(window.__archSuppressClick){ window.__archSuppressClick = false; return; }
+  if(window.__archConnectFrom){ archCompleteConnect(companyName, id); return; }
+  const el = archElById(companyName, id);
+  archSelect(companyName, 'element', id);
+}
+function archOpenEntity(type, name, id){
+  if(type === 'company' && name) openEntityDeep('company', name);
+  else if(type === 'contact' && name) openEntityDeep('contact', name);
+}
+
+// ---- inline toolbar ----
+function archPositionInlineToolbar(companyName){
+  const tb = document.getElementById('archInlineToolbar');
+  const sel = window.__archSel;
+  if(!tb) return;
+  if(!sel){ tb.hidden = true; return; }
+  const card = document.getElementById('archCard');
+  if(sel.kind === 'element'){
+    const node = document.querySelector(`.arch-el[data-id="${sel.id}"]`);
+    if(!node){ tb.hidden = true; return; }
+    const nr = node.getBoundingClientRect();
+    const cr = card.getBoundingClientRect();
+    tb.style.left = Math.max(8, Math.min(cr.width - tb.offsetWidth - 8, nr.left - cr.left + nr.width/2 - tb.offsetWidth/2)) + 'px';
+    const above = nr.top - cr.top - tb.offsetHeight - 10;
+    // Flip below the element when there isn't room above it.
+    tb.style.top = (above > 6 ? above : Math.min(cr.height - tb.offsetHeight - 8, nr.bottom - cr.top + 10)) + 'px';
+    tb.hidden = false;
+  } else {
+    tb.hidden = false;
+    const cr = card.getBoundingClientRect();
+    tb.style.left = (cr.width/2 - tb.offsetWidth/2) + 'px';
+    tb.style.top = '52px';
+  }
+}
+function archInlineToolbarHtml(companyName){
+  const sel = window.__archSel;
+  if(!sel) return '<div id="archInlineToolbar" class="arch-inline-toolbar" hidden></div>';
+  if(sel.kind === 'edge'){
+    const e = archEdgeById(companyName, sel.id);
+    if(!e) return '<div id="archInlineToolbar" class="arch-inline-toolbar" hidden></div>';
+    return `<div id="archInlineToolbar" class="arch-inline-toolbar">
+      <button class="${e.style==='solid'?'on':''}" title="Solid" onclick="archSetEdge('${esc(companyName)}','${e.id}',{style:'solid'})"><i class="ti ti-minus"></i></button>
+      <button class="${e.style==='dashed'?'on':''}" title="Dashed" onclick="archSetEdge('${esc(companyName)}','${e.id}',{style:'dashed'})"><i class="ti ti-line-dashed"></i></button>
+      <span class="sep"></span>
+      <button class="${e.arrow==='none'?'on':''}" title="No arrow" onclick="archSetEdge('${esc(companyName)}','${e.id}',{arrow:'none'})">–</button>
+      <button class="${e.arrow==='end'?'on':''}" title="Arrow" onclick="archSetEdge('${esc(companyName)}','${e.id}',{arrow:'end'})">→</button>
+      <button class="${e.arrow==='both'?'on':''}" title="Both" onclick="archSetEdge('${esc(companyName)}','${e.id}',{arrow:'both'})">↔</button>
+      <span class="sep"></span>
+      ${['#8a8a93','#2A6B7C','#d4472f','#bd7c0c','#6444bd'].map(col => `<button class="swatch" style="background:${col}" onclick="archSetEdge('${esc(companyName)}','${e.id}',{color:'${col}'})"></button>`).join('')}
+      <span class="sep"></span>
+      <button title="Label" onclick="archEditEdgeLabel('${esc(companyName)}','${e.id}')"><i class="ti ti-tag"></i></button>
+      <button title="Delete" onclick="archDeleteEdge('${esc(companyName)}','${e.id}')"><i class="ti ti-trash"></i></button>
+    </div>`;
+  }
+  const el = archElById(companyName, sel.id);
+  if(!el) return '<div id="archInlineToolbar" class="arch-inline-toolbar" hidden></div>';
+  const isShape = el.type === 'shape';
+  return `<div id="archInlineToolbar" class="arch-inline-toolbar">
+    ${ARCH_FILL_SWATCHES.map(col => `<button class="swatch ${el.fill===col?'on':''}" style="background:${col}" title="Fill" onclick="archSetFill('${esc(companyName)}','${el.id}','${col}')"></button>`).join('')}
+    <label class="swatch custom" title="Custom fill"><input type="color" value="${el.fill && el.fill[0]==='#' ? el.fill : '#ffffff'}" onchange="archSetFill('${esc(companyName)}','${el.id}',this.value)"></label>
+    <span class="sep"></span>
+    ${ARCH_TEXT_SWATCHES.map(col => `<button class="tswatch ${el.textColor===col?'on':''}" style="color:${col}" title="Text colour" onclick="archSetTextColor('${esc(companyName)}','${el.id}','${col}')">A</button>`).join('')}
+    <span class="sep"></span>
+    ${isShape ? ARCH_SHAPES.map(s => `<button class="${el.shape===s.key?'on':''}" title="${s.label}" onclick="archSetShape('${esc(companyName)}','${el.id}','${s.key}')"><i class="ti ${s.icon}"></i></button>`).join('') + '<span class="sep"></span>' : ''}
+    <button title="Smaller text" onclick="archFont('${esc(companyName)}','${el.id}',-1)"><i class="ti ti-text-decrease"></i></button>
+    <button title="Bigger text" onclick="archFont('${esc(companyName)}','${el.id}',1)"><i class="ti ti-text-increase"></i></button>
+    <span class="sep"></span>
+    <button title="Connect from here" onclick="archStartConnect('${esc(companyName)}','${el.id}')"><i class="ti ti-line"></i></button>
+    <button title="Bring to front" onclick="archZOrder('${esc(companyName)}','${el.id}',true)"><i class="ti ti-arrow-up-to-arc"></i></button>
+    <button title="Send to back" onclick="archZOrder('${esc(companyName)}','${el.id}',false)"><i class="ti ti-arrow-down-to-arc"></i></button>
+    <button title="Duplicate" onclick="archDuplicate('${esc(companyName)}','${el.id}')"><i class="ti ti-copy"></i></button>
+    ${el.type === 'chart' && el.chart && el.chart.source !== 'manual' ? `<button title="Refresh data" onclick="archRefreshChart('${esc(companyName)}','${el.id}')"><i class="ti ti-refresh"></i></button>` : ''}
+    <button title="Delete" onclick="archDeleteEl('${esc(companyName)}','${el.id}')"><i class="ti ti-trash"></i></button>
+  </div>`;
+}
+
+// ---- top-level render ----
+function rerenderArch(companyName){
+  const card = document.getElementById('archCard');
+  if(!card){ renderPage(); return; }
+  card.outerHTML = renderChangeArchitectureCanvas(companyName);
+  archAfterRender(companyName);
+}
+function archAfterRender(companyName){
+  const d = archDoc(companyName);
+  if(!d) return;
+  archApplyViewport(companyName);
+  archDrawEdges(companyName);
+  archRenderCharts(companyName);
+  // swap the inline toolbar in
+  const holder = document.getElementById('archToolbarHolder');
+  if(holder){ holder.innerHTML = archInlineToolbarHtml(companyName); }
+  archPositionInlineToolbar(companyName);
 }
 
 function renderChangeArchitectureCanvas(companyName){
-  const data = window.__changeArch && window.__changeArch[companyName];
-  if(!data) return '<div class="card"><div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading...</div></div>';
-  const connectMode = !!window.__changeArchConnectMode;
-  const connectFrom = window.__changeArchConnectFrom;
+  const d = archDoc(companyName);
+  if(!d) return `<div class="card" id="archCard"><div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading…</div></div>`;
+  const els = d.elements.map(el => archElHtml(companyName, el)).join('');
   return `
-  <div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:4px;">
-      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-affiliate"></i> Change architecture</div>
+  <div class="card" id="archCard" style="position:relative;overflow:hidden;">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-affiliate"></i> Account canvas</div>
       <div style="display:flex;gap:6px;align-items:center;">
-        <span id="changeArchSaveStatus" class="muted" style="font-size:11px;"></span>
-        <button class="btn btn-secondary btn-sm" onclick="addChangeArchNode('${esc(companyName)}')"><i class="ti ti-plus"></i> Add node</button>
-        <button class="btn ${connectMode?'btn-primary':'btn-secondary'} btn-sm" onclick="toggleChangeArchConnectMode()"><i class="ti ti-arrows-join"></i> ${connectMode ? (connectFrom ? 'Click a node to connect…' : 'Click two nodes to connect') : 'Connect'}</button>
-      </div>
-    </div>
-    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Map this account's own change architecture by hand - current state, pain points, change initiatives, future state, risk of not acting. Built live with the prospect as free value, not generated. Click a node's coloured dot to change its type, click its text to edit, drag to arrange.</div>
-    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
-      ${CHANGE_ARCH_TYPE_ORDER.map(t => `<span style="font-size:10.5px;display:flex;align-items:center;gap:4px;"><span style="width:9px;height:9px;border-radius:50%;background:${CHANGE_ARCH_TYPES[t].color};display:inline-block;"></span>${esc(CHANGE_ARCH_TYPES[t].label)}</span>`).join('')}
-    </div>
-    <div id="changeArchCanvas" style="position:relative;width:100%;height:520px;border:1px solid var(--border-light);border-radius:10px;background:var(--surface-2);overflow:hidden;">
-      <svg id="changeArchLines" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;"></svg>
-      <div id="changeArchEdgeBadges" style="position:absolute;top:0;left:0;width:100%;height:100%;"></div>
-      ${!data.nodes.length ? '<div class="empty-state" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);">No nodes yet - press "Add node" to start mapping this account.</div>' : ''}
-      ${data.nodes.map(n => `
-        <div id="caNode-${n.id}" class="profile-board-node" style="position:absolute;left:${n.x}px;top:${n.y}px;width:150px;min-height:52px;cursor:${connectMode?'pointer':'grab'};border-left:4px solid ${CHANGE_ARCH_TYPES[n.type].color};${connectFrom===n.id?'outline:2px solid var(--accent-2);':''}"
-             onmousedown="${connectMode?'':`startChangeArchNodeDrag(event,'${esc(companyName)}','${n.id}')`}"
-             onclick="handleChangeArchNodeClick('${esc(companyName)}','${n.id}')">
-          <div style="display:flex;align-items:flex-start;gap:6px;padding:6px 8px;">
-            <span ${connectMode?'':`onclick="event.stopPropagation();cycleChangeArchNodeType('${esc(companyName)}','${n.id}')"`} title="${esc(CHANGE_ARCH_TYPES[n.type].label)} - click to change" style="width:10px;height:10px;border-radius:50%;background:${CHANGE_ARCH_TYPES[n.type].color};flex-shrink:0;margin-top:3px;cursor:pointer;"></span>
-            <div contenteditable="${connectMode?'false':'true'}" spellcheck="false" ${connectMode?'':'onmousedown="event.stopPropagation();" onclick="event.stopPropagation();"'} onblur="editChangeArchNodeText('${esc(companyName)}','${n.id}',this)" style="flex:1;font-size:12px;outline:none;word-break:break-word;">${esc(n.text)}</div>
-            <span ${connectMode?'':`onclick="event.stopPropagation();deleteChangeArchNode('${esc(companyName)}','${n.id}')"`} style="cursor:pointer;color:var(--muted);font-size:13px;line-height:1;" title="Delete">×</span>
+        <span id="archSaveStatus" class="muted" style="font-size:11px;"></span>
+        <div class="arch-menu" id="archInsertMenu">
+          <button class="btn btn-primary btn-sm" onclick="event.stopPropagation();archToggleInsertMenu()"><i class="ti ti-plus"></i> Insert</button>
+          <div class="arch-menu-list">
+            <div class="arch-menu-item" onclick="archPickEntity('${esc(companyName)}','contact')"><i class="ti ti-user"></i> Contact card</div>
+            <div class="arch-menu-item" onclick="archPickEntity('${esc(companyName)}','company')"><i class="ti ti-building"></i> Company card</div>
+            <div class="arch-menu-item" onclick="archInsert('${esc(companyName)}',{type:'sticky',w:170,h:150,text:'',fill:'#fef3c7',stroke:'transparent'})"><i class="ti ti-note"></i> Sticky note</div>
+            <div class="arch-menu-item" onclick="archInsert('${esc(companyName)}',{type:'text',w:200,h:40,text:'Text',fill:'transparent',stroke:'transparent'})"><i class="ti ti-typography"></i> Text</div>
+            <div class="arch-menu-sep"></div>
+            <div class="arch-menu-label">Shapes</div>
+            ${ARCH_SHAPES.map(s => `<div class="arch-menu-item" onclick="archInsert('${esc(companyName)}',{type:'shape',shape:'${s.key}',w:170,h:80,text:''})"><i class="ti ${s.icon}"></i> ${s.label}</div>`).join('')}
+            <div class="arch-menu-sep"></div>
+            <div class="arch-menu-label">Change architecture</div>
+            ${ARCH_PRESETS.map(p => `<div class="arch-menu-item" onclick="archInsertPreset('${esc(companyName)}','${p.key}')"><span class="arch-dot" style="background:${p.stroke}"></span> ${p.label}</div>`).join('')}
+            <div class="arch-menu-sep"></div>
+            <div class="arch-menu-label">Chart</div>
+            <div class="arch-menu-item" onclick="archInsert('${esc(companyName)}',{type:'chart',w:340,h:240,chart:{kind:'bar',title:'',source:'manual',data:{labels:[],values:[]}}})"><i class="ti ti-chart-bar"></i> Bar / line / pie</div>
           </div>
         </div>
-      `).join('')}
+        <div class="arch-zoom">
+          <button onclick="archZoomBtn('${esc(companyName)}',-1)" title="Zoom out"><i class="ti ti-minus"></i></button>
+          <span id="archZoomLabel">100%</span>
+          <button onclick="archZoomBtn('${esc(companyName)}',1)" title="Zoom in"><i class="ti ti-plus"></i></button>
+          <button onclick="archFit('${esc(companyName)}')" title="Fit to content"><i class="ti ti-maximize"></i></button>
+          <button onclick="archZoomBtn('${esc(companyName)}',0)" title="Reset view"><i class="ti ti-focus-2"></i></button>
+        </div>
+      </div>
+    </div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:8px;">Freeform board — drag empty space to pan, scroll to zoom. Insert cards, shapes, sticky notes and charts; double-click to edit text; select an element for colour, shape and connectors. Everything autosaves.</div>
+    <div id="archToolbarHolder">${archInlineToolbarHtml(companyName)}</div>
+    <div id="archViewport" class="arch-viewport" onmousedown="archViewportMouseDown(event)" onwheel="archWheel(event)">
+      <div id="archScene" class="arch-scene" style="width:${ARCH_SCENE_W}px;height:${ARCH_SCENE_H}px;">
+        <svg id="archEdges" class="arch-edges" width="${ARCH_SCENE_W}" height="${ARCH_SCENE_H}"></svg>
+        <div id="archEdgeLabels" class="arch-edge-labels"></div>
+        ${els}
+      </div>
+      ${!d.elements.length ? '<div class="arch-empty muted">Empty canvas — press <b>Insert</b> to add your first card.</div>' : ''}
     </div>
   </div>`;
 }
@@ -23722,6 +24590,22 @@ state = makeReactive(rawState, persistState);
 renderSidebar();
 syncSidebarCollapseBtn();
 renderPage();
+
+// Close the account-canvas Insert menu on any outside click.
+document.addEventListener('click', (e) => {
+  if(!e.target.closest || !e.target.closest('.arch-menu')) archCloseMenus();
+});
+// Delete key removes the selected canvas element / edge (unless editing text).
+document.addEventListener('keydown', (e) => {
+  if((e.key === 'Delete' || e.key === 'Backspace') && window.__archSel && !window.__archEditing){
+    const t = e.target.tagName;
+    if(t === 'INPUT' || t === 'TEXTAREA' || e.target.isContentEditable) return;
+    const cn = window.__profileSelectedCompany;
+    if(window.__archSel.kind === 'edge') archDeleteEdge(cn, window.__archSel.id);
+    else archDeleteEl(cn, window.__archSel.id);
+    e.preventDefault();
+  }
+});
 
 // Agency controller session: branding + client switcher + Agency nav.
 // Non-blocking; on a single-client deployment it's a no-op.
