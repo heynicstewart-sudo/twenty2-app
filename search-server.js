@@ -477,8 +477,10 @@ const OPTIONAL_LATE_ADDED_FIELDS = [
   'Decision Maker Criteria',
   // Deep company research (Companies table).
   'Deep Research (JSON)',
-  // Manual change-architecture whiteboard (Companies table).
+  // Manual change-architecture whiteboard / freeform account canvas (Companies table).
   'Change Architecture (JSON)',
+  // Freeform sticky notes pinned to the auto Account board (Companies table).
+  'Account Board Notes (JSON)',
   // Per-client editable GTM motion / ICP profile / competitor map (Settings table).
   'GTM Motion (JSON)',
   'ICP Profile (JSON)',
@@ -9361,7 +9363,10 @@ app.get('/api/companies/:name/change-architecture', async (req, res) => {
     const companyRecord = await findRecordByFieldName('Companies', 'Company Name', decodeURIComponent(req.params.name));
     if (!companyRecord) return res.status(404).json({ error: 'Company not found' });
     const saved = parseJsonSafe(companyRecord.fields['Change Architecture (JSON)']);
-    res.json(saved || { nodes: [], edges: [] });
+    // v1 shape was { nodes, edges }; v2 (freeform account canvas) is
+    // { version:2, elements, edges, viewport }. The browser's normalizeArchDoc()
+    // migrates v1 -> v2 on load, so just hand back whatever is stored.
+    res.json(saved || { version: 2, elements: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } });
   } catch (err) {
     console.error('Change architecture load error:', err.message);
     res.status(500).json({ error: err.message });
@@ -9370,17 +9375,158 @@ app.get('/api/companies/:name/change-architecture', async (req, res) => {
 
 app.post('/api/companies/:name/change-architecture', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
-  const { nodes, edges } = req.body || {};
-  if (!Array.isArray(nodes) || !Array.isArray(edges)) return res.status(400).json({ error: 'nodes and edges arrays are required' });
+  const body = req.body || {};
+  // Accept either the legacy { nodes, edges } or the v2 freeform-canvas
+  // { version, elements, edges, viewport }. Whole-document replace on save -
+  // single-editor board, no operational-transform/merge needed.
+  const hasV2 = Array.isArray(body.elements);
+  const hasV1 = Array.isArray(body.nodes);
+  if (!hasV2 && !hasV1) return res.status(400).json({ error: 'elements (v2) or nodes (v1) array is required' });
+  if (!Array.isArray(body.edges)) return res.status(400).json({ error: 'edges array is required' });
   try {
     const companyRecord = await findRecordByFieldName('Companies', 'Company Name', decodeURIComponent(req.params.name));
     if (!companyRecord) return res.status(404).json({ error: 'Company not found' });
+    const doc = hasV2
+      ? { version: 2, elements: body.elements, edges: body.edges, viewport: body.viewport || { x: 0, y: 0, zoom: 1 } }
+      : { nodes: body.nodes, edges: body.edges };
     await airtableWriteAllowingMissingCtaFields('PATCH', 'Companies', {
-      records: [{ id: companyRecord.id, fields: { 'Change Architecture (JSON)': JSON.stringify({ nodes, edges }) } }]
+      records: [{ id: companyRecord.id, fields: { 'Change Architecture (JSON)': JSON.stringify(doc) } }]
     });
     res.json({ success: true });
   } catch (err) {
     console.error('Change architecture save error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Freeform sticky notes on the auto Account board ----
+// Kept in a separate field from the freeform canvas above so the two boards'
+// state never collides. Small array of { id, x, y, text, fill }.
+app.get('/api/companies/:name/account-board-notes', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const companyRecord = await findRecordByFieldName('Companies', 'Company Name', decodeURIComponent(req.params.name));
+    if (!companyRecord) return res.status(404).json({ error: 'Company not found' });
+    const saved = parseJsonSafe(companyRecord.fields['Account Board Notes (JSON)']);
+    res.json({ notes: Array.isArray(saved) ? saved : (Array.isArray(saved && saved.notes) ? saved.notes : []) });
+  } catch (err) {
+    console.error('Account board notes load error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/companies/:name/account-board-notes', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { notes } = req.body || {};
+  if (!Array.isArray(notes)) return res.status(400).json({ error: 'notes array is required' });
+  try {
+    const companyRecord = await findRecordByFieldName('Companies', 'Company Name', decodeURIComponent(req.params.name));
+    if (!companyRecord) return res.status(404).json({ error: 'Company not found' });
+    await airtableWriteAllowingMissingCtaFields('PATCH', 'Companies', {
+      records: [{ id: companyRecord.id, fields: { 'Account Board Notes (JSON)': JSON.stringify(notes) } }]
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Account board notes save error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Computed chart datasets for a company / contact, for the canvas ----
+// Powers the "Pull from app" option in the canvas chart-data dialog. Each
+// returned dataset is { key, label, kind, labels:[], values:[] } - materialised
+// into the chart element on selection, re-pullable via the element's Refresh.
+function bucketCounts(items, keyFn) {
+  const out = {};
+  items.forEach(it => { const k = keyFn(it); if (k == null || k === '') return; out[k] = (out[k] || 0) + 1; });
+  return out;
+}
+function monthKey(dateStr) {
+  if (!dateStr) return null;
+  const d = new Date(dateStr);
+  if (isNaN(d)) return null;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+function seniorityTierLabel(jobTitle) {
+  const t = (jobTitle || '').toLowerCase();
+  if (/chief|\bceo\b|\bcfo\b|\bcoo\b|\bcto\b|president|owner|founder|director|head of|\bvp\b|vice president/.test(t)) return 'Exec / leadership';
+  if (/manager|\blead\b|principal|superintendent/.test(t)) return 'Manager / lead';
+  return 'Individual contributor';
+}
+function datasetsFromTouchPointsAndContacts(touchPoints, contacts, campaignContactRows, deals) {
+  const datasets = [];
+
+  // Touch points over time (by month)
+  const byMonth = bucketCounts(touchPoints, tp => monthKey(tp.fields && tp.fields['Date']));
+  const months = Object.keys(byMonth).sort();
+  if (months.length) datasets.push({ key: 'touchpoints-over-time', label: 'Touch points over time', kind: 'line', labels: months, values: months.map(m => byMonth[m]) });
+
+  // Touch points by type
+  const byType = bucketCounts(touchPoints, tp => (tp.fields && tp.fields['Type']) || 'Other');
+  if (Object.keys(byType).length) datasets.push({ key: 'touchpoints-by-type', label: 'Touch points by type', kind: 'pie', labels: Object.keys(byType), values: Object.values(byType) });
+
+  // Contacts by seniority tier
+  const byTier = bucketCounts(contacts, c => seniorityTierLabel(c.fields && c.fields['Job Title']));
+  if (Object.keys(byTier).length) datasets.push({ key: 'contacts-by-seniority', label: 'Contacts by seniority', kind: 'pie', labels: Object.keys(byTier), values: Object.values(byTier) });
+
+  // Contacts by journey stage
+  const byJourney = bucketCounts(contacts, c => (c.fields && c.fields['Journey Stage']) || 'Unknown');
+  if (Object.keys(byJourney).length) datasets.push({ key: 'contacts-by-journey', label: 'Contacts by journey stage', kind: 'bar', labels: Object.keys(byJourney), values: Object.values(byJourney) });
+
+  // Campaign stage spread
+  const byStage = bucketCounts(campaignContactRows, r => collapseLegacyStage(normalizeSequenceStage(r.fields && r.fields['Sequence Stage'])) || 'Unknown');
+  if (Object.keys(byStage).length) datasets.push({ key: 'campaign-stage-spread', label: 'Campaign stage spread', kind: 'bar', labels: Object.keys(byStage), values: Object.values(byStage) });
+
+  // Reply sentiment
+  const bySentiment = bucketCounts(campaignContactRows.filter(r => r.fields && r.fields['Reply Sentiment']), r => r.fields['Reply Sentiment']);
+  if (Object.keys(bySentiment).length) datasets.push({ key: 'reply-sentiment', label: 'Reply sentiment', kind: 'pie', labels: Object.keys(bySentiment), values: Object.values(bySentiment) });
+
+  // Deals by outcome
+  const byOutcome = bucketCounts(deals, d => (d.fields && d.fields['Outcome']) || 'Pending');
+  if (Object.keys(byOutcome).length) datasets.push({ key: 'deals-by-outcome', label: 'Deals by outcome', kind: 'pie', labels: Object.keys(byOutcome), values: Object.values(byOutcome) });
+
+  return datasets;
+}
+
+app.get('/api/companies/:name/board-datasets', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const companyRecord = await findRecordByFieldName('Companies', 'Company Name', decodeURIComponent(req.params.name));
+    if (!companyRecord) return res.status(404).json({ error: 'Company not found' });
+    const [contactRecords, touchPoints, campaignRows, deals] = await Promise.all([
+      airtableFetchAllRecords('Contacts'),
+      airtableFetchAllRecords('Touch Points'),
+      fetchCampaignContactsRows(),
+      airtableFetchAllRecords('Deals').catch(() => [])
+    ]);
+    const contactsHere = contactRecords.filter(r => (r.fields['Company'] || [])[0] === companyRecord.id);
+    const contactIds = new Set(contactsHere.map(c => c.id));
+    const tpHere = touchPoints.filter(tp => (tp.fields['Contact'] || []).some(id => contactIds.has(id)));
+    const rowsHere = campaignRows.filter(r => (r.fields['Contact'] || []).some(id => contactIds.has(id)));
+    const dealsHere = deals.filter(d => (d.fields['Contact'] || []).some(id => contactIds.has(id)));
+    res.json({ datasets: datasetsFromTouchPointsAndContacts(tpHere, contactsHere, rowsHere, dealsHere) });
+  } catch (err) {
+    console.error('Company board-datasets error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/contacts/:id/board-datasets', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const contactRecord = await airtableGetRecord('Contacts', req.params.id).catch(() => null);
+    if (!contactRecord) return res.status(404).json({ error: 'Contact not found' });
+    const [touchPoints, campaignRows, deals] = await Promise.all([
+      airtableFetchAllRecords('Touch Points'),
+      fetchCampaignContactsRows(),
+      airtableFetchAllRecords('Deals').catch(() => [])
+    ]);
+    const tpHere = touchPoints.filter(tp => (tp.fields['Contact'] || []).includes(contactRecord.id));
+    const rowsHere = campaignRows.filter(r => (r.fields['Contact'] || []).includes(contactRecord.id));
+    const dealsHere = deals.filter(d => (d.fields['Contact'] || []).includes(contactRecord.id));
+    res.json({ datasets: datasetsFromTouchPointsAndContacts(tpHere, [contactRecord], rowsHere, dealsHere) });
+  } catch (err) {
+    console.error('Contact board-datasets error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
