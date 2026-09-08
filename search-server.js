@@ -5275,10 +5275,17 @@ app.get('/api/campaign/:id/scorecard', async (req, res) => {
       if (Array.isArray(log)) changeMarkers = log.filter(e => e && e.date && e.date >= from && e.date <= to);
     } catch (e) { /* not JSON yet - no markers */ }
 
+    // ICP coverage of this campaign's contacts (Phase 2) - pure read.
+    let icpHealth = null;
+    try {
+      const icpProfile = await getIcpProfile();
+      if (icpProfile) icpHealth = campaignIcpHealth(campaignRecord, contactRecords, ccRows);
+    } catch (e) { icpHealth = null; }
+
     res.json({
       campaignName: campaignRecord.fields['Name'] || campaignRecord.fields['Campaign Name'] || '',
       from, to, prevFrom, prevTo,
-      tiles, series, connectionAb, diagnostic, multiThread, changeMarkers,
+      tiles, series, connectionAb, diagnostic, multiThread, changeMarkers, icpHealth,
       generatedAt: new Date().toISOString()
     });
   } catch (err) {
