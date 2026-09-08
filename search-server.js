@@ -5275,10 +5275,17 @@ app.get('/api/campaign/:id/scorecard', async (req, res) => {
       if (Array.isArray(log)) changeMarkers = log.filter(e => e && e.date && e.date >= from && e.date <= to);
     } catch (e) { /* not JSON yet - no markers */ }
 
+    // ICP coverage of this campaign's contacts (Phase 2) - pure read.
+    let icpHealth = null;
+    try {
+      const icpProfile = await getIcpProfile();
+      if (icpProfile) icpHealth = campaignIcpHealth(campaignRecord, contactRecords, ccRows);
+    } catch (e) { icpHealth = null; }
+
     res.json({
       campaignName: campaignRecord.fields['Name'] || campaignRecord.fields['Campaign Name'] || '',
       from, to, prevFrom, prevTo,
-      tiles, series, connectionAb, diagnostic, multiThread, changeMarkers,
+      tiles, series, connectionAb, diagnostic, multiThread, changeMarkers, icpHealth,
       generatedAt: new Date().toISOString()
     });
   } catch (err) {
@@ -9838,7 +9845,9 @@ app.get('/api/competitor-map', async (req, res) => {
   try {
     const record = await getSettingsRecord();
     const saved = record ? parseJsonSafe(record.fields['Competitor Map (JSON)']) : null;
-    res.json(saved && Array.isArray(saved.nodes) ? saved : { nodes: [], edges: [] });
+    // v1 { nodes, edges } or v3 { version:3, canvases, activeCanvasId } - the
+    // browser's normalizeArchDoc migrates v1 on load, so hand back what's stored.
+    res.json(saved && (Array.isArray(saved.nodes) || Array.isArray(saved.canvases)) ? saved : { version: 3, canvases: [], activeCanvasId: null });
   } catch (err) {
     console.error('Get competitor-map error:', err.message);
     res.status(500).json({ error: err.message });
@@ -9847,12 +9856,17 @@ app.get('/api/competitor-map', async (req, res) => {
 
 app.post('/api/competitor-map', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
-  const { nodes, edges } = req.body || {};
-  if (!Array.isArray(nodes) || !Array.isArray(edges)) return res.status(400).json({ error: 'nodes and edges arrays are required' });
+  const body = req.body || {};
+  const hasV3 = Array.isArray(body.canvases);
+  const hasV1 = Array.isArray(body.nodes) && Array.isArray(body.edges);
+  if (!hasV3 && !hasV1) return res.status(400).json({ error: 'canvases (v3) or nodes+edges (v1) required' });
   try {
     const settingsRecord = await getOrCreateSettingsRecord();
+    const doc = hasV3
+      ? { version: 3, activeCanvasId: body.activeCanvasId || (body.canvases[0] && body.canvases[0].id) || null, canvases: body.canvases }
+      : { nodes: body.nodes, edges: body.edges };
     await airtableWriteAllowingMissingCtaFields('PATCH', SETTINGS_TABLE, {
-      records: [{ id: settingsRecord.id, fields: { 'Competitor Map (JSON)': JSON.stringify({ nodes, edges }) } }]
+      records: [{ id: settingsRecord.id, fields: { 'Competitor Map (JSON)': JSON.stringify(doc) } }]
     });
     res.json({ success: true });
   } catch (err) {
