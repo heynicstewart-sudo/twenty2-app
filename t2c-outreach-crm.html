@@ -2492,6 +2492,7 @@ function afterRender(page){
     if(window.__gtmPerformance === undefined) loadGtmPerformance();
     if(window.__lostDeals === undefined) loadLostDeals();
     if(window.__stalledRelationships === undefined) loadStalledRelationships();
+    if(window.__programs === undefined) loadPrograms();
     ensureContextDataLoaded();
   }
   if(page === 'gtmmotion' && window.__gtmMotion === undefined && !window.__gtmMotionLoading) loadGtmMotion();
@@ -11305,6 +11306,8 @@ function renderCompanyDrawerContent(data){
 
   ${renderRelationshipFlagSection(data.relationshipFlag)}
 
+  ${renderCompanyProgramsSection(c)}
+
   ${c.latestSignal ? `<div class="drawer-section">
     <div class="muted" style="font-size:11px;font-weight:700;margin-bottom:4px;">LATEST SIGNAL</div>
     <div style="font-size:12px;">${esc(c.latestSignal)}${c.signalDate?` <span class="muted">(${fmtDate(c.signalDate)})</span>`:''}</div>
@@ -13970,6 +13973,17 @@ function renderCampaignStrategyTab(campaign){
 // time. Empty library = zero change to existing drafting behaviour.
 const ICP_SIZE_BANDS = ['any', 'Micro', 'Small', 'Mid', 'Large'];
 const ICP_MOMENTUM_OPTIONS = ['any', 'Hiring', 'Funded', 'Leadership Change', 'Flat'];
+
+// Active Programs (Phase 3) - the GTM first-step buying trigger.
+const PROGRAM_TYPES = ['ERP / SAP', 'Agile / SAFe rollout', 'Digital / business transformation', 'Cloud / data platform', 'Operating model', 'Other'];
+const PROGRAM_PHASES = ['Announced', 'Mobilising', 'In delivery', 'Stabilising', 'Slipping', 'Complete', 'Unknown'];
+function programPhaseColor(phase){
+  return {
+    'Slipping': 'var(--danger)', 'In delivery': 'var(--success)', 'Mobilising': 'var(--accent-2)',
+    'Announced': 'var(--warning)', 'Stabilising': 'var(--tint-blue-fg)', 'Complete': 'var(--muted)', 'Unknown': 'var(--muted)'
+  }[phase] || 'var(--muted)';
+}
+const PROGRAM_PHASE_HEAT = { 'Slipping': 0, 'In delivery': 1, 'Mobilising': 2, 'Announced': 3, 'Stabilising': 4, 'Unknown': 5, 'Complete': 6 };
 // Matches Deals.'Loss Reason' choices in Airtable (search-server.js mapMondayLossReason
 // keeps the Monday-scan side of this list in sync) - kept as one shared list so a
 // hand-logged deal and a Monday-scan finding never drift into different vocabularies.
@@ -14352,6 +14366,261 @@ async function removeGlobalAngleLibraryEntry(idx){
   renderPage();
 }
 
+// ===================== ACTIVE PROGRAMS (Phase 3) =====================
+// Twenty2's GTM first step: know which companies are running a transformation
+// program (the buying trigger). Entered by hand or via the capture chat that
+// parses a pasted finding into the right slot. GET /api/programs is a pure
+// read; POST /api/companies/:name/programs replaces one company's array;
+// POST /api/programs/capture returns a proposal the user confirms.
+
+async function loadPrograms(){
+  if(window.__programs !== undefined) return;
+  window.__programs = null;
+  try {
+    const res = await fetch('/api/programs');
+    const json = await res.json();
+    window.__programs = res.ok ? json : { error: true };
+  } catch(err){
+    window.__programs = { error: true };
+  }
+  if(state.currentPage === 'companyuniverse') renderPage();
+}
+
+function renderProgramsCard(){
+  const p = window.__programs;
+  const filterType = window.__programsFilterType || '';
+  const onlyNoCampaign = !!window.__programsOnlyNoCampaign;
+  let rows = (p && !p.error && Array.isArray(p.companies)) ? p.companies.slice() : [];
+  if(filterType) rows = rows.filter(r => r.programs.some(pr => pr.type === filterType));
+  if(onlyNoCampaign) rows = rows.filter(r => !r.inCampaign);
+  rows.sort((a,b) => {
+    const heat = r => Math.min(...r.programs.map(pr => PROGRAM_PHASE_HEAT[pr.phase] ?? 5));
+    return (a.inCampaign - b.inCampaign) || (heat(a) - heat(b));
+  });
+
+  const body = () => {
+    if(p === undefined || p === null) return '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading…</div>';
+    if(p.error) return '<div class="muted" style="font-size:12.5px;">Could not load.</div>';
+    if(!p.companies.length) return `<div class="empty-state" style="padding:24px;">No programs logged yet. Press <b>Log a finding</b> and paste anything you've found — a news line, a LinkedIn post, a note from a call — and the Engine files it against the right company.</div>`;
+    if(!rows.length) return '<div class="muted" style="font-size:12px;">No companies match this filter.</div>';
+    return `
+    <div class="perf-table-wrap">
+      <table class="perf-table">
+        <thead><tr><th>Company</th><th>Programs</th><th>ICP</th><th>In a campaign?</th></tr></thead>
+        <tbody>
+          ${rows.map(r => `
+          <tr class="home-grid-row" onclick="openEntityDeep('company','${esc(r.companyName)}')">
+            <td class="perf-name">${esc(r.companyName)}${r.accountPriority ? `<div class="muted" style="font-weight:400;font-size:10.5px;">${esc(r.accountPriority)}</div>` : ''}</td>
+            <td>${r.programs.map(pr => `<span class="badge" style="background:var(--surface-2);font-size:10.5px;margin:1px 2px 1px 0;display:inline-block;">${esc(pr.name)} <span style="color:${programPhaseColor(pr.phase)};font-weight:700;">· ${esc(pr.phase)}</span></span>`).join('')}</td>
+            <td>${/resources icp/i.test(r.icpTag||'') ? '<span class="badge" style="background:var(--tint-green-bg);color:var(--tint-green-fg);font-size:10px;">ICP</span>' : (r.fitScore!=null ? `<span class="muted" style="font-size:11px;">${r.fitScore}</span>` : '<span class="muted">—</span>')}</td>
+            <td>${r.inCampaign ? '<span class="muted">Yes</span>' : '<span style="color:var(--danger);font-weight:700;font-size:11.5px;">Not yet</span>'}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+  };
+
+  const types = (p && p.types) || PROGRAM_TYPES;
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:4px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-progress-bolt"></i> Active programs</div>
+      <button class="btn btn-primary btn-sm" onclick="openProgramCapture()"><i class="ti ti-message-plus"></i> Log a finding</button>
+    </div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Which companies are running a transformation program right now — Twenty2's first GTM step. A company with a program in delivery (or slipping) that isn't in a campaign yet is your next target.</div>
+    ${(p && !p.error && p.companies.length) ? `
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
+        <select onchange="window.__programsFilterType=this.value;renderPage()" style="font-size:12px;max-width:220px;">
+          <option value="">All program types</option>
+          ${types.map(t => `<option value="${esc(t)}" ${filterType===t?'selected':''}>${esc(t)}</option>`).join('')}
+        </select>
+        <label style="font-size:11.5px;display:flex;align-items:center;gap:5px;"><input type="checkbox" ${onlyNoCampaign?'checked':''} onchange="window.__programsOnlyNoCampaign=this.checked;renderPage()" style="width:auto;"> Not in a campaign</label>
+      </div>` : ''}
+    ${body()}
+  </div>`;
+}
+
+// ---- capture chat ----
+function openProgramCapture(prefillCompany){
+  window.__progCapture = { step: 'input', prefillCompany: prefillCompany || '', proposal: null };
+  renderProgramCaptureModal();
+}
+function renderProgramCaptureModal(){
+  const s = window.__progCapture;
+  if(!s) return;
+  if(s.step === 'input'){
+    openModal('Log a finding', `
+      <div class="muted" style="font-size:12px;margin-bottom:8px;">Paste whatever you found — a news headline, a LinkedIn post, a line from a call. The Engine works out which company it's about and whether it's a program, a signal, or just a note.</div>
+      <textarea id="progCaptureText" rows="6" placeholder="e.g. 'Water Corporation has kicked off a multi-year SAP S/4HANA replacement, go-live slipped to 2027…'" style="width:100%;">${esc(s.text || '')}</textarea>
+      ${s.prefillCompany ? `<div class="muted" style="font-size:11px;margin-top:6px;">Will attach to <b>${esc(s.prefillCompany)}</b> unless the text points elsewhere.</div>` : ''}
+    `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="progCaptureParseBtn" onclick="progCaptureParse()">Parse it</button>`);
+    setTimeout(() => { const t = document.getElementById('progCaptureText'); if(t) t.focus(); }, 20);
+    return;
+  }
+  // proposal step
+  const pr = s.proposal;
+  const companies = (window.__programs && window.__programs.companies || []).map(c => c.companyName);
+  const allCompanyNames = [...new Set([...(state.contacts||[]).map(c => c.company).filter(Boolean), ...companies, ...(pr.candidateCompanies||[])])].sort();
+  const destLabel = { program: 'Active program', signal: 'Company signal', note: 'Company note' }[pr.destination] || 'Note';
+  openModal('Confirm — ' + destLabel, `
+    <div class="field"><label>Company</label>
+      <input id="progPropCompany" list="progPropCompanyList" value="${esc(pr.companyName || s.prefillCompany || '')}" style="width:100%;">
+      <datalist id="progPropCompanyList">${allCompanyNames.map(n => `<option value="${esc(n)}">`).join('')}</datalist>
+      ${pr.companyMatched ? '<div class="muted" style="font-size:10.5px;margin-top:3px;color:var(--success);">Matched a company on file</div>' : '<div class="muted" style="font-size:10.5px;margin-top:3px;color:var(--warning);">Not matched — pick the right one</div>'}
+    </div>
+    <div class="field"><label>This is a</label>
+      <select id="progPropDest" onchange="progPropSetDest(this.value)">
+        <option value="program" ${pr.destination==='program'?'selected':''}>Active program</option>
+        <option value="signal" ${pr.destination==='signal'?'selected':''}>Signal (leadership change / funding / restructure)</option>
+        <option value="note" ${pr.destination==='note'?'selected':''}>Just a note</option>
+      </select>
+    </div>
+    <div id="progPropFields">${renderProgramProposalFields(pr)}</div>
+  `, `<button class="btn btn-secondary" onclick="window.__progCapture.step='input';renderProgramCaptureModal()">Back</button><button class="btn btn-primary" id="progPropSaveBtn" onclick="progCaptureSave()">Save</button>`);
+}
+function renderProgramProposalFields(pr){
+  if(pr.destination === 'program'){
+    const p = pr.program || {};
+    return `
+      <div class="field"><label>Program name</label><input id="progF_name" value="${esc(p.name||'')}"></div>
+      <div class="two-col" style="gap:10px;">
+        <div class="field"><label>Type</label><select id="progF_type">${PROGRAM_TYPES.map(t => `<option ${p.type===t?'selected':''}>${t}</option>`).join('')}</select></div>
+        <div class="field"><label>Phase</label><select id="progF_phase">${PROGRAM_PHASES.map(ph => `<option ${p.phase===ph?'selected':''}>${ph}</option>`).join('')}</select></div>
+      </div>
+      <div class="field"><label>Evidence</label><textarea id="progF_evidence" rows="2">${esc(p.evidence||'')}</textarea></div>
+      <div class="two-col" style="gap:10px;">
+        <div class="field"><label>Source</label><input id="progF_source" value="${esc(p.source||'')}" placeholder="URL, or 'call' / 'LinkedIn'"></div>
+        <div class="field"><label>Confidence</label><select id="progF_confidence">${['high','medium','low'].map(c => `<option ${p.confidence===c?'selected':''}>${c}</option>`).join('')}</select></div>
+      </div>`;
+  }
+  if(pr.destination === 'signal'){
+    return `<div class="field"><label>Signal</label><textarea id="progF_signal" rows="2">${esc(pr.signal||'')}</textarea></div>`;
+  }
+  return `<div class="field"><label>Note</label><textarea id="progF_note" rows="3">${esc(pr.note||'')}</textarea></div>`;
+}
+function progPropSetDest(dest){
+  window.__progCapture.proposal.destination = dest;
+  document.getElementById('progPropFields').innerHTML = renderProgramProposalFields(window.__progCapture.proposal);
+}
+async function progCaptureParse(){
+  const text = (document.getElementById('progCaptureText').value || '').trim();
+  if(!text){ toast('Paste something first', 'warn'); return; }
+  window.__progCapture.text = text;
+  const btn = document.getElementById('progCaptureParseBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Parsing…'; }
+  try {
+    const res = await fetch('/api/programs/capture', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ text }) });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    if(!data.companyMatched && window.__progCapture.prefillCompany){ data.companyName = window.__progCapture.prefillCompany; data.companyMatched = true; }
+    window.__progCapture.proposal = data;
+    window.__progCapture.step = 'proposal';
+    renderProgramCaptureModal();
+  } catch(err){
+    toast('Could not parse: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = 'Parse it'; }
+  }
+}
+async function progCaptureSave(){
+  const s = window.__progCapture;
+  const pr = s.proposal;
+  const company = (document.getElementById('progPropCompany').value || '').trim();
+  if(!company){ toast('Pick a company', 'warn'); return; }
+  const dest = document.getElementById('progPropDest').value;
+  const btn = document.getElementById('progPropSaveBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Saving…'; }
+  try {
+    if(dest === 'program'){
+      // fetch the company's current programs, append, save
+      const cur = await fetch(`/api/companies/profile?name=${encodeURIComponent(company)}`).then(r => r.json()).catch(() => ({}));
+      const existing = (cur.company && cur.company.programs) || [];
+      existing.push({
+        id: 'prog' + Date.now().toString(36),
+        name: (document.getElementById('progF_name').value || '').trim() || 'Unnamed program',
+        type: document.getElementById('progF_type').value,
+        phase: document.getElementById('progF_phase').value,
+        evidence: (document.getElementById('progF_evidence').value || '').trim(),
+        source: (document.getElementById('progF_source').value || '').trim(),
+        confidence: document.getElementById('progF_confidence').value,
+        detectedAt: isoDate(TODAY), addedBy: 'chat'
+      });
+      const r = await fetch(`/api/companies/${encodeURIComponent(company)}/programs`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ programs: existing }) });
+      if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error || 'Save failed');
+    } else if(dest === 'signal'){
+      const summary = (document.getElementById('progF_signal').value || '').trim();
+      const r = await fetch(`/api/companies/${encodeURIComponent(company)}/signal`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ signal: summary }) });
+      if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error || 'Save failed');
+    } else {
+      const note = (document.getElementById('progF_note').value || '').trim();
+      const r = await fetch('/api/companies/notes', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: company, noteText: note }) });
+      if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error || 'Save failed');
+    }
+    closeModal();
+    toast('Filed against ' + company, 'success');
+    window.__progCapture = null;
+    window.__programs = undefined; loadPrograms();
+    window.__icpWorklist = undefined; loadIcpWorklist();
+  } catch(err){
+    toast('Could not save: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = 'Save'; }
+  }
+}
+
+// ---- programs section in the company deep record ----
+function renderCompanyProgramsSection(company){
+  const list = (company && company.programs) || [];
+  const cn = company.name;
+  return `
+  <div class="drawer-section" id="companyProgramsSection">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <div class="section-title" style="font-size:13px;"><i class="ti ti-progress-bolt"></i> Active programs</div>
+      <button class="btn btn-ghost btn-sm" onclick="openProgramCapture('${esc(cn)}')"><i class="ti ti-message-plus"></i> Log a finding</button>
+    </div>
+    ${list.length ? list.map((p,i) => `
+      <div class="tp-item">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+          <div style="flex:1;">
+            <strong style="font-size:12.5px;">${esc(p.name)}</strong>
+            <div class="muted" style="font-size:11px;">${esc(p.type)} · <span style="color:${programPhaseColor(p.phase)};font-weight:700;">${esc(p.phase)}</span>${p.confidence ? ` · ${esc(p.confidence)} confidence` : ''}${p.detectedAt ? ` · ${fmtDate(p.detectedAt)}` : ''}</div>
+            ${p.evidence ? `<div style="font-size:11.5px;margin-top:3px;font-style:italic;">"${esc(p.evidence)}"</div>` : ''}
+            ${p.source ? `<div class="muted" style="font-size:10.5px;margin-top:2px;">${esc(p.source)}</div>` : ''}
+          </div>
+          <div style="display:flex;gap:2px;">
+            <button class="btn btn-ghost btn-sm" title="Edit phase" onclick="cycleCompanyProgramPhase('${esc(cn)}',${i})"><i class="ti ti-adjustments"></i></button>
+            <button class="btn btn-ghost btn-sm" title="Remove" onclick="deleteCompanyProgram('${esc(cn)}',${i})"><i class="ti ti-trash"></i></button>
+          </div>
+        </div>
+      </div>`).join('') : '<div class="muted" style="font-size:12px;margin-top:6px;">None on file. Log a finding, or add one from Company Universe.</div>'}
+  </div>`;
+}
+async function saveCompanyPrograms(companyName, programs){
+  try {
+    const r = await fetch(`/api/companies/${encodeURIComponent(companyName)}/programs`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ programs }) });
+    const data = await r.json();
+    if(!r.ok) throw new Error(data.error || 'Save failed');
+    if(window.__drawerCompanyProfile && window.__drawerCompanyProfile.company) window.__drawerCompanyProfile.company.programs = data.programs;
+    const sec = document.getElementById('companyProgramsSection');
+    if(sec && window.__drawerCompanyProfile) sec.outerHTML = renderCompanyProgramsSection(window.__drawerCompanyProfile.company);
+    window.__programs = undefined; loadPrograms();
+    return true;
+  } catch(err){ toast('Could not save: ' + err.message, 'warn'); return false; }
+}
+function cycleCompanyProgramPhase(companyName, idx){
+  const c = window.__drawerCompanyProfile && window.__drawerCompanyProfile.company;
+  const list = (c && c.programs) || [];
+  if(!list[idx]) return;
+  const i = PROGRAM_PHASES.indexOf(list[idx].phase);
+  list[idx].phase = PROGRAM_PHASES[(i + 1) % PROGRAM_PHASES.length];
+  saveCompanyPrograms(companyName, list);
+}
+function deleteCompanyProgram(companyName, idx){
+  const c = window.__drawerCompanyProfile && window.__drawerCompanyProfile.company;
+  const list = (c && c.programs) || [];
+  list.splice(idx, 1);
+  saveCompanyPrograms(companyName, list);
+}
+
+
 function renderCompanyUniverse(){
   window.__ctxCampaignTag = null;
   return `
@@ -14368,6 +14637,8 @@ function renderCompanyUniverse(){
     <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Size x momentum - every company on file, scored on 3 attributes. Click a company to open its profile. Costs Engine tokens; already-scored companies are skipped automatically.</div>
     ${renderAccountSegmentationGrid()}
   </div>
+
+  ${renderProgramsCard()}
 
   <div class="card" style="margin-bottom:16px;">
     <div class="section-title" style="margin-bottom:4px;"><i class="ti ti-chart-histogram"></i> What's actually converting</div>
@@ -23733,9 +24004,11 @@ async function loadIcpWorklist(){
 function renderIcpWorklistStrip(){
   const w = window.__icpWorklist;
   if(w === undefined || w === null || w.error || !w.icpConfigured) return '';
-  if(!w.icpCompanyCount) return '';
+  const programs = (w.withActiveProgram || []);
+  if(!w.icpCompanyCount && !programs.length) return '';
   const triggers = w.triggers || [];
   const untouched = w.untouched || [];
+  const progTargets = programs.filter(x => !x.inCampaign);
   return `
   <div class="card" style="margin-bottom:22px;">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
@@ -23743,6 +24016,15 @@ function renderIcpWorklistStrip(){
       <button class="btn btn-ghost btn-sm" onclick="navigate('companyuniverse')">Company Universe <i class="ti ti-arrow-right"></i></button>
     </div>
     <div class="muted" style="font-size:11.5px;margin:6px 0 12px;">${w.inCampaignCount} of ${w.icpCompanyCount} ICP accounts are in a campaign. ${w.untouchedTotal} are not.</div>
+    ${progTargets.length ? `
+      <div style="font-size:11px;font-weight:700;color:var(--danger);margin-bottom:4px;"><i class="ti ti-progress-bolt"></i> Active program, not in a campaign — start here</div>
+      ${progTargets.slice(0,6).map(x => `
+        <div class="tp-item" style="cursor:pointer;" onclick="navigate('profile');selectProfileCompany('${esc(x.name)}')">
+          <strong>${esc(x.name)}</strong>${x.priority ? ` <span class="muted">· ${esc(x.priority)}</span>` : ''}${x.icp ? '' : ' <span class="muted" style="font-size:10px;">(not ICP-tagged)</span>'}
+          <div class="muted" style="font-size:11px;">${x.programs.map(pr => esc(pr.name) + ' · ' + esc(pr.phase)).join('  |  ')}</div>
+        </div>`).join('')}
+      <div style="height:8px;"></div>
+    ` : ''}
     ${triggers.length ? `
       <div style="font-size:11px;font-weight:700;color:var(--warning);margin-bottom:4px;"><i class="ti ti-bolt"></i> Buying trigger detected</div>
       ${triggers.slice(0,5).map(t => `

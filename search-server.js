@@ -493,6 +493,8 @@ const OPTIONAL_LATE_ADDED_FIELDS = [
   'ICP Tag', 'Account Priority',
   // ICP fit scoring against the codified profile (Phase 2) — Companies table.
   'ICP Fit Score', 'ICP Trigger Detected',
+  // Active transformation programs (Phase 3) — Companies table.
+  'Programs (JSON)',
   // User-managed GTM Motion templates (Settings table).
   'GTM Motion Templates (JSON)'
 ];
@@ -3792,6 +3794,32 @@ function icpCoverageFor(matchedNames, contacts) {
     checkedAt: new Date().toISOString().slice(0, 10)
   };
 }
+
+// ===================== ACTIVE PROGRAMS (Phase 3) =====================
+// Twenty2's GTM first step: know which companies are running a transformation
+// program (the real buying trigger). Recorded per company, entered by hand or
+// via the capture chat that parses a pasted finding into the right slot.
+const PROGRAM_TYPES = ['ERP / SAP', 'Agile / SAFe rollout', 'Digital / business transformation', 'Cloud / data platform', 'Operating model', 'Other'];
+const PROGRAM_PHASES = ['Announced', 'Mobilising', 'In delivery', 'Stabilising', 'Slipping', 'Complete', 'Unknown'];
+const PROGRAM_HOT_PHASES = ['In delivery', 'Slipping', 'Mobilising'];
+
+function parseCompanyPrograms(cf) {
+  const raw = parseJsonSafe((cf || {})['Programs (JSON)']);
+  const arr = Array.isArray(raw) ? raw : (Array.isArray(raw && raw.programs) ? raw.programs : []);
+  return arr.filter(p => p && p.name).map(p => ({
+    id: p.id || ('prog' + Math.random().toString(36).slice(2, 9)),
+    name: (p.name || '').toString().slice(0, 200),
+    type: PROGRAM_TYPES.includes(p.type) ? p.type : 'Other',
+    phase: PROGRAM_PHASES.includes(p.phase) ? p.phase : 'Unknown',
+    evidence: (p.evidence || '').toString().slice(0, 1000),
+    source: (p.source || '').toString().slice(0, 500),
+    confidence: ['high', 'medium', 'low'].includes(p.confidence) ? p.confidence : 'medium',
+    note: (p.note || '').toString().slice(0, 1000),
+    detectedAt: p.detectedAt || new Date().toISOString().slice(0, 10),
+    addedBy: p.addedBy === 'chat' ? 'chat' : 'manual'
+  }));
+}
+function programIsActive(p) { return p && p.phase !== 'Complete'; }
 
 // Campaign ICP health - what share of a campaign's linked contacts sit on-ICP,
 // for the drift badge on the Campaigns list and the scorecard. Pure read.
@@ -9341,7 +9369,10 @@ app.get('/api/companies/profile', async (req, res) => {
         deepResearch: parseJsonSafe(cf['Deep Research (JSON)']),
         icpTag: cf['ICP Tag'] || null,
         accountPriority: cf['Account Priority'] || null,
-        procurementThreshold: cf['Procurement Threshold ($)'] || null
+        procurementThreshold: cf['Procurement Threshold ($)'] || null,
+        icpFitScore: Number.isFinite(Number(cf['ICP Fit Score'])) ? Number(cf['ICP Fit Score']) : null,
+        icpTriggerDetected: cf['ICP Trigger Detected'] || null,
+        programs: parseCompanyPrograms(cf)
       },
       relationshipFlag,
       matchingCaseStudies,
@@ -10195,16 +10226,182 @@ app.get('/api/icp/worklist', async (req, res) => {
         inCampaign: (contactsByCompany[c.id] || []).some(id => contactsInACampaign.has(id))
       }));
 
+    // Companies (ICP or not) with a live transformation program - the GTM
+    // first-step buying trigger. Not in a campaign = an immediate target.
+    const withActiveProgram = companyRecords
+      .map(c => ({ c, programs: parseCompanyPrograms(c.fields).filter(programIsActive) }))
+      .filter(x => x.programs.length)
+      .map(x => ({
+        id: x.c.id,
+        name: x.c.fields['Company Name'] || '',
+        priority: x.c.fields['Account Priority'] || '',
+        icp: isIcpCompany(x.c),
+        inCampaign: (contactsByCompany[x.c.id] || []).some(id => contactsInACampaign.has(id)),
+        programs: x.programs.map(p => ({ name: p.name, type: p.type, phase: p.phase }))
+      }))
+      .sort((a, b) => (a.inCampaign - b.inCampaign) || priorityRank(a.priority) - priorityRank(b.priority));
+
     res.json({
       icpConfigured: !!icpProfile,
       icpCompanyCount: icpCompanies.length,
       inCampaignCount: icpCompanies.length - untouched.length,
       untouched: untouched.slice(0, 60),
       untouchedTotal: untouched.length,
-      triggers: triggers.slice(0, 30)
+      triggers: triggers.slice(0, 30),
+      withActiveProgram: withActiveProgram.slice(0, 30),
+      withActiveProgramTotal: withActiveProgram.length
     });
   } catch (err) {
     console.error('ICP worklist error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Every company that has a program on file, flattened for the Company Universe
+// "Active programs" card. Pure read.
+app.get('/api/programs', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const [companyRecords, contactRecords, rows] = await Promise.all([
+      airtableFetchAllRecords('Companies'),
+      airtableFetchAllRecords('Contacts'),
+      fetchCampaignContactsRows()
+    ]);
+    const contactsByCompany = {};
+    contactRecords.forEach(c => {
+      const cid = (c.fields['Company'] || [])[0];
+      if (cid) (contactsByCompany[cid] = contactsByCompany[cid] || []).push(c.id);
+    });
+    const inACampaign = new Set();
+    rows.forEach(r => { const cid = (r.fields['Contact'] || [])[0]; if (cid) inACampaign.add(cid); });
+
+    const companies = companyRecords
+      .map(c => ({ c, programs: parseCompanyPrograms(c.fields) }))
+      .filter(x => x.programs.length)
+      .map(x => ({
+        companyId: x.c.id,
+        companyName: x.c.fields['Company Name'] || '',
+        icpTag: x.c.fields['ICP Tag'] || '',
+        accountPriority: x.c.fields['Account Priority'] || '',
+        fitScore: Number.isFinite(Number(x.c.fields['ICP Fit Score'])) ? Number(x.c.fields['ICP Fit Score']) : null,
+        inCampaign: (contactsByCompany[x.c.id] || []).some(id => inACampaign.has(id)),
+        knownContacts: (contactsByCompany[x.c.id] || []).length,
+        programs: x.programs
+      }));
+
+    res.json({ companies, types: PROGRAM_TYPES, phases: PROGRAM_PHASES });
+  } catch (err) {
+    console.error('Programs list error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Whole-array replace of one company's programs (same contract as the canvas
+// / account-board-notes routes).
+app.post('/api/companies/:name/programs', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { programs } = req.body || {};
+  if (!Array.isArray(programs)) return res.status(400).json({ error: 'programs array is required' });
+  try {
+    const companyRecord = await findRecordByFieldName('Companies', 'Company Name', decodeURIComponent(req.params.name));
+    if (!companyRecord) return res.status(404).json({ error: 'Company not found' });
+    const clean = parseCompanyPrograms({ 'Programs (JSON)': JSON.stringify(programs) });
+    await airtableWriteAllowingMissingCtaFields('PATCH', 'Companies', {
+      records: [{ id: companyRecord.id, fields: { 'Programs (JSON)': JSON.stringify(clean) } }]
+    });
+    res.json({ success: true, programs: clean });
+  } catch (err) {
+    console.error('Programs save error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Set a company's Latest Signal (+ date) - one of the destinations the capture
+// chat can file a pasted finding into. Latest Signal already feeds ICP scoring
+// and message drafting.
+app.post('/api/companies/:name/signal', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { signal } = req.body || {};
+  if (!signal || !signal.trim()) return res.status(400).json({ error: 'signal is required' });
+  try {
+    const companyRecord = await findRecordByFieldName('Companies', 'Company Name', decodeURIComponent(req.params.name));
+    if (!companyRecord) return res.status(404).json({ error: 'Company not found' });
+    await airtableWriteAllowingMissingCtaFields('PATCH', 'Companies', {
+      records: [{ id: companyRecord.id, fields: { 'Latest Signal': signal.trim().slice(0, 2000), 'Signal Date': new Date().toISOString().slice(0, 10) } }]
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Company signal save error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Capture chat: the user pastes a finding (news line, LinkedIn post, call note).
+// One Claude call classifies it and returns a PROPOSAL - never writes. The
+// client shows it, the user corrects the company match / fields, then calls
+// the relevant save route (programs / signal / notes).
+app.post('/api/programs/capture', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  const { text } = req.body || {};
+  if (!text || !text.trim()) return res.status(400).json({ error: 'text is required' });
+  try {
+    const companyRecords = await airtableFetchAllRecords('Companies');
+    const companyNames = companyRecords.map(c => c.fields['Company Name'] || '').filter(Boolean);
+
+    const prompt = `You are the intake assistant for T2C Outreach, Twenty2 Collective's CRM. Twenty2 is a Perth Agile/change consultancy whose GTM first step is spotting companies running a transformation program (the buying trigger). Marcus has pasted something he found - a news line, a LinkedIn post, or a note from a call. Work out what it is and where in the CRM it should go.
+
+Pasted finding:
+"""
+${text.slice(0, 4000)}
+"""
+
+Known companies on file (match against these, case-insensitive, tolerate abbreviations like "Dept" / "WA"):
+${companyNames.join(', ')}
+
+Classify into exactly one destination:
+- "program": the finding describes an active transformation / ERP / agile / digital / cloud / operating-model program at a company.
+- "signal": a leadership change, funding, restructure or other momentum event that isn't itself a program.
+- "note": general context about a company that's still worth keeping, but isn't a program or a signal.
+
+Return ONLY valid JSON, no markdown, in exactly this shape:
+{
+  "destination": "program" | "signal" | "note",
+  "companyName": "the matched company name exactly as it appears in the list, or your best guess if not on the list",
+  "companyMatched": true or false,
+  "candidateCompanies": ["up to 5 names from the list this could plausibly be, best first"],
+  "program": { "name": "", "type": "one of: ${PROGRAM_TYPES.join(' | ')}", "phase": "one of: ${PROGRAM_PHASES.join(' | ')}", "evidence": "the most relevant quote from the paste, verbatim, <=300 chars", "source": "a URL from the paste if present, else '' ", "confidence": "high|medium|low" },
+  "signal": { "summary": "one sentence" },
+  "note": { "text": "one or two sentences worth keeping" }
+}
+Only the object matching "destination" needs real content; leave the others as empty strings. "phase": use "Slipping" only if the text actually says it's behind / troubled; "In delivery" if clearly underway; "Announced" if just announced; else "Unknown".`;
+
+    const parsed = await callClaudeJson(clientize(prompt), 700);
+    const dest = ['program', 'signal', 'note'].includes(parsed.destination) ? parsed.destination : 'note';
+    const guessName = (parsed.companyName || '').toString();
+    const exact = companyNames.find(n => n.toLowerCase() === guessName.toLowerCase());
+    const candidates = Array.isArray(parsed.candidateCompanies)
+      ? parsed.candidateCompanies.filter(n => companyNames.some(cn => cn.toLowerCase() === String(n).toLowerCase())).slice(0, 5)
+      : [];
+
+    res.json({
+      destination: dest,
+      companyName: exact || guessName,
+      companyMatched: !!exact,
+      candidateCompanies: candidates,
+      program: dest === 'program' ? {
+        name: (parsed.program && parsed.program.name) || '',
+        type: PROGRAM_TYPES.includes(parsed.program && parsed.program.type) ? parsed.program.type : 'Other',
+        phase: PROGRAM_PHASES.includes(parsed.program && parsed.program.phase) ? parsed.program.phase : 'Unknown',
+        evidence: (parsed.program && parsed.program.evidence) || '',
+        source: (parsed.program && parsed.program.source) || '',
+        confidence: ['high', 'medium', 'low'].includes(parsed.program && parsed.program.confidence) ? parsed.program.confidence : 'medium'
+      } : null,
+      signal: dest === 'signal' ? ((parsed.signal && parsed.signal.summary) || '') : '',
+      note: dest === 'note' ? ((parsed.note && parsed.note.text) || text.trim().slice(0, 500)) : ''
+    });
+  } catch (err) {
+    console.error('Programs capture error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -12041,7 +12238,14 @@ async function accountEnrichmentPromptNote(contactRecord, campaignContactsRows) 
     ? `\nAccount context: Twenty2 is also in touch with ${reachedElsewhere.length} other contact${reachedElsewhere.length === 1 ? '' : 's'} at this same company. This is a multi-threaded account, not a single cold contact - keep this message consistent with building a genuine account-wide relationship, but do NOT explicitly name or reference these other contacts to this person.`
     : '';
 
-  return `${caseStudyNote}${coverageNote}`;
+  // Active transformation programs (Phase 3) - the real reason to be reaching
+  // out. If one is in delivery / slipping, that's the hook.
+  const activePrograms = parseCompanyPrograms(company.fields).filter(programIsActive);
+  const programNote = activePrograms.length
+    ? `\nKNOWN ACTIVE PROGRAM${activePrograms.length > 1 ? 'S' : ''} at this company (this is why we're reaching out - reference it naturally, as something you're aware of, not as insider knowledge): ${activePrograms.map(p => `${p.name} (${p.type}, phase: ${p.phase})${p.evidence ? ` - "${p.evidence.slice(0, 160)}"` : ''}`).join('; ')}. ${activePrograms.some(p => p.phase === 'Slipping') ? 'One of these looks to be slipping - that is the opening, but be tactful, do not claim to know it is in trouble.' : ''}`
+    : '';
+
+  return `${caseStudyNote}${coverageNote}${programNote}`;
 }
 
 // Single source of truth for what an in-campaign outreach draft (message 1, 2
