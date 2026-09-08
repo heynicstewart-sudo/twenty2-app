@@ -9376,19 +9376,23 @@ app.get('/api/companies/:name/change-architecture', async (req, res) => {
 app.post('/api/companies/:name/change-architecture', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   const body = req.body || {};
-  // Accept either the legacy { nodes, edges } or the v2 freeform-canvas
-  // { version, elements, edges, viewport }. Whole-document replace on save -
-  // single-editor board, no operational-transform/merge needed.
+  // Accept v3 multi-canvas { version:3, activeCanvasId, canvases:[...] }, the
+  // v2 single-canvas { elements, edges, viewport }, or the legacy v1
+  // { nodes, edges }. Whole-document replace on save - single-editor board,
+  // no operational-transform/merge needed.
+  const hasV3 = Array.isArray(body.canvases);
   const hasV2 = Array.isArray(body.elements);
   const hasV1 = Array.isArray(body.nodes);
-  if (!hasV2 && !hasV1) return res.status(400).json({ error: 'elements (v2) or nodes (v1) array is required' });
-  if (!Array.isArray(body.edges)) return res.status(400).json({ error: 'edges array is required' });
+  if (!hasV3 && !hasV2 && !hasV1) return res.status(400).json({ error: 'canvases (v3), elements (v2), or nodes (v1) array is required' });
+  if (!hasV3 && !Array.isArray(body.edges)) return res.status(400).json({ error: 'edges array is required' });
   try {
     const companyRecord = await findRecordByFieldName('Companies', 'Company Name', decodeURIComponent(req.params.name));
     if (!companyRecord) return res.status(404).json({ error: 'Company not found' });
-    const doc = hasV2
-      ? { version: 2, elements: body.elements, edges: body.edges, viewport: body.viewport || { x: 0, y: 0, zoom: 1 } }
-      : { nodes: body.nodes, edges: body.edges };
+    const doc = hasV3
+      ? { version: 3, activeCanvasId: body.activeCanvasId || (body.canvases[0] && body.canvases[0].id) || null, canvases: body.canvases }
+      : hasV2
+        ? { version: 2, elements: body.elements, edges: body.edges, viewport: body.viewport || { x: 0, y: 0, zoom: 1 } }
+        : { nodes: body.nodes, edges: body.edges };
     await airtableWriteAllowingMissingCtaFields('PATCH', 'Companies', {
       records: [{ id: companyRecord.id, fields: { 'Change Architecture (JSON)': JSON.stringify(doc) } }]
     });
@@ -9399,9 +9403,11 @@ app.post('/api/companies/:name/change-architecture', async (req, res) => {
   }
 });
 
-// ---- Freeform sticky notes on the auto Account board ----
-// Kept in a separate field from the freeform canvas above so the two boards'
-// state never collides. Small array of { id, x, y, text, fill }.
+// ---- Legacy Account board sticky notes (read-only, for one-time migration) ----
+// The old auto Account board stored freeform sticky notes here. The board is
+// now merged into the multi-canvas freeform canvas; the client folds any notes
+// found here into the first canvas on load, so this GET is kept only for that
+// migration and the write path is gone.
 app.get('/api/companies/:name/account-board-notes', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   try {
@@ -9411,23 +9417,6 @@ app.get('/api/companies/:name/account-board-notes', async (req, res) => {
     res.json({ notes: Array.isArray(saved) ? saved : (Array.isArray(saved && saved.notes) ? saved.notes : []) });
   } catch (err) {
     console.error('Account board notes load error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/companies/:name/account-board-notes', async (req, res) => {
-  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
-  const { notes } = req.body || {};
-  if (!Array.isArray(notes)) return res.status(400).json({ error: 'notes array is required' });
-  try {
-    const companyRecord = await findRecordByFieldName('Companies', 'Company Name', decodeURIComponent(req.params.name));
-    if (!companyRecord) return res.status(404).json({ error: 'Company not found' });
-    await airtableWriteAllowingMissingCtaFields('PATCH', 'Companies', {
-      records: [{ id: companyRecord.id, fields: { 'Account Board Notes (JSON)': JSON.stringify(notes) } }]
-    });
-    res.json({ success: true });
-  } catch (err) {
-    console.error('Account board notes save error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
