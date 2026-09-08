@@ -2475,6 +2475,7 @@ function afterRender(page){
   if(page === 'settings' && isMultiClientSession) { refreshExtensionStatus(); refreshMondaySyncHealth(); }
   if(page === 'campaigns' && (window.__campaignView || 'list') === 'list'){
     loadAllCampaignFunnels();
+    loadCampaignIcpHealth();
   }
   if(page === 'campaigns' && window.__campaignView === 'detail'){
     const tab = window.__campaignDetailTab;
@@ -12839,6 +12840,37 @@ async function loadCampaignFunnel(campaign){
 }
 function loadAllCampaignFunnels(){ state.campaigns.forEach(loadCampaignFunnel); }
 
+// ICP health per campaign (Phase 2) - one fetch, cached, keyed by campaign
+// record id or name. Feeds the ICP column / drift dot on the Campaigns list.
+async function loadCampaignIcpHealth(){
+  if(window.__campaignIcpHealth !== undefined) return;
+  window.__campaignIcpHealth = null;
+  try {
+    const res = await fetch('/api/campaigns/icp-health');
+    const json = await res.json();
+    window.__campaignIcpHealth = res.ok ? json : { error: true };
+  } catch(err){
+    window.__campaignIcpHealth = { error: true };
+  }
+  if(state.currentPage === 'campaigns') renderPage();
+}
+function campaignIcpHealthFor(campaign){
+  const h = window.__campaignIcpHealth;
+  if(!h || h.error || !h.health) return null;
+  return h.health[campaign.recordId] || h.health[campaign.name] || null;
+}
+function campaignIcpCell(campaign){
+  const h = window.__campaignIcpHealth;
+  if(h === undefined || h === null) return '<span class="muted">·</span>';
+  if(h.error || !h.icpConfigured) return '<span class="muted">—</span>';
+  const stat = campaignIcpHealthFor(campaign);
+  if(!stat || !stat.total) return '<span class="muted">·</span>';
+  const pct = stat.onIcpPct;
+  const tone = pct >= 70 ? 'var(--success)' : pct >= 40 ? 'var(--warning)' : 'var(--danger)';
+  const drift = pct < 50 ? ' <i class="ti ti-alert-triangle" title="Mostly off-ICP"></i>' : '';
+  return `<span style="color:${tone};font-weight:700;" title="${stat.onIcp} of ${stat.total} contacts at Resources-ICP companies">${pct}%${drift}</span>`;
+}
+
 function campaignFunnelStep(funnel, key){
   if(!funnel || funnel.error || !Array.isArray(funnel.steps)) return null;
   const s = funnel.steps.find(x => x.key === key);
@@ -12901,6 +12933,7 @@ function renderCampaignListView(){
         <thead><tr>
           <th>Name</th><th>Status</th>
           <th title="Contacts in the campaign">Contacts</th>
+          <th title="Share of contacts at companies tagged Twenty2's codified ICP">ICP</th>
           <th title="Connection request accepted">Connected</th>
           <th title="Reached Message 1 / 2 / 3">M1 / M2 / M3</th>
           <th title="Distinct contacts who replied (of connected)">Reply rate</th>
@@ -12926,6 +12959,7 @@ function renderCampaignListRow(campaign){
     <td class="perf-name">${esc(campaign.name)}${m.excluded ? ` <span class="muted" style="font-weight:400;">· ${m.excluded} excluded</span>` : ''}</td>
     <td><span class="campaign-status ${statusClass}">${esc(campaign.status)}</span></td>
     <td>${m.contactCount}</td>
+    <td>${campaignIcpCell(campaign)}</td>
     <td>${cell ?? n(m.connected)}</td>
     <td>${cell ?? `${n(m.m1)} / ${n(m.m2)} / ${n(m.m3)}`}</td>
     <td>${cell ?? (m.replyRate === null ? '·' : m.replyRate + '%')}</td>
@@ -13078,6 +13112,35 @@ async function buildCampaignFromChat(){
   }
 }
 
+function renderIcpCoverageBlock(icp, headline){
+  if(!icp || !icp.total) return '';
+  const pct = icp.onIcpPct == null ? 0 : icp.onIcpPct;
+  const tone = pct >= 70 ? 'var(--success)' : pct >= 40 ? 'var(--warning)' : 'var(--danger)';
+  const off = (icp.offIcpNames || []);
+  return `
+  <div style="margin-top:12px;padding:12px;border:1px solid var(--border-light);border-radius:10px;background:var(--surface-2);">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;">
+      <div style="font-weight:700;font-size:12px;"><i class="ti ti-crosshair"></i> ICP coverage</div>
+      <div style="font-weight:800;font-size:13px;color:${tone};">${pct}% on-ICP</div>
+    </div>
+    ${headline ? `<div class="muted" style="font-size:10.5px;margin-top:2px;">ICP: ${esc(headline)}</div>` : ''}
+    <div style="height:7px;border-radius:99px;background:var(--border);overflow:hidden;margin-top:8px;">
+      <div style="height:100%;width:${pct}%;background:${tone};"></div>
+    </div>
+    <div class="muted" style="font-size:11px;margin-top:6px;">${icp.onIcp} of ${icp.total} matched contacts sit at Resources-ICP companies.</div>
+    ${off.length ? `
+      <details style="margin-top:8px;">
+        <summary style="font-size:11px;cursor:pointer;color:var(--danger);">${off.length} off-ICP contact${off.length===1?'':'s'} in this campaign</summary>
+        <div class="muted" style="font-size:11px;margin-top:4px;">${off.map(esc).join(', ')}</div>
+      </details>
+      <div style="margin-top:8px;">
+        <label class="muted" style="font-size:10.5px;font-weight:700;">Why include the off-ICP contacts? (optional, saved with the campaign)</label>
+        <textarea id="icpOverrideNote" rows="2" placeholder="e.g. warm intros / adjacent dept we're deliberately testing" style="width:100%;margin-top:3px;">${esc((window.__campaignChat && window.__campaignChat.icpOverrideNote) || '')}</textarea>
+      </div>
+    ` : ''}
+  </div>`;
+}
+
 function renderCampaignPreviewCard(preview){
   const offerReady = window.__campaignChat && window.__campaignChat.offerStep === 'accepted';
   return `
@@ -13085,6 +13148,7 @@ function renderCampaignPreviewCard(preview){
     <div class="campaign-card-name">${esc(preview.campaignName)}</div>
     <p class="muted" style="font-size:12px;margin-top:6px;">${esc(preview.targetSegmentSummary||'')}</p>
     <p style="font-size:11.5px;font-weight:700;margin-top:10px;">${(preview.matchedContactNames||[]).length} matched contact${(preview.matchedContactNames||[]).length===1?'':'s'}</p>
+    ${renderIcpCoverageBlock(preview.icpAlignment, preview.icpProfileHeadline)}
     <div class="flow flow-3" style="margin-top:10px;">
       ${CAMPAIGN_STAGE_META.map(([key,label]) => {
         const stage = (preview.sequence||{})[key] || {};
@@ -13259,6 +13323,8 @@ function saveCampaignToDraft(){
   const chat = window.__campaignChat;
   const preview = chat.previewCampaign;
   if(!preview) return;
+  const overrideEl = document.getElementById('icpOverrideNote');
+  if(overrideEl) chat.icpOverrideNote = overrideEl.value.trim();
   const matchedNames = preview.matchedContactNames || [];
   const contactIds = state.contacts
     .filter(c => matchedNames.some(n => n.trim().toLowerCase() === c.name.trim().toLowerCase()))
@@ -13269,6 +13335,9 @@ function saveCampaignToDraft(){
     campaign = { id: uid('camp'), createdAt: isoDate(TODAY) };
     state.campaigns.push(campaign);
   }
+  const icpAlignment = preview.icpAlignment
+    ? Object.assign({}, preview.icpAlignment, { overrideNote: chat.icpOverrideNote || '' })
+    : null;
   Object.assign(campaign, {
     name: preview.campaignName || 'Untitled campaign',
     goal: preview.goal || '',
@@ -13281,6 +13350,7 @@ function saveCampaignToDraft(){
     sequence: preview.sequence || {},
     strategyBrief: preview.strategyBrief || '',
     estimatedConversions: preview.estimatedConversions || '',
+    icpAlignment,
     conversationHistory: chat.messages.filter(m=>!m.pending),
     status: campaign.status || 'Draft',
     type: chat.campaignType === 'email' ? 'email' : (campaign.type || 'linkedin'),
@@ -17893,7 +17963,8 @@ function syncCampaignToAirtable(campaign, onSynced){
       ctaMessage: campaign.ctaMessage || (campaign.sequenceLength || 3),
       angleLibrary: campaign.angleLibrary || [],
       framingMode: campaign.framingMode || 'Auto',
-      decisionMakerCriteria: campaign.decisionMakerCriteria || ''
+      decisionMakerCriteria: campaign.decisionMakerCriteria || '',
+      icpAlignment: campaign.icpAlignment || undefined
     })
   })
     .then(res => res.json())
