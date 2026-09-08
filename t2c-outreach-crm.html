@@ -6843,6 +6843,7 @@ async function loadIcpProfile(){
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
     window.__icpProfile = normalizeIcpProfile(data.profile) || icpProfileDefault();
+    window.__icpComputed = data.computed || null;
   } catch(err){
     window.__icpProfile = icpProfileDefault();
     window.__icpProfileLoadError = err.message;
@@ -6969,6 +6970,38 @@ function icpPct(a, b){
   if(b === null || b === undefined || b === '' || !b) return '—';
   if(a === null || a === undefined || a === '') return '—';
   return Math.round((a / b) * 100) + '%';
+}
+
+// Live funnel numbers computed from the actual pipeline (Campaign Contacts +
+// Deals, split by company ICP Tag) - GET /api/icp-profile.computed. Shown above
+// the manual tracking table so "review each quarter" isn't a form to hand-fill.
+function renderIcpComputedPanel(){
+  const c = window.__icpComputed;
+  if(!c) return '';
+  const row = (label, icp, total) => `
+    <tr><td class="ss-name">${label}</td>
+      <td class="ss-num">${icp ?? '—'}</td>
+      <td class="ss-num">${total ?? '—'}</td>
+      <td class="ss-num" style="font-weight:700;">${icpPct(icp, total)}</td></tr>`;
+  const wr = v => (v === null || v === undefined) ? '—' : v + '%';
+  return `
+  <div style="border:1px solid var(--border-light);border-radius:10px;padding:12px;margin-bottom:14px;background:var(--surface-2);">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;">
+      <div style="font-weight:700;font-size:12px;"><i class="ti ti-bolt"></i> Live from the pipeline</div>
+      <div class="muted" style="font-size:10px;">auto-computed ${c.computedAt ? '· ' + esc(c.computedAt) : ''}</div>
+    </div>
+    <div class="spreadsheet-wrap" style="margin-top:8px;">
+      <table class="spreadsheet-table" style="min-width:420px;">
+        <thead><tr><th>Stage</th><th style="text-align:right;">ICP</th><th style="text-align:right;">Total</th><th style="text-align:right;">ICP share</th></tr></thead>
+        <tbody>
+          ${row('Leads (in a campaign)', c.leadsIcp, c.leadsTotal)}
+          ${row('Opportunities (replied / in a deal)', c.oppsIcp, c.oppsTotal)}
+          ${row('Customers (won)', c.customersIcp, c.customersTotal)}
+        </tbody>
+      </table>
+    </div>
+    <div class="muted" style="font-size:11px;margin-top:8px;">Win rate — ICP <b>${wr(c.winRateIcp)}</b> vs non-ICP <b>${wr(c.winRateNonIcp)}</b>. Fill the table below with your own read, or use these.</div>
+  </div>`;
 }
 
 function renderIcpVennSvg(m){
@@ -7098,6 +7131,7 @@ function renderIcpBuilderPage(){
   <div class="card" style="margin-bottom:16px;">
     <div class="section-title" style="margin-bottom:2px;"><i class="ti ti-route"></i> Track it through the funnel</div>
     <div class="muted" style="font-size:11.5px;margin-bottom:12px;">Don't file the ICP and forget it. Tag every lead, opportunity and customer ICP / non-ICP, and watch the rates diverge — that's the evidence that mobilises the whole motion.</div>
+    ${renderIcpComputedPanel()}
     <div class="spreadsheet-wrap" style="margin-bottom:12px;">
       <table class="spreadsheet-table" style="min-width:520px;">
         <thead><tr><th>Stage</th><th style="text-align:right;">ICP</th><th style="text-align:right;">Total</th><th style="text-align:right;">ICP share</th></tr></thead>

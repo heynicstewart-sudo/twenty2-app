@@ -491,6 +491,8 @@ const OPTIONAL_LATE_ADDED_FIELDS = [
   'Procurement Threshold ($)',
   // Resources ICP report, 7 Sep 2026 (Companies + Contacts tables).
   'ICP Tag', 'Account Priority',
+  // ICP fit scoring against the codified profile (Phase 2) — Companies table.
+  'ICP Fit Score', 'ICP Trigger Detected',
   // User-managed GTM Motion templates (Settings table).
   'GTM Motion Templates (JSON)'
 ];
@@ -9741,12 +9743,73 @@ app.get('/api/icp-profile', async (req, res) => {
   try {
     const record = await getSettingsRecord();
     const profile = record ? parseJsonSafe(record.fields['ICP Profile (JSON)']) : null;
-    res.json({ profile: profile || null });
+    // Real funnel numbers computed from the pipeline, ICP vs non-ICP - shown
+    // alongside the profile's manual `tracking` block so "reviewed each
+    // quarter" stops being a form to fill in by hand. Best-effort; on any
+    // failure the client just falls back to the manual block.
+    let computed = null;
+    try { computed = await computeIcpTrackingFromPipeline(); } catch (e) { computed = null; }
+    res.json({ profile: profile || null, computed });
   } catch (err) {
     console.error('Get icp-profile error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
+
+// leads = distinct contacts ever in a campaign; opps = those that replied or
+// have a live/won deal; customers = won deals. Split by the contact's company
+// ICP Tag. Win rate = won / (won + lost) within each tag.
+async function computeIcpTrackingFromPipeline() {
+  const [contactRecords, rows, deals] = await Promise.all([
+    airtableFetchAllRecords('Contacts'),
+    fetchCampaignContactsRows(),
+    airtableFetchAllRecords('Deals').catch(() => [])
+  ]);
+  const contactById = {};
+  contactRecords.forEach(c => { contactById[c.id] = c; });
+  const isIcpContact = c => {
+    const t = c && c.fields['ICP Tag'];
+    return /resources icp/i.test((Array.isArray(t) ? t[0] : t) || '');
+  };
+
+  const leadIds = new Set();
+  const oppIds = new Set();
+  rows.forEach(r => {
+    const cid = (r.fields['Contact'] || [])[0];
+    if (!cid) return;
+    leadIds.add(cid);
+    if (rowReplyReceived(r) || r.fields['Reply Received']) oppIds.add(cid);
+  });
+
+  let wonIcp = 0, wonNon = 0, lostIcp = 0, lostNon = 0;
+  deals.forEach(d => {
+    const cid = (d.fields['Contact'] || [])[0];
+    const c = contactById[cid];
+    const icp = isIcpContact(c);
+    const outcome = (d.fields['Outcome'] || '').toLowerCase();
+    if (cid) oppIds.add(cid);
+    if (outcome === 'won') { icp ? wonIcp++ : wonNon++; }
+    else if (outcome === 'lost') { icp ? lostIcp++ : lostNon++; }
+  });
+
+  const countSplit = idSet => {
+    let icp = 0, total = 0;
+    idSet.forEach(id => { total++; if (isIcpContact(contactById[id])) icp++; });
+    return { icp, total };
+  };
+  const leads = countSplit(leadIds);
+  const opps = countSplit(oppIds);
+  const winRate = (won, lost) => (won + lost) ? Math.round((won / (won + lost)) * 100) : null;
+
+  return {
+    leadsIcp: leads.icp, leadsTotal: leads.total,
+    oppsIcp: opps.icp, oppsTotal: opps.total,
+    customersIcp: wonIcp, customersTotal: wonIcp + wonNon,
+    winRateIcp: winRate(wonIcp, lostIcp),
+    winRateNonIcp: winRate(wonNon, lostNon),
+    computedAt: new Date().toISOString().slice(0, 10)
+  };
+}
 
 app.post('/api/icp-profile', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
@@ -9825,22 +9888,36 @@ app.post('/api/companies/enrich', async (req, res) => {
 const ICP_SIZE_BANDS = ['Micro', 'Small', 'Mid', 'Large'];
 const ICP_MOMENTUM = ['Hiring', 'Funded', 'Leadership Change', 'Flat'];
 
-function buildIcpScoringPrompt(companyRecord) {
+function buildIcpScoringPrompt(companyRecord, icpProfile) {
   const f = companyRecord.fields || {};
-  return `You are scoring one company for T2C Outreach, Twenty2 Collective's outreach CRM, against a 3-attribute segmentation model.
+  const attrs = icpProfile && Array.isArray(icpProfile.attributes)
+    ? icpProfile.attributes.filter(a => a && a.value).map(a => `- ${a.label}: ${a.value}`).join('\n')
+    : '';
+  const trigger = icpProfile && icpProfile.attributes
+    ? (icpProfile.attributes.find(a => /trigger/i.test(a.label || '')) || {}).value || ''
+    : '';
+  const icpSection = attrs ? `
+
+Twenty2's codified ICP (from the ICP Builder):
+${attrs}
+${icpProfile && icpProfile.headline ? `Headline: ${icpProfile.headline}` : ''}` : '';
+
+  return `You are scoring one company for T2C Outreach, Twenty2 Collective's outreach CRM.
 
 Company: ${f['Company Name'] || 'Unknown'}
 Industry: ${f['Industry'] || 'not recorded'}. Sector: ${f['Sector'] || 'not recorded'}.
 Overview: ${f['Company Overview (AI)'] || f['AI Summary'] || 'none on file'}
-Latest signal: ${f['Latest Signal'] || 'none'}${f['Signal Date'] ? ` (${f['Signal Date']})` : ''}
+Latest signal: ${f['Latest Signal'] || 'none'}${f['Signal Date'] ? ` (${f['Signal Date']})` : ''}${icpSection}
 
-Score exactly these 3 attributes from what's above - do not invent detail that isn't supported by it:
-1. sizeBand - one of: ${ICP_SIZE_BANDS.join(', ')}. If genuinely unclear, use "Small" as the conservative default.
-2. momentum - one of: ${ICP_MOMENTUM.join(', ')}. Only pick Hiring/Funded/Leadership Change if the overview or latest signal actually supports it; otherwise "Flat".
-3. workloadType - a short 1-3 word label for this company's business model or vertical (e.g. "Professional Services", "Trades", "SaaS", "Manufacturing") - your own judgement, not a fixed list.
+Score from what's above - do not invent detail that isn't supported by it:
+1. sizeBand - one of: ${ICP_SIZE_BANDS.join(', ')}. If genuinely unclear, use "Small".
+2. momentum - one of: ${ICP_MOMENTUM.join(', ')}. Only pick Hiring/Funded/Leadership Change if the overview or latest signal supports it; otherwise "Flat".
+3. workloadType - a short 1-3 word label for this company's business model or vertical - your own judgement.
+${attrs ? `4. icpFitScore - integer 0-100: how well this company matches Twenty2's codified ICP above (industry/vertical, size, geography, and whether a buying trigger looks present). Be strict: 80+ only if it clearly fits on the major axes.
+5. icpTriggerDetected - if the overview or latest signal shows the company hitting the ICP's trigger (${trigger || 'a funded transformation slipping, a new delivery leader, a stalling agile rollout'}), name it in a short phrase; otherwise empty string "".` : ''}
 
 Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
-{"sizeBand": "string", "momentum": "string", "workloadType": "string"}`;
+{"sizeBand": "string", "momentum": "string", "workloadType": "string"${attrs ? ', "icpFitScore": 0, "icpTriggerDetected": "string"' : ''}}`;
 }
 
 // "Profile before you speak" (Jeanne DeWitt Grosser: research every account
@@ -9954,18 +10031,35 @@ function buildAccountContacts(companyRecord, contactRecords, campaignContactRows
 }
 
 async function scoreIcpForCompany(companyRecord) {
-  const parsed = await callClaudeJson(buildIcpScoringPrompt(companyRecord), 300);
+  const icpProfile = await getIcpProfile();
+  const parsed = await callClaudeJson(buildIcpScoringPrompt(companyRecord, icpProfile), 350);
   const sizeBand = ICP_SIZE_BANDS.includes(parsed.sizeBand) ? parsed.sizeBand : 'Small';
   const momentum = ICP_MOMENTUM.includes(parsed.momentum) ? parsed.momentum : 'Flat';
   const workloadType = (parsed.workloadType || 'Other').trim().slice(0, 60) || 'Other';
   const today = new Date().toISOString().slice(0, 10);
+  const fields = {
+    'ICP Size Band': sizeBand, 'ICP Momentum': momentum, 'ICP Workload Type': workloadType, 'ICP Scored At': today
+  };
+
+  let fitScore = null, trigger = '';
+  if (icpProfile) {
+    fitScore = Number.isFinite(+parsed.icpFitScore) ? Math.max(0, Math.min(100, Math.round(+parsed.icpFitScore))) : null;
+    trigger = (parsed.icpTriggerDetected || '').toString().trim().slice(0, 120);
+    if (fitScore !== null) fields['ICP Fit Score'] = fitScore;
+    if (trigger) fields['ICP Trigger Detected'] = trigger;
+    // Keep the coarse Resources-ICP tag in step with the fit score, but never
+    // overwrite a tag a human has already set by hand.
+    const currentTag = companyRecord.fields['ICP Tag'];
+    if (!currentTag && fitScore !== null) {
+      fields['ICP Tag'] = fitScore >= 60 ? 'Resources ICP' : 'Non-ICP';
+    }
+  }
+
   await airtableWriteAllowingMissingCtaFields('PATCH', 'Companies', {
-    records: [{ id: companyRecord.id, fields: {
-      'ICP Size Band': sizeBand, 'ICP Momentum': momentum, 'ICP Workload Type': workloadType, 'ICP Scored At': today
-    } }],
+    records: [{ id: companyRecord.id, fields }],
     typecast: true
   });
-  return { sizeBand, momentum, workloadType };
+  return { sizeBand, momentum, workloadType, fitScore, trigger };
 }
 
 // Explicit clear - POST /api/airtable/campaign only ever writes Angle
