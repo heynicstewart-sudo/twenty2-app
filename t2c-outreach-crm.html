@@ -697,20 +697,6 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
   .cm-rail{position:static;}
 }
 
-/* Profile board (Jeanne vision pivot §2 - mind-map canvas replacing the flat tree) */
-.profile-board-canvas{position:relative;height:520px;min-width:600px;background:var(--surface-2);border:1px solid var(--border-light);border-radius:var(--radius-card);overflow:auto;}
-.profile-board-lines{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;}
-.profile-board-center{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:150px;padding:12px;border-radius:var(--radius-input);background:var(--primary);color:#fff;text-align:center;z-index:2;box-shadow:var(--shadow-lg);}
-.pbc-name{font-weight:800;font-size:13px;}
-.pbc-icp{font-size:10.5px;color:rgba(255,255,255,.7);margin-top:4px;}
-.pbc-rel{font-size:10px;font-weight:700;color:#fff;background:rgba(255,255,255,.18);border-radius:var(--radius-pill);padding:2px 8px;margin-top:6px;display:inline-block;}
-.profile-board-node{position:absolute;width:128px;padding:8px 10px;border-radius:var(--radius-input);background:var(--surface);border:2px solid var(--border);cursor:grab;z-index:3;user-select:none;box-shadow:var(--shadow-sm);}
-.change-arch-edge-badge{width:16px;height:16px;border-radius:50%;background:var(--surface);border:1px solid var(--border);color:var(--muted);font-size:11px;line-height:14px;text-align:center;cursor:pointer;z-index:2;}
-.profile-board-node:active{cursor:grabbing;}
-.pbn-name{font-weight:700;font-size:11.5px;line-height:1.3;}
-.pbn-title{font-size:10px;line-height:1.3;margin-top:1px;}
-.pbn-badge{font-size:10px;font-weight:700;margin-top:5px;}
-
 /* ---- Freeform account canvas ---- */
 .arch-viewport{position:relative;width:100%;height:600px;border:1px solid var(--border-light);border-radius:12px;background:var(--surface-2);overflow:hidden;cursor:grab;background-image:radial-gradient(var(--border) 1px,transparent 1px);background-size:24px 24px;}
 .arch-viewport:active{cursor:grabbing;}
@@ -770,10 +756,14 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .arch-pick-row{padding:8px 10px;border-radius:8px;cursor:pointer;font-size:12.5px;}
 .arch-pick-row:hover{background:var(--surface-2);}
 .profile-drawer--full{width:1040px;max-width:96vw;}
-.pb-note{position:absolute;width:150px;min-height:64px;padding:10px 20px 10px 10px;border-radius:3px;box-shadow:0 2px 8px rgba(20,20,20,.16);font-size:11.5px;line-height:1.4;cursor:grab;z-index:4;}
-.pb-note:active{cursor:grabbing;}
-.pb-note [contenteditable]{outline:none;word-break:break-word;min-height:20px;}
-.pb-note-del{position:absolute;top:3px;right:5px;cursor:pointer;color:rgba(0,0,0,.4);font-size:13px;line-height:1;}
+.arch-canvas-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid var(--border-light);}
+.arch-canvas-chip{border:1px solid var(--border);background:var(--surface);color:var(--text);border-radius:999px;padding:5px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;}
+.arch-canvas-chip:hover{background:var(--surface-2);}
+.arch-canvas-chip.active{background:var(--primary);color:#fff;border-color:var(--primary);}
+.arch-canvas-new{border-style:dashed;color:var(--muted);}
+.arch-el--live .arch-handle{display:none;}
+.arch-imp{display:flex;align-items:center;gap:8px;font-size:12.5px;padding:5px 0;}
+.arch-imp input{width:auto;}
 
 /* Context menu */
 .ctx-menu{position:fixed;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card);box-shadow:var(--shadow-lg);z-index:300;overflow:hidden;min-width:180px;}
@@ -2578,15 +2568,9 @@ function afterRender(page){
   }
   if(page === 'profile' && window.__profileSelectedCompany){
     const name = window.__profileSelectedCompany;
-    if((window.__profileSubTab||'board') === 'architecture'){
-      window.__arch = window.__arch || {};
-      if(window.__arch[name] === undefined) loadChangeArchitecture(name);
-      else archAfterRender(name);
-    } else {
-      window.__profileBoardData = window.__profileBoardData || {};
-      if(window.__profileBoardData[name] === undefined) loadProfileBoard(name);
-      else { layoutProfileBoard(); loadAccountBoardNotes(name); }
-    }
+    window.__arch = window.__arch || {};
+    if(window.__arch[name] === undefined) loadChangeArchitecture(name);
+    else archAfterRender(name);
   }
 }
 
@@ -14586,7 +14570,6 @@ function renderCompanyUniverse(){
 
 function renderProfilePage(){
   const query = (window.__profileQuery || '').trim().toLowerCase();
-  const scopeCampaignId = window.__profileCampaignScope || '';
 
   let peopleResults = [];
   let companyResults = [];
@@ -14597,7 +14580,6 @@ function renderProfilePage(){
   }
 
   const selectedCompany = window.__profileSelectedCompany || '';
-  const profileSubTab = window.__profileSubTab || 'board';
 
   return `
   <div class="card" style="margin-bottom:16px;">
@@ -14617,13 +14599,7 @@ function renderProfilePage(){
       </div>
     ` : ''}
   </div>
-  ${selectedCompany ? `
-    <div style="display:flex;gap:6px;margin-bottom:12px;">
-      <button class="btn ${profileSubTab==='board'?'btn-primary':'btn-secondary'} btn-sm" onclick="setProfileSubTab('board')"><i class="ti ti-hierarchy-2"></i> Account board</button>
-      <button class="btn ${profileSubTab==='architecture'?'btn-primary':'btn-secondary'} btn-sm" onclick="setProfileSubTab('architecture')"><i class="ti ti-affiliate"></i> Account canvas</button>
-    </div>
-    ${profileSubTab === 'architecture' ? renderChangeArchitectureCanvas(selectedCompany) : renderProfileCompanyBoard(selectedCompany, scopeCampaignId)}
-  ` : ''}
+  ${selectedCompany ? renderChangeArchitectureCanvas(selectedCompany) : ''}
   `;
 }
 
@@ -14638,14 +14614,8 @@ function setProfileQuery(value){
 
 function selectProfileCompany(name){
   window.__profileSelectedCompany = name;
-  window.__profileCampaignScope = '';
-  window.__profileSubTab = 'board';
-  renderPage();
-}
-
-function setProfileSubTab(tab){
-  window.__profileSubTab = tab;
-  if(tab === 'architecture') loadChangeArchitecture(window.__profileSelectedCompany);
+  window.__profileCanvasId = null;
+  if(!(window.__arch && window.__arch[name])) loadChangeArchitecture(name);
   renderPage();
 }
 
@@ -14659,14 +14629,21 @@ function setProfileSubTab(tab){
 
 async function loadProfileBoard(companyName){
   window.__profileBoardData = window.__profileBoardData || {};
+  if(window.__profileBoardLoading && window.__profileBoardLoading[companyName]) return;
+  window.__profileBoardLoading = window.__profileBoardLoading || {};
+  window.__profileBoardLoading[companyName] = true;
   try {
     const res = await fetch(`/api/companies/${encodeURIComponent(companyName)}/profile-board`);
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
     window.__profileBoardData[companyName] = data;
   } catch(err){
-    window.__profileBoardData[companyName] = { error: err.message };
+    // keep any previously-good data rather than replacing it with an error
+    if(!window.__profileBoardData[companyName] || window.__profileBoardData[companyName].error){
+      window.__profileBoardData[companyName] = { error: err.message };
+    }
   }
+  window.__profileBoardLoading[companyName] = false;
   if(window.__profileSelectedCompany === companyName) renderPage();
 }
 
@@ -14704,245 +14681,6 @@ function computeProfileBoardAutoLayout(contacts){
   return offsets;
 }
 
-function renderProfileCompanyBoard(companyName, scopeCampaignId){
-  const scopeCampaign = scopeCampaignId ? state.campaigns.find(c => c.id === scopeCampaignId) : null;
-  const header = `
-    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:4px;">
-      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-building"></i> ${esc(companyName)}</div>
-      <div class="field" style="max-width:240px;margin-bottom:0;">
-        <select onchange="setProfileCampaignScope(this.value)">
-          <option value="">All campaigns</option>
-          ${state.campaigns.map(c => `<option value="${c.id}" ${scopeCampaignId===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}
-        </select>
-      </div>
-    </div>`;
-
-  const data = window.__profileBoardData && window.__profileBoardData[companyName];
-  if(!data) return `<div class="card">${header}<div class="muted" style="padding:40px;text-align:center;"><i class="ti ti-loader-2"></i> Loading account board...</div></div>`;
-  if(data.error) return `<div class="card">${header}<div class="empty-state">Could not load: ${esc(data.error)}</div></div>`;
-
-  let contacts = data.contacts || [];
-  if(scopeCampaign) contacts = contacts.filter(c => c.campaigns.includes(scopeCampaign.name));
-  if(!contacts.length){
-    return `<div class="card">${header}<div class="empty-state">No contacts on file at this company${scopeCampaign ? ' for this campaign' : ''}.</div></div>`;
-  }
-
-  window.__profileBoardAutoLayout = window.__profileBoardAutoLayout || {};
-  window.__profileBoardAutoLayout[companyName] = computeProfileBoardAutoLayout(contacts);
-
-  const company = data.company;
-  const relFlag = company.relationshipFlag;
-
-  const nodesHtml = contacts.map(c => {
-    const badgeText = scopeCampaign ? (c.stageByCampaign[scopeCampaign.name] || '—') : c.status;
-    const color = scopeCampaign ? 'var(--accent)' : profileStatusColor(c.status);
-    return `
-    <div class="profile-board-node" id="pbNode-${c.id}" style="border-color:${color};" onmousedown="startProfileNodeDrag(event,'${c.id}')" onclick="handleProfileNodeClick(event,'${esc(c.name)}')">
-      <div class="pbn-name">${esc(c.name)}</div>
-      <div class="pbn-title muted">${esc(c.jobTitle||'No title on file')}</div>
-      <div class="pbn-badge" style="color:${color};">${esc(badgeText)}${c.won ? ' <i class="ti ti-trophy"></i>' : ''}</div>
-    </div>`;
-  }).join('');
-
-  const notes = (window.__accountBoardNotes && window.__accountBoardNotes[companyName]) || [];
-  const notesHtml = notes.map(n => `
-    <div class="pb-note" id="pbNote-${n.id}" style="left:${n.x}px;top:${n.y}px;background:${esc(n.fill||'#fef3c7')};" onmousedown="startPbNoteDrag(event,'${esc(companyName)}','${n.id}')">
-      <div contenteditable="true" spellcheck="false" onmousedown="event.stopPropagation()" onblur="editPbNote('${esc(companyName)}','${n.id}',this)">${esc(n.text)}</div>
-      <span class="pb-note-del" onmousedown="event.stopPropagation()" onclick="deletePbNote('${esc(companyName)}','${n.id}')" title="Delete">×</span>
-    </div>`).join('');
-
-  return `
-  <div class="card">
-    ${header}
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
-      <div class="muted" style="font-size:11.5px;margin:6px 0 12px;">${contacts.length} contact${contacts.length===1?'':'s'}${scopeCampaign ? ` in ${esc(scopeCampaign.name)}` : ' across all campaigns'} - drag to rearrange, click to open the full record.</div>
-      <button class="btn btn-secondary btn-sm" onclick="addPbNote('${esc(companyName)}')"><i class="ti ti-note"></i> Add note card</button>
-    </div>
-    <div id="profileBoardCanvas" class="profile-board-canvas">
-      <svg id="profileBoardLines" class="profile-board-lines"></svg>
-      <div class="profile-board-center" style="cursor:pointer;" onclick="openEntityDeep('company','${esc(company.name)}')" title="Open full company record">
-        <div class="pbc-name">${esc(company.name)}</div>
-        ${company.icpSizeBand ? `<div class="pbc-icp">${esc(company.icpSizeBand)} size · ${esc(company.icpMomentum||'')}</div>` : ''}
-        ${relFlag ? `<div class="pbc-rel">${esc(relFlag.status)}</div>` : ''}
-      </div>
-      ${nodesHtml}
-      ${notesHtml}
-    </div>
-  </div>`;
-}
-
-// ---- Account board freeform note cards (persisted to Companies.'Account Board Notes (JSON)') ----
-async function loadAccountBoardNotes(companyName){
-  window.__accountBoardNotes = window.__accountBoardNotes || {};
-  if(window.__accountBoardNotes[companyName] !== undefined) return;
-  window.__accountBoardNotes[companyName] = [];
-  try {
-    const res = await fetch(`/api/companies/${encodeURIComponent(companyName)}/account-board-notes`);
-    const data = await res.json();
-    if(res.ok && Array.isArray(data.notes)) window.__accountBoardNotes[companyName] = data.notes;
-  } catch(e){}
-  if(window.__profileSelectedCompany === companyName && (window.__profileSubTab||'board') === 'board') renderPage();
-}
-let __pbNoteSaveTimer = null;
-function savePbNotes(companyName){
-  clearTimeout(__pbNoteSaveTimer);
-  __pbNoteSaveTimer = setTimeout(() => {
-    fetch(`/api/companies/${encodeURIComponent(companyName)}/account-board-notes`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ notes: (window.__accountBoardNotes && window.__accountBoardNotes[companyName]) || [] })
-    }).catch(() => {});
-  }, 600);
-}
-function addPbNote(companyName){
-  window.__accountBoardNotes = window.__accountBoardNotes || {};
-  const list = window.__accountBoardNotes[companyName] || (window.__accountBoardNotes[companyName] = []);
-  list.push({ id: 'note' + Date.now().toString(36), x: 24 + (list.length%4)*20, y: 24 + (list.length%4)*20, text: 'New note', fill: '#fef3c7' });
-  savePbNotes(companyName);
-  renderPage();
-}
-function editPbNote(companyName, id, el){
-  const n = (window.__accountBoardNotes[companyName] || []).find(x => x.id === id);
-  if(!n) return;
-  const t = (el.textContent || '').trim();
-  if(t !== n.text){ n.text = t; savePbNotes(companyName); }
-}
-function deletePbNote(companyName, id){
-  window.__accountBoardNotes[companyName] = (window.__accountBoardNotes[companyName] || []).filter(x => x.id !== id);
-  savePbNotes(companyName);
-  renderPage();
-}
-let __pbNoteDrag = null;
-function startPbNoteDrag(e, companyName, id){
-  e.preventDefault();
-  const canvas = document.getElementById('profileBoardCanvas');
-  const node = document.getElementById('pbNote-' + id);
-  if(!canvas || !node) return;
-  const cr = canvas.getBoundingClientRect(), nr = node.getBoundingClientRect();
-  __pbNoteDrag = { companyName, id, node, cr, gx: e.clientX - nr.left, gy: e.clientY - nr.top };
-  document.onmousemove = dragPbNote;
-  document.onmouseup = endPbNote;
-}
-function dragPbNote(e){
-  const d = __pbNoteDrag;
-  if(!d) return;
-  const left = Math.max(0, Math.min(d.cr.width - d.node.offsetWidth, e.clientX - d.cr.left - d.gx));
-  const top = Math.max(0, Math.min(d.cr.height - d.node.offsetHeight, e.clientY - d.cr.top - d.gy));
-  d.node.style.left = left + 'px';
-  d.node.style.top = top + 'px';
-}
-function endPbNote(){
-  document.onmousemove = null; document.onmouseup = null;
-  const d = __pbNoteDrag;
-  __pbNoteDrag = null;
-  if(!d) return;
-  const n = (window.__accountBoardNotes[d.companyName] || []).find(x => x.id === d.id);
-  if(n){ n.x = parseFloat(d.node.style.left); n.y = parseFloat(d.node.style.top); savePbNotes(d.companyName); }
-}
-
-// Positions every node (dragged position if the user moved it this session,
-// else the auto-layout offset) and draws the hub-and-spoke lines back to the
-// center. Runs after every render of the profile page while a company is
-// selected (afterRender) since re-rendering rebuilds the DOM from scratch.
-function layoutProfileBoard(){
-  const canvas = document.getElementById('profileBoardCanvas');
-  const companyName = window.__profileSelectedCompany;
-  if(!canvas || !companyName) return;
-  const autoLayout = (window.__profileBoardAutoLayout && window.__profileBoardAutoLayout[companyName]) || {};
-  const saved = (window.__profileBoardPositions && window.__profileBoardPositions[companyName]) || {};
-  const cx = canvas.clientWidth / 2, cy = canvas.clientHeight / 2;
-  const svg = document.getElementById('profileBoardLines');
-  const lines = [];
-
-  const maxLeft = Math.max(0, canvas.clientWidth - 128);
-
-  canvas.querySelectorAll('.profile-board-node').forEach(node => {
-    const contactId = node.id.replace('pbNode-', '');
-    const nodeHeight = node.offsetHeight || 54;
-    const maxTop = Math.max(0, canvas.clientHeight - nodeHeight);
-    let left, top;
-    if(saved[contactId]){
-      left = saved[contactId].left; top = saved[contactId].top;
-    } else {
-      const off = autoLayout[contactId] || { dx:0, dy:0 };
-      left = cx + off.dx - 64; top = cy + off.dy - nodeHeight / 2; // center the node on the offset point
-    }
-    left = Math.max(0, Math.min(maxLeft, left));
-    top = Math.max(0, Math.min(maxTop, top));
-    node.style.left = left + 'px';
-    node.style.top = top + 'px';
-    const ncx = left + 64, ncy = top + nodeHeight / 2;
-    lines.push(`<line x1="${cx}" y1="${cy}" x2="${ncx}" y2="${ncy}" stroke="var(--accent-2)" stroke-width="1.5" stroke-dasharray="4,3"/>`);
-  });
-  if(svg) svg.innerHTML = lines.join('');
-}
-
-let __profileDrag = null;
-
-function startProfileNodeDrag(e, contactId){
-  e.preventDefault();
-  const canvas = document.getElementById('profileBoardCanvas');
-  const node = document.getElementById('pbNode-'+contactId);
-  if(!canvas || !node) return;
-  const canvasRect = canvas.getBoundingClientRect();
-  const nodeRect = node.getBoundingClientRect();
-  __profileDrag = {
-    contactId, node, canvasRect,
-    grabX: e.clientX - nodeRect.left, grabY: e.clientY - nodeRect.top,
-    moved: false
-  };
-  document.onmousemove = dragProfileNode;
-  document.onmouseup = endProfileNodeDrag;
-}
-
-function dragProfileNode(e){
-  const d = __profileDrag;
-  if(!d) return;
-  d.moved = true;
-  const maxLeft = d.canvasRect.width - d.node.offsetWidth;
-  const maxTop = d.canvasRect.height - d.node.offsetHeight;
-  const left = Math.max(0, Math.min(maxLeft, e.clientX - d.canvasRect.left - d.grabX));
-  const top = Math.max(0, Math.min(maxTop, e.clientY - d.canvasRect.top - d.grabY));
-  d.node.style.left = left + 'px';
-  d.node.style.top = top + 'px';
-  const svg = document.getElementById('profileBoardLines');
-  const line = svg && svg.querySelector(`line[data-cid="${d.contactId}"]`);
-  const cx = d.canvasRect.width/2, cy = d.canvasRect.height/2;
-  if(svg){
-    // Cheap redraw - only this one line needs to move during the drag.
-    const others = [...svg.querySelectorAll('line')].filter(l => l !== line);
-    const ncx = left + d.node.offsetWidth/2, ncy = top + d.node.offsetHeight/2;
-    const thisLine = `<line data-cid="${d.contactId}" x1="${cx}" y1="${cy}" x2="${ncx}" y2="${ncy}" stroke="var(--accent-2)" stroke-width="1.5" stroke-dasharray="4,3"/>`;
-    svg.innerHTML = others.map(l => l.outerHTML).join('') + thisLine;
-  }
-}
-
-function endProfileNodeDrag(e){
-  const d = __profileDrag;
-  document.onmousemove = null;
-  document.onmouseup = null;
-  if(!d) return;
-  if(d.moved){
-    const companyName = window.__profileSelectedCompany;
-    window.__profileBoardPositions = window.__profileBoardPositions || {};
-    window.__profileBoardPositions[companyName] = window.__profileBoardPositions[companyName] || {};
-    window.__profileBoardPositions[companyName][d.contactId] = {
-      left: parseFloat(d.node.style.left), top: parseFloat(d.node.style.top)
-    };
-    window.__pbSuppressClick = true;
-  }
-  __profileDrag = null;
-}
-
-function handleProfileNodeClick(e, contactName){
-  if(window.__pbSuppressClick){ window.__pbSuppressClick = false; return; }
-  openEntityDeep('contact', contactName);
-}
-
-function setProfileCampaignScope(campaignId){
-  window.__profileCampaignScope = campaignId;
-  renderPage();
-}
-
 // ---- Freeform account canvas ("Change architecture" tab) ----
 // A Whimsical-style freeform board, manually authored (not AI-generated).
 // Originally the "change architecture" mapping tool - current state / pain /
@@ -14952,13 +14690,20 @@ function setProfileCampaignScope(campaignId){
 // pan and zoom. Whole-document autosave (single editor, no merge). The five
 // change-architecture types survive as one-click coloured shape presets.
 //
-// Document model (stored in Companies.'Change Architecture (JSON)', version 2):
-//   { version:2, elements:[{ id, type, x, y, w, h, text, shape, fill, stroke,
-//       textColor, fontSize, ref:{kind,id,name}, chart:{kind,title,source,data} }],
-//     edges:[{ id, from, to, style, arrow, color, label }],
-//     viewport:{ x, y, zoom } }
+// Document model (stored in Companies.'Change Architecture (JSON)', version 3):
+//   { version:3, activeCanvasId,
+//     canvases:[{ id, name, createdAt,
+//       elements:[{ id, type, x, y, w, h, text, shape, fill, stroke, textColor,
+//                   fontSize, ref:{kind,id,name}, chart:{kind,title,source,data} }],
+//       edges:[{ id, from, to, style, arrow, color, label }],
+//       viewport:{ x, y, zoom },
+//       layers:{ orgMap:bool },          // live contact-map layer
+//       layout:{ "<liveNodeId>":{x,y,note} } }] }
 // type: shape | sticky | text | contact | company | chart
 // shape: rectangle | ellipse | diamond | pill | parallelogram
+// A company can hold several named canvases ("variations"); the org-map layer
+// renders the live CRM contact tree (company centre + every contact) on top of
+// whatever freeform elements the canvas holds.
 
 const ARCH_SCENE_W = 4000, ARCH_SCENE_H = 3000;
 const ARCH_MIN_ZOOM = 0.25, ARCH_MAX_ZOOM = 2.5;
@@ -14988,24 +14733,62 @@ const ARCH_LEGACY_TYPE = {
 
 function archUid(p){ return (p||'el') + Date.now().toString(36) + Math.floor(Math.random()*1e4).toString(36); }
 
-// v1 { nodes:[{id,x,y,text,type}], edges:[{id,from,to}] }  ->  v2 doc.
-function normalizeArchDoc(raw){
-  const vp = (raw && raw.viewport) || {};
-  const viewport = {
+function normalizeArchViewport(vp){
+  vp = vp || {};
+  return {
     x: Number.isFinite(vp.x) ? vp.x : 40,
     y: Number.isFinite(vp.y) ? vp.y : 40,
     zoom: Number.isFinite(vp.zoom) ? Math.min(ARCH_MAX_ZOOM, Math.max(ARCH_MIN_ZOOM, vp.zoom)) : 1
   };
-  if(raw && Array.isArray(raw.elements)){
-    return { version: 2, elements: raw.elements.map(normalizeArchEl).filter(Boolean), edges: (raw.edges||[]).map(normalizeArchEdge), viewport };
+}
+function normalizeArchCanvas(raw){
+  raw = raw || {};
+  const layout = {};
+  if(raw.layout && typeof raw.layout === 'object'){
+    Object.keys(raw.layout).forEach(k => {
+      const v = raw.layout[k] || {};
+      layout[k] = { x: Number.isFinite(v.x) ? v.x : 0, y: Number.isFinite(v.y) ? v.y : 0, note: (v.note || '').toString() };
+    });
   }
-  // migrate v1
-  const nodes = (raw && raw.nodes) || [];
-  const elements = nodes.map(n => {
-    const preset = ARCH_LEGACY_TYPE[n.type] || ARCH_PRESETS[0];
-    return normalizeArchEl({ id: n.id || archUid(), type: 'shape', shape: 'rectangle', x: n.x||60, y: n.y||60, w: 170, h: 64, text: n.text || '', fill: preset.fill, stroke: preset.stroke, textColor: '#18181b' });
-  });
-  return { version: 2, elements, edges: ((raw && raw.edges) || []).map(normalizeArchEdge), viewport };
+  return {
+    id: raw.id || archUid('canvas'),
+    name: (raw.name || 'Untitled canvas').toString(),
+    createdAt: raw.createdAt || new Date().toISOString(),
+    elements: (raw.elements || []).map(normalizeArchEl).filter(Boolean),
+    edges: (raw.edges || []).map(normalizeArchEdge),
+    viewport: normalizeArchViewport(raw.viewport),
+    layers: { orgMap: !!(raw.layers && raw.layers.orgMap) },
+    layout
+  };
+}
+function archDefaultCanvas(){
+  const c = normalizeArchCanvas({ name: 'Account map' });
+  c.layers.orgMap = true;
+  return c;
+}
+// Accepts: v3 { version:3, canvases, activeCanvasId } | v2 { version:2, elements, edges, viewport }
+// | v1 { nodes, edges } | empty. Always returns a v3 container.
+function normalizeArchDoc(raw){
+  if(raw && Array.isArray(raw.canvases) && raw.canvases.length){
+    const canvases = raw.canvases.map(normalizeArchCanvas);
+    const activeCanvasId = canvases.some(c => c.id === raw.activeCanvasId) ? raw.activeCanvasId : canvases[0].id;
+    return { version: 3, canvases, activeCanvasId };
+  }
+  let firstCanvas;
+  if(raw && Array.isArray(raw.elements)){
+    // v2 -> single canvas
+    firstCanvas = normalizeArchCanvas({ name: 'Account canvas', elements: raw.elements, edges: raw.edges, viewport: raw.viewport });
+  } else if(raw && Array.isArray(raw.nodes)){
+    // v1 -> single canvas, nodes become tinted rectangles
+    const elements = raw.nodes.map(n => {
+      const preset = ARCH_LEGACY_TYPE[n.type] || ARCH_PRESETS[0];
+      return { id: n.id || archUid(), type: 'shape', shape: 'rectangle', x: n.x||60, y: n.y||60, w: 170, h: 64, text: n.text || '', fill: preset.fill, stroke: preset.stroke, textColor: '#18181b' };
+    });
+    firstCanvas = normalizeArchCanvas({ name: 'Change architecture', elements, edges: raw.edges });
+  } else {
+    firstCanvas = archDefaultCanvas();
+  }
+  return { version: 3, canvases: [firstCanvas], activeCanvasId: firstCanvas.id };
 }
 function normalizeArchEl(e){
   if(!e || typeof e !== 'object') return null;
@@ -15047,23 +14830,56 @@ function normalizeArchEdge(e){
   };
 }
 
-function archDoc(companyName){ return window.__arch && window.__arch[companyName]; }
-function archElById(companyName, id){ const d = archDoc(companyName); return d && d.elements.find(el => el.id === id); }
+// The full per-company container ({ version:3, canvases, activeCanvasId }).
+function archContainer(companyName){ return window.__arch && window.__arch[companyName]; }
+// archDoc returns the ACTIVE CANVAS - it has { elements, edges, viewport, layers,
+// layout }, so the rest of the arch* engine works on it unchanged.
+function archDoc(companyName){
+  const c = archContainer(companyName);
+  if(!c || !c.canvases || !c.canvases.length) return null;
+  return c.canvases.find(x => x.id === c.activeCanvasId) || c.canvases[0];
+}
+function archElById(companyName, id){
+  const d = archDoc(companyName);
+  if(!d) return null;
+  return d.elements.find(el => el.id === id) || archLiveElements(companyName).find(el => el.id === id) || null;
+}
 function archEdgeById(companyName, id){ const d = archDoc(companyName); return d && d.edges.find(e => e.id === id); }
 
 async function loadChangeArchitecture(companyName){
   if(!companyName) return;
   window.__arch = window.__arch || {};
+  let raw = {};
   try {
     const res = await fetch(`/api/companies/${encodeURIComponent(companyName)}/change-architecture`);
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
-    window.__arch[companyName] = normalizeArchDoc(data);
+    raw = data || {};
   } catch(err){
     window.__arch[companyName] = normalizeArchDoc({});
     window.__arch[companyName].error = err.message;
+    if(window.__profileSelectedCompany === companyName) rerenderArch(companyName);
+    return;
   }
-  if(window.__profileSelectedCompany === companyName && window.__profileSubTab === 'architecture') rerenderArch(companyName);
+  const isLegacy = !(raw && Array.isArray(raw.canvases) && raw.canvases.length);
+  const container = normalizeArchDoc(raw);
+  // One-time migration of the old Account board sticky notes into the first canvas.
+  if(isLegacy){
+    try {
+      const nres = await fetch(`/api/companies/${encodeURIComponent(companyName)}/account-board-notes`);
+      const ndata = await nres.json();
+      if(nres.ok && Array.isArray(ndata.notes) && ndata.notes.length){
+        const c0 = container.canvases[0];
+        ndata.notes.forEach(n => c0.elements.push(normalizeArchEl({
+          id: archUid(), type: 'sticky', x: (n.x || 20) + 40, y: (n.y || 20) + 40,
+          w: 170, h: 130, text: n.text || '', fill: n.fill || '#fef3c7', stroke: 'transparent'
+        })));
+      }
+    } catch(e){ /* notes are optional */ }
+  }
+  window.__arch[companyName] = container;
+  if(isLegacy) saveArch(companyName);  // persist the v3 container + any migrated notes
+  if(window.__profileSelectedCompany === companyName) rerenderArch(companyName);
 }
 
 let __archSaveTimer = null;
@@ -15072,12 +14888,12 @@ function saveArch(companyName){
   if(el) el.textContent = 'Saving…';
   clearTimeout(__archSaveTimer);
   __archSaveTimer = setTimeout(async () => {
-    const d = archDoc(companyName);
-    if(!d) return;
+    const c = archContainer(companyName);
+    if(!c) return;
     try {
       const res = await fetch(`/api/companies/${encodeURIComponent(companyName)}/change-architecture`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ version: 2, elements: d.elements, edges: d.edges, viewport: d.viewport })
+        body: JSON.stringify({ version: 3, activeCanvasId: c.activeCanvasId, canvases: c.canvases })
       });
       const body = await res.json().catch(() => ({}));
       if(!res.ok) throw new Error(body.error || `Request failed (${res.status})`);
@@ -15088,6 +14904,129 @@ function saveArch(companyName){
       if(s) s.textContent = 'Could not save - ' + err.message;
     }
   }, 650);
+}
+
+// ---- multi-canvas management ----
+function setProfileCanvas(companyName, canvasId){
+  const c = archContainer(companyName);
+  if(!c) return;
+  c.activeCanvasId = canvasId;
+  window.__profileCanvasId = canvasId;
+  saveArch(companyName);
+  rerenderArch(companyName);
+}
+function archCreateCanvas(companyName, name, opts){
+  const c = archContainer(companyName);
+  if(!c) return;
+  const canvas = normalizeArchCanvas({ name: name || `Canvas ${c.canvases.length + 1}` });
+  opts = opts || {};
+  if(opts.orgMap) canvas.layers.orgMap = true;
+  if(opts.seedElements) opts.seedElements.forEach(e => canvas.elements.push(normalizeArchEl(e)));
+  c.canvases.push(canvas);
+  c.activeCanvasId = canvas.id;
+  window.__profileCanvasId = canvas.id;
+  saveArch(companyName);
+  rerenderArch(companyName);
+  return canvas;
+}
+function archRenameCanvas(companyName){
+  const d = archDoc(companyName);
+  if(!d) return;
+  const v = prompt('Rename canvas', d.name);
+  if(v === null) return;
+  d.name = (v.trim() || d.name);
+  saveArch(companyName);
+  rerenderArch(companyName);
+}
+function archDuplicateCanvas(companyName){
+  const c = archContainer(companyName), d = archDoc(companyName);
+  if(!c || !d) return;
+  const copy = normalizeArchCanvas(JSON.parse(JSON.stringify(d)));
+  copy.id = archUid('canvas');
+  copy.name = d.name + ' copy';
+  copy.createdAt = new Date().toISOString();
+  c.canvases.push(copy);
+  c.activeCanvasId = copy.id;
+  window.__profileCanvasId = copy.id;
+  saveArch(companyName);
+  rerenderArch(companyName);
+}
+function archDeleteCanvas(companyName){
+  const c = archContainer(companyName);
+  if(!c || c.canvases.length <= 1){ toast('A company needs at least one canvas', 'warn'); return; }
+  const d = archDoc(companyName);
+  if(!confirm(`Delete canvas "${d.name}"? This cannot be undone.`)) return;
+  c.canvases = c.canvases.filter(x => x.id !== d.id);
+  c.activeCanvasId = c.canvases[0].id;
+  window.__profileCanvasId = c.activeCanvasId;
+  saveArch(companyName);
+  rerenderArch(companyName);
+}
+function archToggleOrgMap(companyName){
+  const d = archDoc(companyName);
+  if(!d) return;
+  d.layers.orgMap = !d.layers.orgMap;
+  const have = window.__profileBoardData && window.__profileBoardData[companyName] && !window.__profileBoardData[companyName].error;
+  if(d.layers.orgMap && !have) loadProfileBoard(companyName);
+  saveArch(companyName);
+  rerenderArch(companyName);
+}
+
+// ---- live org-map layer (company centre + every CRM contact) ----
+const ARCH_ORG_CENTRE = { x: 1400, y: 1000 };
+function archLiveElements(companyName){
+  const d = archDoc(companyName);
+  if(!d || !d.layers.orgMap) return [];
+  const board = window.__profileBoardData && window.__profileBoardData[companyName];
+  if(!board || board.error || !board.company) return [];
+  const contacts = board.contacts || [];
+  const offsets = computeProfileBoardAutoLayout(contacts);
+  const scale = 2.4;  // spread the compact auto-layout out on the big scene
+  const els = [];
+  const centreId = 'company:' + board.company.id;
+  const cLay = d.layout[centreId];
+  els.push({
+    id: centreId, live: true, type: 'company', shape: 'rectangle',
+    x: cLay ? cLay.x : ARCH_ORG_CENTRE.x - 90, y: cLay ? cLay.y : ARCH_ORG_CENTRE.y - 34,
+    w: 180, h: 68, text: (cLay && cLay.note) || '',
+    fill: '#18181b', stroke: '#18181b', textColor: '#ffffff', fontSize: 13,
+    ref: { kind: 'company', id: board.company.id, name: board.company.name }
+  });
+  contacts.forEach(ct => {
+    const id = 'contact:' + ct.id;
+    const lay = d.layout[id];
+    const off = offsets[ct.id] || { dx: 0, dy: 0 };
+    const colour = profileStatusColor(ct.status);
+    els.push({
+      id, live: true, type: 'contact', shape: 'rectangle',
+      x: lay ? lay.x : Math.round(ARCH_ORG_CENTRE.x + off.dx * scale - 100),
+      y: lay ? lay.y : Math.round(ARCH_ORG_CENTRE.y + off.dy * scale - 37),
+      w: 200, h: 74, text: (lay && lay.note) || '',
+      fill: '#ffffff', stroke: colour, textColor: '#18181b', fontSize: 12,
+      ref: { kind: 'contact', id: ct.id, name: ct.name },
+      subtitle: ct.jobTitle || '', badge: ct.status
+    });
+  });
+  return els;
+}
+function archLiveEdges(companyName){
+  const d = archDoc(companyName);
+  if(!d || !d.layers.orgMap) return [];
+  const board = window.__profileBoardData && window.__profileBoardData[companyName];
+  if(!board || board.error || !board.company) return [];
+  const centreId = 'company:' + board.company.id;
+  return (board.contacts || []).map(ct => ({
+    id: 'orglink:' + ct.id, live: true, from: centreId, to: 'contact:' + ct.id,
+    style: 'dashed', arrow: 'none', color: '#c4c4cc', label: ''
+  }));
+}
+function archAllElements(companyName){
+  const d = archDoc(companyName);
+  return [...archLiveElements(companyName), ...((d && d.elements) || [])];
+}
+function archAllEdges(companyName){
+  const d = archDoc(companyName);
+  return [...archLiveEdges(companyName), ...((d && d.edges) || [])];
 }
 
 // ---- geometry ----
@@ -15196,7 +15135,7 @@ function archDeselect(companyName){
 // ---- element mutation ----
 function archMutate(companyName, id, patch){
   const el = archElById(companyName, id);
-  if(!el) return;
+  if(!el || el.live) return;   // live org-map nodes take their style from the CRM
   Object.assign(el, patch);
   saveArch(companyName);
   rerenderArch(companyName);
@@ -15221,7 +15160,7 @@ function archZOrder(companyName, id, toFront){
 }
 function archDuplicate(companyName, id){
   const el = archElById(companyName, id);
-  if(!el) return;
+  if(!el || el.live) return;
   const copy = normalizeArchEl(Object.assign(JSON.parse(JSON.stringify(el)), { id: archUid(), x: el.x + 24, y: el.y + 24 }));
   archDoc(companyName).elements.push(copy);
   saveArch(companyName);
@@ -15231,6 +15170,11 @@ function archDuplicate(companyName, id){
 function archDeleteEl(companyName, id){
   const d = archDoc(companyName);
   if(!d) return;
+  if(id && id.indexOf(':') > -1 && (id.startsWith('contact:') || id.startsWith('company:'))){
+    // Live org-map node - can't delete an individual one; toggle the layer off instead.
+    toast('This card comes from the live contact map - turn the Org map layer off to hide them', 'warn');
+    return;
+  }
   d.elements = d.elements.filter(e => e.id !== id);
   d.edges = d.edges.filter(e => e.from !== id && e.to !== id);
   if(window.__archCharts && window.__archCharts[id]){ try { window.__archCharts[id].destroy(); } catch(e){} delete window.__archCharts[id]; }
@@ -15241,7 +15185,7 @@ function archDeleteEl(companyName, id){
 
 // ---- text editing ----
 function archBeginTextEdit(companyName, id){
-  const node = document.querySelector(`.arch-el[data-id="${id}"] .arch-el-text`);
+  const node = document.querySelector(`.arch-el[data-id="${CSS.escape(id)}"] .arch-el-text`);
   if(!node) return;
   node.setAttribute('contenteditable', 'true');
   node.classList.add('editing');
@@ -15256,7 +15200,15 @@ function archCommitTextEdit(companyName, id, node){
   node.classList.remove('editing');
   const text = (node.textContent || '').trim();
   const el = archElById(companyName, id);
-  if(el && el.text !== text){ el.text = text; saveArch(companyName); }
+  if(!el) return;
+  if(el.live){
+    // Live node annotation goes to canvas.layout so it survives re-synthesis.
+    const canvas = archDoc(companyName);
+    const cur = canvas.layout[id] || { x: el.x, y: el.y };
+    if((cur.note || '') !== text){ canvas.layout[id] = { x: cur.x, y: cur.y, note: text }; saveArch(companyName); }
+    return;
+  }
+  if(el.text !== text){ el.text = text; saveArch(companyName); }
 }
 
 // ---- drag / resize ----
@@ -15270,7 +15222,7 @@ function archElMouseDown(e, companyName, id){
   const el = archElById(companyName, id);
   if(!d || !el) return;
   archSelect(companyName, 'element', id);
-  __archDrag = { companyName, id, startX: e.clientX, startY: e.clientY, ox: el.x, oy: el.y, moved: false, zoom: d.viewport.zoom };
+  __archDrag = { companyName, id, live: !!el.live, startX: e.clientX, startY: e.clientY, ox: el.x, oy: el.y, x: el.x, y: el.y, moved: false, zoom: d.viewport.zoom };
   document.addEventListener('mousemove', archDragMove);
   document.addEventListener('mouseup', archDragEnd);
 }
@@ -15279,12 +15231,22 @@ function archDragMove(e){
   if(!d) return;
   const dx = (e.clientX - d.startX) / d.zoom, dy = (e.clientY - d.startY) / d.zoom;
   if(Math.abs(dx) + Math.abs(dy) > 2) d.moved = true;
-  const el = archElById(d.companyName, d.id);
-  if(!el) return;
-  el.x = Math.round(d.ox + dx);
-  el.y = Math.round(d.oy + dy);
-  const node = document.querySelector(`.arch-el[data-id="${d.id}"]`);
-  if(node){ node.style.left = el.x + 'px'; node.style.top = el.y + 'px'; }
+  d.x = Math.round(d.ox + dx);
+  d.y = Math.round(d.oy + dy);
+  // Live org-map nodes are synthesised fresh each render, so their position
+  // lives in canvas.layout, not on the element.
+  if(d.live){
+    const canvas = archDoc(d.companyName);
+    if(canvas){
+      const cur = canvas.layout[d.id] || {};
+      canvas.layout[d.id] = { x: d.x, y: d.y, note: cur.note || '' };
+    }
+  } else {
+    const el = archElById(d.companyName, d.id);
+    if(el){ el.x = d.x; el.y = d.y; }
+  }
+  const node = document.querySelector(`.arch-el[data-id="${CSS.escape(d.id)}"]`);
+  if(node){ node.style.left = d.x + 'px'; node.style.top = d.y + 'px'; }
   archDrawEdges(d.companyName);
   archPositionInlineToolbar(d.companyName);
 }
@@ -15300,7 +15262,7 @@ let __archResize = null;
 function archResizeDown(e, companyName, id){
   e.stopPropagation(); e.preventDefault();
   const d = archDoc(companyName), el = archElById(companyName, id);
-  if(!d || !el) return;
+  if(!d || !el || el.live) return;   // live org-map nodes are fixed size
   __archResize = { companyName, id, startX: e.clientX, startY: e.clientY, ow: el.w, oh: el.h, zoom: d.viewport.zoom };
   document.addEventListener('mousemove', archResizeMove);
   document.addEventListener('mouseup', archResizeEnd);
@@ -15312,7 +15274,7 @@ function archResizeMove(e){
   if(!el) return;
   el.w = Math.max(60, Math.round(d.ow + (e.clientX - d.startX) / d.zoom));
   el.h = Math.max(32, Math.round(d.oh + (e.clientY - d.startY) / d.zoom));
-  const node = document.querySelector(`.arch-el[data-id="${d.id}"]`);
+  const node = document.querySelector(`.arch-el[data-id="${CSS.escape(d.id)}"]`);
   if(node){ node.style.width = el.w + 'px'; node.style.height = el.h + 'px'; }
   archDrawEdges(d.companyName);
   archPositionInlineToolbar(d.companyName);
@@ -15484,7 +15446,8 @@ function archFit(companyName){
   const maxY = Math.max(...d.elements.map(e => e.y + e.h));
   const r = vpEl.getBoundingClientRect();
   const pad = 60;
-  const zoom = Math.min(ARCH_MAX_ZOOM, Math.max(ARCH_MIN_ZOOM, Math.min((r.width - pad*2) / (maxX - minX || 1), (r.height - pad*2) / (maxY - minY || 1))));
+  // cap at 1.2 so a sparse canvas doesn't slam to max zoom
+  const zoom = Math.min(1.2, Math.max(ARCH_MIN_ZOOM, Math.min((r.width - pad*2) / (maxX - minX || 1), (r.height - pad*2) / (maxY - minY || 1))));
   d.viewport.zoom = zoom;
   d.viewport.x = pad - minX * zoom + (r.width - pad*2 - (maxX - minX) * zoom) / 2;
   d.viewport.y = pad - minY * zoom + (r.height - pad*2 - (maxY - minY) * zoom) / 2;
@@ -15525,7 +15488,7 @@ function archDrawEdges(companyName){
   </defs>`;
   const parts = [markers];
   const labels = [];
-  d.edges.forEach(edge => {
+  archAllEdges(companyName).forEach(edge => {
     const a = archElById(companyName, edge.from), b = archElById(companyName, edge.to);
     if(!a || !b) return;
     const p1 = archEdgeAnchor(a, b), p2 = archEdgeAnchor(b, a);
@@ -15534,6 +15497,10 @@ function archDrawEdges(companyName){
     const dash = edge.style === 'dashed' ? 'stroke-dasharray="6,5"' : '';
     const mEnd = (edge.arrow === 'end' || edge.arrow === 'both') ? 'marker-end="url(#archArrowEnd)"' : '';
     const mStart = (edge.arrow === 'both') ? 'marker-start="url(#archArrowEnd)"' : '';
+    if(edge.live){
+      parts.push(`<line x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="${col}" stroke-width="1.5" ${dash} style="pointer-events:none;"/>`);
+      return;
+    }
     parts.push(`<line class="arch-edge-hit ${isSel ? 'selected' : ''}" data-edge="${edge.id}" x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="transparent" stroke-width="14" onclick="archSelectEdge('${esc(companyName)}','${edge.id}')" ondblclick="archEditEdgeLabel('${esc(companyName)}','${edge.id}')" style="cursor:pointer;pointer-events:stroke;"/>`);
     parts.push(`<line x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="${col}" stroke-width="${isSel ? 3 : 2}" ${dash} ${mEnd} ${mStart} style="pointer-events:none;"/>`);
     if(edge.label){
@@ -15709,9 +15676,10 @@ function archElInnerHtml(companyName, el){
   }
   if(el.type === 'contact' || el.type === 'company'){
     const name = (el.ref && el.ref.name) || 'Unlinked';
+    const kindLabel = el.type === 'company' ? 'COMPANY' : (el.subtitle ? esc(el.subtitle) : 'CONTACT');
     return `${bg}
       <div class="arch-card-inner">
-        <div class="arch-card-kind muted">${el.type === 'company' ? 'COMPANY' : 'CONTACT'}</div>
+        <div class="arch-card-kind" style="color:${el.type==='company'?'rgba(255,255,255,.65)':'var(--muted)'};">${kindLabel}${el.badge ? ` · <span style="color:${esc(el.stroke)};font-weight:700;">${esc(el.badge)}</span>` : ''}</div>
         <div class="arch-card-name" style="color:${esc(el.textColor)};font-size:${(el.fontSize||13)+1}px;">${esc(name)}</div>
         <div class="arch-el-text" data-id="${el.id}" style="color:${esc(el.textColor)};font-size:${(el.fontSize||13)-1}px;" onblur="archCommitTextEdit('${esc(companyName)}','${el.id}',this)">${esc(el.text)}</div>
         <button class="arch-card-open btn btn-ghost btn-sm" onmousedown="event.stopPropagation()" onclick="event.stopPropagation();archOpenEntity('${el.type}','${esc((el.ref&&el.ref.name)||'')}','${esc((el.ref&&el.ref.id)||'')}')"><i class="ti ti-external-link"></i> Open</button>
@@ -15725,14 +15693,15 @@ function archElHtml(companyName, el){
   const sel = window.__archSel;
   const isSel = sel && sel.kind === 'element' && sel.id === el.id;
   const connecting = window.__archConnectFrom === el.id;
-  return `<div class="arch-el arch-el--${el.type} ${isSel ? 'selected' : ''} ${connecting ? 'connect-src' : ''}" data-id="${el.id}"
+  const jid = el.id.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  return `<div class="arch-el arch-el--${el.type} ${el.live ? 'arch-el--live' : ''} ${isSel ? 'selected' : ''} ${connecting ? 'connect-src' : ''}" data-id="${esc(el.id)}"
       style="left:${el.x}px;top:${el.y}px;width:${el.w}px;height:${el.h}px;"
-      onmousedown="archElMouseDown(event,'${esc(companyName)}','${el.id}')"
-      ondblclick="event.stopPropagation();${el.type==='chart'?`openArchChartDialog('${esc(companyName)}','${el.id}')`:`archBeginTextEdit('${esc(companyName)}','${el.id}')`}"
-      onclick="archElClick(event,'${esc(companyName)}','${el.id}')">
+      onmousedown="archElMouseDown(event,'${esc(companyName)}','${jid}')"
+      ondblclick="event.stopPropagation();${el.type==='chart'?`openArchChartDialog('${esc(companyName)}','${jid}')`:`archBeginTextEdit('${esc(companyName)}','${jid}')`}"
+      onclick="archElClick(event,'${esc(companyName)}','${jid}')">
     ${archElInnerHtml(companyName, el)}
-    ${['left','right','top','bottom'].map(s => `<div class="arch-cdot arch-cdot--${s}" onmousedown="archDotDown(event,'${esc(companyName)}','${el.id}')" title="Drag to connect"></div>`).join('')}
-    <div class="arch-handle" onmousedown="archResizeDown(event,'${esc(companyName)}','${el.id}')"></div>
+    ${['left','right','top','bottom'].map(s => `<div class="arch-cdot arch-cdot--${s}" onmousedown="archDotDown(event,'${esc(companyName)}','${jid}')" title="Drag to connect"></div>`).join('')}
+    ${el.live ? '' : `<div class="arch-handle" onmousedown="archResizeDown(event,'${esc(companyName)}','${jid}')"></div>`}
   </div>`;
 }
 function archElClick(e, companyName, id){
@@ -15754,7 +15723,7 @@ function archPositionInlineToolbar(companyName){
   if(!sel){ tb.hidden = true; return; }
   const card = document.getElementById('archCard');
   if(sel.kind === 'element'){
-    const node = document.querySelector(`.arch-el[data-id="${sel.id}"]`);
+    const node = document.querySelector(`.arch-el[data-id="${CSS.escape(sel.id)}"]`);
     if(!node){ tb.hidden = true; return; }
     const nr = node.getBoundingClientRect();
     const cr = card.getBoundingClientRect();
@@ -15792,6 +15761,16 @@ function archInlineToolbarHtml(companyName){
   }
   const el = archElById(companyName, sel.id);
   if(!el) return '<div id="archInlineToolbar" class="arch-inline-toolbar" hidden></div>';
+  const jid = el.id.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  if(el.live){
+    return `<div id="archInlineToolbar" class="arch-inline-toolbar">
+      <button title="Open full record" onclick="archOpenEntity('${el.type}','${esc((el.ref&&el.ref.name)||'')}','${esc((el.ref&&el.ref.id)||'')}')"><i class="ti ti-external-link"></i></button>
+      <button title="Connect from here" onclick="archStartConnect('${esc(companyName)}','${jid}')"><i class="ti ti-line"></i></button>
+      <button title="Add a note" onclick="archBeginTextEdit('${esc(companyName)}','${jid}')"><i class="ti ti-note"></i></button>
+      <span class="sep"></span>
+      <span class="muted" style="font-size:10px;padding:0 4px;">from contact map</span>
+    </div>`;
+  }
   const isShape = el.type === 'shape';
   return `<div id="archInlineToolbar" class="arch-inline-toolbar">
     ${ARCH_FILL_SWATCHES.map(col => `<button class="swatch ${el.fill===col?'on':''}" style="background:${col}" title="Fill" onclick="archSetFill('${esc(companyName)}','${el.id}','${col}')"></button>`).join('')}
@@ -15822,25 +15801,45 @@ function rerenderArch(companyName){
 function archAfterRender(companyName){
   const d = archDoc(companyName);
   if(!d) return;
+  if(d.layers.orgMap && !(window.__profileBoardData && window.__profileBoardData[companyName])){
+    loadProfileBoard(companyName);   // will rerenderArch when it lands
+  }
   archApplyViewport(companyName);
   archDrawEdges(companyName);
   archRenderCharts(companyName);
-  // swap the inline toolbar in
   const holder = document.getElementById('archToolbarHolder');
   if(holder){ holder.innerHTML = archInlineToolbarHtml(companyName); }
   archPositionInlineToolbar(companyName);
 }
 
+function archCanvasTabsHtml(companyName){
+  const c = archContainer(companyName);
+  if(!c) return '';
+  return `<div class="arch-canvas-tabs">
+    ${c.canvases.map(cv => `<button class="arch-canvas-chip ${cv.id===c.activeCanvasId?'active':''}" onclick="setProfileCanvas('${esc(companyName)}','${cv.id}')">${esc(cv.name)}</button>`).join('')}
+    <button class="arch-canvas-chip arch-canvas-new" onclick="archNewCanvasDialog('${esc(companyName)}')"><i class="ti ti-plus"></i> New canvas</button>
+  </div>`;
+}
+
 function renderChangeArchitectureCanvas(companyName){
+  const container = archContainer(companyName);
   const d = archDoc(companyName);
   if(!d) return `<div class="card" id="archCard"><div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading…</div></div>`;
-  const els = d.elements.map(el => archElHtml(companyName, el)).join('');
+  const allEls = archAllElements(companyName);
+  const els = allEls.map(el => archElHtml(companyName, el)).join('');
   return `
   <div class="card" id="archCard" style="position:relative;overflow:hidden;">
+    ${archCanvasTabsHtml(companyName)}
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
-      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-affiliate"></i> Account canvas</div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <div class="section-title" style="margin-bottom:0;"><i class="ti ti-affiliate"></i> ${esc(d.name)}</div>
+        <button class="btn btn-ghost btn-sm" title="Rename" onclick="archRenameCanvas('${esc(companyName)}')"><i class="ti ti-pencil"></i></button>
+        <button class="btn btn-ghost btn-sm" title="Duplicate" onclick="archDuplicateCanvas('${esc(companyName)}')"><i class="ti ti-copy"></i></button>
+        ${container && container.canvases.length > 1 ? `<button class="btn btn-ghost btn-sm" title="Delete canvas" onclick="archDeleteCanvas('${esc(companyName)}')"><i class="ti ti-trash"></i></button>` : ''}
+      </div>
       <div style="display:flex;gap:6px;align-items:center;">
         <span id="archSaveStatus" class="muted" style="font-size:11px;"></span>
+        <button class="btn ${d.layers.orgMap?'btn-primary':'btn-secondary'} btn-sm" title="Show the live CRM contact map on this canvas" onclick="archToggleOrgMap('${esc(companyName)}')"><i class="ti ti-sitemap"></i> Org map</button>
         <div class="arch-menu" id="archInsertMenu">
           <button class="btn btn-primary btn-sm" onclick="event.stopPropagation();archToggleInsertMenu()"><i class="ti ti-plus"></i> Insert</button>
           <div class="arch-menu-list">
@@ -15868,7 +15867,7 @@ function renderChangeArchitectureCanvas(companyName){
         </div>
       </div>
     </div>
-    <div class="muted" style="font-size:11.5px;margin-bottom:8px;">Freeform board — drag empty space to pan, scroll to zoom. Insert cards, shapes, sticky notes and charts; double-click to edit text; select an element for colour, shape and connectors. Everything autosaves.</div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:8px;">Freeform board — drag empty space to pan, scroll to zoom. Insert cards, shapes, sticky notes and charts; double-click to edit text; select an element for colour, shape and connectors.${d.layers.orgMap ? ' The live contact map updates itself as the CRM changes.' : ''} Everything autosaves.</div>
     <div id="archToolbarHolder">${archInlineToolbarHtml(companyName)}</div>
     <div id="archViewport" class="arch-viewport" onmousedown="archViewportMouseDown(event)" onwheel="archWheel(event)">
       <div id="archScene" class="arch-scene" style="width:${ARCH_SCENE_W}px;height:${ARCH_SCENE_H}px;">
@@ -15876,9 +15875,78 @@ function renderChangeArchitectureCanvas(companyName){
         <div id="archEdgeLabels" class="arch-edge-labels"></div>
         ${els}
       </div>
-      ${!d.elements.length ? '<div class="arch-empty muted">Empty canvas — press <b>Insert</b> to add your first card.</div>' : ''}
+      ${!allEls.length ? '<div class="arch-empty muted">Empty canvas — press <b>Insert</b>, or turn on <b>Org map</b> to pull in the contact tree.</div>' : ''}
     </div>
   </div>`;
+}
+
+// ---- "New canvas" import dialog ----
+function archNewCanvasDialog(companyName){
+  archCloseMenus();
+  openModal('New canvas for ' + esc(companyName), `
+    <div class="field"><label>Canvas name</label><input id="archNewName" placeholder="e.g. Stakeholder map" value="Canvas"></div>
+    <div class="muted" style="font-size:11.5px;margin:10px 0 6px;">What do you want to import from this account?</div>
+    <label class="arch-imp"><input type="checkbox" id="archImpOrg" checked> Contact org map <span class="muted">— live company + contact tree</span></label>
+    <label class="arch-imp"><input type="checkbox" id="archImpChart" checked> Touch-point chart <span class="muted">— activity by type</span></label>
+    <label class="arch-imp"><input type="checkbox" id="archImpDeals" checked> Deals + relationship note</label>
+    <label class="arch-imp"><input type="checkbox" id="archImpArch" checked> Change-architecture starter <span class="muted">— 5 labelled shapes</span></label>
+    <div style="margin-top:8px;display:flex;gap:10px;">
+      <button class="btn btn-ghost btn-sm" onclick="archImpSetAll(true)">Everything</button>
+      <button class="btn btn-ghost btn-sm" onclick="archImpSetAll(false)">Nothing</button>
+    </div>
+  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="archNewCreateBtn" onclick="archCreateCanvasFromDialog('${esc(companyName)}')">Create canvas</button>`);
+  setTimeout(() => { const n = document.getElementById('archNewName'); if(n){ n.focus(); n.select(); } }, 20);
+}
+function archImpSetAll(v){
+  ['archImpOrg','archImpChart','archImpDeals','archImpArch'].forEach(id => { const e = document.getElementById(id); if(e) e.checked = v; });
+}
+async function archCreateCanvasFromDialog(companyName){
+  const name = (document.getElementById('archNewName').value || '').trim() || 'Untitled canvas';
+  const wantOrg = document.getElementById('archImpOrg').checked;
+  const wantChart = document.getElementById('archImpChart').checked;
+  const wantDeals = document.getElementById('archImpDeals').checked;
+  const wantArch = document.getElementById('archImpArch').checked;
+  const btn = document.getElementById('archNewCreateBtn');
+  if(btn){ btn.disabled = true; btn.textContent = 'Creating…'; }
+
+  const seedElements = [];
+  if(wantArch){
+    ARCH_PRESETS.forEach((p, i) => seedElements.push({
+      type: 'shape', shape: 'rectangle', x: 1160 + i * 210, y: 1220, w: 190, h: 90,
+      text: p.label, fill: p.fill, stroke: p.stroke, textColor: '#18181b'
+    }));
+  }
+  if(wantChart){
+    let data = { labels: [], values: [] };
+    try {
+      const res = await fetch(`/api/companies/${encodeURIComponent(companyName)}/board-datasets`);
+      const j = await res.json();
+      const ds = res.ok && (j.datasets || []).find(x => x.key === 'touchpoints-by-type');
+      if(ds) data = { labels: ds.labels, values: ds.values };
+    } catch(e){}
+    seedElements.push({ type: 'chart', x: 1160, y: 1360, w: 340, h: 240,
+      chart: { kind: 'bar', title: 'Touch points by type', source: data.labels.length ? 'auto:touchpoints-by-type' : 'manual', data, pulledAt: data.labels.length ? new Date().toISOString() : null } });
+  }
+  if(wantDeals){
+    let text = 'Deals & relationship — nothing on file yet.';
+    try {
+      const res = await fetch(`/api/companies/profile?name=${encodeURIComponent(companyName)}`);
+      const j = await res.json();
+      if(res.ok){
+        const lines = [];
+        const rf = j.relationshipFlag;
+        if(rf) lines.push(`TWENTY2 RELATIONSHIP: ${rf.status}${rf.tier ? ' (Tier ' + rf.tier + ')' : ''}` + (rf.notes ? '\n' + rf.notes : ''));
+        (j.deals || []).forEach(dl => lines.push(`• ${dl.outcome}${dl.dealValue ? ' — $' + Number(dl.dealValue).toLocaleString() : ''}${dl.date ? ' (' + fmtDate(dl.date) + ')' : ''}`));
+        if(lines.length) text = lines.join('\n');
+      }
+    } catch(e){}
+    seedElements.push({ type: 'sticky', x: 1520, y: 1360, w: 260, h: 220, text, fill: '#fef3c7', stroke: 'transparent', fontSize: 11 });
+  }
+
+  closeModal();
+  archCreateCanvas(companyName, name, { orgMap: wantOrg, seedElements });
+  const haveBoard = window.__profileBoardData && window.__profileBoardData[companyName] && !window.__profileBoardData[companyName].error;
+  if(wantOrg && !haveBoard) loadProfileBoard(companyName);
 }
 
 function renderAngleLibrarySection(campaign){
