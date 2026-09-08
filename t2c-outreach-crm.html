@@ -764,6 +764,7 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .arch-el--live .arch-handle{display:none;}
 .arch-imp{display:flex;align-items:center;gap:8px;font-size:12.5px;padding:5px 0;}
 .arch-imp input{width:auto;}
+.profile-search-bar{display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--border-light);border-radius:var(--radius-card);padding:10px 14px;margin-bottom:12px;box-shadow:var(--shadow-sm);}
 
 /* Context menu */
 .ctx-menu{position:fixed;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card);box-shadow:var(--shadow-lg);z-index:300;overflow:hidden;min-width:180px;}
@@ -14580,11 +14581,17 @@ function renderProfilePage(){
   }
 
   const selectedCompany = window.__profileSelectedCompany || '';
+  // Once a company is picked the search collapses to a slim bar so the canvas
+  // is right there - no scrolling past a long results list. "Change" re-opens it.
+  const searchOpen = !selectedCompany || window.__profileSearchExpanded;
 
-  return `
-  <div class="card" style="margin-bottom:16px;">
-    <div class="section-title"><i class="ti ti-hierarchy-2"></i> Profile</div>
-    <div class="muted" style="font-size:12px;margin-bottom:10px;">Search for a person or a company. A company's profile shows every contact reached there, grouped by job title.</div>
+  const searchCard = searchOpen ? `
+  <div class="card" style="margin-bottom:12px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-hierarchy-2"></i> Profile</div>
+      ${selectedCompany ? `<button class="btn btn-ghost btn-sm" onclick="collapseProfileSearch()"><i class="ti ti-x"></i></button>` : ''}
+    </div>
+    <div class="muted" style="font-size:12px;margin:6px 0 10px;">Search for a person or a company. A company's profile opens its account canvas.</div>
     <input id="profileSearchInput" type="text" placeholder="Search a person or company..." value="${esc(window.__profileQuery||'')}" oninput="setProfileQuery(this.value)" style="width:100%;max-width:420px;">
     ${query.length >= 2 ? `
       <div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:14px;">
@@ -14598,7 +14605,15 @@ function renderProfilePage(){
         </div>
       </div>
     ` : ''}
-  </div>
+  </div>` : `
+  <div class="profile-search-bar">
+    <i class="ti ti-building" style="color:var(--muted);"></i>
+    <strong style="font-size:13px;">${esc(selectedCompany)}</strong>
+    <button class="btn btn-ghost btn-sm" style="margin-left:auto;" onclick="expandProfileSearch()"><i class="ti ti-switch-horizontal"></i> Change</button>
+  </div>`;
+
+  return `
+  ${searchCard}
   ${selectedCompany ? renderChangeArchitectureCanvas(selectedCompany) : ''}
   `;
 }
@@ -14611,12 +14626,25 @@ function setProfileQuery(value){
   const input = document.getElementById('profileSearchInput');
   if(input){ input.focus(); input.setSelectionRange(value.length, value.length); }
 }
+function expandProfileSearch(){
+  window.__profileSearchExpanded = true;
+  renderPage();
+  const input = document.getElementById('profileSearchInput');
+  if(input) input.focus();
+}
+function collapseProfileSearch(){
+  window.__profileSearchExpanded = false;
+  renderPage();
+}
 
 function selectProfileCompany(name){
   window.__profileSelectedCompany = name;
   window.__profileCanvasId = null;
+  window.__profileSearchExpanded = false;
   if(!(window.__arch && window.__arch[name])) loadChangeArchitecture(name);
   renderPage();
+  const card = document.getElementById('archCard');
+  if(card) card.scrollIntoView({ block: 'start', behavior: 'smooth' });
 }
 
 // ---- Visual Profile board (Jeanne vision pivot §2) ----
