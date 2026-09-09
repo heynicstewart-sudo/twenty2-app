@@ -11224,25 +11224,182 @@ function renderRelationshipFlagSection(flag){
 // This is the account-level view the per-campaign Pipeline tab doesn't
 // give: a persona gap ("6 contacts here, 0 decision-makers") is visible
 // looking at the company alone, before opening any specific campaign.
-function renderAccountContactsSection(contacts){
-  if(!contacts || !contacts.length) return '';
+// Connection status <select> shared by the account-coverage list and the
+// "Add people" review modal. `journeyStage` -> control value.
+const CONN_STATUS_OPTS = [['none','Not contacted'],['sent','Request sent'],['connected','Connected']];
+function connStatusValueFromStage(stage){
+  if(stage === 'Connected' || stage === 'Messaging' || stage === 'Booked') return 'connected';
+  if(stage === 'Connection Pending') return 'sent';
+  return 'none';
+}
+function connStatusSelect(value, onchange){
+  return `<select onchange="${onchange}" onclick="event.stopPropagation()" style="font-size:10.5px;padding:2px 4px;">
+    ${CONN_STATUS_OPTS.map(([v,l]) => `<option value="${v}" ${value===v?'selected':''}>${l}</option>`).join('')}
+  </select>`;
+}
+
+function renderAccountContactsSection(contacts, companyName){
+  contacts = contacts || [];
   const dmCount = contacts.filter(c => c.isDecisionMaker === true).length;
   const anyCriteria = contacts.some(c => c.isDecisionMaker !== null);
+  const cn = companyName || (window.__drawerCompanyProfile && window.__drawerCompanyProfile.company && window.__drawerCompanyProfile.company.name) || '';
   return `
   <div class="drawer-section">
-    <div class="section-title" style="font-size:13px;"><i class="ti ti-users-group"></i> Account coverage</div>
-    ${anyCriteria ? `<div class="muted" style="font-size:11.5px;margin-bottom:8px;">${dmCount} of ${contacts.length} known contact${contacts.length===1?'':'s'} match${dmCount===1?'es':''} a Decision Maker Criteria keyword from a campaign touching this account.</div>` : `<div class="muted" style="font-size:11.5px;margin-bottom:8px;">${contacts.length} known contact${contacts.length===1?'':'s'} at this company.</div>`}
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+      <div class="section-title" style="font-size:13px;margin-bottom:0;"><i class="ti ti-users-group"></i> Account coverage</div>
+      ${cn ? `<button class="btn btn-ghost btn-sm" onclick="openCompanyPeopleModal('${esc(cn)}')"><i class="ti ti-user-plus"></i> Add people</button>` : ''}
+    </div>
+    ${!contacts.length ? '<div class="muted" style="font-size:11.5px;margin-top:8px;">No contacts on file yet. Press <b>Add people</b> and paste them straight from LinkedIn.</div>' : `
+    ${anyCriteria ? `<div class="muted" style="font-size:11.5px;margin:8px 0;">${dmCount} of ${contacts.length} known contact${contacts.length===1?'':'s'} match${dmCount===1?'es':''} a Decision Maker Criteria keyword from a campaign touching this account.</div>` : `<div class="muted" style="font-size:11.5px;margin:8px 0;">${contacts.length} known contact${contacts.length===1?'':'s'} at this company.</div>`}
     ${contacts.map(c => `
       <div class="tp-item" style="cursor:pointer;" onclick="closeDrawer();openContactDrawer('${esc(c.name)}', null)">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
           <strong>${esc(c.name)}</strong>
-          ${c.isDecisionMaker===true ? '<span class="badge" style="background:var(--success-bg,#dcfce7);color:var(--success,#16a34a);font-size:10px;">Decision maker</span>' : ''}
+          <div style="display:flex;align-items:center;gap:6px;flex:none;">
+            ${c.isDecisionMaker===true ? '<span class="badge" style="background:var(--success-bg,#dcfce7);color:var(--success,#16a34a);font-size:10px;">DM</span>' : ''}
+            ${connStatusSelect(connStatusValueFromStage(c.journeyStage), `setAccountContactStatus('${c.id}', this.value)`)}
+          </div>
         </div>
-        <div class="muted" style="font-size:11.5px;">${esc(c.jobTitle||'No title on file')}</div>
+        <div class="muted" style="font-size:11.5px;">${esc(c.jobTitle||'No title on file')}${c.connectionSentDate?` · req sent ${fmtDate(c.connectionSentDate)}`:''}</div>
         ${c.campaignStatuses.length ? c.campaignStatuses.map(s=>`<div class="muted" style="font-size:11px;margin-top:2px;">${esc(s.campaignName)} — ${esc(s.stage)}${s.replyReceived?' · replied':''}</div>`).join('') : '<div class="muted" style="font-size:11px;margin-top:2px;font-style:italic;">Not yet targeted in any campaign</div>'}
       </div>
-    `).join('')}
+    `).join('')}`}
   </div>`;
+}
+
+async function setAccountContactStatus(contactId, status){
+  try {
+    const res = await fetch(`/api/contacts/${encodeURIComponent(contactId)}/connection-status`, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ status })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Save failed');
+    toast(status === 'none' ? 'Status cleared' : status === 'sent' ? 'Marked: connection request sent' : 'Marked: connected', 'success');
+    // refresh the drawer so campaign statuses + dates update
+    const cn = window.__drawerCompanyProfile && window.__drawerCompanyProfile.company && window.__drawerCompanyProfile.company.name;
+    if(cn) afterCompanyPeopleChange(cn);
+  } catch(err){ toast('Could not update: ' + err.message, 'warn'); }
+}
+
+// Refresh whatever surface the "add people" / status change happened on.
+function afterCompanyPeopleChange(companyName){
+  if(document.getElementById('profileDrawer') && window.__drawerCompanyName === companyName){
+    openCompanyDrawer(companyName);
+  } else if(state.currentPage === 'profile'){
+    if(window.__profileBoardData) delete window.__profileBoardData[companyName];
+    renderPage();
+  }
+  if(typeof hydrateContactsFromAirtable === 'function') hydrateContactsFromAirtable();
+}
+
+/* ---- "Add people" to a company: paste / screenshot -> review -> import ---- */
+function openCompanyPeopleModal(companyName){
+  window.__companyPeople = { company: companyName, step: 'input', text: '', shots: [], proposals: null };
+  renderCompanyPeopleModal();
+}
+function renderCompanyPeopleModal(){
+  const s = window.__companyPeople;
+  if(!s) return;
+  if(s.step === 'input'){
+    openModal(`Add people — ${esc(s.company)}`, `
+      <div class="muted" style="font-size:12px;margin-bottom:8px;">Open the company's <b>People</b> tab (or "People you may know") on LinkedIn, select the list and paste it here — or drop a screenshot. The Engine pulls out names, titles and profile URLs; you review before anything is saved.</div>
+      <textarea id="cpPeopleText" rows="7" placeholder="Paste the LinkedIn people list here…" style="width:100%;">${esc(s.text||'')}</textarea>
+      <div class="learning-panel" ${dropZoneAttrs('cpPeopleImageInput')} style="margin:10px 0;">
+        <h4 style="font-size:12px;"><i class="ti ti-photo"></i> Or drop screenshot(s)</h4>
+        <input type="file" id="cpPeopleImageInput" accept="image/*" multiple style="display:none;" onchange="handleCompanyPeopleImages(event)">
+        <button class="btn btn-secondary btn-sm" onclick="document.getElementById('cpPeopleImageInput').click()"><i class="ti ti-upload"></i> Upload</button>
+        <div id="cpPeopleShots" style="margin-top:6px;">${(s.shots||[]).map((f,i)=>`<span class="shot-file-chip">${esc(f.name)}<button onclick="removeCompanyPeopleShot(${i})">&times;</button></span>`).join('')}</div>
+      </div>
+    `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="cpParseBtn" onclick="parseCompanyPeople()">Read them</button>`);
+    setTimeout(()=>{ const t=document.getElementById('cpPeopleText'); if(t) t.focus(); }, 20);
+    return;
+  }
+  // review step
+  const rows = s.proposals || [];
+  openModal(`Review — ${esc(s.company)}`, `
+    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">${rows.length} ${rows.length===1?'person':'people'} found. Set a connection status for anyone you've already reached out to, then import.</div>
+    <div style="display:flex;flex-direction:column;gap:8px;max-height:52vh;overflow-y:auto;">
+      ${rows.map((p,i)=>`
+        <div style="border:1px solid var(--border-light);border-radius:var(--radius-input);padding:8px 10px;${p._skip?'opacity:.45;':''}">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <input value="${esc(p.name)}" onchange="window.__companyPeople.proposals[${i}].name=this.value" style="font-size:12px;font-weight:700;flex:1;min-width:120px;">
+            ${p.existingContactId ? '<span class="badge" style="background:var(--surface-2);font-size:9.5px;">on file</span>' : ''}
+            <label style="font-size:10.5px;display:flex;align-items:center;gap:3px;"><input type="checkbox" ${p._skip?'checked':''} onchange="window.__companyPeople.proposals[${i}]._skip=this.checked;renderCompanyPeopleModal()" style="width:auto;"> skip</label>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;margin-top:5px;flex-wrap:wrap;">
+            <input value="${esc(p.jobTitle||'')}" placeholder="Job title" onchange="window.__companyPeople.proposals[${i}].jobTitle=this.value" style="font-size:11px;flex:1;min-width:140px;">
+            ${connStatusSelect(p.status||'none', `window.__companyPeople.proposals[${i}].status=this.value`)}
+          </div>
+          <input value="${esc(p.linkedinUrl||'')}" placeholder="linkedin.com/in/…" onchange="window.__companyPeople.proposals[${i}].linkedinUrl=this.value" style="font-size:10.5px;width:100%;margin-top:4px;">
+        </div>`).join('')}
+    </div>
+  `, `<button class="btn btn-secondary" onclick="window.__companyPeople.step='input';renderCompanyPeopleModal()">Back</button><button class="btn btn-primary" id="cpImportBtn" onclick="importCompanyPeople()">Import ${rows.filter(p=>!p._skip).length}</button>`);
+}
+function handleCompanyPeopleImages(event){
+  const files = Array.from(event.target.files||[]); event.target.value='';
+  const s = window.__companyPeople; let pending = files.length;
+  if(!pending) return;
+  files.forEach(file => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const m = String(reader.result).match(/^data:([^;]+);base64,(.*)$/);
+      if(m) s.shots.push({ name: file.name, mediaType: m[1], base64: m[2] });
+      if(--pending === 0) renderCompanyPeopleModal();
+    };
+    reader.onerror = () => toast('Could not read that file', 'warn');
+    reader.readAsDataURL(file);
+  });
+}
+function removeCompanyPeopleShot(i){ window.__companyPeople.shots.splice(i,1); renderCompanyPeopleModal(); }
+async function parseCompanyPeople(){
+  const s = window.__companyPeople;
+  s.text = (document.getElementById('cpPeopleText')?.value || '').trim();
+  if(!s.text && !s.shots.length){ toast('Paste some text or add a screenshot', 'warn'); return; }
+  const btn = document.getElementById('cpParseBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Reading…'; }
+  try {
+    const res = await fetch(`/api/companies/${encodeURIComponent(s.company)}/people/parse`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ text: s.text, images: s.shots })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    s.proposals = (data.proposals||[]).map(p => ({
+      ...p,
+      status: p.existingStage ? connStatusValueFromStage(p.existingStage) : 'none',
+      jobTitle: p.jobTitle || p.existingJobTitle || '',
+      _skip: false
+    }));
+    if(!s.proposals.length){ toast('No people found in that', 'warn'); if(btn){ btn.disabled=false; btn.innerHTML='Read them'; } return; }
+    s.step = 'review';
+    renderCompanyPeopleModal();
+  } catch(err){
+    toast('Could not read that: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = 'Read them'; }
+  }
+}
+async function importCompanyPeople(){
+  const s = window.__companyPeople;
+  const people = (s.proposals||[]).filter(p => !p._skip && (p.name||'').trim()).map(p => ({
+    name: p.name.trim(), jobTitle: (p.jobTitle||'').trim(), linkedinUrl: (p.linkedinUrl||'').trim(), status: p.status||'none'
+  }));
+  if(!people.length){ toast('Nothing to import', 'warn'); return; }
+  const btn = document.getElementById('cpImportBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Importing…'; }
+  try {
+    const res = await fetch(`/api/companies/${encodeURIComponent(s.company)}/people/import`, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ people })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Import failed');
+    closeModal();
+    window.__companyPeople = null;
+    toast(`${data.created} added, ${data.updated} updated${data.failed?`, ${data.failed} failed`:''}`, data.failed ? 'warn' : 'success');
+    afterCompanyPeopleChange(s.company);
+  } catch(err){
+    toast('Import failed: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = 'Import'; }
+  }
 }
 
 // Relevant proof from Twenty2's own delivery history (99-entry case study
@@ -11333,7 +11490,7 @@ function renderCompanyDrawerContent(data){
     ${data.campaignsTouching.map(camp=>`<div class="tp-item" style="cursor:pointer;" onclick="closeDrawer();navigate('campaigns');openCampaignDetail('${camp.id}','pipeline')"><strong>${esc(camp.name)}</strong></div>`).join('')}
   </div>` : ''}
 
-  ${renderAccountContactsSection(data.accountContacts)}
+  ${renderAccountContactsSection(data.accountContacts, c.name)}
 
   ${renderMatchingCaseStudiesSection(data.matchingCaseStudies)}
 
@@ -15040,7 +15197,8 @@ function renderProfilePage(){
   <div class="profile-search-bar">
     <i class="ti ti-building" style="color:var(--muted);"></i>
     <strong style="font-size:13px;">${esc(selectedCompany)}</strong>
-    <button class="btn btn-ghost btn-sm" style="margin-left:auto;" onclick="expandProfileSearch()"><i class="ti ti-switch-horizontal"></i> Change</button>
+    <button class="btn btn-ghost btn-sm" style="margin-left:auto;" onclick="openCompanyPeopleModal('${esc(selectedCompany)}')"><i class="ti ti-user-plus"></i> Add people</button>
+    <button class="btn btn-ghost btn-sm" onclick="expandProfileSearch()"><i class="ti ti-switch-horizontal"></i> Change</button>
   </div>`;
 
   return `

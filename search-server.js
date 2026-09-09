@@ -10450,6 +10450,10 @@ function buildAccountContacts(companyRecord, contactRecords, campaignContactRows
         id: r.id,
         name: cf['Full Name'] || '',
         jobTitle: cf['Job Title'] || '',
+        linkedinUrl: cf['LinkedIn URL'] || '',
+        journeyStage: cf['Journey Stage'] || 'Found',
+        connectionSentDate: cf['Connection Sent Date'] || null,
+        icpRoleCategory: cf['ICP Role Category'] || '',
         isDecisionMaker: allCriteria.length ? jobTitleMatchesCriteria(cf['Job Title'], allCriteria) : null,
         campaignStatuses,
         everContacted: campaignStatuses.length > 0
