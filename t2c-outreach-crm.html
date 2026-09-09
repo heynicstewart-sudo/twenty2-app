@@ -2555,6 +2555,7 @@ function afterRender(page){
   if(page === 'contentcalendar' && window.__contentCalendarItems === undefined) loadContentCalendarItems();
   if(page === 'home' && window.__homeContactSignals === undefined) loadHomeContactSignals();
   if(page === 'home') loadIcpWorklist();
+  if((page === 'home' || page === 'settings') && window.__programDiscovery === undefined) loadProgramDiscovery();
   if(page === 'research'){
     const tab = window.__researchSubTab || 'market';
     if(tab === 'market'){
@@ -2867,6 +2868,7 @@ function renderHome(){
   <div class="muted" style="margin-bottom:22px;">${esc(__tagline)}</div>
 
   ${renderIcpWorklistStrip()}
+  ${renderProgramDiscoveryCard()}
   ${renderContactSignalsStrip()}
   ${renderTodaysActions()}
 
@@ -14457,14 +14459,28 @@ function renderProgramCaptureModal(){
   const s = window.__progCapture;
   if(!s) return;
   if(s.step === 'input'){
-    openModal('Log a finding', `
-      <div class="muted" style="font-size:12px;margin-bottom:8px;">Paste whatever you found — a news headline, a LinkedIn post, a line from a call. The Engine works out which company it's about and whether it's a program, a signal, or just a note.</div>
-      <textarea id="progCaptureText" rows="6" placeholder="e.g. 'Water Corporation has kicked off a multi-year SAP S/4HANA replacement, go-live slipped to 2027…'" style="width:100%;">${esc(s.text || '')}</textarea>
-      ${s.prefillCompany ? `<div class="muted" style="font-size:11px;margin-top:6px;">Will attach to <b>${esc(s.prefillCompany)}</b> unless the text points elsewhere.</div>` : ''}
-    `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="progCaptureParseBtn" onclick="progCaptureParse()">Parse it</button>`);
-    setTimeout(() => { const t = document.getElementById('progCaptureText'); if(t) t.focus(); }, 20);
+    const batch = s.mode === 'batch';
+    const tab = (on) => `padding:5px 12px;border-radius:var(--radius-input);font-size:12px;cursor:pointer;border:1px solid var(--border-light);${on ? 'background:var(--accent);color:#fff;font-weight:700;' : 'background:var(--surface-2);'}`;
+    openModal(batch ? 'Log findings — batch' : 'Log a finding', `
+      ${s.prefillCompany ? '' : `<div style="display:flex;gap:6px;margin-bottom:10px;">
+        <span style="${tab(!batch)}" onclick="window.__progCapture.mode='single';renderProgramCaptureModal()">One finding</span>
+        <span style="${tab(batch)}" onclick="window.__progCapture.mode='batch';renderProgramCaptureModal()">Paste a batch</span>
+      </div>`}
+      ${batch ? `
+        <div class="muted" style="font-size:12px;margin-bottom:8px;">One finding per line — a research dump, a list of companies + what you found. The Engine classifies each and files it against the right company. Up to 25 at a time.</div>
+        <textarea id="progBulkText" rows="9" placeholder="Rio Tinto — new SAP S/4HANA rollout announced Aug 2026, go-live 2028&#10;Water Corp — appointed a Chief Transformation Officer&#10;South32 — operating model review underway per H1 results call" style="width:100%;">${esc(s.bulkText || '')}</textarea>
+      ` : `
+        <div class="muted" style="font-size:12px;margin-bottom:8px;">Paste whatever you found — a news headline, a LinkedIn post, a line from a call. The Engine works out which company it's about and whether it's a program, a signal, or just a note.</div>
+        <textarea id="progCaptureText" rows="6" placeholder="e.g. 'Water Corporation has kicked off a multi-year SAP S/4HANA replacement, go-live slipped to 2027…'" style="width:100%;">${esc(s.text || '')}</textarea>
+        ${s.prefillCompany ? `<div class="muted" style="font-size:11px;margin-top:6px;">Will attach to <b>${esc(s.prefillCompany)}</b> unless the text points elsewhere.</div>` : ''}
+      `}
+    `, batch
+      ? `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="progBulkParseBtn" onclick="progBulkParse()">Parse batch</button>`
+      : `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="progCaptureParseBtn" onclick="progCaptureParse()">Parse it</button>`);
+    setTimeout(() => { const t = document.getElementById(batch ? 'progBulkText' : 'progCaptureText'); if(t) t.focus(); }, 20);
     return;
   }
+  if(s.step === 'batchreview'){ renderProgramBatchReview(); return; }
   // proposal step
   const pr = s.proposal;
   const companies = (window.__programs && window.__programs.companies || []).map(c => c.companyName);
@@ -14572,6 +14588,293 @@ async function progCaptureSave(){
     toast('Could not save: ' + err.message, 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = 'Save'; }
   }
+}
+
+// Shared filing path - takes a plain proposal object, writes it through the
+// same per-company routes the single capture uses. Returns nothing / throws.
+async function progFileOne({ destination, companyName, program, signal, note, sourceText }){
+  const company = (companyName || '').trim();
+  if(!company) throw new Error('No company');
+  if(destination === 'program'){
+    const cur = await fetch(`/api/companies/profile?name=${encodeURIComponent(company)}`).then(r => r.json()).catch(() => ({}));
+    const existing = (cur.company && cur.company.programs) || [];
+    const p = program || {};
+    existing.push({
+      id: 'prog' + Date.now().toString(36) + Math.random().toString(36).slice(2,5),
+      name: (p.name || '').trim() || 'Unnamed program',
+      type: PROGRAM_TYPES.includes(p.type) ? p.type : 'Other',
+      phase: PROGRAM_PHASES.includes(p.phase) ? p.phase : 'Unknown',
+      evidence: (p.evidence || '').trim(),
+      source: (p.source || '').trim(),
+      confidence: ['high','medium','low'].includes(p.confidence) ? p.confidence : 'medium',
+      detectedAt: isoDate(TODAY), addedBy: 'chat'
+    });
+    const r = await fetch(`/api/companies/${encodeURIComponent(company)}/programs`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ programs: existing }) });
+    if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error || 'Save failed');
+  } else if(destination === 'signal'){
+    const r = await fetch(`/api/companies/${encodeURIComponent(company)}/signal`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ signal: (signal || sourceText || '').trim() }) });
+    if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error || 'Save failed');
+  } else {
+    const r = await fetch('/api/companies/notes', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: company, noteText: (note || sourceText || '').trim() }) });
+    if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error || 'Save failed');
+  }
+}
+
+/* ---- batch capture ---- */
+async function progBulkParse(){
+  const text = (document.getElementById('progBulkText').value || '').trim();
+  if(!text){ toast('Paste some findings first', 'warn'); return; }
+  window.__progCapture.bulkText = text;
+  const btn = document.getElementById('progBulkParseBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Parsing…'; }
+  try {
+    const res = await fetch('/api/programs/bulk-capture', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ text }) });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__progCapture.proposals = (data.proposals || []).map(p => ({ ...p, _status: 'pending' }));
+    window.__progCapture.truncated = !!data.truncated;
+    window.__progCapture.step = 'batchreview';
+    renderProgramCaptureModal();
+  } catch(err){
+    toast('Could not parse: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = 'Parse batch'; }
+  }
+}
+function renderProgramBatchReview(){
+  const s = window.__progCapture;
+  const rows = s.proposals || [];
+  const companies = (window.__programs && window.__programs.companies || []).map(c => c.companyName);
+  const allNames = [...new Set([...(state.contacts||[]).map(c => c.company).filter(Boolean), ...companies])].sort();
+  const chip = c => ({ high:'var(--success)', medium:'var(--warning)', low:'var(--muted)' }[c] || 'var(--muted)');
+  const pend = rows.filter(r => r._status === 'pending').length;
+  const body = `
+    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">${rows.length} finding(s) classified${s.truncated ? ' (first 25 only)' : ''}. Fix the company match if it's wrong, then Accept.</div>
+    <datalist id="progBulkCompanyList">${allNames.map(n => `<option value="${esc(n)}">`).join('')}</datalist>
+    <div style="display:flex;flex-direction:column;gap:9px;max-height:52vh;overflow-y:auto;">
+      ${rows.map((r,i) => {
+        if(r.error) return `<div style="border:1px solid var(--border-light);border-radius:var(--radius-input);padding:9px 11px;opacity:.7;"><div class="muted" style="font-size:11px;">Couldn't parse: "${esc((r.sourceText||'').slice(0,90))}"</div></div>`;
+        const done = r._status !== 'pending';
+        const destLabel = { program:'Program', signal:'Signal', note:'Note' }[r.destination] || 'Note';
+        return `<div style="border:1px solid var(--border-light);border-radius:var(--radius-input);padding:9px 11px;${done ? 'opacity:.5;' : ''}">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;">
+            <div style="flex:1;min-width:180px;">
+              <span class="badge" style="background:var(--surface-2);font-size:10px;">${destLabel}</span>
+              ${r.destination==='program' && r.program ? `<span style="font-size:10.5px;color:${programPhaseColor(r.program.phase)};font-weight:700;"> ${esc(r.program.phase)}</span> <span class="muted" style="font-size:10.5px;">${esc(r.program.type)}</span>` : ''}
+              ${r.program && r.program.confidence ? `<span style="font-size:10px;color:${chip(r.program.confidence)};font-weight:700;"> · ${esc(r.program.confidence)}</span>` : ''}
+              <div style="font-size:12px;margin-top:3px;">${esc(r.destination==='program' ? (r.program && r.program.name || '') : (r.signal || r.note || r.sourceText || ''))}</div>
+              ${r.program && r.program.evidence ? `<div class="muted" style="font-size:10.5px;font-style:italic;margin-top:2px;">"${esc(r.program.evidence.slice(0,160))}"</div>` : ''}
+            </div>
+            <div style="display:flex;gap:5px;align-items:center;flex:none;">
+              <input id="progBulkCo-${i}" list="progBulkCompanyList" value="${esc(r.companyName||'')}" placeholder="Company" style="font-size:11.5px;width:150px;" ${done?'disabled':''}>
+              ${done ? `<span class="muted" style="font-size:11px;">${r._status === 'accepted' ? '✓ filed' : 'skipped'}</span>` : `
+                <button class="btn btn-secondary btn-sm" onclick="progBulkAccept(${i})"><i class="ti ti-check"></i></button>
+                <button class="btn btn-ghost btn-sm" onclick="progBulkSkip(${i})"><i class="ti ti-x"></i></button>`}
+            </div>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>`;
+  openModal('Review batch', body, `
+    <button class="btn btn-secondary" onclick="window.__progCapture.step='input';renderProgramCaptureModal()">Back</button>
+    <button class="btn btn-secondary" onclick="progBulkAcceptHighConfidence()" ${pend?'':'disabled'}>Accept all high-confidence</button>
+    <button class="btn btn-primary" onclick="closeModal();window.__progCapture=null;window.__programs=undefined;loadPrograms();window.__icpWorklist=undefined;loadIcpWorklist();">Done</button>`);
+}
+async function progBulkAccept(i){
+  const s = window.__progCapture; const r = s.proposals[i];
+  if(!r || r._status !== 'pending') return;
+  const companyName = (document.getElementById('progBulkCo-'+i)?.value || r.companyName || '').trim();
+  if(!companyName){ toast('Pick a company for this row', 'warn'); return; }
+  try {
+    await progFileOne({ ...r, companyName });
+    r._status = 'accepted';
+    renderProgramBatchReview();
+  } catch(err){ toast('Row ' + (i+1) + ': ' + err.message, 'warn'); }
+}
+function progBulkSkip(i){
+  const r = window.__progCapture.proposals[i];
+  if(r) r._status = 'skipped';
+  renderProgramBatchReview();
+}
+async function progBulkAcceptHighConfidence(){
+  const s = window.__progCapture;
+  for(let i=0;i<s.proposals.length;i++){
+    const r = s.proposals[i];
+    if(r._status === 'pending' && !r.error && r.companyMatched && ((r.program && r.program.confidence === 'high') || r.destination !== 'program')){
+      try { await progFileOne(r); r._status = 'accepted'; } catch(e){ /* leave pending */ }
+    }
+  }
+  renderProgramBatchReview();
+}
+
+/* ==================== PROGRAM DISCOVERY AGENT (Home + Settings) ==================== */
+function progDiscoWhen(iso){
+  if(!iso) return '—';
+  try { return new Date(iso).toLocaleString('en-AU',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}); }
+  catch(e){ return fmtDate(iso); }
+}
+async function loadProgramDiscovery(){
+  if(window.__programDiscovery !== undefined && window.__programDiscovery !== null) return;
+  window.__programDiscovery = null;
+  try {
+    const res = await fetch('/api/programs/discovery');
+    window.__programDiscovery = res.ok ? await res.json() : { error: true };
+  } catch(err){ window.__programDiscovery = { error: true }; }
+  if(['home','settings'].includes(state.currentPage)) renderPage();
+}
+function renderProgramDiscoveryCard(){
+  const d = window.__programDiscovery;
+  if(!d || d.error) return '';
+  const running = !!window.__programDiscoveryRunning || !!d.running;
+  const n = d.pendingCount || 0;
+  const last = (d.log && d.log[0]) || null;
+  const mode = window.__programDiscoveryMode || 'both';
+  const modeOpt = (v,label) => `<option value="${v}" ${mode===v?'selected':''}>${label}</option>`;
+  return `
+  <div class="card" style="margin-bottom:22px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-robot"></i> Programs found ${n ? `<span class="count-pill has" style="margin-left:6px;">${n}</span>` : ''}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+        ${n ? `<button class="btn btn-ghost btn-sm" onclick="openProgramDiscoveryQueue()"><i class="ti ti-list-check"></i> Review</button>` : ''}
+        <select onchange="window.__programDiscoveryMode=this.value" style="font-size:11.5px;" ${running?'disabled':''}>
+          ${modeOpt('both','Known + new')}${modeOpt('monitor','Known accounts only')}${modeOpt('discover','New companies only')}
+        </select>
+        <button class="btn btn-secondary btn-sm" onclick="runProgramDiscoveryNow()" ${running?'disabled':''}><i class="ti ${running?'ti-loader-2':'ti-radar'}"></i> ${running?'Scanning…':'Run now'}</button>
+      </div>
+    </div>
+    <div class="muted" style="font-size:11.5px;margin:6px 0 0;">
+      The agent scans for transformation programs — re-checks known accounts and surfaces new ICP-sector companies. High-confidence findings file themselves; the rest wait here for a yes/no.
+      ${d.settings.enabled ? ' Also runs automatically every Monday.' : ' Automatic weekly runs are <b>off</b> — turn them on in Settings once you’re happy with a manual run.'}
+      ${last ? ` Last run ${progDiscoWhen(last.ranAt)} — scanned ${last.companiesScanned}, filed ${last.autoFiled}, ${last.queued} queued${last.newCompanies?`, ${last.newCompanies} new`:''}${(last.errors&&last.errors.length)?`, ${last.errors.length} error(s)`:''}.` : ''}
+    </div>
+  </div>`;
+}
+async function runProgramDiscoveryNow(mode){
+  if(window.__programDiscoveryRunning) return;
+  const m = mode || window.__programDiscoveryMode || 'both';
+  window.__programDiscoveryRunning = true; renderPage();
+  try {
+    const res = await fetch('/api/programs/discovery/run', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ mode: m }) });
+    const s = await res.json();
+    if(!res.ok && res.status !== 409) throw new Error(s.error || 'Run failed');
+    toast('Discovery run started — this can take a few minutes. You can keep working.');
+    await pollProgramDiscovery();
+  } catch(err){
+    toast('Discovery run failed: ' + err.message, 'warn');
+    window.__programDiscoveryRunning = false; renderPage();
+  }
+}
+async function pollProgramDiscovery(){
+  for(let i=0; i<160; i++){                       // ~13 min ceiling
+    await new Promise(r => setTimeout(r, 5000));
+    let d;
+    try { const res = await fetch('/api/programs/discovery'); d = await res.json(); if(!res.ok) continue; }
+    catch(e){ continue; }
+    window.__programDiscovery = d;
+    if(!d.running){
+      window.__programDiscoveryRunning = false;
+      const last = d.log && d.log[0];
+      if(last) toast(`Discovery done — scanned ${last.companiesScanned}, filed ${last.autoFiled}, ${last.queued} to review${last.newCompanies?`, ${last.newCompanies} new`:''}${(last.errors&&last.errors.length)?` (${last.errors.length} error(s))`:''}`, (last.errors&&last.errors.length)?'warn':'success');
+      window.__programs = undefined; loadPrograms();
+      window.__icpWorklist = undefined; loadIcpWorklist();
+      renderPage();
+      return;
+    }
+    if(['home','settings'].includes(state.currentPage)) renderPage();
+  }
+  window.__programDiscoveryRunning = false; renderPage();
+  toast('Discovery is taking longer than expected — check back shortly.', 'warn');
+}
+function openProgramDiscoveryQueue(){
+  const d = window.__programDiscovery;
+  const rows = (d && d.queue) || [];
+  const allNames = [...new Set([...(state.contacts||[]).map(c => c.company).filter(Boolean), ...((window.__programs && window.__programs.companies || []).map(c => c.companyName))])].sort();
+  const chip = c => ({ high:'var(--success)', medium:'var(--warning)', low:'var(--muted)' }[c] || 'var(--muted)');
+  const body = !rows.length ? '<div class="empty-state" style="padding:20px;">Nothing waiting. High-confidence findings are filed automatically.</div>' : `
+    <datalist id="progQCompanyList">${allNames.map(n => `<option value="${esc(n)}">`).join('')}</datalist>
+    <div style="display:flex;flex-direction:column;gap:9px;max-height:56vh;overflow-y:auto;">
+    ${rows.map(q => `
+      <div id="progQRow-${q.id}" style="border:1px solid var(--border-light);border-radius:var(--radius-input);padding:10px 12px;">
+        <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:flex-start;">
+          <div style="flex:1;min-width:190px;">
+            <div style="font-weight:700;font-size:12.5px;">${esc(q.companyName)}${q.isNewCompany ? ' <span class="badge" style="background:var(--tint-blue-bg);color:var(--tint-blue-fg);font-size:9.5px;">NEW</span>' : ''}</div>
+            <div class="muted" style="font-size:11px;">
+              <span class="badge" style="background:var(--surface-2);font-size:9.5px;">${esc({program:'Program',signal:'Signal',note:'Note'}[q.destination]||'Note')}</span>
+              ${q.destination==='program' && q.program ? `${esc(q.program.name)} · <span style="color:${programPhaseColor(q.program.phase)};font-weight:700;">${esc(q.program.phase)}</span> · ${esc(q.program.type)}` : esc(q.signal || '')}
+              ${q.confidence ? ` · <span style="color:${chip(q.confidence)};font-weight:700;">${esc(q.confidence)}</span>` : ''}
+            </div>
+            ${q.evidence ? `<div style="font-size:11px;font-style:italic;margin-top:3px;">"${esc(q.evidence)}"</div>` : ''}
+            ${q.source ? `<div class="muted" style="font-size:10px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;">${esc(q.source)}</div>` : ''}
+          </div>
+          <div style="display:flex;flex-direction:column;gap:5px;flex:none;">
+            <input id="progQCo-${q.id}" list="progQCompanyList" value="${esc(q.companyName||'')}" style="font-size:11px;width:150px;">
+            <div style="display:flex;gap:5px;">
+              <button class="btn btn-secondary btn-sm" onclick="resolveProgramQueueItem('${q.id}','accept')"><i class="ti ti-check"></i> Accept</button>
+              <button class="btn btn-ghost btn-sm" onclick="resolveProgramQueueItem('${q.id}','reject')"><i class="ti ti-trash"></i></button>
+            </div>
+          </div>
+        </div>
+      </div>`).join('')}
+    </div>`;
+  openModal(`Programs to review${rows.length?` (${rows.length})`:''}`, body, `<button class="btn btn-primary" onclick="closeModal()">Done</button>`);
+}
+async function resolveProgramQueueItem(id, action){
+  const co = (document.getElementById('progQCo-'+id)?.value || '').trim();
+  try {
+    const res = await fetch(`/api/programs/discovery/queue/${id}/${action}`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(action === 'accept' ? { companyName: co } : {})
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Failed');
+    const row = document.getElementById('progQRow-'+id); if(row) row.remove();
+    if(window.__programDiscovery && Array.isArray(window.__programDiscovery.queue)){
+      window.__programDiscovery.queue = window.__programDiscovery.queue.filter(q => q.id !== id);
+      window.__programDiscovery.pendingCount = window.__programDiscovery.queue.length;
+    }
+    toast(action === 'accept' ? 'Filed against ' + co : 'Dismissed', 'success');
+    if(action === 'accept'){ window.__programs = undefined; loadPrograms(); window.__icpWorklist = undefined; loadIcpWorklist(); }
+  } catch(err){ toast('Could not ' + action + ': ' + err.message, 'warn'); }
+}
+function renderProgramDiscoverySettingsCard(){
+  const d = window.__programDiscovery;
+  if(!d) return '';
+  if(d.error) return `<div class="settings-section card"><div class="section-title"><i class="ti ti-robot"></i> Program discovery</div><div class="muted" style="font-size:12px;">Could not load. The Settings fields may not exist on this base yet.</div></div>`;
+  const st = d.settings || {};
+  const running = !!window.__programDiscoveryRunning;
+  const log = d.log || [];
+  return `
+  <div class="settings-section card">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:6px;">
+      <div>
+        <div class="section-title" style="margin-bottom:2px;"><i class="ti ti-robot"></i> Program discovery agent</div>
+        <div class="muted" style="font-size:12px;">Weekly web scan (Mondays 7am) for transformation programs — re-checks known accounts and finds new ICP-sector companies. High-confidence findings are filed automatically; the rest go to the Home review queue. Needs SERPER_API_KEY + ANTHROPIC_API_KEY. Runs on the ambient (cheaper) model.</div>
+      </div>
+      <button class="btn btn-secondary btn-sm" onclick="runProgramDiscoveryNow()" ${running?'disabled':''}><i class="ti ${running?'ti-loader-2':'ti-radar'}"></i> ${running?'Scanning…':'Run now'}</button>
+    </div>
+    <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;font-size:12px;">
+      <label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" ${st.enabled?'checked':''} onchange="saveProgramDiscoverySettings({enabled:this.checked})" style="width:auto;"> <b>Run automatically every week</b></label>
+      <label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" ${st.autoFile==='high'?'checked':''} onchange="saveProgramDiscoverySettings({autoFile:this.checked?'high':'off'})" style="width:auto;"> Auto-file high-confidence findings</label>
+    </div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;">
+      <div class="field" style="max-width:130px;"><label style="font-size:11px;">Companies re-scanned / run</label><input type="number" min="5" max="200" value="${st.monitorCompanies||40}" onchange="saveProgramDiscoverySettings({monitorCompanies:+this.value})"></div>
+      <div class="field" style="max-width:130px;"><label style="font-size:11px;">Search cap / run</label><input type="number" min="10" max="200" value="${st.serperCap||60}" onchange="saveProgramDiscoverySettings({serperCap:+this.value})"></div>
+      <div class="field" style="max-width:130px;"><label style="font-size:11px;">Engine call cap / run</label><input type="number" min="10" max="200" value="${st.engineCap||60}" onchange="saveProgramDiscoverySettings({engineCap:+this.value})"></div>
+    </div>
+    ${log.length ? `<div style="margin-top:12px;"><div class="muted" style="font-size:11px;font-weight:700;margin-bottom:4px;">Recent runs</div>
+      <div class="perf-table-wrap"><table class="perf-table"><thead><tr><th>When</th><th>Mode</th><th>Scanned</th><th>Filed</th><th>Queued</th><th>New</th><th>Errors</th></tr></thead><tbody>
+      ${log.map(l => `<tr><td>${progDiscoWhen(l.ranAt)}</td><td>${esc(l.mode||'')}</td><td>${l.companiesScanned||0}</td><td>${l.autoFiled||0}</td><td>${l.queued||0}</td><td>${l.newCompanies||0}</td><td>${(l.errors||[]).length}</td></tr>`).join('')}
+      </tbody></table></div></div>` : ''}
+  </div>`;
+}
+async function saveProgramDiscoverySettings(patch){
+  try {
+    const res = await fetch('/api/programs/discovery/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(patch) });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Save failed');
+    if(window.__programDiscovery) window.__programDiscovery.settings = data.settings;
+    toast('Saved', 'success');
+    renderPage();
+  } catch(err){ toast('Could not save: ' + err.message, 'warn'); }
 }
 
 // ---- programs section in the company deep record ----
@@ -24605,6 +24908,7 @@ function renderSettings(){
     </div>
     ${renderMondayStallScanSection(window.__mondayStallScan)}
   </div>
+  ${renderProgramDiscoverySettingsCard()}
   <div class="settings-section card">
     <div class="section-title"><i class="ti ti-brand-linkedin"></i> LinkedIn accounts</div>
     ${s.accounts.map((a,i) => `

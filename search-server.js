@@ -496,7 +496,11 @@ const OPTIONAL_LATE_ADDED_FIELDS = [
   // Active transformation programs (Phase 3) — Companies table.
   'Programs (JSON)',
   // User-managed GTM Motion templates (Settings table).
-  'GTM Motion Templates (JSON)'
+  'GTM Motion Templates (JSON)',
+  // Program discovery agent (Phase 3.5) — Companies table (scan cursor) +
+  // Settings table (queue / run log / settings blob).
+  'Programs Scanned At',
+  'Program Discovery Queue (JSON)', 'Program Discovery Log (JSON)', 'Program Discovery Settings (JSON)'
 ];
 const optionalFieldsMissing = new Set();
 function stripMissingOptionalFields(body) {
@@ -3838,10 +3842,362 @@ function parseCompanyPrograms(cf) {
     confidence: ['high', 'medium', 'low'].includes(p.confidence) ? p.confidence : 'medium',
     note: (p.note || '').toString().slice(0, 1000),
     detectedAt: p.detectedAt || new Date().toISOString().slice(0, 10),
-    addedBy: p.addedBy === 'chat' ? 'chat' : 'manual'
+    addedBy: ['chat', 'agent'].includes(p.addedBy) ? p.addedBy : 'manual'
   }));
 }
 function programIsActive(p) { return p && p.phase !== 'Complete'; }
+
+// ===================== PROGRAM DISCOVERY AGENT (Phase 3.5) =====================
+// Takes the human out of the find->capture loop for Active Programs. Two bounded,
+// Sonnet-only passes, run weekly by cron (opt-in) or on demand from the UI:
+//   - monitor:  re-scan companies already on file for a new / changed program
+//   - discover: surface ICP-sector companies NOT yet in the grid that have a
+//               live program, create the Company record + ICP-score it
+// High-confidence findings are filed straight onto the Company record; anything
+// less lands in a review queue on Home. Every run is logged. Never throws
+// (cron-safe, same contract as updateAllOfferMetrics).
+
+const PROGRAM_DISCOVERY_DEFAULTS = {
+  enabled: false, autoFile: 'high',
+  serperCap: 60, engineCap: 60,
+  monitorCompanies: 40, discoverQueries: 8, discoverCandidates: 10
+};
+
+const PROGRAM_INTENT_PHRASES = [
+  '"digital transformation" program',
+  '"business transformation"',
+  '"ERP implementation" OR "SAP S/4HANA"',
+  '"target operating model" OR "operating model review"',
+  '"agile transformation" OR "ways of working"',
+  '"transformation office" OR "transformation program"',
+  'appoints "Head of Transformation" OR "Chief Transformation Officer"',
+  '"transformation manager" OR "program director" jobs'
+];
+
+function programDiscoverySettingsFrom(settingsRecord) {
+  const raw = parseJsonSafe((settingsRecord && settingsRecord.fields || {})['Program Discovery Settings (JSON)']) || {};
+  const num = (v, d) => (Number.isFinite(+v) && +v > 0 ? Math.min(+v, 500) : d);
+  return {
+    enabled: raw.enabled === true,
+    autoFile: raw.autoFile === 'off' ? 'off' : 'high',
+    serperCap: num(raw.serperCap, PROGRAM_DISCOVERY_DEFAULTS.serperCap),
+    engineCap: num(raw.engineCap, PROGRAM_DISCOVERY_DEFAULTS.engineCap),
+    monitorCompanies: num(raw.monitorCompanies, PROGRAM_DISCOVERY_DEFAULTS.monitorCompanies),
+    discoverQueries: num(raw.discoverQueries, PROGRAM_DISCOVERY_DEFAULTS.discoverQueries),
+    discoverCandidates: num(raw.discoverCandidates, PROGRAM_DISCOVERY_DEFAULTS.discoverCandidates)
+  };
+}
+
+async function loadProgramDiscoveryState() {
+  const rec = await getOrCreateSettingsRecord();
+  return {
+    rec,
+    settings: programDiscoverySettingsFrom(rec),
+    queue: parseJsonSafe(rec.fields['Program Discovery Queue (JSON)']) || [],
+    log: parseJsonSafe(rec.fields['Program Discovery Log (JSON)']) || []
+  };
+}
+
+async function writeProgramDiscoveryState(patch) {
+  const rec = await getOrCreateSettingsRecord();
+  const fields = {};
+  if (patch.queue) fields['Program Discovery Queue (JSON)'] = JSON.stringify(patch.queue.slice(-100));
+  if (patch.log) fields['Program Discovery Log (JSON)'] = JSON.stringify(patch.log.slice(-20));
+  if (patch.settings) fields['Program Discovery Settings (JSON)'] = JSON.stringify(patch.settings);
+  if (!Object.keys(fields).length) return;
+  await airtableWriteAllowingMissingCtaFields('PATCH', SETTINGS_TABLE, { records: [{ id: rec.id, fields }] });
+}
+
+// One Serper call -> a plain array of {title, snippet, link, date}. Swallows
+// every failure (returns []) so a bad query can't abort a run.
+async function serperOrganic(q, num = 8) {
+  if (!process.env.SERPER_API_KEY) return [];
+  try {
+    const r = await fetch(SERPER_URL, {
+      method: 'POST',
+      headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ q, gl: 'au', location: 'Australia', num })
+    });
+    if (!r.ok) return [];
+    const d = await r.json();
+    return (d.organic || []).map(o => ({ title: o.title || '', snippet: o.snippet || '', link: o.link || '', date: o.date || '' }));
+  } catch (e) { return []; }
+}
+
+// Compact, keyword-style sector term from the codified ICP (the raw attribute
+// values are full sentences - jamming those straight into a Google query gives
+// junk). Region defaults to Twenty2's market; the LLM path below handles nuance.
+function programDiscoveryMarketTerms(icpProfile) {
+  const attrs = (icpProfile && icpProfile.attributes || []).filter(a => a && a.value);
+  const industry = ((attrs.find(a => /sector|industry|vertical|market/i.test(a.label || '')) || {}).value || '').toString();
+  const sector = industry
+    .split(/[.;(]/)[0]
+    .split(/\s+/).filter(w => !/^(with|or|and|the|a|an|of|where|based|major|underway|active|an?)$/i.test(w))
+    .slice(0, 6).join(' ').trim() || 'mining resources energy oil gas';
+  return { sector, region: 'Western Australia' };
+}
+
+// Turn the codified ICP (+ GTM motion) into ~8 Google queries tuned to surface
+// transformation programs at ICP-fit companies. One Sonnet call; falls back to
+// a keyword-heuristic build when the Engine is unavailable or returns junk.
+async function buildDiscoveryQueries(icpProfile, gtmMotion, cap = 8) {
+  cap = Math.max(1, Math.min(cap || 8, 12));
+  const yr = new Date().getFullYear();
+  const heuristic = () => {
+    const { sector, region } = programDiscoveryMarketTerms(icpProfile);
+    return PROGRAM_INTENT_PHRASES.slice(0, cap).map(phrase => ({
+      label: phrase.replace(/["']/g, '').slice(0, 48),
+      q: `${region} ${sector} ${phrase} ${yr - 1}..${yr}`
+    }));
+  };
+  if (!process.env.ANTHROPIC_API_KEY) return heuristic();
+  try {
+    const icpBlock = icpProfilePromptBlock(icpProfile) || '';
+    const motion = gtmMotion && Array.isArray(gtmMotion.stages)
+      ? gtmMotion.stages.map(s => `${s.title}: ${s.body}`).join('\n').slice(0, 1200) : '';
+    const prompt = `Twenty2 Collective (a Perth change / agile consultancy) finds new prospects by spotting organisations that have just STARTED a transformation program - ERP / SAP, operating-model review, agile / ways-of-working, digital transformation, or a major capital-program / site mobilisation. Write ${cap} Google search queries that would surface NEWS, ANNOUNCEMENTS and JOB ADS about such programs at companies matching Twenty2's ICP.
+${icpBlock}
+${motion ? `\nTwenty2's GTM motion:\n${motion}\n` : ''}
+Rules for the queries:
+- Short, keyword-style - what a researcher would actually type, not a sentence.
+- Bias to Western Australia / Perth and the ICP's industries.
+- Vary them: some target a program type, some a leadership hire ("Chief Transformation Officer" appointed), some job ads ("Transformation Manager" OR "Program Director" jobs), some half-year results / announcement language.
+- Put a recency hint like ${yr - 1}..${yr} on a few.
+- Do NOT name specific companies.
+
+Return ONLY valid JSON: { "queries": ["query one", "query two", ...] }`;
+    const parsed = await callClaudeJson(clientize(prompt), 800, AMBIENT_MODEL);
+    const qs = (parsed.queries || []).filter(q => typeof q === 'string' && q.trim().length > 8).slice(0, cap);
+    if (qs.length >= 3) return qs.map(q => ({ label: q.replace(/["']/g, '').slice(0, 48), q: q.trim() }));
+  } catch (e) { console.warn('buildDiscoveryQueries LLM failed, using heuristic:', e.message); }
+  return heuristic();
+}
+
+// Normalised program shape for the review queue (no evidence/source - those
+// live alongside on the queue item).
+function normalizeIncomingProgram(u) {
+  u = u || {};
+  return {
+    name: (u.name || '').toString().slice(0, 200) || 'Unnamed program',
+    type: PROGRAM_TYPES.includes(u.type) ? u.type : 'Other',
+    phase: PROGRAM_PHASES.includes(u.phase) ? u.phase : 'Unknown',
+    confidence: ['high', 'medium', 'low'].includes(u.confidence) ? u.confidence : 'medium'
+  };
+}
+
+// Merge one agent-found program (raw {name,type,phase,evidence,source,confidence,
+// programId?}) into a company's existing programs array. Matches an existing
+// entry by id or case-insensitive name, else appends. Returns the new array.
+function applyProgramUpdate(existing, u) {
+  const byId = u.programId && existing.find(p => p.id === u.programId);
+  const clean = {
+    id: byId ? u.programId : ('prog' + Math.random().toString(36).slice(2, 9)),
+    name: (u.name || '').toString().slice(0, 200) || 'Unnamed program',
+    type: PROGRAM_TYPES.includes(u.type) ? u.type : 'Other',
+    phase: PROGRAM_PHASES.includes(u.phase) ? u.phase : 'Unknown',
+    evidence: (u.evidence || '').toString().slice(0, 1000),
+    source: (u.source || '').toString().slice(0, 500),
+    confidence: ['high', 'medium', 'low'].includes(u.confidence) ? u.confidence : 'medium',
+    detectedAt: new Date().toISOString().slice(0, 10),
+    addedBy: 'agent'
+  };
+  const idx = existing.findIndex(p => p.id === clean.id || p.name.toLowerCase() === clean.name.toLowerCase());
+  const next = existing.slice();
+  if (idx >= 0) next[idx] = { ...existing[idx], ...clean, id: existing[idx].id, detectedAt: existing[idx].detectedAt || clean.detectedAt };
+  else next.push(clean);
+  return next;
+}
+
+// Files one accepted queue item to the right place (program / signal / note),
+// reusing the same write paths the manual routes use.
+async function fileProgramQueueItem(item) {
+  const rec = await findRecordByFieldName('Companies', 'Company Name', item.companyName);
+  if (!rec) throw new Error('Company not found: ' + item.companyName);
+  if (item.destination === 'program') {
+    const p = item.program || {};
+    const next = applyProgramUpdate(parseCompanyPrograms(rec.fields), {
+      name: p.name, type: p.type, phase: p.phase,
+      evidence: item.evidence, source: item.source, confidence: p.confidence
+    });
+    await airtableWriteAllowingMissingCtaFields('PATCH', 'Companies', { records: [{ id: rec.id, fields: { 'Programs (JSON)': JSON.stringify(next) } }] });
+  } else if (item.destination === 'signal') {
+    await airtableWriteAllowingMissingCtaFields('PATCH', 'Companies', {
+      records: [{ id: rec.id, fields: { 'Latest Signal': (item.signal || '').toString().slice(0, 2000), 'Signal Date': new Date().toISOString().slice(0, 10) } }]
+    });
+  } else {
+    const existing = rec.fields['Notes'] || '';
+    const line = `[${new Date().toISOString().slice(0, 10)}] ${(item.note || item.evidence || '').toString()}`;
+    await airtableRequest('PATCH', 'Companies', { records: [{ id: rec.id, fields: { 'Notes': existing ? existing + '\n\n' + line : line } }] });
+  }
+}
+
+// One Sonnet call: assess ONE known company against fresh search results.
+async function programMonitorAnalyse(companyName, existingPrograms, organic) {
+  const resultsBlock = organic.slice(0, 6).map(o => `- ${o.title}\n  ${o.snippet}\n  ${o.link}${o.date ? `  (${o.date})` : ''}`).join('\n') || 'No results.';
+  const existingBlock = existingPrograms.length
+    ? existingPrograms.map(p => `- ${p.name} (${p.type}) - phase ${p.phase} [id:${p.id}]`).join('\n')
+    : 'None on file.';
+  const prompt = `You track transformation programs for T2C Outreach (Twenty2 Collective, a Perth change / agile consultancy). A live program is the buying trigger. Assess ONE company from fresh web results.
+
+Company: ${companyName}
+
+Programs already on file:
+${existingBlock}
+
+Fresh web results:
+${resultsBlock}
+
+Return ONLY valid JSON, no markdown:
+{
+  "updates": [
+    { "programId": "the [id:...] of an existing program this updates, else \\"\\"",
+      "name": "program name",
+      "type": "one of: ${PROGRAM_TYPES.join(' | ')}",
+      "phase": "one of: ${PROGRAM_PHASES.join(' | ')}",
+      "evidence": "verbatim quote from the results, <=280 chars",
+      "source": "the result URL",
+      "confidence": "high|medium|low" }
+  ],
+  "signals": [ { "summary": "one sentence - a leadership change / funding / restructure that is NOT itself a program", "source": "url", "confidence": "high|medium|low" } ]
+}
+Only include an update if the results genuinely evidence a NEW program or a CHANGED phase vs what's on file. "high" confidence needs a named, dated, specific source. Empty arrays are fine. No speculation.`;
+  const parsed = await callClaudeJson(clientize(prompt), 900, AMBIENT_MODEL);
+  return {
+    updates: Array.isArray(parsed.updates) ? parsed.updates : [],
+    signals: Array.isArray(parsed.signals) ? parsed.signals : []
+  };
+}
+
+// One Sonnet call over all discover-query results -> candidate NEW companies.
+async function programDiscoverExtract(resultsText, knownNames, icpProfile) {
+  const icpBlock = icpProfilePromptBlock(icpProfile) || '\n\nICP: mid-to-large WA resources / energy / utilities / government organisations.';
+  const prompt = `You find NEW target companies for T2C Outreach (Twenty2 Collective, a Perth change / agile consultancy). Twenty2 targets organisations running a transformation program (the buying trigger).
+${icpBlock}
+
+Web search results (mixed sources):
+${resultsText.slice(0, 9000)}
+
+Companies ALREADY on file - EXCLUDE every one of these (case-insensitive, tolerate abbreviations like "Dept" / "WA"):
+${knownNames.join(', ').slice(0, 6000)}
+
+Return ONLY valid JSON, no markdown:
+{ "candidates": [ {
+  "companyName": "clean organisation name",
+  "website": "root domain if visible, else \\"\\"",
+  "icpSectorMatch": true or false,
+  "program": { "name": "", "type": "one of: ${PROGRAM_TYPES.join(' | ')}", "phase": "one of: ${PROGRAM_PHASES.join(' | ')}", "evidence": "verbatim quote <=280 chars", "source": "url", "confidence": "high|medium|low" }
+} ] }
+Include a company only if ALL of: (a) it is NOT already on file, (b) icpSectorMatch is true, (c) the results genuinely evidence a live program. Max 12 candidates. "high" confidence needs a named, dated, specific source.`;
+  const parsed = await callClaudeJson(clientize(prompt), 2000, AMBIENT_MODEL);
+  return Array.isArray(parsed.candidates) ? parsed.candidates : [];
+}
+
+async function runProgramDiscovery(opts = {}) {
+  const mode = ['both', 'monitor', 'discover'].includes(opts.mode) ? opts.mode : 'both';
+  const today = new Date().toISOString().slice(0, 10);
+  const summary = { ranAt: new Date().toISOString(), mode, companiesScanned: 0, queriesRun: 0, autoFiled: 0, queued: 0, newCompanies: 0, errors: [] };
+  const budget = { serper: 0, engine: 0 };
+  let state;
+  try {
+    if (!AIRTABLE_API_KEY || !process.env.ANTHROPIC_API_KEY) throw new Error('AIRTABLE_API_KEY / ANTHROPIC_API_KEY not configured');
+    state = await loadProgramDiscoveryState();
+    const settings = { ...state.settings, ...(opts.settingsOverride || {}) };
+    const serperCap = opts.cap ? +opts.cap : settings.serperCap;
+    const engineCap = opts.cap ? +opts.cap : settings.engineCap;
+    const icpProfile = await getIcpProfile();
+    const companyRecords = await airtableFetchAllRecords('Companies');
+    const knownNames = companyRecords.map(c => c.fields['Company Name'] || '').filter(Boolean);
+    const knownLower = new Set(knownNames.map(n => n.toLowerCase()));
+    let queue = state.queue.slice();
+    const enqueue = item => {
+      queue.push({ id: 'pq' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), foundAt: new Date().toISOString(), status: 'pending', ...item });
+      summary.queued++;
+    };
+    const budgetLeft = () => budget.serper < serperCap && budget.engine < engineCap;
+
+    // ---- monitor pass ----
+    if (mode !== 'discover') {
+      const pick = companyRecords
+        .filter(c => {
+          const icp = /resources icp/i.test(c.fields['ICP Tag'] || '') || Number(c.fields['ICP Fit Score']) >= 60;
+          return icp || parseCompanyPrograms(c.fields).some(programIsActive);
+        })
+        .sort((a, b) => String(a.fields['Programs Scanned At'] || '').localeCompare(String(b.fields['Programs Scanned At'] || '')))
+        .slice(0, settings.monitorCompanies);
+      const yr = new Date().getFullYear();
+      for (const c of pick) {
+        if (!budgetLeft()) break;
+        const name = c.fields['Company Name'];
+        try {
+          const organic = await serperOrganic(`"${name}" (transformation OR "operating model" OR ERP OR restructure OR "ways of working") ${yr - 1}..${yr}`, 6);
+          budget.serper++;
+          const existing = parseCompanyPrograms(c.fields);
+          const { updates, signals } = await programMonitorAnalyse(name, existing, organic);
+          budget.engine++;
+          summary.companiesScanned++;
+          let next = existing, filed = false;
+          for (const u of updates) {
+            if (u && u.confidence === 'high' && settings.autoFile === 'high') { next = applyProgramUpdate(next, u); filed = true; summary.autoFiled++; }
+            else if (u) enqueue({ companyName: name, companyId: c.id, isNewCompany: false, destination: 'program', program: normalizeIncomingProgram(u), evidence: (u.evidence || '').toString().slice(0, 400), source: (u.source || '').toString().slice(0, 400), confidence: normalizeIncomingProgram(u).confidence });
+          }
+          for (const s of signals) {
+            if (s && s.summary) enqueue({ companyName: name, companyId: c.id, isNewCompany: false, destination: 'signal', signal: s.summary.toString().slice(0, 500), evidence: '', source: (s.source || '').toString().slice(0, 400), confidence: ['high', 'medium', 'low'].includes(s.confidence) ? s.confidence : 'medium' });
+          }
+          const fields = { 'Programs Scanned At': today };
+          if (filed) fields['Programs (JSON)'] = JSON.stringify(next);
+          await airtableWriteAllowingMissingCtaFields('PATCH', 'Companies', { records: [{ id: c.id, fields }] });
+        } catch (e) { summary.errors.push(`monitor ${name}: ${(e.message || e).toString().slice(0, 160)}`); }
+      }
+    }
+
+    // ---- discover pass ----
+    if (mode !== 'monitor' && budgetLeft()) {
+      let resultsText = '';
+      const discoveryQueries = await buildDiscoveryQueries(icpProfile, await getGtmMotion().catch(() => null), settings.discoverQueries);
+      budget.engine++; // the query-builder's Engine call (falls back to a heuristic if it fails)
+      for (const { label, q } of discoveryQueries) {
+        if (budget.serper >= serperCap) break;
+        const organic = await serperOrganic(q, 8);
+        budget.serper++; summary.queriesRun++;
+        resultsText += `\n\n## ${label}\n` + organic.map(o => `- ${o.title}\n  ${o.snippet}\n  ${o.link}${o.date ? `  (${o.date})` : ''}`).join('\n');
+      }
+      if (resultsText.trim() && budget.engine < engineCap) {
+        try {
+          const cands = await programDiscoverExtract(resultsText, knownNames, icpProfile);
+          budget.engine++;
+          for (const cand of cands.slice(0, settings.discoverCandidates)) {
+            const cn = (cand && cand.companyName || '').toString().trim();
+            if (!cn || knownLower.has(cn.toLowerCase()) || !cand.icpSectorMatch || !cand.program) continue;
+            try {
+              const created = await findOrCreateCompanyRecord(cn);
+              if (!created.skipped) { summary.newCompanies++; knownLower.add(cn.toLowerCase()); }
+              const full = await findRecordByFieldName('Companies', 'Company Name', cn);
+              if (full && !full.fields['ICP Scored At'] && budget.engine < engineCap) {
+                try { await scoreIcpForCompany(full); budget.engine++; } catch (e) {}
+              }
+              const isHigh = cand.program.confidence === 'high' && settings.autoFile === 'high';
+              if (isHigh) {
+                const existing = full ? parseCompanyPrograms(full.fields) : [];
+                await airtableWriteAllowingMissingCtaFields('PATCH', 'Companies', { records: [{ id: created.id, fields: { 'Programs (JSON)': JSON.stringify(applyProgramUpdate(existing, cand.program)), 'Programs Scanned At': today } }] });
+                summary.autoFiled++;
+              } else {
+                enqueue({ companyName: cn, companyId: created.id, isNewCompany: !created.skipped, destination: 'program', program: normalizeIncomingProgram(cand.program), evidence: (cand.program.evidence || '').toString().slice(0, 400), source: (cand.program.source || cand.website || '').toString().slice(0, 400), confidence: normalizeIncomingProgram(cand.program).confidence });
+              }
+            } catch (e) { summary.errors.push(`discover ${cn}: ${(e.message || e).toString().slice(0, 160)}`); }
+          }
+        } catch (e) { summary.errors.push(`discover extract: ${(e.message || e).toString().slice(0, 160)}`); }
+      }
+    }
+
+    summary.budget = budget;
+    await writeProgramDiscoveryState({ queue, log: [...state.log, summary] });
+    return summary;
+  } catch (err) {
+    summary.errors.push((err.message || err).toString().slice(0, 200));
+    try { const s = state || await loadProgramDiscoveryState(); await writeProgramDiscoveryState({ log: [...s.log, summary] }); } catch (e) {}
+    return summary;
+  }
+}
 
 // Campaign ICP health - what share of a campaign's linked contacts sit on-ICP,
 // for the drift badge on the Campaigns list and the scorecard. Pure read.
@@ -10362,20 +10718,16 @@ app.post('/api/companies/:name/signal', async (req, res) => {
 // One Claude call classifies it and returns a PROPOSAL - never writes. The
 // client shows it, the user corrects the company match / fields, then calls
 // the relevant save route (programs / signal / notes).
-app.post('/api/programs/capture', async (req, res) => {
-  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
-  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
-  const { text } = req.body || {};
-  if (!text || !text.trim()) return res.status(400).json({ error: 'text is required' });
-  try {
-    const companyRecords = await airtableFetchAllRecords('Companies');
-    const companyNames = companyRecords.map(c => c.fields['Company Name'] || '').filter(Boolean);
-
-    const prompt = `You are the intake assistant for T2C Outreach, Twenty2 Collective's CRM. Twenty2 is a Perth Agile/change consultancy whose GTM first step is spotting companies running a transformation program (the buying trigger). Marcus has pasted something he found - a news line, a LinkedIn post, or a note from a call. Work out what it is and where in the CRM it should go.
+// One Claude call: classify a raw finding (news line / LinkedIn post / call
+// note) into a program / signal / note PROPOSAL. Never writes. Shared by the
+// single capture chat, the bulk paste, and available to the discovery agent.
+// `model` defaults to the interactive model; the bulk path passes AMBIENT_MODEL.
+async function captureFindingToProposal(text, companyNames, model) {
+  const prompt = `You are the intake assistant for T2C Outreach, Twenty2 Collective's CRM. Twenty2 is a Perth Agile/change consultancy whose GTM first step is spotting companies running a transformation program (the buying trigger). Marcus has pasted something he found - a news line, a LinkedIn post, or a note from a call. Work out what it is and where in the CRM it should go.
 
 Pasted finding:
 """
-${text.slice(0, 4000)}
+${(text || '').slice(0, 4000)}
 """
 
 Known companies on file (match against these, case-insensitive, tolerate abbreviations like "Dept" / "WA"):
@@ -10398,32 +10750,176 @@ Return ONLY valid JSON, no markdown, in exactly this shape:
 }
 Only the object matching "destination" needs real content; leave the others as empty strings. "phase": use "Slipping" only if the text actually says it's behind / troubled; "In delivery" if clearly underway; "Announced" if just announced; else "Unknown".`;
 
-    const parsed = await callClaudeJson(clientize(prompt), 700);
-    const dest = ['program', 'signal', 'note'].includes(parsed.destination) ? parsed.destination : 'note';
-    const guessName = (parsed.companyName || '').toString();
-    const exact = companyNames.find(n => n.toLowerCase() === guessName.toLowerCase());
-    const candidates = Array.isArray(parsed.candidateCompanies)
-      ? parsed.candidateCompanies.filter(n => companyNames.some(cn => cn.toLowerCase() === String(n).toLowerCase())).slice(0, 5)
-      : [];
+  const parsed = await callClaudeJson(clientize(prompt), 700, model);
+  const dest = ['program', 'signal', 'note'].includes(parsed.destination) ? parsed.destination : 'note';
+  const guessName = (parsed.companyName || '').toString();
+  const exact = companyNames.find(n => n.toLowerCase() === guessName.toLowerCase());
+  const candidates = Array.isArray(parsed.candidateCompanies)
+    ? parsed.candidateCompanies.filter(n => companyNames.some(cn => cn.toLowerCase() === String(n).toLowerCase())).slice(0, 5)
+    : [];
+  return {
+    sourceText: (text || '').trim().slice(0, 500),
+    destination: dest,
+    companyName: exact || guessName,
+    companyMatched: !!exact,
+    candidateCompanies: candidates,
+    program: dest === 'program' ? {
+      name: (parsed.program && parsed.program.name) || '',
+      type: PROGRAM_TYPES.includes(parsed.program && parsed.program.type) ? parsed.program.type : 'Other',
+      phase: PROGRAM_PHASES.includes(parsed.program && parsed.program.phase) ? parsed.program.phase : 'Unknown',
+      evidence: (parsed.program && parsed.program.evidence) || '',
+      source: (parsed.program && parsed.program.source) || '',
+      confidence: ['high', 'medium', 'low'].includes(parsed.program && parsed.program.confidence) ? parsed.program.confidence : 'medium'
+    } : null,
+    signal: dest === 'signal' ? ((parsed.signal && parsed.signal.summary) || '') : '',
+    note: dest === 'note' ? ((parsed.note && parsed.note.text) || (text || '').trim().slice(0, 500)) : ''
+  };
+}
 
-    res.json({
-      destination: dest,
-      companyName: exact || guessName,
-      companyMatched: !!exact,
-      candidateCompanies: candidates,
-      program: dest === 'program' ? {
-        name: (parsed.program && parsed.program.name) || '',
-        type: PROGRAM_TYPES.includes(parsed.program && parsed.program.type) ? parsed.program.type : 'Other',
-        phase: PROGRAM_PHASES.includes(parsed.program && parsed.program.phase) ? parsed.program.phase : 'Unknown',
-        evidence: (parsed.program && parsed.program.evidence) || '',
-        source: (parsed.program && parsed.program.source) || '',
-        confidence: ['high', 'medium', 'low'].includes(parsed.program && parsed.program.confidence) ? parsed.program.confidence : 'medium'
-      } : null,
-      signal: dest === 'signal' ? ((parsed.signal && parsed.signal.summary) || '') : '',
-      note: dest === 'note' ? ((parsed.note && parsed.note.text) || text.trim().slice(0, 500)) : ''
-    });
+app.post('/api/programs/capture', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  const { text } = req.body || {};
+  if (!text || !text.trim()) return res.status(400).json({ error: 'text is required' });
+  try {
+    const companyRecords = await airtableFetchAllRecords('Companies');
+    const companyNames = companyRecords.map(c => c.fields['Company Name'] || '').filter(Boolean);
+    res.json(await captureFindingToProposal(text, companyNames));
   } catch (err) {
     console.error('Programs capture error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Bulk paste: one finding per line (or a pasted table / list). Runs the same
+// classifier per line, capped, on the ambient model. Returns proposals only -
+// never writes. The client shows a review list and files the accepted ones
+// through the existing per-company save routes.
+const PROGRAM_BULK_CAPTURE_CAP = 25;
+app.post('/api/programs/bulk-capture', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  const body = req.body || {};
+  const lines = (Array.isArray(body.rows) ? body.rows : String(body.text || '').split(/\r?\n/))
+    .map(s => (s || '').trim()).filter(s => s.length > 3);
+  if (!lines.length) return res.status(400).json({ error: 'text (one finding per line) or rows[] is required' });
+  const capped = lines.slice(0, PROGRAM_BULK_CAPTURE_CAP);
+  try {
+    const companyRecords = await airtableFetchAllRecords('Companies');
+    const companyNames = companyRecords.map(c => c.fields['Company Name'] || '').filter(Boolean);
+    const proposals = [];
+    for (const line of capped) {
+      try { proposals.push(await captureFindingToProposal(line, companyNames, AMBIENT_MODEL)); }
+      catch (e) { proposals.push({ sourceText: line.slice(0, 500), error: (e.message || e).toString().slice(0, 160) }); }
+    }
+    res.json({ proposals, truncated: lines.length > capped.length, submitted: lines.length });
+  } catch (err) {
+    console.error('Programs bulk-capture error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Program discovery agent: run / read / triage the queue / settings ----
+
+// One run at a time, in-process. A full scan can take minutes, so the run
+// endpoint kicks it off in the background and the client polls GET /discovery
+// for `running` to flip back to false.
+let programDiscoveryRunState = { running: false, startedAt: null, mode: null };
+async function runProgramDiscoveryTracked(opts) {
+  if (programDiscoveryRunState.running) return { skipped: true, reason: 'A discovery run is already in progress' };
+  programDiscoveryRunState = { running: true, startedAt: new Date().toISOString(), mode: opts && opts.mode || 'both' };
+  try {
+    return await runProgramDiscovery(opts);
+  } finally {
+    programDiscoveryRunState = { running: false, startedAt: null, mode: null };
+  }
+}
+
+// Run a scan now. Background by default (returns immediately); pass wait:true
+// (the weekly cron does) to block until the summary is ready. Bounded + never throws.
+app.post('/api/programs/discovery/run', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  if (programDiscoveryRunState.running) return res.status(409).json({ error: 'A discovery run is already in progress', running: true });
+  const { mode, cap, wait } = req.body || {};
+  const opts = { mode, cap: cap ? Math.min(Math.max(+cap, 1), 200) : undefined };
+  if (wait) return res.json(await runProgramDiscoveryTracked(opts));
+  runProgramDiscoveryTracked(opts).catch(err => console.warn('Background discovery run failed:', err.message));
+  res.json({ started: true, mode: opts.mode || 'both' });
+});
+
+// The Home card + review queue read this.
+app.get('/api/programs/discovery', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const state = await loadProgramDiscoveryState();
+    const pending = state.queue.filter(q => q.status === 'pending');
+    const lastRun = state.log[state.log.length - 1] || null;
+    res.json({
+      settings: state.settings,
+      queue: pending,
+      pendingCount: pending.length,
+      log: state.log.slice(-10).reverse(),
+      lastRunAt: lastRun ? lastRun.ranAt : null,
+      running: programDiscoveryRunState.running,
+      runningSince: programDiscoveryRunState.startedAt
+    });
+  } catch (err) {
+    console.error('Programs discovery read error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/programs/discovery/queue/:id/accept', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const state = await loadProgramDiscoveryState();
+    const item = state.queue.find(q => q.id === req.params.id && q.status === 'pending');
+    if (!item) return res.status(404).json({ error: 'Queue item not found' });
+    // Allow the reviewer to correct the company / phase / destination before filing.
+    const patch = req.body || {};
+    if (patch.companyName) item.companyName = String(patch.companyName).slice(0, 200);
+    if (patch.destination && ['program', 'signal', 'note'].includes(patch.destination)) item.destination = patch.destination;
+    if (patch.phase && item.program && PROGRAM_PHASES.includes(patch.phase)) item.program.phase = patch.phase;
+    await fileProgramQueueItem(item);
+    const queue = state.queue.map(q => q.id === item.id ? { ...item, status: 'accepted', resolvedAt: new Date().toISOString() } : q);
+    await writeProgramDiscoveryState({ queue });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Programs discovery accept error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/programs/discovery/queue/:id/reject', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const state = await loadProgramDiscoveryState();
+    if (!state.queue.some(q => q.id === req.params.id)) return res.status(404).json({ error: 'Queue item not found' });
+    const queue = state.queue.map(q => q.id === req.params.id ? { ...q, status: 'rejected', resolvedAt: new Date().toISOString() } : q);
+    await writeProgramDiscoveryState({ queue });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Programs discovery reject error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/programs/discovery/settings', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const state = await loadProgramDiscoveryState();
+    const b = req.body || {};
+    const merged = { ...state.settings };
+    if (typeof b.enabled === 'boolean') merged.enabled = b.enabled;
+    if (b.autoFile === 'off' || b.autoFile === 'high') merged.autoFile = b.autoFile;
+    for (const k of ['serperCap', 'engineCap', 'monitorCompanies', 'discoverQueries', 'discoverCandidates']) {
+      if (Number.isFinite(+b[k]) && +b[k] > 0) merged[k] = Math.min(+b[k], 500);
+    }
+    await writeProgramDiscoveryState({ settings: merged });
+    res.json({ success: true, settings: merged });
+  } catch (err) {
+    console.error('Programs discovery settings error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -20109,6 +20605,22 @@ app.patch('/api/agency/clients/:slug', async (req, res) => {
 // signals" button). Re-add those calls here to put it back on a schedule.
 cron.schedule('0 6 * * *', () => {
   updateAllOfferMetrics().catch(err => console.warn('Scheduled offer metrics update failed:', err.message));
+});
+
+// Weekly Monday 7am: the program discovery agent. Internally no-ops unless
+// Settings.'Program Discovery Settings (JSON)'.enabled === true, so it ships
+// off and the user opts in from the Settings page - same "scanning is off,
+// press the button" stance as the contact-signal scan above. Never throws.
+cron.schedule('0 7 * * 1', async () => {
+  try {
+    const state = await loadProgramDiscoveryState();
+    if (!state.settings.enabled) return;
+    const summary = await runProgramDiscoveryTracked({ mode: 'both' });
+    if (summary.skipped) { console.log('Program discovery (weekly): skipped -', summary.reason); return; }
+    console.log(`Program discovery (weekly): scanned ${summary.companiesScanned}, auto-filed ${summary.autoFiled}, queued ${summary.queued}, new ${summary.newCompanies}${summary.errors.length ? `, ${summary.errors.length} error(s)` : ''}`);
+  } catch (err) {
+    console.warn('Scheduled program discovery failed:', err.message);
+  }
 });
 
 const PORT = process.env.PORT || 3000;
