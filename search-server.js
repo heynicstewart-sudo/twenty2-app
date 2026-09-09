@@ -10817,13 +10817,31 @@ app.post('/api/programs/bulk-capture', async (req, res) => {
 
 // ---- Program discovery agent: run / read / triage the queue / settings ----
 
-// Run a scan now (also what the weekly cron calls). Bounded + never throws.
+// One run at a time, in-process. A full scan can take minutes, so the run
+// endpoint kicks it off in the background and the client polls GET /discovery
+// for `running` to flip back to false.
+let programDiscoveryRunState = { running: false, startedAt: null, mode: null };
+async function runProgramDiscoveryTracked(opts) {
+  if (programDiscoveryRunState.running) return { skipped: true, reason: 'A discovery run is already in progress' };
+  programDiscoveryRunState = { running: true, startedAt: new Date().toISOString(), mode: opts && opts.mode || 'both' };
+  try {
+    return await runProgramDiscovery(opts);
+  } finally {
+    programDiscoveryRunState = { running: false, startedAt: null, mode: null };
+  }
+}
+
+// Run a scan now. Background by default (returns immediately); pass wait:true
+// (the weekly cron does) to block until the summary is ready. Bounded + never throws.
 app.post('/api/programs/discovery/run', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
-  const { mode, cap } = req.body || {};
-  const summary = await runProgramDiscovery({ mode, cap: cap ? Math.min(Math.max(+cap, 1), 200) : undefined });
-  res.json(summary);
+  if (programDiscoveryRunState.running) return res.status(409).json({ error: 'A discovery run is already in progress', running: true });
+  const { mode, cap, wait } = req.body || {};
+  const opts = { mode, cap: cap ? Math.min(Math.max(+cap, 1), 200) : undefined };
+  if (wait) return res.json(await runProgramDiscoveryTracked(opts));
+  runProgramDiscoveryTracked(opts).catch(err => console.warn('Background discovery run failed:', err.message));
+  res.json({ started: true, mode: opts.mode || 'both' });
 });
 
 // The Home card + review queue read this.
@@ -10838,7 +10856,9 @@ app.get('/api/programs/discovery', async (req, res) => {
       queue: pending,
       pendingCount: pending.length,
       log: state.log.slice(-10).reverse(),
-      lastRunAt: lastRun ? lastRun.ranAt : null
+      lastRunAt: lastRun ? lastRun.ranAt : null,
+      running: programDiscoveryRunState.running,
+      runningSince: programDiscoveryRunState.startedAt
     });
   } catch (err) {
     console.error('Programs discovery read error:', err.message);
@@ -20583,7 +20603,8 @@ cron.schedule('0 7 * * 1', async () => {
   try {
     const state = await loadProgramDiscoveryState();
     if (!state.settings.enabled) return;
-    const summary = await runProgramDiscovery({ mode: 'both' });
+    const summary = await runProgramDiscoveryTracked({ mode: 'both' });
+    if (summary.skipped) { console.log('Program discovery (weekly): skipped -', summary.reason); return; }
     console.log(`Program discovery (weekly): scanned ${summary.companiesScanned}, auto-filed ${summary.autoFiled}, queued ${summary.queued}, new ${summary.newCompanies}${summary.errors.length ? `, ${summary.errors.length} error(s)` : ''}`);
   } catch (err) {
     console.warn('Scheduled program discovery failed:', err.message);

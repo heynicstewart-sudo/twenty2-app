@@ -14724,38 +14724,65 @@ async function loadProgramDiscovery(){
 function renderProgramDiscoveryCard(){
   const d = window.__programDiscovery;
   if(!d || d.error) return '';
-  const running = !!window.__programDiscoveryRunning;
+  const running = !!window.__programDiscoveryRunning || !!d.running;
   const n = d.pendingCount || 0;
-  if(!d.settings.enabled && !n && !d.lastRunAt && !running) return '';
+  const last = (d.log && d.log[0]) || null;
+  const mode = window.__programDiscoveryMode || 'both';
+  const modeOpt = (v,label) => `<option value="${v}" ${mode===v?'selected':''}>${label}</option>`;
   return `
   <div class="card" style="margin-bottom:22px;">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-robot"></i> Programs found ${n ? `<span class="count-pill has" style="margin-left:6px;">${n}</span>` : ''}</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
         ${n ? `<button class="btn btn-ghost btn-sm" onclick="openProgramDiscoveryQueue()"><i class="ti ti-list-check"></i> Review</button>` : ''}
-        <button class="btn btn-secondary btn-sm" onclick="runProgramDiscoveryNow()" ${running?'disabled':''}><i class="ti ${running?'ti-loader-2':'ti-radar'}"></i> ${running?'Scanning…':'Run discovery now'}</button>
+        <select onchange="window.__programDiscoveryMode=this.value" style="font-size:11.5px;" ${running?'disabled':''}>
+          ${modeOpt('both','Known + new')}${modeOpt('monitor','Known accounts only')}${modeOpt('discover','New companies only')}
+        </select>
+        <button class="btn btn-secondary btn-sm" onclick="runProgramDiscoveryNow()" ${running?'disabled':''}><i class="ti ${running?'ti-loader-2':'ti-radar'}"></i> ${running?'Scanning…':'Run now'}</button>
       </div>
     </div>
     <div class="muted" style="font-size:11.5px;margin:6px 0 0;">
       The agent scans for transformation programs — re-checks known accounts and surfaces new ICP-sector companies. High-confidence findings file themselves; the rest wait here for a yes/no.
-      ${d.settings.enabled ? ' Runs automatically every Monday.' : ' Automatic weekly runs are <b>off</b> — turn them on in Settings.'}
-      ${d.lastRunAt ? ` Last run ${progDiscoWhen(d.lastRunAt)}.` : ''}
+      ${d.settings.enabled ? ' Also runs automatically every Monday.' : ' Automatic weekly runs are <b>off</b> — turn them on in Settings once you’re happy with a manual run.'}
+      ${last ? ` Last run ${progDiscoWhen(last.ranAt)} — scanned ${last.companiesScanned}, filed ${last.autoFiled}, ${last.queued} queued${last.newCompanies?`, ${last.newCompanies} new`:''}${(last.errors&&last.errors.length)?`, ${last.errors.length} error(s)`:''}.` : ''}
     </div>
   </div>`;
 }
 async function runProgramDiscoveryNow(mode){
   if(window.__programDiscoveryRunning) return;
+  const m = mode || window.__programDiscoveryMode || 'both';
   window.__programDiscoveryRunning = true; renderPage();
   try {
-    const res = await fetch('/api/programs/discovery/run', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ mode: mode || 'both' }) });
+    const res = await fetch('/api/programs/discovery/run', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ mode: m }) });
     const s = await res.json();
-    if(!res.ok) throw new Error(s.error || 'Run failed');
-    toast(`Scanned ${s.companiesScanned}, filed ${s.autoFiled}, ${s.queued} to review${s.newCompanies?`, ${s.newCompanies} new`:''}`, s.errors && s.errors.length ? 'warn' : 'success');
-  } catch(err){ toast('Discovery run failed: ' + err.message, 'warn'); }
-  window.__programDiscoveryRunning = false;
-  window.__programDiscovery = undefined; await loadProgramDiscovery();
-  window.__programs = undefined; loadPrograms();
-  window.__icpWorklist = undefined; loadIcpWorklist();
+    if(!res.ok && res.status !== 409) throw new Error(s.error || 'Run failed');
+    toast('Discovery run started — this can take a few minutes. You can keep working.');
+    await pollProgramDiscovery();
+  } catch(err){
+    toast('Discovery run failed: ' + err.message, 'warn');
+    window.__programDiscoveryRunning = false; renderPage();
+  }
+}
+async function pollProgramDiscovery(){
+  for(let i=0; i<160; i++){                       // ~13 min ceiling
+    await new Promise(r => setTimeout(r, 5000));
+    let d;
+    try { const res = await fetch('/api/programs/discovery'); d = await res.json(); if(!res.ok) continue; }
+    catch(e){ continue; }
+    window.__programDiscovery = d;
+    if(!d.running){
+      window.__programDiscoveryRunning = false;
+      const last = d.log && d.log[0];
+      if(last) toast(`Discovery done — scanned ${last.companiesScanned}, filed ${last.autoFiled}, ${last.queued} to review${last.newCompanies?`, ${last.newCompanies} new`:''}${(last.errors&&last.errors.length)?` (${last.errors.length} error(s))`:''}`, (last.errors&&last.errors.length)?'warn':'success');
+      window.__programs = undefined; loadPrograms();
+      window.__icpWorklist = undefined; loadIcpWorklist();
+      renderPage();
+      return;
+    }
+    if(['home','settings'].includes(state.currentPage)) renderPage();
+  }
+  window.__programDiscoveryRunning = false; renderPage();
+  toast('Discovery is taking longer than expected — check back shortly.', 'warn');
 }
 function openProgramDiscoveryQueue(){
   const d = window.__programDiscovery;
