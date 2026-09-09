@@ -3595,10 +3595,27 @@ app.post('/api/enrich/contact', async (req, res) => {
 app.post('/api/apollo/search-contacts', async (req, res) => {
   if (!process.env.APOLLO_API_KEY) return res.status(500).json({ error: 'APOLLO_API_KEY not configured' });
 
-  const { jobTitle, location, keywords } = req.body || {};
+  const { jobTitle, location, keywords, companySize } = req.body || {};
   if (!jobTitle && !location && !keywords) {
     return res.status(400).json({ error: 'jobTitle, location or keywords is required' });
   }
+
+  // Company headcount buckets, matched to Apollo's own
+  // organization_num_employees_ranges[] format ("min,max", open-ended top
+  // bucket as "10001,"). The client sends the selected ranges as a
+  // comma-separated list of bucket keys (e.g. "1-10,11-20,21-50"); anything
+  // that isn't a known bucket is ignored so a stray value can't break the
+  // search.
+  const HEADCOUNT_BUCKETS = {
+    '1-10': '1,10', '11-20': '11,20', '21-50': '21,50', '51-100': '51,100',
+    '101-200': '101,200', '201-500': '201,500', '501-1000': '501,1000',
+    '1001-2000': '1001,2000', '2001-5000': '2001,5000',
+    '5001-10000': '5001,10000', '10001+': '10001,'
+  };
+  const employeeRanges = (companySize || '')
+    .split(',').map(s => s.trim())
+    .map(k => HEADCOUNT_BUCKETS[k])
+    .filter(Boolean);
 
   // Job titles accept a comma-separated list - Apollo's person_titles param
   // is an array, matched as OR within the field.
@@ -3624,6 +3641,7 @@ app.post('/api/apollo/search-contacts', async (req, res) => {
     // q_keywords string, which Apollo would otherwise treat as a single
     // phrase to match rather than a set of alternative industry keywords.
     if (keywordTags.length) apolloBody['organization_keyword_tags[]'] = keywordTags;
+    if (employeeRanges.length) apolloBody['organization_num_employees_ranges[]'] = employeeRanges;
 
     // Apollo caps a single page at 100 results and reports how many pages
     // exist via response.pagination.total_pages - walked here the same way

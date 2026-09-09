@@ -8210,11 +8210,18 @@ async function searchContactDetailsConfirmed(){
 
 function openApolloSearchModal(){
   window.__apolloResults = [];
+  const sizeBuckets = ['1-10','11-20','21-50','51-100','101-200','201-500','501-1000','1001-2000','2001-5000','5001-10000','10001+'];
+  const preselected = ['1-10','11-20','21-50'];
   const body = `
-    <div class="field"><label>Job title</label><input id="apolloJobTitle" placeholder="e.g. Transformation Lead, Head of Delivery"></div>
-    <div class="field"><label>Location</label><input id="apolloLocation" placeholder="e.g. Perth, Australia; Sydney, Australia"></div>
-    <div class="field"><label>Industry / keywords</label><input id="apolloKeywords" placeholder="e.g. mining, energy"></div>
-    <p class="muted" style="font-size:11.5px;margin-bottom:10px;">Job title accepts a comma-separated list. For multiple locations, separate them with semicolons.</p>
+    <div class="field"><label>Job title</label><input id="apolloJobTitle" placeholder="e.g. Founder, CEO, Head of Growth"></div>
+    <div class="field"><label>Location</label><input id="apolloLocation" placeholder="e.g. United States"></div>
+    <div class="field"><label>Industry / keywords</label><input id="apolloKeywords" placeholder="e.g. B2B consulting, marketing agency, SaaS"></div>
+    <div class="field"><label>Company size (employees)</label>
+      <div id="apolloSizeGroup" style="display:flex;flex-wrap:wrap;gap:6px 12px;font-size:12px;margin-top:4px;">
+        ${sizeBuckets.map(b => `<label style="display:inline-flex;align-items:center;gap:4px;font-weight:400;"><input type="checkbox" class="apolloSize" value="${b}" ${preselected.includes(b)?'checked':''} style="width:auto;"> ${b}</label>`).join('')}
+      </div>
+    </div>
+    <p class="muted" style="font-size:11.5px;margin-bottom:10px;">Job title accepts a comma-separated list. For multiple locations, separate them with semicolons. Leave all sizes unticked to not filter by headcount.</p>
     <button class="btn btn-primary btn-sm" id="apolloSearchBtn" onclick="runApolloSearch()"><i class="ti ti-search"></i> Search Apollo</button>
     <div id="apolloResultsArea" style="margin-top:14px;"></div>
   `;
@@ -8229,6 +8236,7 @@ async function runApolloSearch(){
   const jobTitle = (document.getElementById('apolloJobTitle')?.value || '').trim();
   const location = (document.getElementById('apolloLocation')?.value || '').trim();
   const keywords = (document.getElementById('apolloKeywords')?.value || '').trim();
+  const companySize = [...document.querySelectorAll('.apolloSize:checked')].map(c => c.value).join(',');
   if(!jobTitle && !location && !keywords){ toast('Add at least a job title, location or keyword to search', 'warn'); return; }
 
   const btn = document.getElementById('apolloSearchBtn');
@@ -8240,7 +8248,7 @@ async function runApolloSearch(){
     const res = await fetch('/api/apollo/search-contacts', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ jobTitle, location, keywords })
+      body: JSON.stringify({ jobTitle, location, keywords, companySize })
     });
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
