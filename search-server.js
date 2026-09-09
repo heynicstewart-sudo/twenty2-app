@@ -10682,20 +10682,16 @@ app.post('/api/companies/:name/signal', async (req, res) => {
 // One Claude call classifies it and returns a PROPOSAL - never writes. The
 // client shows it, the user corrects the company match / fields, then calls
 // the relevant save route (programs / signal / notes).
-app.post('/api/programs/capture', async (req, res) => {
-  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
-  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
-  const { text } = req.body || {};
-  if (!text || !text.trim()) return res.status(400).json({ error: 'text is required' });
-  try {
-    const companyRecords = await airtableFetchAllRecords('Companies');
-    const companyNames = companyRecords.map(c => c.fields['Company Name'] || '').filter(Boolean);
-
-    const prompt = `You are the intake assistant for T2C Outreach, Twenty2 Collective's CRM. Twenty2 is a Perth Agile/change consultancy whose GTM first step is spotting companies running a transformation program (the buying trigger). Marcus has pasted something he found - a news line, a LinkedIn post, or a note from a call. Work out what it is and where in the CRM it should go.
+// One Claude call: classify a raw finding (news line / LinkedIn post / call
+// note) into a program / signal / note PROPOSAL. Never writes. Shared by the
+// single capture chat, the bulk paste, and available to the discovery agent.
+// `model` defaults to the interactive model; the bulk path passes AMBIENT_MODEL.
+async function captureFindingToProposal(text, companyNames, model) {
+  const prompt = `You are the intake assistant for T2C Outreach, Twenty2 Collective's CRM. Twenty2 is a Perth Agile/change consultancy whose GTM first step is spotting companies running a transformation program (the buying trigger). Marcus has pasted something he found - a news line, a LinkedIn post, or a note from a call. Work out what it is and where in the CRM it should go.
 
 Pasted finding:
 """
-${text.slice(0, 4000)}
+${(text || '').slice(0, 4000)}
 """
 
 Known companies on file (match against these, case-insensitive, tolerate abbreviations like "Dept" / "WA"):
@@ -10718,32 +10714,156 @@ Return ONLY valid JSON, no markdown, in exactly this shape:
 }
 Only the object matching "destination" needs real content; leave the others as empty strings. "phase": use "Slipping" only if the text actually says it's behind / troubled; "In delivery" if clearly underway; "Announced" if just announced; else "Unknown".`;
 
-    const parsed = await callClaudeJson(clientize(prompt), 700);
-    const dest = ['program', 'signal', 'note'].includes(parsed.destination) ? parsed.destination : 'note';
-    const guessName = (parsed.companyName || '').toString();
-    const exact = companyNames.find(n => n.toLowerCase() === guessName.toLowerCase());
-    const candidates = Array.isArray(parsed.candidateCompanies)
-      ? parsed.candidateCompanies.filter(n => companyNames.some(cn => cn.toLowerCase() === String(n).toLowerCase())).slice(0, 5)
-      : [];
+  const parsed = await callClaudeJson(clientize(prompt), 700, model);
+  const dest = ['program', 'signal', 'note'].includes(parsed.destination) ? parsed.destination : 'note';
+  const guessName = (parsed.companyName || '').toString();
+  const exact = companyNames.find(n => n.toLowerCase() === guessName.toLowerCase());
+  const candidates = Array.isArray(parsed.candidateCompanies)
+    ? parsed.candidateCompanies.filter(n => companyNames.some(cn => cn.toLowerCase() === String(n).toLowerCase())).slice(0, 5)
+    : [];
+  return {
+    sourceText: (text || '').trim().slice(0, 500),
+    destination: dest,
+    companyName: exact || guessName,
+    companyMatched: !!exact,
+    candidateCompanies: candidates,
+    program: dest === 'program' ? {
+      name: (parsed.program && parsed.program.name) || '',
+      type: PROGRAM_TYPES.includes(parsed.program && parsed.program.type) ? parsed.program.type : 'Other',
+      phase: PROGRAM_PHASES.includes(parsed.program && parsed.program.phase) ? parsed.program.phase : 'Unknown',
+      evidence: (parsed.program && parsed.program.evidence) || '',
+      source: (parsed.program && parsed.program.source) || '',
+      confidence: ['high', 'medium', 'low'].includes(parsed.program && parsed.program.confidence) ? parsed.program.confidence : 'medium'
+    } : null,
+    signal: dest === 'signal' ? ((parsed.signal && parsed.signal.summary) || '') : '',
+    note: dest === 'note' ? ((parsed.note && parsed.note.text) || (text || '').trim().slice(0, 500)) : ''
+  };
+}
 
-    res.json({
-      destination: dest,
-      companyName: exact || guessName,
-      companyMatched: !!exact,
-      candidateCompanies: candidates,
-      program: dest === 'program' ? {
-        name: (parsed.program && parsed.program.name) || '',
-        type: PROGRAM_TYPES.includes(parsed.program && parsed.program.type) ? parsed.program.type : 'Other',
-        phase: PROGRAM_PHASES.includes(parsed.program && parsed.program.phase) ? parsed.program.phase : 'Unknown',
-        evidence: (parsed.program && parsed.program.evidence) || '',
-        source: (parsed.program && parsed.program.source) || '',
-        confidence: ['high', 'medium', 'low'].includes(parsed.program && parsed.program.confidence) ? parsed.program.confidence : 'medium'
-      } : null,
-      signal: dest === 'signal' ? ((parsed.signal && parsed.signal.summary) || '') : '',
-      note: dest === 'note' ? ((parsed.note && parsed.note.text) || text.trim().slice(0, 500)) : ''
-    });
+app.post('/api/programs/capture', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  const { text } = req.body || {};
+  if (!text || !text.trim()) return res.status(400).json({ error: 'text is required' });
+  try {
+    const companyRecords = await airtableFetchAllRecords('Companies');
+    const companyNames = companyRecords.map(c => c.fields['Company Name'] || '').filter(Boolean);
+    res.json(await captureFindingToProposal(text, companyNames));
   } catch (err) {
     console.error('Programs capture error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Bulk paste: one finding per line (or a pasted table / list). Runs the same
+// classifier per line, capped, on the ambient model. Returns proposals only -
+// never writes. The client shows a review list and files the accepted ones
+// through the existing per-company save routes.
+const PROGRAM_BULK_CAPTURE_CAP = 25;
+app.post('/api/programs/bulk-capture', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  const body = req.body || {};
+  const lines = (Array.isArray(body.rows) ? body.rows : String(body.text || '').split(/\r?\n/))
+    .map(s => (s || '').trim()).filter(s => s.length > 3);
+  if (!lines.length) return res.status(400).json({ error: 'text (one finding per line) or rows[] is required' });
+  const capped = lines.slice(0, PROGRAM_BULK_CAPTURE_CAP);
+  try {
+    const companyRecords = await airtableFetchAllRecords('Companies');
+    const companyNames = companyRecords.map(c => c.fields['Company Name'] || '').filter(Boolean);
+    const proposals = [];
+    for (const line of capped) {
+      try { proposals.push(await captureFindingToProposal(line, companyNames, AMBIENT_MODEL)); }
+      catch (e) { proposals.push({ sourceText: line.slice(0, 500), error: (e.message || e).toString().slice(0, 160) }); }
+    }
+    res.json({ proposals, truncated: lines.length > capped.length, submitted: lines.length });
+  } catch (err) {
+    console.error('Programs bulk-capture error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Program discovery agent: run / read / triage the queue / settings ----
+
+// Run a scan now (also what the weekly cron calls). Bounded + never throws.
+app.post('/api/programs/discovery/run', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  const { mode, cap } = req.body || {};
+  const summary = await runProgramDiscovery({ mode, cap: cap ? Math.min(Math.max(+cap, 1), 200) : undefined });
+  res.json(summary);
+});
+
+// The Home card + review queue read this.
+app.get('/api/programs/discovery', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const state = await loadProgramDiscoveryState();
+    const pending = state.queue.filter(q => q.status === 'pending');
+    const lastRun = state.log[state.log.length - 1] || null;
+    res.json({
+      settings: state.settings,
+      queue: pending,
+      pendingCount: pending.length,
+      log: state.log.slice(-10).reverse(),
+      lastRunAt: lastRun ? lastRun.ranAt : null
+    });
+  } catch (err) {
+    console.error('Programs discovery read error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/programs/discovery/queue/:id/accept', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const state = await loadProgramDiscoveryState();
+    const item = state.queue.find(q => q.id === req.params.id && q.status === 'pending');
+    if (!item) return res.status(404).json({ error: 'Queue item not found' });
+    // Allow the reviewer to correct the company / phase / destination before filing.
+    const patch = req.body || {};
+    if (patch.companyName) item.companyName = String(patch.companyName).slice(0, 200);
+    if (patch.destination && ['program', 'signal', 'note'].includes(patch.destination)) item.destination = patch.destination;
+    if (patch.phase && item.program && PROGRAM_PHASES.includes(patch.phase)) item.program.phase = patch.phase;
+    await fileProgramQueueItem(item);
+    const queue = state.queue.map(q => q.id === item.id ? { ...item, status: 'accepted', resolvedAt: new Date().toISOString() } : q);
+    await writeProgramDiscoveryState({ queue });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Programs discovery accept error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/programs/discovery/queue/:id/reject', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const state = await loadProgramDiscoveryState();
+    if (!state.queue.some(q => q.id === req.params.id)) return res.status(404).json({ error: 'Queue item not found' });
+    const queue = state.queue.map(q => q.id === req.params.id ? { ...q, status: 'rejected', resolvedAt: new Date().toISOString() } : q);
+    await writeProgramDiscoveryState({ queue });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Programs discovery reject error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/programs/discovery/settings', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const state = await loadProgramDiscoveryState();
+    const b = req.body || {};
+    const merged = { ...state.settings };
+    if (typeof b.enabled === 'boolean') merged.enabled = b.enabled;
+    if (b.autoFile === 'off' || b.autoFile === 'high') merged.autoFile = b.autoFile;
+    for (const k of ['serperCap', 'engineCap', 'monitorCompanies', 'discoverQueries', 'discoverCandidates']) {
+      if (Number.isFinite(+b[k]) && +b[k] > 0) merged[k] = Math.min(+b[k], 500);
+    }
+    await writeProgramDiscoveryState({ settings: merged });
+    res.json({ success: true, settings: merged });
+  } catch (err) {
+    console.error('Programs discovery settings error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -20421,6 +20541,21 @@ app.patch('/api/agency/clients/:slug', async (req, res) => {
 // signals" button). Re-add those calls here to put it back on a schedule.
 cron.schedule('0 6 * * *', () => {
   updateAllOfferMetrics().catch(err => console.warn('Scheduled offer metrics update failed:', err.message));
+});
+
+// Weekly Monday 7am: the program discovery agent. Internally no-ops unless
+// Settings.'Program Discovery Settings (JSON)'.enabled === true, so it ships
+// off and the user opts in from the Settings page - same "scanning is off,
+// press the button" stance as the contact-signal scan above. Never throws.
+cron.schedule('0 7 * * 1', async () => {
+  try {
+    const state = await loadProgramDiscoveryState();
+    if (!state.settings.enabled) return;
+    const summary = await runProgramDiscovery({ mode: 'both' });
+    console.log(`Program discovery (weekly): scanned ${summary.companiesScanned}, auto-filed ${summary.autoFiled}, queued ${summary.queued}, new ${summary.newCompanies}${summary.errors.length ? `, ${summary.errors.length} error(s)` : ''}`);
+  } catch (err) {
+    console.warn('Scheduled program discovery failed:', err.message);
+  }
 });
 
 const PORT = process.env.PORT || 3000;
