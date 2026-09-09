@@ -3608,9 +3608,9 @@ app.post('/api/enrich/contact', async (req, res) => {
 app.post('/api/apollo/search-contacts', async (req, res) => {
   if (!process.env.APOLLO_API_KEY) return res.status(500).json({ error: 'APOLLO_API_KEY not configured' });
 
-  const { jobTitle, location, keywords, companySize } = req.body || {};
-  if (!jobTitle && !location && !keywords) {
-    return res.status(400).json({ error: 'jobTitle, location or keywords is required' });
+  const { jobTitle, location, keywords, companySize, company } = req.body || {};
+  if (!jobTitle && !location && !keywords && !company) {
+    return res.status(400).json({ error: 'jobTitle, location, keywords or company is required' });
   }
 
   // Company headcount buckets, matched to Apollo's own
@@ -3655,6 +3655,16 @@ app.post('/api/apollo/search-contacts', async (req, res) => {
     // phrase to match rather than a set of alternative industry keywords.
     if (keywordTags.length) apolloBody['organization_keyword_tags[]'] = keywordTags;
     if (employeeRanges.length) apolloBody['organization_num_employees_ranges[]'] = employeeRanges;
+
+    // Named-company search: a value with a dot and no spaces is treated as a
+    // domain (q_organization_domains, newline-joined per Apollo's format);
+    // anything else as an org name. Lets "pull everyone at Strike Energy"
+    // work alongside the title/location/size filters as further narrowing.
+    const companyRaw = (company || '').trim();
+    if (companyRaw) {
+      if (/^[^\s]+\.[^\s]+$/.test(companyRaw)) apolloBody.q_organization_domains = companyRaw.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+      else apolloBody.q_organization_name = companyRaw;
+    }
 
     // Apollo caps a single page at 100 results and reports how many pages
     // exist via response.pagination.total_pages - walked here the same way

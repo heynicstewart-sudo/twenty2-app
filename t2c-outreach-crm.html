@@ -8218,6 +8218,7 @@ function openApolloSearchModal(){
   const sizeBuckets = ['1-10','11-20','21-50','51-100','101-200','201-500','501-1000','1001-2000','2001-5000','5001-10000','10001+'];
   const preselected = ['1-10','11-20','21-50'];
   const body = `
+    <div class="field"><label>Company (optional)</label><input id="apolloCompany" placeholder="e.g. Strike Energy — or a domain like strikeenergy.com.au"></div>
     <div class="field"><label>Job title</label><input id="apolloJobTitle" placeholder="e.g. Founder, CEO, Head of Growth"></div>
     <div class="field"><label>Location</label><input id="apolloLocation" placeholder="e.g. United States"></div>
     <div class="field"><label>Industry / keywords</label><input id="apolloKeywords" placeholder="e.g. B2B consulting, marketing agency, SaaS"></div>
@@ -8238,11 +8239,12 @@ function openApolloSearchModal(){
 }
 
 async function runApolloSearch(){
+  const company = (document.getElementById('apolloCompany')?.value || '').trim();
   const jobTitle = (document.getElementById('apolloJobTitle')?.value || '').trim();
   const location = (document.getElementById('apolloLocation')?.value || '').trim();
   const keywords = (document.getElementById('apolloKeywords')?.value || '').trim();
   const companySize = [...document.querySelectorAll('.apolloSize:checked')].map(c => c.value).join(',');
-  if(!jobTitle && !location && !keywords){ toast('Add at least a job title, location or keyword to search', 'warn'); return; }
+  if(!jobTitle && !location && !keywords && !company){ toast('Add a company, job title, location or keyword to search', 'warn'); return; }
 
   const btn = document.getElementById('apolloSearchBtn');
   if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Searching...'; }
@@ -8253,7 +8255,7 @@ async function runApolloSearch(){
     const res = await fetch('/api/apollo/search-contacts', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ jobTitle, location, keywords, companySize })
+      body: JSON.stringify({ company, jobTitle, location, keywords, companySize })
     });
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
