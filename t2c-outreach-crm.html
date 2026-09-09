@@ -1466,6 +1466,8 @@ function createNewGridFlow(){
   const grid = createGrid(name);
   openGrid(grid.id);
   toast('Grid "'+name+'" created', 'success');
+  // Offer to seed it from a company right away (cancellable).
+  openImportCompanyModal({ gridId: grid.id });
 }
 
 function importCsvForNewGrid(){
@@ -7270,6 +7272,7 @@ function renderGrid(){
     <button class="btn btn-secondary" onclick="addGridColumn()"><i class="ti ti-plus"></i> Add column</button>
     <button class="btn btn-primary" id="runSearchBtn" onclick="runDailySearch()" ${isGridSearchRunning(grid.id) ? 'disabled' : ''}><i class="ti ti-search"></i> ${isGridSearchRunning(grid.id) ? 'Searching...' : 'Run daily search'}</button>
     <button class="btn btn-secondary" onclick="openAddContactModal()"><i class="ti ti-user-plus"></i> Add contact</button>
+    <button class="btn btn-secondary" onclick="openImportCompanyModal({ gridId: currentGrid().id })"><i class="ti ti-building-community"></i> Import from company</button>
     <button class="btn btn-secondary" onclick="openApolloSearchModal()"><i class="ti ti-building-skyscraper"></i> Search Apollo</button>
     <button class="btn btn-ghost" onclick="resetGrid()"><i class="ti ti-refresh"></i> Reset</button>
     <button class="btn btn-secondary" onclick="exportContactsCsv()"><i class="ti ti-file-download"></i> Export contacts</button>
@@ -8129,8 +8132,8 @@ function openAddContactModal(){
 // optional - only the Apollo import flow passes it (Apollo's own verbose
 // title, kept separate from `role`, which is the grid column/searched job
 // title written to the real Job Title field - see confirmApolloImport).
-function createManualGridContact(name, role, company, linkedinUrl, apolloTitle, email, website){
-  const grid = currentGrid();
+function createManualGridContact(name, role, company, linkedinUrl, apolloTitle, email, website, gridIdOverride){
+  const grid = gridIdOverride ? (state.grids.find(g => g.id === gridIdOverride) || currentGrid()) : currentGrid();
   const seqId = role === 'Digital and Tech' ? 'digitalTech' : 'seniorLeaders';
   const contact = {
     id: uid('c'), gridId: grid.id, name, company, role, url: linkedinUrl, email: email || '',
@@ -13513,6 +13516,7 @@ function renderCampaignGridTab(campaign){
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-grid-dots"></i> Contact grids</div>
       <div style="display:flex;gap:10px;">
+        <button class="btn btn-secondary btn-sm" onclick="openImportCompanyModal({ campaignId: '${campaign.id}' })"><i class="ti ti-building-community"></i> Import from company</button>
         <button class="btn btn-secondary btn-sm" onclick="openImportGridModal('${campaign.id}')"><i class="ti ti-link"></i> Import existing grid</button>
         <button class="btn btn-primary btn-sm" onclick="createGridForCampaign('${campaign.id}')"><i class="ti ti-plus"></i> New grid</button>
       </div>
@@ -13536,6 +13540,114 @@ function renderCampaignGridTab(campaign){
     </div>` : '<div class="empty-state">No grids linked yet - import one from Home or create a new one.</div>'}
   </div>
   `;
+}
+
+/* ---- Import a company's people into a grid or campaign ---- */
+// target: { gridId } or { campaignId }
+function openImportCompanyModal(target){
+  window.__importCompany = { target, company: '', step: 'pick', contacts: null, mode: 'all', roles: new Set() };
+  renderImportCompanyModal();
+}
+function renderImportCompanyModal(){
+  const s = window.__importCompany;
+  if(!s) return;
+  const companyNames = [...new Set([
+    ...((state.companies||[]).map(c => c.name || c).filter(Boolean)),
+    ...((state.contacts||[]).map(c => c.company).filter(Boolean))
+  ])].sort();
+  if(s.step === 'pick'){
+    openModal('Import from a company', `
+      <div class="muted" style="font-size:12px;margin-bottom:8px;">Pick a company and pull its people straight in — all of them, or just the roles you want.</div>
+      <input id="importCompanyInput" list="importCompanyList" placeholder="Company name…" value="${esc(s.company||'')}" style="width:100%;">
+      <datalist id="importCompanyList">${companyNames.map(n => `<option value="${esc(n)}">`).join('')}</datalist>
+    `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="importCoNextBtn" onclick="importCompanyLoadContacts()">Next</button>`);
+    setTimeout(()=>{ const i=document.getElementById('importCompanyInput'); if(i) i.focus(); }, 20);
+    return;
+  }
+  // choose step
+  const contacts = s.contacts || [];
+  const roles = [...new Set(contacts.map(c => (c.jobTitle||'').trim()).filter(Boolean))].sort();
+  const icpCount = contacts.filter(c => c.icpRoleCategory || c.isDecisionMaker === true).length;
+  openModal(`Import from ${esc(s.company)}`, `
+    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">${contacts.length} contact${contacts.length===1?'':'s'} on file at ${esc(s.company)}.</div>
+    <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;margin-bottom:6px;"><input type="radio" name="importCoMode" ${s.mode==='all'?'checked':''} onchange="window.__importCompany.mode='all';renderImportCompanyModal()"> All ${contacts.length} contacts</label>
+    ${icpCount ? `<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;margin-bottom:6px;"><input type="radio" name="importCoMode" ${s.mode==='icp'?'checked':''} onchange="window.__importCompany.mode='icp';renderImportCompanyModal()"> ICP roles / decision-makers only (${icpCount})</label>` : ''}
+    <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;margin-bottom:6px;"><input type="radio" name="importCoMode" ${s.mode==='roles'?'checked':''} onchange="window.__importCompany.mode='roles';renderImportCompanyModal()"> Pick roles</label>
+    ${s.mode==='roles' ? `<div style="max-height:34vh;overflow-y:auto;border:1px solid var(--border-light);border-radius:var(--radius-input);padding:8px 10px;margin:4px 0;">
+      ${roles.length ? roles.map(r => `<label style="display:flex;align-items:center;gap:6px;font-size:12px;padding:2px 0;"><input type="checkbox" ${s.roles.has(r)?'checked':''} onchange="importCompanyToggleRole('${esc(r).replace(/'/g,"\\'")}', this.checked)" style="width:auto;"> ${esc(r)} <span class="muted">(${contacts.filter(c=>(c.jobTitle||'').trim()===r).length})</span></label>`).join('') : '<div class="muted" style="font-size:12px;">No job titles on file — use "All".</div>'}
+    </div>` : ''}
+  `, `<button class="btn btn-secondary" onclick="window.__importCompany.step='pick';renderImportCompanyModal()">Back</button><button class="btn btn-primary" id="importCoGoBtn" onclick="confirmImportCompany()">Import</button>`);
+}
+function importCompanyToggleRole(role, on){
+  const s = window.__importCompany;
+  if(on) s.roles.add(role); else s.roles.delete(role);
+}
+async function importCompanyLoadContacts(){
+  const s = window.__importCompany;
+  s.company = (document.getElementById('importCompanyInput')?.value || '').trim();
+  if(!s.company){ toast('Pick a company', 'warn'); return; }
+  const btn = document.getElementById('importCoNextBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Loading…'; }
+  try {
+    const res = await fetch(`/api/companies/profile?name=${encodeURIComponent(s.company)}`);
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    s.contacts = data.accountContacts || [];
+    if(!s.contacts.length){
+      toast('No contacts on file for that company yet — add people to it first', 'warn');
+      if(btn){ btn.disabled = false; btn.innerHTML = 'Next'; }
+      return;
+    }
+    s.step = 'choose';
+    renderImportCompanyModal();
+  } catch(err){
+    toast('Could not load: ' + err.message, 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = 'Next'; }
+  }
+}
+async function confirmImportCompany(){
+  const s = window.__importCompany;
+  const contacts = s.contacts || [];
+  let picked;
+  if(s.mode === 'all') picked = contacts;
+  else if(s.mode === 'icp') picked = contacts.filter(c => c.icpRoleCategory || c.isDecisionMaker === true);
+  else picked = contacts.filter(c => s.roles.has((c.jobTitle||'').trim()));
+  if(!picked.length){ toast('Nothing selected', 'warn'); return; }
+
+  // Resolve a grid to import into.
+  let gridId = s.target.gridId;
+  if(!gridId && s.target.campaignId){
+    const campaign = state.campaigns.find(c => c.id === s.target.campaignId);
+    if(!campaign) return;
+    let grid = (campaign.gridIds||[]).map(id => state.grids.find(g=>g.id===id)).find(Boolean);
+    if(!grid){
+      grid = createGrid(`${s.company} — ${campaign.name}`.slice(0, 80));
+      campaign.gridIds = campaign.gridIds || [];
+      campaign.gridIds.push(grid.id);
+      syncCampaignToAirtable(campaign);
+    }
+    gridId = grid.id;
+  }
+  const grid = state.grids.find(g => g.id === gridId);
+  if(!grid){ toast('No grid to import into', 'warn'); return; }
+
+  const btn = document.getElementById('importCoGoBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Importing…'; }
+  const existing = new Set(gridContacts(gridId).map(c => (c.name||'').toLowerCase()));
+  ensureGridCompany(grid, s.company);
+  let added = 0;
+  picked.forEach(c => {
+    if(existing.has((c.name||'').toLowerCase())) return;
+    const role = (c.jobTitle||'').trim();
+    if(role && !grid.columns.includes(role)) grid.columns.push(role);
+    createManualGridContact(c.name, role, s.company, c.linkedinUrl || '', '', '', '', gridId);
+    added++;
+  });
+  touchGrid(gridId);
+  closeModal();
+  window.__importCompany = null;
+  toast(`${added} contact${added===1?'':'s'} imported from ${s.company}`, added ? 'success' : 'warn');
+  renderPage();
 }
 
 function createGridForCampaign(campaignId){
