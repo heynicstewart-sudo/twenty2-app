@@ -21473,22 +21473,58 @@ async function generateSeoPost(id){
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ keywordId: id })
     });
-    const data = await res.json();
-    if(!res.ok || !data.success) throw new Error(data.error || 'Generation failed');
-    if(k) Object.assign(k, { status:'Generated', postTitle:data.title, postHtml:data.html, metaTitle:data.metaTitle, metaDescription:data.metaDescription });
-    window.__seoPreview = {
-      keywordId: id, keyword: k ? k.keyword : '',
-      title: data.title, html: data.html, metaTitle: data.metaTitle, metaDescription: data.metaDescription,
-      status: 'Generated', usedCustomVoiceProfile: data.usedCustomVoiceProfile, linkWarning: data.linkWarning || null
-    };
-    toast('Post generated', 'success');
-    if(data.linkWarning) toast(data.linkWarning, 'warn');
-    renderPage();
+    let data = {};
+    try { data = await res.json(); } catch(e){}
+    if(!res.ok) throw new Error(data.error || 'Could not start generation');
+    toast('Generating post - this takes a few minutes, you can keep working', 'success');
+    pollSeoPostStatus(id, k ? k.keyword : '');
   } catch(err){
     if(k) k.status = 'Queued';
     toast('Could not generate post: ' + err.message, 'warn');
     renderPage();
   }
+}
+
+// The server generates in the background (Serper + scrapes + draft + 3
+// humanizer passes = several minutes, past any request timeout), so the UI
+// polls the keyword's Status: Generating -> Generated on success, or back
+// to Queued with the reason in Notes on failure.
+async function pollSeoPostStatus(id, keywordLabel, attempt){
+  attempt = attempt || 0;
+  const setBack = () => {
+    const kk = Array.isArray(window.__seoKeywords) ? window.__seoKeywords.find(x=>x.id===id) : null;
+    if(kk) kk.status = 'Queued';
+    renderPage();
+  };
+  if(attempt > 150){ // ~15 minutes
+    setBack();
+    toast('Generation is taking longer than usual - reopen the SEO tab in a minute to check', 'warn');
+    return;
+  }
+  await new Promise(r => setTimeout(r, 6000));
+  let kw = null;
+  try {
+    const res = await fetch('/api/seo/keywords');
+    const data = await res.json();
+    kw = (data.keywords || []).find(x => x.id === id);
+  } catch(e){ return pollSeoPostStatus(id, keywordLabel, attempt + 1); }
+  if(!kw || kw.status === 'Generating') return pollSeoPostStatus(id, keywordLabel, attempt + 1);
+
+  window.__seoKeywords = undefined;
+  await loadSeoKeywords();
+
+  if(kw.status === 'Generated'){
+    window.__seoPreview = {
+      keywordId: id, keyword: kw.keyword || keywordLabel,
+      title: kw.postTitle, html: kw.postHtml, metaTitle: kw.metaTitle, metaDescription: kw.metaDescription,
+      status: 'Generated'
+    };
+    toast('Post generated', 'success');
+  } else {
+    const reason = (kw.suggestedReason || '').startsWith('Generation failed:') ? kw.suggestedReason.replace('Generation failed:', '').trim() : '';
+    toast('Generation did not complete' + (reason ? ': ' + reason : ' - try again'), 'warn');
+  }
+  renderPage();
 }
 
 function openSeoPreview(id){
@@ -21583,14 +21619,15 @@ async function regenerateSeoPreview(){
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ keywordId: p.keywordId })
     });
-    const data = await res.json();
-    if(!res.ok || !data.success) throw new Error(data.error || 'Regenerate failed');
-    Object.assign(p, { title:data.title, html:data.html, metaTitle:data.metaTitle, metaDescription:data.metaDescription, usedCustomVoiceProfile:data.usedCustomVoiceProfile, linkWarning:data.linkWarning || null });
+    let data = {};
+    try { data = await res.json(); } catch(e){}
+    if(!res.ok) throw new Error(data.error || 'Could not start regeneration');
     const k = (window.__seoKeywords||[]).find(x=>x.id===p.keywordId);
-    if(k) Object.assign(k, { status:'Generated', postTitle:data.title, postHtml:data.html, metaTitle:data.metaTitle, metaDescription:data.metaDescription });
-    toast('Regenerated', 'success');
-    if(data.linkWarning) toast(data.linkWarning, 'warn');
+    if(k) k.status = 'Generating';
+    p.status = 'Generating';
+    toast('Regenerating - this takes a few minutes', 'success');
     renderPage();
+    pollSeoPostStatus(p.keywordId, p.keyword);
   } catch(err){
     toast('Could not regenerate: ' + err.message, 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-refresh"></i> Regenerate'; }

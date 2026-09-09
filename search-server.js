@@ -746,11 +746,15 @@ async function callClaudeText(content, maxTokens, model) {
 
 async function callClaudeJson(content, maxTokens, model) {
   const text = await callClaudeMessages(content, maxTokens, undefined, model);
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  const cleaned = stripCodeFences(text);
+  const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
   try {
-    return JSON.parse(jsonMatch ? jsonMatch[0] : text);
+    return JSON.parse(jsonMatch ? jsonMatch[0] : cleaned);
   } catch (parseErr) {
-    throw new Error('Could not parse Claude response as JSON');
+    // The usual cause is the response hitting the max_tokens ceiling and
+    // getting cut off mid-JSON. Say so, so the caller/UI can prompt a retry
+    // rather than treating it as a permanent failure.
+    throw new Error('Could not parse the model response as JSON - it was likely cut off. Try generating again.');
   }
 }
 
@@ -15967,7 +15971,7 @@ async function runHumanizerChain(html) {
   console.log('Humanizer pass 1 starting');
   let pass1;
   try {
-    const raw = await callClaudeMessages(`HTML content to rewrite:\n\n${html}`, 8000, SEO_HUMANIZER_SYSTEM_PROMPT);
+    const raw = await callClaudeMessages(`HTML content to rewrite:\n\n${html}`, 16000, SEO_HUMANIZER_SYSTEM_PROMPT);
     pass1 = stripCodeFences(raw).trim();
   } catch (err) {
     console.warn('Humanizer pass 1 failed - keeping the pre-humanizer version:', err.message);
@@ -16000,7 +16004,7 @@ async function runHumanizerChain(html) {
   console.log('Humanizer pass 3 final rewrite starting');
   try {
     const raw = await callClaudeMessages(
-      `${seoHumanizerFinalPrompt(auditBullets)}\n\nHTML content:\n\n${pass1}`, 8000
+      `${seoHumanizerFinalPrompt(auditBullets)}\n\nHTML content:\n\n${pass1}`, 16000
     );
     const pass3 = stripCodeFences(raw).trim();
     if (!isUsableHumanizedHtml(pass3)) {
@@ -16267,7 +16271,7 @@ Also write an "excerpt": a 2-3 sentence plain text summary of the post, written 
 Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 { "title": string, "html": string, "excerpt": string (2-3 plain-text sentences, no HTML tags), "metaTitle": string (under 60 characters), "metaDescription": string (under 160 characters) }`;
 
-  const drafted = await callClaudeJson(prompt, 8000);
+  const drafted = await callClaudeJson(prompt, 20000);
   let html = await ensureValidSeoStructure(drafted.html || '', keyword);
   html = await humanizeSeoHtml(html);
 
@@ -16329,7 +16333,7 @@ Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 { "html": string }`;
 
   try {
-    const fixed = await callClaudeJson(fixPrompt, 8000);
+    const fixed = await callClaudeJson(fixPrompt, 16000);
     if (!fixed.html) return html;
     const revalidation = validateSeoStructure(fixed.html);
     if (!revalidation.valid) {
@@ -16494,53 +16498,61 @@ app.post('/api/seo/generate-post', async (req, res) => {
   const { keywordId } = req.body;
   if (!keywordId) return res.status(400).json({ error: 'keywordId is required' });
 
+  let keywordRecord;
   try {
     await ensureKeywordsTable();
     await ensureKeywordsExcerptField();
     await ensureSitemapTable();
-    const keywordRecord = await airtableGetRecord(KEYWORDS_TABLE, keywordId);
+    keywordRecord = await airtableGetRecord(KEYWORDS_TABLE, keywordId);
     if (!keywordRecord) return res.status(404).json({ error: 'Keyword not found' });
-
-    airtableRequest('PATCH', KEYWORDS_TABLE, { records: [{ id: keywordId, fields: { 'Status': 'Generating' } }], typecast: true })
-      .catch(err => console.warn('Could not mark keyword Generating:', err.message));
-
-    const post = await generateSeoPostForKeyword(keywordRecord);
-
-    // Weave in internal links to already-published pages before saving, so
-    // they travel with the post through preview and on to Framer.
-    let linkWarning = null;
-    try {
-      const sitemapRecords = await airtableFetchAllRecords(SITEMAP_TABLE);
-      const linked = await injectInternalLinks(post.html, keywordRecord.fields['Keyword'], sitemapRecords);
-      post.html = linked.html;
-      linkWarning = linked.warning;
-    } catch (err) {
-      console.warn('Internal linking skipped:', err.message);
-      linkWarning = 'Internal links could not be added automatically - add them by hand before publishing.';
-    }
-
-    await airtableRequest('PATCH', KEYWORDS_TABLE, {
-      records: [{
-        id: keywordId,
-        fields: {
-          'Post Title': post.title,
-          'Content': post.html,
-          'Meta Title': post.metaTitle,
-          'Meta Description': post.metaDescription,
-          'Excerpt': post.excerpt,
-          'Status': 'Generated'
-        }
-      }],
-      typecast: true
-    });
-
-    res.json({ success: true, keywordId, title: post.title, html: post.html, excerpt: post.excerpt, metaTitle: post.metaTitle, metaDescription: post.metaDescription, status: 'Generated', usedCustomVoiceProfile: post.usedCustomVoiceProfile, linkWarning });
+    await airtableRequest('PATCH', KEYWORDS_TABLE, { records: [{ id: keywordId, fields: { 'Status': 'Generating' } }], typecast: true });
   } catch (err) {
-    console.error('Generate SEO post error:', err.message);
-    airtableRequest('PATCH', KEYWORDS_TABLE, { records: [{ id: keywordId, fields: { 'Status': 'Queued' } }], typecast: true })
-      .catch(() => {});
-    res.status(500).json({ error: err.message });
+    console.error('Generate SEO post kickoff error:', err.message);
+    return res.status(500).json({ error: err.message });
   }
+
+  // A full post is a Serper search, three page scrapes, the draft, a
+  // structure-check pass and three humanizer passes - several minutes, well
+  // past any proxy's request timeout. Run it in the background and let the
+  // browser poll GET /api/seo/keywords for the Status flip
+  // (Generating -> Generated, or back to Queued with the reason in Notes).
+  res.json({ started: true, keywordId });
+
+  (async () => {
+    try {
+      const post = await generateSeoPostForKeyword(keywordRecord);
+
+      try {
+        const sitemapRecords = await airtableFetchAllRecords(SITEMAP_TABLE);
+        const linked = await injectInternalLinks(post.html, keywordRecord.fields['Keyword'], sitemapRecords);
+        post.html = linked.html;
+      } catch (err) {
+        console.warn('Internal linking skipped:', err.message);
+      }
+
+      await airtableRequest('PATCH', KEYWORDS_TABLE, {
+        records: [{
+          id: keywordId,
+          fields: {
+            'Post Title': post.title,
+            'Content': post.html,
+            'Meta Title': post.metaTitle,
+            'Meta Description': post.metaDescription,
+            'Excerpt': post.excerpt,
+            'Status': 'Generated'
+          }
+        }],
+        typecast: true
+      });
+      console.log(`SEO post generated for "${keywordRecord.fields['Keyword']}"`);
+    } catch (err) {
+      console.error('Generate SEO post error:', err.message);
+      airtableRequest('PATCH', KEYWORDS_TABLE, {
+        records: [{ id: keywordId, fields: { 'Status': 'Queued', 'Notes': 'Generation failed: ' + err.message } }],
+        typecast: true
+      }).catch(() => {});
+    }
+  })();
 });
 
 // ---- Send to Framer (as a draft) ----
@@ -17168,7 +17180,7 @@ Also write an "excerpt": a 2-3 sentence plain text summary of the page, written 
 Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
 { "title": string, "html": string, "excerpt": string (2-3 plain-text sentences, no HTML tags), "metaTitle": string (under 60 characters), "metaDescription": string (under 160 characters) }`;
 
-  const drafted = await callClaudeJson(prompt, 8000);
+  const drafted = await callClaudeJson(prompt, 20000);
   let html = await ensureValidSeoStructure(drafted.html || '', keyword);
   html = await humanizeSeoHtml(html);
 
