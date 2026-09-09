@@ -3920,23 +3920,53 @@ async function serperOrganic(q, num = 8) {
   } catch (e) { return []; }
 }
 
-// Region + sector search terms, from the codified ICP profile when it exists,
-// else Twenty2's default WA-resources market.
+// Compact, keyword-style sector term from the codified ICP (the raw attribute
+// values are full sentences - jamming those straight into a Google query gives
+// junk). Region defaults to Twenty2's market; the LLM path below handles nuance.
 function programDiscoveryMarketTerms(icpProfile) {
   const attrs = (icpProfile && icpProfile.attributes || []).filter(a => a && a.value);
-  const pick = re => attrs.filter(a => re.test(a.label || '')).map(a => a.value).join(' ');
-  const sector = (pick(/sector|industry|vertical|market/i) || (icpProfile && icpProfile.headline) || 'resources energy utilities government').toString().slice(0, 120);
-  const region = (pick(/region|geo|location|country|state/i) || 'Western Australia').toString().slice(0, 80);
-  return { sector, region };
+  const industry = ((attrs.find(a => /sector|industry|vertical|market/i.test(a.label || '')) || {}).value || '').toString();
+  const sector = industry
+    .split(/[.;(]/)[0]
+    .split(/\s+/).filter(w => !/^(with|or|and|the|a|an|of|where|based|major|underway|active|an?)$/i.test(w))
+    .slice(0, 6).join(' ').trim() || 'mining resources energy oil gas';
+  return { sector, region: 'Western Australia' };
 }
 
-function buildDiscoveryQueries(icpProfile, cap = 8) {
-  const { sector, region } = programDiscoveryMarketTerms(icpProfile);
+// Turn the codified ICP (+ GTM motion) into ~8 Google queries tuned to surface
+// transformation programs at ICP-fit companies. One Sonnet call; falls back to
+// a keyword-heuristic build when the Engine is unavailable or returns junk.
+async function buildDiscoveryQueries(icpProfile, gtmMotion, cap = 8) {
+  cap = Math.max(1, Math.min(cap || 8, 12));
   const yr = new Date().getFullYear();
-  return PROGRAM_INTENT_PHRASES.slice(0, Math.max(1, cap)).map(phrase => ({
-    label: phrase.replace(/["']/g, '').slice(0, 48),
-    q: `${region} ${sector} ${phrase} ${yr - 1}..${yr}`
-  }));
+  const heuristic = () => {
+    const { sector, region } = programDiscoveryMarketTerms(icpProfile);
+    return PROGRAM_INTENT_PHRASES.slice(0, cap).map(phrase => ({
+      label: phrase.replace(/["']/g, '').slice(0, 48),
+      q: `${region} ${sector} ${phrase} ${yr - 1}..${yr}`
+    }));
+  };
+  if (!process.env.ANTHROPIC_API_KEY) return heuristic();
+  try {
+    const icpBlock = icpProfilePromptBlock(icpProfile) || '';
+    const motion = gtmMotion && Array.isArray(gtmMotion.stages)
+      ? gtmMotion.stages.map(s => `${s.title}: ${s.body}`).join('\n').slice(0, 1200) : '';
+    const prompt = `Twenty2 Collective (a Perth change / agile consultancy) finds new prospects by spotting organisations that have just STARTED a transformation program - ERP / SAP, operating-model review, agile / ways-of-working, digital transformation, or a major capital-program / site mobilisation. Write ${cap} Google search queries that would surface NEWS, ANNOUNCEMENTS and JOB ADS about such programs at companies matching Twenty2's ICP.
+${icpBlock}
+${motion ? `\nTwenty2's GTM motion:\n${motion}\n` : ''}
+Rules for the queries:
+- Short, keyword-style - what a researcher would actually type, not a sentence.
+- Bias to Western Australia / Perth and the ICP's industries.
+- Vary them: some target a program type, some a leadership hire ("Chief Transformation Officer" appointed), some job ads ("Transformation Manager" OR "Program Director" jobs), some half-year results / announcement language.
+- Put a recency hint like ${yr - 1}..${yr} on a few.
+- Do NOT name specific companies.
+
+Return ONLY valid JSON: { "queries": ["query one", "query two", ...] }`;
+    const parsed = await callClaudeJson(clientize(prompt), 800, AMBIENT_MODEL);
+    const qs = (parsed.queries || []).filter(q => typeof q === 'string' && q.trim().length > 8).slice(0, cap);
+    if (qs.length >= 3) return qs.map(q => ({ label: q.replace(/["']/g, '').slice(0, 48), q: q.trim() }));
+  } catch (e) { console.warn('buildDiscoveryQueries LLM failed, using heuristic:', e.message); }
+  return heuristic();
 }
 
 // Normalised program shape for the review queue (no evidence/source - those
@@ -4119,7 +4149,9 @@ async function runProgramDiscovery(opts = {}) {
     // ---- discover pass ----
     if (mode !== 'monitor' && budgetLeft()) {
       let resultsText = '';
-      for (const { label, q } of buildDiscoveryQueries(icpProfile, settings.discoverQueries)) {
+      const discoveryQueries = await buildDiscoveryQueries(icpProfile, await getGtmMotion().catch(() => null), settings.discoverQueries);
+      budget.engine++; // the query-builder's Engine call (falls back to a heuristic if it fails)
+      for (const { label, q } of discoveryQueries) {
         if (budget.serper >= serperCap) break;
         const organic = await serperOrganic(q, 8);
         budget.serper++; summary.queriesRun++;
