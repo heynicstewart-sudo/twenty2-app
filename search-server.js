@@ -500,7 +500,11 @@ const OPTIONAL_LATE_ADDED_FIELDS = [
   // Program discovery agent (Phase 3.5) — Companies table (scan cursor) +
   // Settings table (queue / run log / settings blob).
   'Programs Scanned At',
-  'Program Discovery Queue (JSON)', 'Program Discovery Log (JSON)', 'Program Discovery Settings (JSON)'
+  'Program Discovery Queue (JSON)', 'Program Discovery Log (JSON)', 'Program Discovery Settings (JSON)',
+  // Person-level connection-sent date (Contacts table) - mirrors the
+  // long-standing Campaign Contacts field, so a connection request logged
+  // before the person is in any campaign still has a date to carry over.
+  'Connection Sent Date'
 ];
 const optionalFieldsMissing = new Set();
 function stripMissingOptionalFields(body) {
@@ -2579,6 +2583,7 @@ function mapStateToStage(state) {
   const map = {
     'found': 'Found',
     'opened': 'Found',
+    'connectionPending': 'Connection Pending',
     'connected': 'Connected',
     'messaging': 'Messaging',
     'booked': 'Booked'
@@ -11663,16 +11668,36 @@ async function getOrCreateCampaignContactRow(contactId, contactName, campaignRec
   const existing = findCampaignContactRow(rows, contactId, campaignRecordId);
   if (existing) return existing;
   const addedDate = new Date().toISOString().slice(0, 10);
+
+  // Seed the new row from the person's own connection status (a person-level
+  // fact - Contacts.'Journey Stage' / 'Connection Sent Date'), so adding a
+  // company whose people you've already connected with doesn't reset them to
+  // "Found". Only the pre-message stages carry over. Skipped when the caller
+  // already dictates the stage via extraFields (e.g. the Logger).
+  let seedStage = 'Found';
+  const seedExtra = {};
+  if (!(extraFields && extraFields['Sequence Stage'])) {
+    try {
+      const contactRec = await airtableGetRecord('Contacts', contactId);
+      const js = contactRec && contactRec.fields && contactRec.fields['Journey Stage'];
+      if (js === 'Connected') seedStage = 'Connected';
+      else if (js === 'Connection Pending') {
+        seedStage = 'Connection Pending';
+        if (contactRec.fields['Connection Sent Date']) seedExtra['Connection Sent Date'] = contactRec.fields['Connection Sent Date'];
+      }
+    } catch (e) { /* fall back to Found */ }
+  }
+
   const data = await airtableRequest('POST', CAMPAIGN_CONTACTS_TABLE, {
     records: [{
       fields: Object.assign({
         'Name': `${contactName} — ${campaignName}`,
         'Contact': [contactId],
         'Campaign': [campaignRecordId],
-        'Sequence Stage': 'Found',
-        'Stage History': appendStageHistory('', 'Found', addedDate),
+        'Sequence Stage': seedStage,
+        'Stage History': appendStageHistory('', seedStage, addedDate),
         'Added Date': addedDate
-      }, extraFields || {})
+      }, seedExtra, extraFields || {})
     }]
   });
   const created = data.records[0];
@@ -14720,7 +14745,12 @@ app.patch('/api/context/contact-fields', async (req, res) => {
       const contactFields = {};
       if (journeyStage) contactFields['Journey Stage'] = journeyStage;
       if (jobTitle) contactFields['Job Title'] = jobTitle;
-      await airtableRequest('PATCH', 'Contacts', { records: [{ id: contactId, fields: contactFields }], typecast: true });
+      // Connection-sent is a person-level fact, kept on the Contact itself so
+      // it survives even when the person isn't in any campaign yet (a new
+      // Campaign Contacts row later copies it - getOrCreateCampaignContactRow).
+      if (journeyStage === 'Connection Pending') contactFields['Connection Sent Date'] = new Date().toISOString().slice(0, 10);
+      else if (journeyStage === 'Found') contactFields['Connection Sent Date'] = null;
+      await airtableWriteAllowingMissingCtaFields('PATCH', 'Contacts', { records: [{ id: contactId, fields: contactFields }], typecast: true });
     }
 
     let campaignContactRowsSynced = 0;
