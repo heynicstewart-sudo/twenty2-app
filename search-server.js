@@ -500,7 +500,11 @@ const OPTIONAL_LATE_ADDED_FIELDS = [
   // Program discovery agent (Phase 3.5) — Companies table (scan cursor) +
   // Settings table (queue / run log / settings blob).
   'Programs Scanned At',
-  'Program Discovery Queue (JSON)', 'Program Discovery Log (JSON)', 'Program Discovery Settings (JSON)'
+  'Program Discovery Queue (JSON)', 'Program Discovery Log (JSON)', 'Program Discovery Settings (JSON)',
+  // Person-level connection-sent date (Contacts table) - mirrors the
+  // long-standing Campaign Contacts field, so a connection request logged
+  // before the person is in any campaign still has a date to carry over.
+  'Connection Sent Date'
 ];
 const optionalFieldsMissing = new Set();
 function stripMissingOptionalFields(body) {
@@ -2579,6 +2583,7 @@ function mapStateToStage(state) {
   const map = {
     'found': 'Found',
     'opened': 'Found',
+    'connectionPending': 'Connection Pending',
     'connected': 'Connected',
     'messaging': 'Messaging',
     'booked': 'Booked'
@@ -3603,9 +3608,9 @@ app.post('/api/enrich/contact', async (req, res) => {
 app.post('/api/apollo/search-contacts', async (req, res) => {
   if (!process.env.APOLLO_API_KEY) return res.status(500).json({ error: 'APOLLO_API_KEY not configured' });
 
-  const { jobTitle, location, keywords, companySize } = req.body || {};
-  if (!jobTitle && !location && !keywords) {
-    return res.status(400).json({ error: 'jobTitle, location or keywords is required' });
+  const { jobTitle, location, keywords, companySize, company } = req.body || {};
+  if (!jobTitle && !location && !keywords && !company) {
+    return res.status(400).json({ error: 'jobTitle, location, keywords or company is required' });
   }
 
   // Company headcount buckets, matched to Apollo's own
@@ -3650,6 +3655,16 @@ app.post('/api/apollo/search-contacts', async (req, res) => {
     // phrase to match rather than a set of alternative industry keywords.
     if (keywordTags.length) apolloBody['organization_keyword_tags[]'] = keywordTags;
     if (employeeRanges.length) apolloBody['organization_num_employees_ranges[]'] = employeeRanges;
+
+    // Named-company search: a value with a dot and no spaces is treated as a
+    // domain (q_organization_domains, newline-joined per Apollo's format);
+    // anything else as an org name. Lets "pull everyone at Strike Energy"
+    // work alongside the title/location/size filters as further narrowing.
+    const companyRaw = (company || '').trim();
+    if (companyRaw) {
+      if (/^[^\s]+\.[^\s]+$/.test(companyRaw)) apolloBody.q_organization_domains = companyRaw.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+      else apolloBody.q_organization_name = companyRaw;
+    }
 
     // Apollo caps a single page at 100 results and reports how many pages
     // exist via response.pagination.total_pages - walked here the same way
@@ -10445,6 +10460,10 @@ function buildAccountContacts(companyRecord, contactRecords, campaignContactRows
         id: r.id,
         name: cf['Full Name'] || '',
         jobTitle: cf['Job Title'] || '',
+        linkedinUrl: cf['LinkedIn URL'] || '',
+        journeyStage: cf['Journey Stage'] || 'Found',
+        connectionSentDate: cf['Connection Sent Date'] || null,
+        icpRoleCategory: cf['ICP Role Category'] || '',
         isDecisionMaker: allCriteria.length ? jobTitleMatchesCriteria(cf['Job Title'], allCriteria) : null,
         campaignStatuses,
         everContacted: campaignStatuses.length > 0
@@ -10710,6 +10729,173 @@ app.post('/api/companies/:name/signal', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('Company signal save error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Add people to a company (paste / screenshot) ----------------------------
+
+// Person-level connection status, shared by the per-contact control on the
+// company page and the "Add people" import below. status: 'sent' | 'connected'
+// | 'none'. Writes Contacts.'Journey Stage' + 'Connection Sent Date', then
+// carries the change onto any Campaign Contacts rows still at an earlier stage
+// (the same sync PATCH /api/context/contact-fields has always done).
+async function setContactConnectionStatus(contactId, status) {
+  if (!isAirtableRecordId(contactId)) return { skipped: true };
+  const today = new Date().toISOString().slice(0, 10);
+  let campaignContactRowsSynced = 0;
+
+  if (status === 'sent') {
+    await airtableWriteAllowingMissingCtaFields('PATCH', 'Contacts', {
+      records: [{ id: contactId, fields: { 'Journey Stage': 'Connection Pending', 'Connection Sent Date': today } }], typecast: true
+    });
+    const rows = await fetchCampaignContactsRows();
+    const pending = rows.filter(r => (r.fields['Contact'] || []).includes(contactId) && ['Connection Requested', 'Found'].includes(r.fields['Sequence Stage'] || ''));
+    if (pending.length) {
+      await airtableBatchPatch(CAMPAIGN_CONTACTS_TABLE, pending.map(r => ({
+        id: r.id,
+        fields: { 'Sequence Stage': 'Connection Pending', 'Stage History': appendStageHistory(r.fields['Stage History'], 'Connection Pending', today), 'Connection Sent Date': r.fields['Connection Sent Date'] || today }
+      })));
+      campaignContactRowsSynced = pending.length;
+    }
+  } else if (status === 'connected') {
+    await airtableWriteAllowingMissingCtaFields('PATCH', 'Contacts', {
+      records: [{ id: contactId, fields: { 'Journey Stage': 'Connected' } }], typecast: true
+    });
+    const rows = await fetchCampaignContactsRows();
+    const accepted = rows.filter(r => (r.fields['Contact'] || []).includes(contactId) && ['Connection Pending', 'Connection Requested', 'Found'].includes(r.fields['Sequence Stage'] || ''));
+    if (accepted.length) {
+      await airtableBatchPatch(CAMPAIGN_CONTACTS_TABLE, accepted.map(r => ({
+        id: r.id, fields: { 'Sequence Stage': 'Connected', 'Stage History': appendStageHistory(r.fields['Stage History'], 'Connected', today) }
+      })));
+      campaignContactRowsSynced = accepted.length;
+    }
+    try {
+      const rec = await airtableGetRecord('Contacts', contactId);
+      const url = rec && rec.fields['LinkedIn URL'];
+      if (rec && url) trigifyCreateContactSearch(contactId, rec.fields['Full Name'] || contactId, url).catch(e => console.warn('Trigify on connect (non-fatal):', e.message));
+    } catch (e) { /* non-fatal */ }
+  } else { // 'none' - reset the person-level fact only
+    await airtableWriteAllowingMissingCtaFields('PATCH', 'Contacts', {
+      records: [{ id: contactId, fields: { 'Journey Stage': 'Found', 'Connection Sent Date': null } }], typecast: true
+    });
+  }
+  return { campaignContactRowsSynced };
+}
+
+// Set one contact's connection status from the company page's per-person control.
+app.post('/api/contacts/:id/connection-status', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const status = (req.body || {}).status;
+  if (!['none', 'sent', 'connected'].includes(status)) return res.status(400).json({ error: "status must be 'none', 'sent' or 'connected'" });
+  try {
+    const result = await setContactConnectionStatus(req.params.id, status);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('Contact connection-status error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Parse a pasted block / screenshot(s) of a LinkedIn company People tab (or
+// "People you may know") into a reviewable list. Never writes.
+app.post('/api/companies/:name/people/parse', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  const { text, images } = req.body || {};
+  const hasImages = Array.isArray(images) && images.length;
+  if (!hasImages && !(text && text.trim())) return res.status(400).json({ error: 'text or images is required' });
+  const companyName = decodeURIComponent(req.params.name);
+  try {
+    const source = hasImages ? 'the attached screenshot(s) of a LinkedIn page' : 'this text pasted from a LinkedIn page';
+    const textNote = hasImages ? '' : `A raw paste from LinkedIn's company "People" tab or "People you may know" repeats a block per person - the name, then a headline/title, sometimes "Xth" degree, mutual-connections text, and a "Connect"/"Follow"/"Message" button. Ignore all the page furniture; keep the name, the best job title from the headline, and a linkedin.com/in/... URL if one is visible.\n\n`;
+    const promptText = `Extract the people listed in ${source}. They all work (or the page implies they work) at "${companyName}".\n\n${textNote}${hasImages ? '' : `Pasted text:\n${(text || '').slice(0, 8000)}\n\n`}Return ONLY a JSON object, no markdown, in exactly this shape:
+{ "people": [ { "name": "Jane Doe", "jobTitle": "Transformation Lead", "linkedinUrl": "https://www.linkedin.com/in/jane-doe" } ] }
+One entry per distinct person. jobTitle: best guess from their headline, "" if none. linkedinUrl: only if a real /in/ URL is visible, else "". Skip anyone who is clearly not a person (company pages, "and 12 others").`;
+
+    const content = hasImages
+      ? [...images.map(img => ({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.base64 } })), { type: 'text', text: promptText }]
+      : promptText;
+    const rawText = await callClaudeText(content, 3000);
+    let parsed;
+    try {
+      const cleaned = stripCodeFences(rawText);
+      const m = cleaned.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(m ? m[0] : cleaned);
+    } catch (e) {
+      console.error('People parse: malformed JSON from Claude:', rawText);
+      throw new Error('Could not read that - try a cleaner paste or screenshot');
+    }
+    const people = (Array.isArray(parsed.people) ? parsed.people : [])
+      .filter(p => p && p.name)
+      .map(p => ({ name: String(p.name).trim(), jobTitle: p.jobTitle ? String(p.jobTitle).trim() : '', linkedinUrl: p.linkedinUrl ? String(p.linkedinUrl).trim() : '' }));
+
+    // Flag anyone already on file (by name or LinkedIn slug) so the client can
+    // show "already a contact" and pre-fill their current status.
+    const contactRecords = await airtableFetchAllRecords('Contacts');
+    const bySlug = {}, byName = {};
+    contactRecords.forEach(r => {
+      const nm = (r.fields['Full Name'] || '').trim().toLowerCase();
+      if (nm) byName[nm] = r;
+      const slug = extractLinkedInSlug(r.fields['LinkedIn URL'] || '');
+      if (slug) bySlug[slug.toLowerCase()] = r;
+    });
+    const proposals = people.map(p => {
+      const slug = extractLinkedInSlug(p.linkedinUrl || '');
+      const hit = (slug && bySlug[slug.toLowerCase()]) || byName[p.name.toLowerCase()] || null;
+      return {
+        ...p,
+        existingContactId: hit ? hit.id : null,
+        existingStage: hit ? (hit.fields['Journey Stage'] || 'Found') : null,
+        existingJobTitle: hit ? (hit.fields['Job Title'] || '') : null
+      };
+    });
+    res.json({ company: companyName, proposals });
+  } catch (err) {
+    console.error('Company people parse error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Create/link the reviewed people to this company, and apply each one's chosen
+// connection status.
+app.post('/api/companies/:name/people/import', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const companyName = decodeURIComponent(req.params.name);
+  const people = Array.isArray((req.body || {}).people) ? req.body.people : [];
+  if (!people.length) return res.status(400).json({ error: 'people array is required' });
+  try {
+    const results = [];
+    for (const p of people.slice(0, 100)) {
+      const name = (p.name || '').trim();
+      if (!name) continue;
+      const status = ['sent', 'connected'].includes(p.status) ? p.status : 'none';
+      try {
+        const upsert = await createOrUpdateAirtableContact({
+          name,
+          company: companyName,
+          role: (p.jobTitle || '').trim(),
+          linkedinUrl: (p.linkedinUrl || '').trim(),
+          state: status === 'connected' ? 'connected' : status === 'sent' ? 'connectionPending' : 'found'
+        });
+        // createOrUpdateAirtableContact only maps state->Journey Stage on
+        // create; for a re-encountered contact, and to stamp the dated field
+        // + sync junction rows, run the shared status helper too.
+        if (status !== 'none' && upsert.recordId) await setContactConnectionStatus(upsert.recordId, status);
+        results.push({ name, recordId: upsert.recordId, created: !upsert.skipped, status });
+      } catch (e) {
+        results.push({ name, error: (e.message || e).toString().slice(0, 160) });
+      }
+    }
+    res.json({
+      success: true,
+      created: results.filter(r => r.created).length,
+      updated: results.filter(r => r.recordId && !r.created).length,
+      failed: results.filter(r => r.error).length,
+      results
+    });
+  } catch (err) {
+    console.error('Company people import error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -11663,16 +11849,36 @@ async function getOrCreateCampaignContactRow(contactId, contactName, campaignRec
   const existing = findCampaignContactRow(rows, contactId, campaignRecordId);
   if (existing) return existing;
   const addedDate = new Date().toISOString().slice(0, 10);
+
+  // Seed the new row from the person's own connection status (a person-level
+  // fact - Contacts.'Journey Stage' / 'Connection Sent Date'), so adding a
+  // company whose people you've already connected with doesn't reset them to
+  // "Found". Only the pre-message stages carry over. Skipped when the caller
+  // already dictates the stage via extraFields (e.g. the Logger).
+  let seedStage = 'Found';
+  const seedExtra = {};
+  if (!(extraFields && extraFields['Sequence Stage'])) {
+    try {
+      const contactRec = await airtableGetRecord('Contacts', contactId);
+      const js = contactRec && contactRec.fields && contactRec.fields['Journey Stage'];
+      if (js === 'Connected') seedStage = 'Connected';
+      else if (js === 'Connection Pending') {
+        seedStage = 'Connection Pending';
+        if (contactRec.fields['Connection Sent Date']) seedExtra['Connection Sent Date'] = contactRec.fields['Connection Sent Date'];
+      }
+    } catch (e) { /* fall back to Found */ }
+  }
+
   const data = await airtableRequest('POST', CAMPAIGN_CONTACTS_TABLE, {
     records: [{
       fields: Object.assign({
         'Name': `${contactName} — ${campaignName}`,
         'Contact': [contactId],
         'Campaign': [campaignRecordId],
-        'Sequence Stage': 'Found',
-        'Stage History': appendStageHistory('', 'Found', addedDate),
+        'Sequence Stage': seedStage,
+        'Stage History': appendStageHistory('', seedStage, addedDate),
         'Added Date': addedDate
-      }, extraFields || {})
+      }, seedExtra, extraFields || {})
     }]
   });
   const created = data.records[0];
@@ -14720,7 +14926,12 @@ app.patch('/api/context/contact-fields', async (req, res) => {
       const contactFields = {};
       if (journeyStage) contactFields['Journey Stage'] = journeyStage;
       if (jobTitle) contactFields['Job Title'] = jobTitle;
-      await airtableRequest('PATCH', 'Contacts', { records: [{ id: contactId, fields: contactFields }], typecast: true });
+      // Connection-sent is a person-level fact, kept on the Contact itself so
+      // it survives even when the person isn't in any campaign yet (a new
+      // Campaign Contacts row later copies it - getOrCreateCampaignContactRow).
+      if (journeyStage === 'Connection Pending') contactFields['Connection Sent Date'] = new Date().toISOString().slice(0, 10);
+      else if (journeyStage === 'Found') contactFields['Connection Sent Date'] = null;
+      await airtableWriteAllowingMissingCtaFields('PATCH', 'Contacts', { records: [{ id: contactId, fields: contactFields }], typecast: true });
     }
 
     let campaignContactRowsSynced = 0;
