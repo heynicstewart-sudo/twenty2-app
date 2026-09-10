@@ -294,12 +294,12 @@ label{font-size:var(--label-size);font-weight:700;color:var(--muted);display:blo
 .mini-card .label{font-size:12px;color:var(--muted);margin-top:4px;font-weight:600;}
 .health-stat-grid{grid-template-columns:repeat(4,1fr);}
 .health-cards-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;margin-bottom:16px;}
-.perf-table-wrap{overflow-x:auto;}
+.perf-table-wrap{overflow-x:auto;border:1px solid var(--border-light);border-radius:12px;}
 .perf-table{width:100%;border-collapse:collapse;font-size:12.5px;}
-.perf-table th{text-align:left;padding:10px 12px;font-size:11px;text-transform:uppercase;letter-spacing:.03em;color:var(--muted);border-bottom:1px solid var(--border-light);white-space:nowrap;}
-.perf-table td{padding:11px 12px;border-bottom:1px solid var(--border-light);white-space:nowrap;}
+.perf-table th{text-align:left;padding:11px 14px;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text-dim);border-bottom:1px solid var(--border-light);white-space:nowrap;background:var(--surface-2);}
+.perf-table td{padding:13px 14px;border-bottom:1px solid var(--border-light);white-space:nowrap;}
 .perf-table tr:last-child td{border-bottom:none;}
-.perf-table td.perf-name{white-space:normal;font-weight:700;}
+.perf-table td.perf-name{white-space:normal;font-weight:700;color:var(--ink);}
 .home-actions{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px;}
 .home-action-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card);padding:18px;cursor:pointer;box-shadow:var(--shadow-sm);transition:border-color .15s,box-shadow .15s,transform .15s;}
 .home-action-card:hover{border-color:var(--border);box-shadow:var(--shadow-md);transform:translateY(-1px);}
@@ -587,8 +587,12 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .drawer-section:first-of-type{border-top:none;margin-top:16px;padding-top:0;}
 .note-item{padding:8px 0;border-bottom:1px solid var(--border);font-size:12.5px;white-space:pre-wrap;}
 .note-item:last-child{border-bottom:none;}
-.tp-item{padding:8px 10px;border-radius:var(--radius-badge);font-size:12px;margin-bottom:6px;background:var(--surface-2);}
+.tp-item{padding:11px 13px;border-radius:10px;font-size:12.5px;margin-bottom:8px;background:var(--surface-2);transition:background .12s ease;}
+.tp-item[onclick]:hover{background:var(--sky-soft);}
 .tp-item.other{opacity:.75;}
+.worklist-group{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;margin:16px 0 8px;display:flex;align-items:center;gap:6px;}
+.worklist-group:first-child{margin-top:2px;}
+.worklist-group i{font-size:13px;}
 .event-chip:hover .event-tooltip{display:block;}
 .event-tooltip{display:none;position:absolute;bottom:120%;left:0;background:var(--primary);color:#fff;padding:8px 10px;border-radius:8px;font-size:11px;white-space:nowrap;z-index:30;font-weight:600;}
 
@@ -893,12 +897,9 @@ html{scrollbar-width:thin;scrollbar-color:rgba(24,24,27,.22) transparent;}
 }
 
 /* Tables - shared header + row-hover treatment */
-.perf-table th,.grid-table th{background:transparent;font-weight:700;}
+.perf-table th,.grid-table th{background:var(--surface-2);font-weight:700;}
 .grid-table tbody tr:hover td,.perf-table tbody tr:hover td{background:var(--surface-2);}
 .grid-table td,.perf-table td{transition:background .1s ease;}
-
-/* Interactive-list rows */
-.kanban-col-header .count{background:var(--surface-2);}
 .reply-btn,.chip,.tag-item,.shot-file-chip{transition:border-color .12s ease,background .12s ease;}
 
 /* Calendar */
@@ -15832,6 +15833,8 @@ function renderCompanyUniverse(){
     </div>
   </div>
 
+  ${renderUniverseMetricStrip()}
+
   ${renderIcpWorklistStrip()}
 
   <div class="card" style="margin-bottom:16px;">
@@ -25452,6 +25455,60 @@ async function loadIcpWorklist(){
   }
   if(['home','gtmmotion','companyuniverse'].includes(state.currentPage)) renderPage();
 }
+// Summary strip for Company Universe — real numbers from the ICP worklist +
+// programs feeds, styled as the reference's KPI cards. Renders nothing until
+// at least one feed has landed.
+function renderUniverseMetricStrip(){
+  const w = window.__icpWorklist;
+  const p = window.__programs;
+  const haveW = w && !w.error && w.icpConfigured;
+  const progCompanies = (p && !p.error && Array.isArray(p.companies)) ? p.companies : null;
+  if(!haveW && !progCompanies) return '';
+  const cards = [];
+  if(haveW && w.icpCompanyCount){
+    const pct = Math.round((w.inCampaignCount / w.icpCompanyCount) * 100);
+    cards.push(`<div class="metric-card">
+      <div>
+        <div class="m-label"><span class="dot"></span> ICP accounts in a campaign</div>
+        <div class="m-value">${w.inCampaignCount}<small>/ ${w.icpCompanyCount}</small></div>
+        <span class="m-delta ${w.untouchedTotal ? 'flat' : ''}">${w.untouchedTotal ? w.untouchedTotal + ' still to work' : 'full coverage'}</span>
+      </div>
+      <div class="m-icon"><i class="ti ti-target-arrow"></i></div>
+    </div>`);
+    cards.push(`<div class="metric-card">
+      <div>
+        <div class="m-label"><span class="dot" style="background:var(--lime-ink);"></span> ICP coverage</div>
+        <div class="m-value">${pct}<small>%</small></div>
+        <span class="m-delta ${pct >= 60 ? '' : 'flat'}">${pct >= 60 ? 'healthy' : 'below target'}</span>
+      </div>
+      <div class="m-icon" style="color:var(--lime-ink);background:var(--lime-soft);"><i class="ti ti-chart-pie"></i></div>
+    </div>`);
+  }
+  if(progCompanies){
+    const active = progCompanies.length;
+    const noCampaign = progCompanies.filter(r => !r.inCampaign).length;
+    cards.push(`<div class="metric-card">
+      <div>
+        <div class="m-label"><span class="dot" style="background:var(--tint-gold-fg);"></span> Companies with an active program</div>
+        <div class="m-value">${active}</div>
+        <span class="m-delta ${noCampaign ? 'down' : ''}">${noCampaign ? noCampaign + ' not in a campaign' : 'all in a campaign'}</span>
+      </div>
+      <div class="m-icon" style="color:var(--tint-gold-fg);background:var(--tint-gold-bg);"><i class="ti ti-progress-bolt"></i></div>
+    </div>`);
+  } else if(haveW){
+    cards.push(`<div class="metric-card">
+      <div>
+        <div class="m-label"><span class="dot" style="background:var(--tint-gold-fg);"></span> Companies with an active program</div>
+        <div class="m-value">${(w.withActiveProgram || []).length}</div>
+        <span class="m-delta flat">from the worklist</span>
+      </div>
+      <div class="m-icon" style="color:var(--tint-gold-fg);background:var(--tint-gold-bg);"><i class="ti ti-progress-bolt"></i></div>
+    </div>`);
+  }
+  if(!cards.length) return '';
+  return `<div class="metric-strip" style="grid-template-columns:repeat(${cards.length},minmax(0,1fr));">${cards.join('')}</div>`;
+}
+
 function renderIcpWorklistStrip(){
   const w = window.__icpWorklist;
   if(w === undefined || w === null || w.error || !w.icpConfigured) return '';
@@ -25467,7 +25524,7 @@ function renderIcpWorklistStrip(){
     </div>
     <div class="muted" style="font-size:11.5px;margin:6px 0 12px;">${w.inCampaignCount} of ${w.icpCompanyCount} ICP accounts are in a campaign. ${w.untouchedTotal} are not. Click one to open its profile, then pin it to your Targets board.</div>
     ${progTargets.length ? `
-      <div style="font-size:11px;font-weight:700;color:var(--danger);margin-bottom:4px;"><i class="ti ti-progress-bolt"></i> Active program, not in a campaign — start here</div>
+      <div class="worklist-group" style="color:var(--danger);"><i class="ti ti-progress-bolt"></i> Active program · not in a campaign — start here</div>
       ${progTargets.slice(0,6).map(x => `
         <div class="tp-item" style="cursor:pointer;" onclick="navigate('profile');selectProfileCompany('${esc(x.name)}')">
           <strong>${esc(x.name)}</strong>${x.priority ? ` <span class="muted">· ${esc(x.priority)}</span>` : ''}${x.icp ? '' : ' <span class="muted" style="font-size:10px;">(not ICP-tagged)</span>'}
@@ -25476,7 +25533,7 @@ function renderIcpWorklistStrip(){
       <div style="height:8px;"></div>
     ` : ''}
     ${triggers.length ? `
-      <div style="font-size:11px;font-weight:700;color:var(--warning);margin-bottom:4px;"><i class="ti ti-bolt"></i> Buying trigger detected</div>
+      <div class="worklist-group" style="color:var(--warning);"><i class="ti ti-bolt"></i> Buying trigger detected</div>
       ${triggers.slice(0,5).map(t => `
         <div class="tp-item" style="cursor:pointer;" onclick="navigate('profile');selectProfileCompany('${esc(t.name)}')">
           <strong>${esc(t.name)}</strong>${t.priority ? ` <span class="muted">· ${esc(t.priority)}</span>` : ''}${t.inCampaign ? '' : ' <span class="badge" style="background:var(--danger-bg,#fee);color:var(--danger);font-size:10px;">not in a campaign</span>'}
@@ -25485,7 +25542,7 @@ function renderIcpWorklistStrip(){
       <div style="height:8px;"></div>
     ` : ''}
     ${untouched.length ? `
-      <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:4px;">ICP accounts with no one in a campaign${w.untouchedTotal > untouched.length ? ` (top ${untouched.length} of ${w.untouchedTotal})` : ''}</div>
+      <div class="worklist-group" style="color:var(--muted);">ICP accounts with no one in a campaign${w.untouchedTotal > untouched.length ? ` — top ${untouched.length} of ${w.untouchedTotal}` : ''}</div>
       <div style="display:flex;flex-wrap:wrap;gap:6px;">
         ${untouched.slice(0,14).map(c => `<span class="badge" style="background:var(--surface-2);cursor:pointer;font-size:11px;" onclick="navigate('profile');selectProfileCompany('${esc(c.name)}')">${esc(c.name)}${c.priority ? ` · ${esc(c.priority.replace(/\\s*\\(.*\\)/,''))}` : ''}${c.knownContacts ? ` · ${c.knownContacts} known` : ''}</span>`).join('')}
       </div>
