@@ -1456,7 +1456,7 @@ function gridBackAction(){
     navigate('campaigns');
     openCampaignDetail(returnTo.campaignId, 'grid');
   } else {
-    navigate('home');
+    navigate('grids');
   }
 }
 
@@ -1632,7 +1632,7 @@ function goToRunIntelligence(){
 //   research   -> deleted outright, per the user - removed from the render
 //                 dispatch entirely, not just hidden.
 const NAV = [
-  { id:'home', label:'Today\'s Actions', icon:'ti-list-check' },
+  { id:'home', label:'Targets', icon:'ti-pin' },
   { id:'companyuniverse', label:'Company Universe', icon:'ti-building-skyscraper' },
   { id:'content', label:'Funnel', icon:'ti-news' },
   { id:'campaigns', label:'Campaigns', icon:'ti-rocket' },
@@ -1646,17 +1646,24 @@ const NAV = [
   { id:'intelligence', label:'Engine', icon:'ti-brain', hidden:true },
   { id:'settings', label:'Settings', icon:'ti-settings', hidden:true },
   { id:'contentcalendar', label:'Calendar', icon:'ti-calendar-month', hidden:true },
+  { id:'grids', label:'Grids', icon:'ti-layout-grid', hidden:true },
   { id:'grid', label:'Grid', icon:'ti-grid-dots', hidden:true }
 ];
 
 function renderSidebar(){
   const nav = document.getElementById('sidebarNav');
-  // Replies is folded into Today's Actions (redesign plan §2) - its badge
-  // count moves onto the "home" nav item instead of its own (now hidden) one.
-  const repliesCount = window.__repliesQueue ? window.__repliesQueue.length : null;
+  // "New actions ready" - total pending Today's Actions across every Live
+  // campaign, shown as a badge on the Campaigns nav item (actions are a
+  // per-campaign tab now, not a page of their own).
+  let actionTotal = 0;
+  try {
+    actionTotal = state.campaigns
+      .filter(c => c.status === 'Live')
+      .reduce((s, c) => s + (campaignActionCount(c) || 0), 0);
+  } catch(e){ actionTotal = 0; }
   nav.innerHTML = NAV.filter(n => !n.hidden).map(n => {
-    const badge = (n.id === 'home' && repliesCount)
-      ? ' <span class="count-pill has" style="margin-left:auto;">'+repliesCount+'</span>'
+    const badge = (n.id === 'campaigns' && actionTotal)
+      ? ' <span class="count-pill has" style="margin-left:auto;">'+actionTotal+'</span>'
       : '';
     return '<button class="nav-item '+(state.currentPage===n.id?'active':'')+'" onclick="navigate(\''+n.id+'\')"><i class="ti '+n.icon+'"></i><span>'+n.label+badge+'</span></button>';
   }).join('');
@@ -2408,6 +2415,10 @@ async function loadAgencyOverview(force){
 
 
 function navigate(page){
+  // Leaving the Targets page (or re-clicking it in the sidebar) always lands
+  // on the pin board, never a stale open target detail.
+  if(page !== 'home') window.__targetOpen = null;
+  else if(state.currentPage === 'home') window.__targetOpen = null;
   state.currentPage = page;
   const navEntry = NAV.find(n => n.id === page);
   state.activeNavKey = navEntry ? navEntry.id : page;
@@ -2428,7 +2439,7 @@ function renderPage(){
 
   // 'research' deleted outright (redesign plan §1) - renderResearch() is
   // left defined (harmless dead code) but no longer reachable via dispatch.
-  const renderers = { home: renderHome, companyuniverse: renderCompanyUniverse, profile: renderProfilePage, gtmmotion: renderGtmMotionPage, icpbuilder: renderIcpBuilderPage, competitormap: renderCompetitorMapPage, replies: renderReplies, logger: renderLoggerPage, howitworks: renderHowItWorks, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, contentcalendar: renderContentCalendarPage, settings: renderSettings, agency: renderAgencyPage };
+  const renderers = { home: renderHome, companyuniverse: renderCompanyUniverse, profile: renderProfilePage, gtmmotion: renderGtmMotionPage, icpbuilder: renderIcpBuilderPage, competitormap: renderCompetitorMapPage, replies: renderReplies, logger: renderLoggerPage, howitworks: renderHowItWorks, grids: renderGridsListView, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, contentcalendar: renderContentCalendarPage, settings: renderSettings, agency: renderAgencyPage };
   el.innerHTML = renderers[state.currentPage]();
   afterRender(state.currentPage);
 
@@ -2468,10 +2479,21 @@ function afterRender(page){
   if(page === 'campaigns' && (window.__campaignView || 'list') === 'list'){
     loadAllCampaignFunnels();
     loadCampaignIcpHealth();
+    // Per-campaign "new actions ready" pill + sidebar badge need the same
+    // data Today's Actions did (now a per-campaign tab, not a home page).
+    ensureTodaysActionsSequenceStagesLoaded();
+    if(window.__dueReminders === undefined) loadDueReminders();
+    if(window.__wrongPersonaAccounts === undefined) loadWrongPersonaAccounts();
   }
   if(page === 'campaigns' && window.__campaignView === 'detail'){
     const tab = window.__campaignDetailTab;
     const campaign = state.campaigns.find(c => c.id === window.__campaignDetailId);
+    if(tab === 'actions'){
+      ensureTodaysActionsSequenceStagesLoaded();
+      if(window.__dueReminders === undefined) loadDueReminders();
+      if(window.__wrongPersonaAccounts === undefined) loadWrongPersonaAccounts();
+      if(window.__repliesQueue === undefined && !window.__repliesLoading) loadRepliesQueue();
+    }
     if(tab === 'roadmap') initRoadmapDrag();
     if(tab === 'pipeline' && campaign) loadAccountPipeline(campaign);
     if(tab === 'intelligence') ensureContextDataLoaded();
@@ -2508,9 +2530,15 @@ function afterRender(page){
     else archAfterRender(ARCH_COMPETITOR_KEY);
   }
   if(page === 'replies' && window.__repliesQueue === undefined && !window.__repliesLoading) loadRepliesQueue();
-  if(page === 'home') ensureTodaysActionsSequenceStagesLoaded();
-  if(page === 'home' && window.__dueReminders === undefined) loadDueReminders();
-  if(page === 'home' && window.__wrongPersonaAccounts === undefined) loadWrongPersonaAccounts();
+  if(page === 'home' && window.__targets === undefined && !window.__targetsLoading) loadTargets();
+  if(page === 'home' && window.__targetOpen){
+    const name = window.__targetOpen;
+    loadCompanyMessages(name);
+    window.__archKey = name;
+    window.__arch = window.__arch || {};
+    if(window.__arch[name] === undefined) loadChangeArchitecture(name);
+    else archAfterRender(name);
+  }
   if(page === 'logger' && window.__repsCache === undefined) loadRepsCache();
   if(page === 'logger' && window.__loggerCampaigns === undefined) loadLoggerCampaigns();
   if(page === 'calendar'){
@@ -2558,6 +2586,7 @@ function afterRender(page){
   if(page === 'home' && window.__homeContactSignals === undefined) loadHomeContactSignals();
   if(page === 'home') loadIcpWorklist();
   if((page === 'home' || page === 'settings') && window.__programDiscovery === undefined) loadProgramDiscovery();
+  if((page === 'profile' || page === 'companyuniverse') && window.__targets === undefined && !window.__targetsLoading) loadTargets();
   if(page === 'research'){
     const tab = window.__researchSubTab || 'market';
     if(tab === 'market'){
@@ -2861,47 +2890,205 @@ async function replyApprove(id){
 
 /* ===================== HOME ===================== */
 
+// The "home" page id is kept internally (many state.currentPage === 'home'
+// checks) but the page is now "Targets" - a pin board of companies Marcus
+// wants to work, each opening that account's canvas + recent campaign
+// messages. The old landing-page contents moved out: the four quick-action
+// cards were dropped, "Your Grids" became a Campaigns sub-tab
+// (renderGridsListView), and "Today's actions" became a per-campaign tab
+// (renderCampaignActionsTab). The three intelligence strips stay here.
 function renderHome(){
-  const __c = (typeof activeClient === 'function' && activeClient()) || {};
-  const __name = __c.name || 'Twenty2 Collective';
-  const __tagline = __c.tagline || 'Your WA market intelligence engine.';
+  if(window.__targetOpen) return renderTargetDetail(window.__targetOpen);
+
   return `
-  <div class="section-title" style="font-size:24px;margin-bottom:2px;">Hey ${esc(__name)}, ready to get started?</div>
-  <div class="muted" style="margin-bottom:22px;">${esc(__tagline)}</div>
+  <div class="section-title" style="font-size:24px;margin-bottom:2px;"><i class="ti ti-pin"></i> Targets</div>
+  <div class="muted" style="margin-bottom:22px;">Companies you want to work — pinned, with their account canvas and campaign history one click away.</div>
 
   ${renderIcpWorklistStrip()}
   ${renderProgramDiscoveryCard()}
   ${renderContactSignalsStrip()}
-  ${renderTodaysActions()}
+  ${renderTargetsBoard()}
+  `;
+}
 
-  <div class="home-actions">
-    <div class="home-action-card" onclick="createNewGridFlow()">
-      <div class="home-action-icon icon-tile amber"><i class="ti ti-grid-dots"></i></div>
-      <div class="home-action-title">New Grid</div>
-      <div class="home-action-desc">Create a blank grid</div>
+/* ===================== TARGETS PIN BOARD ===================== */
+// Pinned companies come from Companies.'Pinned Target' (a checkbox on the
+// base). GET /api/targets returns the card data; POST /api/companies/:name/pin
+// toggles the flag. Pinning is also available from the Profile page header and
+// the company drawer, so it works from wherever Marcus is already looking at
+// an account.
+
+async function loadTargets(){
+  if(window.__targetsLoading) return;
+  window.__targetsLoading = true;
+  try {
+    const res = await fetch('/api/targets');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__targets = Array.isArray(data.targets) ? data.targets : [];
+  } catch(err){
+    if(window.__targets === undefined) window.__targets = { error: err.message };
+  }
+  window.__targetsLoading = false;
+  if(state.currentPage === 'home') renderPage();
+}
+
+function isPinnedTarget(name){
+  const t = window.__targets;
+  return Array.isArray(t) && t.some(x => (x.name||'').toLowerCase() === (name||'').toLowerCase());
+}
+
+async function pinTarget(name){
+  await setTargetPinned(name, true);
+}
+async function unpinTarget(name){
+  await setTargetPinned(name, false);
+}
+async function setTargetPinned(name, pinned){
+  try {
+    const res = await fetch('/api/companies/'+encodeURIComponent(name)+'/pin', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ pinned })
+    });
+    if(!res.ok){ const d = await res.json().catch(()=>({})); throw new Error(d.error || 'Request failed'); }
+    toast(pinned ? 'Pinned to Targets' : 'Removed from Targets', 'success');
+  } catch(err){
+    toast('Could not update pin: '+err.message, 'error');
+    return;
+  }
+  window.__targets = undefined;
+  loadTargets();
+  if(['profile','companyuniverse'].includes(state.currentPage)) renderPage();
+}
+
+function renderTargetsBoard(){
+  const t = window.__targets;
+  const loading = t === undefined || window.__targetsLoading;
+  const rows = Array.isArray(t) ? t : [];
+
+  return `
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-pin"></i> Pinned targets ${rows.length ? `<span class="count-pill has" style="margin-left:6px;">${rows.length}</span>` : ''}</div>
+      <input id="targetPinSearch" type="text" placeholder="Pin a company…" oninput="renderTargetPinSuggestions(this.value)" style="max-width:260px;">
     </div>
-    <div class="home-action-card" onclick="importCsvForNewGrid()">
-      <div class="home-action-icon icon-tile mint"><i class="ti ti-file-upload"></i></div>
-      <div class="home-action-title">Import from CSV</div>
-      <div class="home-action-desc">Import a company + contact list</div>
+    <div id="targetPinSuggestions"></div>
+    ${loading ? '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading…</div>'
+      : (t && t.error) ? `<div class="muted" style="font-size:12.5px;">Could not load targets: ${esc(t.error)}</div>`
+      : !rows.length ? '<div class="empty-state">No targets pinned yet. Search a company above, or use “Pin as target” from a company’s profile.</div>'
+      : `<div class="home-actions" style="margin-top:4px;">${rows.map(renderTargetCard).join('')}</div>`}
+  </div>`;
+}
+
+function renderTargetCard(x){
+  const nm = esc(x.name);
+  const prog = (x.programs || []).find(Boolean);
+  return `
+  <div class="home-action-card" onclick="openTarget('${nm}')" style="cursor:pointer;position:relative;">
+    <button class="btn btn-ghost btn-sm" title="Unpin" onclick="event.stopPropagation();unpinTarget('${nm}')" style="position:absolute;top:8px;right:8px;"><i class="ti ti-pin-filled"></i></button>
+    <div class="home-action-title" style="padding-right:28px;">${nm}</div>
+    <div class="muted" style="font-size:11.5px;margin-top:2px;">${esc(x.sector || x.industry || '—')}</div>
+    <div style="margin-top:8px;display:flex;gap:4px;flex-wrap:wrap;">
+      ${/resources icp/i.test(x.icpTag||'') ? '<span class="badge" style="background:var(--tint-green-bg);color:var(--tint-green-fg);font-size:10px;">ICP</span>' : (x.icpFitScore!=null ? `<span class="badge" style="background:var(--surface-2);font-size:10px;">Fit ${x.icpFitScore}</span>` : '')}
+      ${prog ? `<span class="badge" style="background:var(--tint-gold-bg);color:var(--tint-gold-fg);font-size:10px;"><i class="ti ti-progress-bolt"></i> ${esc(prog.name || 'Active program')}</span>` : ''}
+      ${x.inCampaign ? `<span class="badge" style="background:var(--tint-blue-bg);color:var(--tint-blue-fg);font-size:10px;">In ${x.campaigns && x.campaigns.length ? x.campaigns.length : 1} campaign${(x.campaigns && x.campaigns.length > 1) ? 's' : ''}</span>` : '<span class="badge" style="background:var(--danger-bg,#fee);color:var(--danger);font-size:10px;">Not in a campaign</span>'}
     </div>
-    <div class="home-action-card" onclick="goToNewCampaign()">
-      <div class="home-action-icon icon-tile sky"><i class="ti ti-rocket"></i></div>
-      <div class="home-action-title">New Campaign</div>
-      <div class="home-action-desc">Set up a new outreach campaign</div>
-    </div>
-    <div class="home-action-card" onclick="goToRunIntelligence()">
-      <div class="home-action-icon icon-tile violet"><i class="ti ti-brain"></i></div>
-      <div class="home-action-title">Run Engine</div>
-      <div class="home-action-desc">Analyse everything, surface insights</div>
+    ${x.latestSignal ? `<div class="muted" style="font-size:11px;margin-top:8px;">${esc(x.latestSignal)}</div>` : ''}
+    ${x.lastActivity ? `<div class="muted" style="font-size:10.5px;margin-top:6px;">Last activity ${fmtDate(x.lastActivity)}</div>` : ''}
+  </div>`;
+}
+
+// Company name suggestions for the "Pin a company" box - same client-side
+// company list the Profile search uses (distinct Contacts.company values),
+// minus anything already pinned.
+function renderTargetPinSuggestions(q){
+  const host = document.getElementById('targetPinSuggestions');
+  if(!host) return;
+  const query = (q||'').trim().toLowerCase();
+  if(query.length < 2){ host.innerHTML = ''; return; }
+  const names = [...new Set(state.contacts.map(c => (c.company||'').trim()).filter(Boolean))]
+    .filter(n => n.toLowerCase().includes(query) && !isPinnedTarget(n))
+    .slice(0, 8);
+  host.innerHTML = names.length
+    ? `<div style="margin-bottom:12px;display:flex;flex-wrap:wrap;gap:6px;">${names.map(n => `<button class="btn btn-secondary btn-sm" onclick="pinTarget('${esc(n)}')"><i class="ti ti-pin"></i> ${esc(n)}</button>`).join('')}</div>`
+    : `<div class="muted" style="font-size:12px;margin-bottom:12px;">No unpinned company matches “${esc(q)}”.</div>`;
+}
+
+function openTarget(name){
+  window.__targetOpen = name;
+  renderPage();
+  window.scrollTo({ top: 0 });
+}
+function closeTarget(){
+  window.__targetOpen = null;
+  renderPage();
+}
+
+function renderTargetDetail(name){
+  const nm = esc(name);
+  return `
+  <button class="btn btn-ghost btn-sm" style="margin-bottom:10px;" onclick="closeTarget()"><i class="ti ti-arrow-left"></i> Targets</button>
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+    <div class="section-title" style="margin-bottom:0;"><i class="ti ti-building-skyscraper"></i> ${nm}</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;">
+      <button class="btn btn-ghost btn-sm" onclick="unpinTarget('${nm}');closeTarget();"><i class="ti ti-pin-filled"></i> Unpin</button>
+      <button class="btn btn-secondary btn-sm" onclick="navigate('profile');selectProfileCompany('${nm}')"><i class="ti ti-hierarchy-2"></i> Open full profile</button>
     </div>
   </div>
+  ${renderCompanyMessagesPanel(name)}
+  ${renderChangeArchitectureCanvas(name)}
+  `;
+}
 
+/* ---- Recent campaign messages for one company ---- */
+async function loadCompanyMessages(name){
+  window.__companyMessages = window.__companyMessages || {};
+  if(window.__companyMessages[name] !== undefined) return;
+  window.__companyMessages[name] = null;
+  try {
+    const res = await fetch('/api/companies/'+encodeURIComponent(name)+'/messages');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__companyMessages[name] = Array.isArray(data.messages) ? data.messages : [];
+  } catch(err){
+    window.__companyMessages[name] = { error: err.message };
+  }
+  if(window.__targetOpen === name) renderPage();
+}
+
+function renderCompanyMessagesPanel(name){
+  const m = window.__companyMessages && window.__companyMessages[name];
+  const body = () => {
+    if(m === undefined || m === null) return '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading…</div>';
+    if(m.error) return `<div class="muted" style="font-size:12.5px;">Could not load messages: ${esc(m.error)}</div>`;
+    if(!m.length) return '<div class="empty-state">No campaign messages logged for this company yet.</div>';
+    return m.map(r => `
+      <div class="tp-item" style="cursor:pointer;" onclick="openContactDrawer('${esc(r.contactName)}', ${r.campaignName ? `'${esc(r.campaignName)}'` : 'null'})">
+        <div style="display:flex;justify-content:space-between;gap:8px;">
+          <strong>${esc(r.contactName)}</strong>
+          <span class="muted" style="font-size:11px;">${r.connectionSentDate ? fmtDate(r.connectionSentDate) : ''}</span>
+        </div>
+        <div class="muted" style="font-size:11px;">${esc(r.campaignName || '—')}${r.sequenceStage ? ' · ' + esc(r.sequenceStage) : ''}</div>
+        ${(r.finalMessageSent || r.nextMessageDraft) ? `<div style="font-size:12px;margin-top:4px;white-space:pre-wrap;">${esc((r.finalMessageSent || r.nextMessageDraft).slice(0, 280))}${(r.finalMessageSent || r.nextMessageDraft).length > 280 ? '…' : ''}</div>` : ''}
+      </div>`).join('');
+  };
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-title" style="margin-bottom:8px;"><i class="ti ti-messages"></i> Recent campaign messages</div>
+    ${body()}
+  </div>`;
+}
+
+// Full "Your Grids" directory - moved off the landing page into a Campaigns
+// sub-tab (renderCampaignsAreaSubNav). Same markup and helpers as before.
+function renderGridsListView(){
+  return `
+  ${renderCampaignsAreaSubNav('grids')}
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-layout-grid"></i> Your Grids</div>
       <div style="display:flex;gap:8px;">
         <button class="btn btn-secondary btn-sm" onclick="confirmBackfillContactGridTags()" title="One-time: tag every existing contact with its current grid, so it stops depending on its company's Grid Name"><i class="ti ti-tag"></i> Backfill grid tags</button>
+        <button class="btn btn-secondary btn-sm" onclick="importCsvForNewGrid()"><i class="ti ti-file-upload"></i> Import from CSV</button>
         <button class="btn btn-primary btn-sm" onclick="createNewGridFlow()"><i class="ti ti-plus"></i> New Grid</button>
       </div>
     </div>
@@ -5309,6 +5496,7 @@ async function loadWrongPersonaAccounts(){
     window.__wrongPersonaLoading = false;
   }
   if(state.currentPage === 'home') renderPage();
+  if(state.currentPage === 'campaigns'){ renderPage(); renderSidebar(); }
 }
 
 function wrongPersonaTodaysActions(){
@@ -5328,7 +5516,20 @@ function wrongPersonaTodaysActions(){
     .filter(Boolean);
 }
 
+// The Campaigns list (one campaignActionCount per row) plus the sidebar badge
+// call this several times inside a single synchronous render frame. Memoise
+// for the duration of that frame - the cache clears on the next microtask, so
+// any handler that mutates state and re-renders still recomputes.
+let __todaysActionsCache = null;
 function computeTodaysActions(){
+  if(__todaysActionsCache) return __todaysActionsCache;
+  const result = computeTodaysActionsUncached();
+  __todaysActionsCache = result;
+  queueMicrotask(() => { __todaysActionsCache = null; });
+  return result;
+}
+
+function computeTodaysActionsUncached(){
   const actions = state.contacts
     .map(c => { const action = getContactAction(c); return action ? { contact:c, ...action } : null; })
     .filter(Boolean)
@@ -5371,6 +5572,16 @@ function computeTodaysActions(){
   );
 
   return actions;
+}
+
+// Count of pending Today's Actions for one campaign - drives the "N new
+// actions" pill on the Campaigns list and the sidebar badge. Returns null
+// (not 0) while this campaign's Sequence Stage map is still loading, so the
+// caller can tell "no actions" apart from "not known yet".
+function campaignActionCount(campaign){
+  if(!campaign || campaign.status !== 'Live') return 0;
+  if(!(window.__campaignSequenceStages && window.__campaignSequenceStages[campaign.id])) return null;
+  return computeTodaysActions().filter(a => a.campaignName === campaign.name).length;
 }
 
 // Today's Actions sub-tabs - filter the same computed actions list by
@@ -5426,8 +5637,12 @@ function setTodaysActionsTab(tab){
   renderPage();
 }
 
-function renderTodaysActions(){
-  const actions = computeTodaysActions();
+// campaign (optional) scopes the list to one campaign's actions - used by the
+// per-campaign Actions tab (renderCampaignActionsTab). With no argument this
+// is the full cross-campaign list (no longer shown anywhere by default, kept
+// for reuse).
+function renderTodaysActions(campaign){
+  const actions = computeTodaysActions().filter(a => !campaign || a.campaignName === campaign.name);
   const counts = {};
   TODAYS_ACTIONS_TABS.forEach(([key]) => { counts[key] = actions.filter(a => todaysActionMatchesTab(a, key)).length; });
 
@@ -5678,6 +5893,7 @@ async function loadDueReminders(){
     window.__dueReminders = [];
   }
   if(state.currentPage === 'home') renderPage();
+  if(state.currentPage === 'campaigns'){ renderPage(); renderSidebar(); }
 }
 
 // "Mark as done" on a reminder card - same optimistic-UI convention as
@@ -7254,7 +7470,7 @@ function renderGrid(){
   }
 
   return `
-  <button class="btn btn-ghost btn-sm" style="margin-bottom:10px;" onclick="gridBackAction()"><i class="ti ti-arrow-left"></i> ${window.__gridReturnTo && window.__gridReturnTo.campaignId ? 'Back to campaign' : 'Home'}</button>
+  <button class="btn btn-ghost btn-sm" style="margin-bottom:10px;" onclick="gridBackAction()"><i class="ti ti-arrow-left"></i> ${window.__gridReturnTo && window.__gridReturnTo.campaignId ? 'Back to campaign' : 'Grids'}</button>
   <div class="section-title" style="margin-bottom:14px;"><i class="ti ti-grid-dots"></i> ${esc(grid.name)}</div>
   ${campaignsForGrid(grid.id).length ? `<div style="margin-bottom:10px;">${campaignsForGrid(grid.id).map(c=>`<span class="pill" style="background:var(--tint-blue-bg);color:var(--tint-blue-fg);">Linked to ${esc(c.name)}</span>`).join(' ')}</div>` : ''}
   <div class="toolbar">
@@ -12777,7 +12993,7 @@ function renderCampaigns(){
 // to have. `navigate()` still works with these ids - they're hidden from
 // the sidebar (NAV entries marked hidden:true), not removed from dispatch.
 function renderCampaignsAreaSubNav(activeId){
-  const items = [['campaigns','All Campaigns'],['calendar','Pipeline'],['logger','Log an interaction']];
+  const items = [['campaigns','All Campaigns'],['grids','Grids'],['calendar','Pipeline'],['logger','Log an interaction']];
   return `<div class="seq-tabs" style="margin-bottom:16px;">
     ${items.map(([id,label]) => `<div class="seq-tab ${activeId===id?'active':''}" onclick="navigate('${id}')">${label}</div>`).join('')}
   </div>`;
@@ -12917,9 +13133,13 @@ function renderCampaignListRow(campaign){
   const statusClass = CAMPAIGN_STATUS_CLASS[campaign.status] || 'campaign-status-draft';
   const n = v => (v === null || v === undefined) ? '·' : v;
   const cell = m.loading ? '<span class="muted">·</span>' : (m.error ? '<span class="muted" title="'+esc(m.error)+'">!</span>' : null);
+  const actionCount = campaignActionCount(campaign);
+  const actionPill = actionCount > 0
+    ? ` <span class="pill" style="background:var(--tint-blue-bg);color:var(--tint-blue-fg);font-weight:700;"><i class="ti ti-bell" style="font-size:11px;"></i> ${actionCount} new action${actionCount === 1 ? '' : 's'} ready</span>`
+    : '';
   return `
   <tr class="home-grid-row" onclick="openCampaignDetail('${campaign.id}')">
-    <td class="perf-name">${esc(campaign.name)}${m.excluded ? ` <span class="muted" style="font-weight:400;">· ${m.excluded} excluded</span>` : ''}</td>
+    <td class="perf-name">${esc(campaign.name)}${actionPill}${m.excluded ? ` <span class="muted" style="font-weight:400;">· ${m.excluded} excluded</span>` : ''}</td>
     <td><span class="campaign-status ${statusClass}">${esc(campaign.status)}</span></td>
     <td>${m.contactCount}</td>
     <td>${campaignIcpCell(campaign)}</td>
@@ -13380,7 +13600,7 @@ function editCampaign(campaignId){
 
 /* ---- Detail view ---- */
 
-const CAMPAIGN_DETAIL_TABS = [['intelligence','Engine'],['grid','Grid'],['roadmap','Roadmap'],['pipeline','Pipeline'],['strategy','Strategy'],['analytics','Analytics'],['sales','Sales'],['content','Content']];
+const CAMPAIGN_DETAIL_TABS = [['actions','Actions'],['intelligence','Engine'],['grid','Grid'],['roadmap','Roadmap'],['pipeline','Pipeline'],['strategy','Strategy'],['analytics','Analytics'],['sales','Sales'],['content','Content']];
 
 // tab param lets callers (e.g. the Grid page's back button) land on a
 // specific tab instead of always resetting to the first one.
@@ -13393,7 +13613,7 @@ function openCampaignDetail(campaignId, tab){
   }
   window.__campaignView = 'detail';
   window.__campaignDetailId = campaignId;
-  window.__campaignDetailTab = tab || 'intelligence';
+  window.__campaignDetailTab = tab || 'actions';
   window.__campaignAnalytics = null;
   window.__campaignMessagePerf = null;
   window.__campaignScorecard = undefined;
@@ -13468,7 +13688,7 @@ function renderCampaignDetail(){
   if(!campaign.gridIds) campaign.gridIds = [];
   if(!campaign.deals) campaign.deals = [];
   if(!campaign.transcriptAnalyses) campaign.transcriptAnalyses = [];
-  const tab = window.__campaignDetailTab || 'intelligence';
+  const tab = window.__campaignDetailTab || 'actions';
   const statusClass = CAMPAIGN_STATUS_CLASS[campaign.status] || 'campaign-status-draft';
   return `
   <button class="btn btn-ghost btn-sm" style="margin-bottom:10px;" onclick="backToCampaignList()"><i class="ti ti-arrow-left"></i> Campaigns</button>
@@ -13485,6 +13705,7 @@ function renderCampaignDetail(){
   <div class="seq-tabs">
     ${CAMPAIGN_DETAIL_TABS.map(([key,label]) => `<div class="seq-tab ${tab===key?'active':''}" onclick="setCampaignDetailTab('${key}')">${label}</div>`).join('')}
   </div>
+  ${tab==='actions' ? renderCampaignActionsTab(campaign) : ''}
   ${tab==='intelligence' ? renderCampaignIntelligenceTab(campaign) : ''}
   ${tab==='grid' ? renderCampaignGridTab(campaign) : ''}
   ${tab==='roadmap' ? renderCampaignRoadmapTab(campaign) : ''}
@@ -13494,6 +13715,21 @@ function renderCampaignDetail(){
   ${tab==='sales' ? renderCampaignSalesTab(campaign) : ''}
   ${tab==='content' ? renderCampaignContentTab(campaign) : ''}
   `;
+}
+
+/* ---- Actions tab ---- */
+// "Today's actions" is per-campaign now (it used to be the landing page).
+// Same computed list, same cards, filtered to this campaign - see
+// renderTodaysActions(campaign). The loaders it needs
+// (window.__campaignSequenceStages, __dueReminders, __wrongPersonaAccounts,
+// __repliesQueue) fire from afterRender's campaign-detail branch.
+function renderCampaignActionsTab(campaign){
+  if(campaign.status !== 'Live'){
+    return '<div class="empty-state">Actions appear once the campaign is Live.</div>';
+  }
+  const loaded = window.__campaignSequenceStages && window.__campaignSequenceStages[campaign.id];
+  if(!loaded) return '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading actions…</div>';
+  return renderTodaysActions(campaign);
 }
 
 /* ---- Intelligence tab ---- */
@@ -13887,11 +14123,14 @@ async function loadCampaignSequenceStages(campaign){
     window.__campaignReplyReceived = window.__campaignReplyReceived || {};
     window.__campaignReplyReceived[campaign.id] = {};
   }
-  if(window.__campaignView === 'detail' && window.__campaignDetailId === campaign.id && ['roadmap','analytics'].includes(window.__campaignDetailTab)) renderPage();
+  if(window.__campaignView === 'detail' && window.__campaignDetailId === campaign.id && ['roadmap','analytics','actions'].includes(window.__campaignDetailTab)) renderPage();
   // Both Grid view modes depend on this now - Table already did (sequence
   // stage column), and Grid does too since gridConnectionSentDateFor started
   // backing its day badge with Connection Sent Date.
   if(state.currentPage === 'grid') renderPage();
+  // The Campaigns list "N new actions ready" pills and the sidebar badge
+  // read campaignActionCount(), which needs these maps.
+  if(state.currentPage === 'campaigns'){ renderPage(); renderSidebar(); }
   if(state.currentPage === 'home') renderPage();
 }
 
@@ -15283,6 +15522,7 @@ function renderCompanyUniverse(){
   window.__ctxCampaignTag = null;
   return `
   <div style="display:flex;justify-content:flex-end;gap:6px;margin-bottom:12px;">
+    <button class="btn btn-ghost btn-sm" onclick="goToRunIntelligence()"><i class="ti ti-brain"></i> Run Engine</button>
     <button class="btn btn-ghost btn-sm" onclick="navigate('icpbuilder')"><i class="ti ti-crosshair"></i> ICP builder</button>
     <button class="btn btn-ghost btn-sm" onclick="navigate('competitormap')"><i class="ti ti-affiliate"></i> Competitor map</button>
     <button class="btn btn-ghost btn-sm" onclick="navigate('gtmmotion')"><i class="ti ti-topology-star-3"></i> See our GTM motion</button>
@@ -15436,7 +15676,8 @@ function renderProfilePage(){
   <div class="profile-search-bar">
     <i class="ti ti-building" style="color:var(--muted);"></i>
     <strong style="font-size:13px;">${esc(selectedCompany)}</strong>
-    <button class="btn btn-ghost btn-sm" style="margin-left:auto;" onclick="openCompanyPeopleModal('${esc(selectedCompany)}')"><i class="ti ti-user-plus"></i> Add people</button>
+    <button class="btn btn-ghost btn-sm" style="margin-left:auto;" onclick="${isPinnedTarget(selectedCompany) ? `unpinTarget('${esc(selectedCompany)}')` : `pinTarget('${esc(selectedCompany)}')`}"><i class="ti ${isPinnedTarget(selectedCompany) ? 'ti-pin-filled' : 'ti-pin'}"></i> ${isPinnedTarget(selectedCompany) ? 'Pinned' : 'Pin as target'}</button>
+    <button class="btn btn-ghost btn-sm" onclick="openCompanyPeopleModal('${esc(selectedCompany)}')"><i class="ti ti-user-plus"></i> Add people</button>
     <button class="btn btn-ghost btn-sm" onclick="expandProfileSearch()"><i class="ti ti-switch-horizontal"></i> Change</button>
   </div>`;
 
