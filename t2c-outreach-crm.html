@@ -546,9 +546,11 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .grid-search-status-bar{position:fixed;bottom:20px;right:20px;z-index:150;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card);box-shadow:0 4px 16px rgba(31,36,33,.10);padding:12px 16px;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:8px;max-width:320px;}
 
 /* Sequences */
-.seq-tabs{display:flex;gap:8px;margin-bottom:18px;border-bottom:1px solid var(--border);}
-.seq-tab{padding:10px 16px;font-weight:700;font-size:13px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;}
-.seq-tab.active{color:var(--text);border-color:var(--accent-strong);}
+.seq-tabs{display:flex;gap:4px;margin-bottom:20px;border-bottom:1px solid var(--border);overflow-x:auto;}
+.seq-tab{padding:9px 14px;font-weight:700;font-size:13px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;white-space:nowrap;transition:color .12s ease;}
+.seq-tab:hover{color:var(--text);}
+.seq-tab.active{color:var(--ink);border-color:var(--ink);}
+.seq-tab-sep{width:1px;background:var(--border);margin:8px 8px;flex:none;}
 .seq-header{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:18px;gap:14px;flex-wrap:wrap;}
 .pill{display:inline-flex;padding:4px 11px;border-radius:var(--radius-pill);background:var(--tint-gold-bg);color:var(--tint-gold-fg);font-size:11.5px;font-weight:600;margin-right:6px;}
 .pill-sky{background:var(--tint-blue-bg);color:var(--tint-blue-fg);}
@@ -15994,17 +15996,29 @@ function renderProfilePage(){
   // is right there - no scrolling past a long results list. "Change" re-opens it.
   const searchOpen = !selectedCompany || window.__profileSearchExpanded;
 
+  // Quick picks when nothing is being searched: pinned targets first.
+  const pinned = Array.isArray(window.__targets) ? window.__targets.slice(0, 10) : [];
+  const quickPicks = (!query.length && !selectedCompany && pinned.length) ? `
+    <div style="margin-top:16px;">
+      <div class="worklist-group" style="color:var(--muted);margin-top:0;">Your pinned targets</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;">
+        ${pinned.map(t => `<button class="tpill" style="background:var(--surface-2);color:var(--ink);border:none;cursor:pointer;font-weight:600;padding:5px 11px;" onclick="selectProfileCompany('${esc(t.name)}')">${esc(t.name)}</button>`).join('')}
+      </div>
+    </div>` : '';
+
   const searchCard = searchOpen ? `
+  ${!selectedCompany ? `<div class="page-head"><h1 class="page-h1">Profile</h1><div class="page-sub">Map an account's transformation and where Twenty2 fits — the free-value artifact you bring to the first conversation.</div></div>` : ''}
   <div class="card" style="margin-bottom:12px;">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
-      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-hierarchy-2"></i> Profile</div>
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-search"></i> Find a company or person</div>
       ${selectedCompany ? `<button class="btn btn-ghost btn-sm" onclick="collapseProfileSearch()"><i class="ti ti-x"></i></button>` : ''}
     </div>
-    <div class="muted" style="font-size:12px;margin:6px 0 10px;">Search for a person or a company. A company's profile opens its account canvas. Type a new name and hit <strong>Create</strong> to start researching a company before it's in a campaign.</div>
+    <div class="muted" style="font-size:12.5px;margin:-4px 0 12px;">A company opens its account canvas. Type a new name and hit <strong>Create</strong> to research a company before it's in a campaign.</div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
       <input id="profileSearchInput" type="text" placeholder="Search or create a company…" value="${esc(window.__profileQuery||'')}" oninput="setProfileQuery(this.value)" onkeydown="if(event.key==='Enter'&&this.value.trim().length>=2)createProfileCompany(this.value.trim())" style="flex:1;min-width:240px;max-width:420px;">
       ${rawQuery.length >= 2 && !exactCompanyMatch ? `<button class="btn btn-primary btn-sm" onclick="createProfileCompany('${esc(rawQuery.replace(/'/g,"\\'"))}')"><i class="ti ti-plus"></i> Create "${esc(rawQuery)}"</button>` : ''}
     </div>
+    ${quickPicks}
     ${query.length >= 2 ? `
       <div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:14px;">
         <div style="min-width:200px;">
@@ -17477,7 +17491,7 @@ function renderChangeArchitectureCanvas(companyName){
           <div class="arch-menu-list">
             ${isComp ? '' : `<div class="arch-menu-item" onclick="archPickEntity('${esc(companyName)}','contact')"><i class="ti ti-user"></i> Contact card</div>
             <div class="arch-menu-item" onclick="archPickEntity('${esc(companyName)}','company')"><i class="ti ti-building"></i> Company card</div>`}
-            <div class="arch-menu-item" onclick="archInsert('${esc(companyName)}',{type:'sticky',w:170,h:150,text:'',fill:'#fef3c7',stroke:'transparent'})"><i class="ti ti-note"></i> Sticky note</div>
+            <div class="arch-menu-item" onclick="archInsert('${esc(companyName)}',{type:'sticky',w:170,h:150,text:'',fill:'#F0ECE1',stroke:'transparent'})"><i class="ti ti-note"></i> Sticky note</div>
             <div class="arch-menu-item" onclick="archInsert('${esc(companyName)}',{type:'text',w:200,h:40,text:'Text',fill:'transparent',stroke:'transparent'})"><i class="ti ti-typography"></i> Text</div>
             <div class="arch-menu-item" onclick="archPickFile('${esc(companyName)}')"><i class="ti ti-photo-up"></i> Image / PDF</div>
             <div class="arch-menu-item" onclick="archAddLinkPrompt('${esc(companyName)}')"><i class="ti ti-link"></i> Link</div>
@@ -20473,7 +20487,7 @@ function renderLearningResult(kind, data, recordCount){
 // campaign-name-not-id scoping convention (the backend resolves a campaign
 // name to its Airtable record id itself, same as sales-overview/deals).
 
-const CONTENT_SUBTABS = [['signals','Signals'],['drafts','Draft Centre'],['calendar','Calendar'],['performance','LinkedIn Performance'],['seo','SEO'],['aeo','AEO'],['googleads','Google Ads'],['email','Email Marketing'],['settings','Settings']];
+const CONTENT_SUBTABS = [['signals','Signals'],['drafts','Draft Centre'],['calendar','Calendar'],['sep'],['performance','LinkedIn'],['seo','SEO'],['aeo','AEO'],['googleads','Google Ads'],['email','Email'],['sep'],['settings','Settings']];
 const CONTENT_FORMATS = ['LinkedIn Post','Blog','Newsletter'];
 const CONTENT_FORMAT_META = {
   'LinkedIn Post': { dotClass:'format-linkedin', label:'LinkedIn' },
@@ -20497,8 +20511,12 @@ function setContentSubTab(tab){
 function renderContent(){
   const tab = window.__contentSubTab || 'signals';
   return `
+  <div class="page-head">
+    <h1 class="page-h1">Marketing</h1>
+    <div class="page-sub">The content engine that feeds outreach — buying signals to write about, drafts and calendar, and channel performance.</div>
+  </div>
   <div class="seq-tabs">
-    ${CONTENT_SUBTABS.map(([key,label]) => `<div class="seq-tab ${tab===key?'active':''}" onclick="setContentSubTab('${key}')">${label}</div>`).join('')}
+    ${CONTENT_SUBTABS.map(t => t[0]==='sep' ? '<div class="seq-tab-sep"></div>' : `<div class="seq-tab ${tab===t[0]?'active':''}" onclick="setContentSubTab('${t[0]}')">${t[1]}</div>`).join('')}
   </div>
   ${tab==='signals' ? renderContentSignalsTab() : ''}
   ${tab==='drafts' ? renderContentDraftsTab() : ''}
