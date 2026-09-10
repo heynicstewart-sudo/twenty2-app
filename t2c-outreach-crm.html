@@ -15672,20 +15672,24 @@ function normalizeArchDoc(raw, defaultName){
 }
 function normalizeArchEl(e){
   if(!e || typeof e !== 'object') return null;
-  const type = ['shape','sticky','text','contact','company','chart'].includes(e.type) ? e.type : 'shape';
+  const type = ['shape','sticky','text','contact','company','chart','image','link'].includes(e.type) ? e.type : 'shape';
   return {
     id: e.id || archUid(),
     type,
     shape: ARCH_SHAPES.some(s => s.key === e.shape) ? e.shape : 'rectangle',
     x: Number.isFinite(e.x) ? e.x : 80,
     y: Number.isFinite(e.y) ? e.y : 80,
-    w: Number.isFinite(e.w) ? Math.max(40, e.w) : (type === 'chart' ? 320 : 170),
-    h: Number.isFinite(e.h) ? Math.max(28, e.h) : (type === 'chart' ? 220 : (type === 'text' ? 40 : 64)),
+    w: Number.isFinite(e.w) ? Math.max(40, e.w) : (type === 'chart' ? 320 : type === 'image' ? 240 : type === 'link' ? 260 : 170),
+    h: Number.isFinite(e.h) ? Math.max(28, e.h) : (type === 'chart' ? 220 : type === 'image' ? 180 : type === 'link' ? 56 : (type === 'text' ? 40 : 64)),
     text: (e.text || '').toString(),
-    fill: e.fill || (type === 'sticky' ? '#fef3c7' : (type === 'text' ? 'transparent' : '#ffffff')),
+    fill: e.fill || (type === 'sticky' ? '#fef3c7' : (type === 'text' || type === 'image' ? 'transparent' : '#ffffff')),
     stroke: e.stroke || (type === 'sticky' || type === 'text' ? 'transparent' : '#d4d4d8'),
     textColor: e.textColor || '#18181b',
     fontSize: Number.isFinite(e.fontSize) ? e.fontSize : (type === 'text' ? 15 : 13),
+    src: (e.src || '').toString().slice(0, 2000),
+    href: (e.href || '').toString().slice(0, 2000),
+    favicon: (e.favicon || '').toString().slice(0, 2000),
+    isPdf: !!e.isPdf,
     ref: (e.ref && e.ref.kind) ? { kind: e.ref.kind, id: e.ref.id || '', name: e.ref.name || '' } : null,
     chart: e.chart && e.chart.kind ? {
       kind: ['pie','line','bar'].includes(e.chart.kind) ? e.chart.kind : 'bar',
@@ -15986,10 +15990,110 @@ function archInsert(companyName, spec){
   saveArch(companyName);
   rerenderArch(companyName);
   archSelect(companyName, 'element', base.id);
-  if(base.type !== 'chart' && base.type !== 'contact' && base.type !== 'company'){
+  if(!['chart','contact','company','image','link'].includes(base.type)){
     setTimeout(() => archBeginTextEdit(companyName, base.id), 30);
   }
   if(base.type === 'chart') openArchChartDialog(companyName, base.id);
+  return base;
+}
+
+/* ---- account canvas: paste / drop images, PDFs and links ---- */
+const ARCH_URL_RE = /^https?:\/\/[^\s]+$/i;
+function archHostOf(url){ try { return new URL(url).host; } catch(e){ return (url || '').replace(/^https?:\/\//, '').split('/')[0]; } }
+function archFaviconFor(url){ return 'https://www.google.com/s2/favicons?sz=64&domain=' + encodeURIComponent(archHostOf(url)); }
+
+// Insert-menu "Image / PDF" -> hidden file picker
+function archPickFile(companyName){
+  archCloseMenus();
+  let inp = document.getElementById('archFileInput');
+  if(!inp){
+    inp = document.createElement('input');
+    inp.type = 'file'; inp.id = 'archFileInput';
+    inp.accept = 'image/png,image/jpeg,image/gif,image/webp,image/svg+xml,application/pdf';
+    inp.style.display = 'none';
+    document.body.appendChild(inp);
+  }
+  inp.onchange = () => { const f = inp.files && inp.files[0]; inp.value = ''; if(f) archUploadAndInsert(companyName, f); };
+  inp.click();
+}
+function archAddLinkPrompt(companyName){
+  archCloseMenus();
+  const url = (prompt('Paste a link (news, LinkedIn, a doc…):') || '').trim();
+  if(url && ARCH_URL_RE.test(url)) archInsertLink(companyName, url);
+  else if(url) toast('That doesn\'t look like a URL', 'warn');
+}
+
+async function archUploadAndInsert(companyName, file){
+  if(!file) return;
+  if(!/^(image\/(png|jpe?g|gif|webp|svg\+xml)|application\/pdf)$/i.test(file.type)){ toast('Only images and PDFs can go on the canvas', 'warn'); return; }
+  if(file.size > 5 * 1024 * 1024){ toast('That file is over 5MB', 'warn'); return; }
+  const isPdf = file.type === 'application/pdf';
+  // insert a placeholder immediately so the drop feels instant
+  const placeholder = archInsert(companyName, isPdf
+    ? { type:'link', isPdf:true, text: file.name || 'PDF', href:'', w:260, h:56 }
+    : { type:'image', src:'', w:240, h:180 });
+  if(!placeholder) return;
+  try {
+    const dataUrl = await new Promise((resolve, reject) => {
+      const r = new FileReader(); r.onload = () => resolve(String(r.result)); r.onerror = reject; r.readAsDataURL(file);
+    });
+    const res = await fetch(`/api/companies/${encodeURIComponent(companyName)}/canvas-asset`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ dataUrl, filename: file.name })
+    });
+    const data = await res.json().catch(() => ({}));
+    if(!res.ok) throw new Error(data.error || `Upload failed (${res.status})`);
+    const d = archDoc(companyName);
+    const el = d && d.elements.find(x => x.id === placeholder.id);
+    if(el){
+      if(isPdf){ el.href = data.url; el.text = data.filename || el.text; }
+      else { el.src = data.url; }
+      saveArch(companyName); rerenderArch(companyName);
+    }
+    toast(isPdf ? 'PDF added' : 'Image added', 'success');
+  } catch(err){
+    // pull the failed placeholder back out
+    const d = archDoc(companyName);
+    if(d){ d.elements = d.elements.filter(x => x.id !== placeholder.id); saveArch(companyName); rerenderArch(companyName); }
+    toast('Could not add that file: ' + err.message, 'warn');
+  }
+}
+
+async function archInsertLink(companyName, url){
+  const host = url.replace(/^https?:\/\//,'').split('/')[0];
+  const el = archInsert(companyName, { type:'link', href:url, text:host, favicon:`https://www.google.com/s2/favicons?sz=64&domain=${host}`, w:260, h:56 });
+  if(!el) return;
+  try {
+    const res = await fetch(`/api/link-preview?url=${encodeURIComponent(url)}`);
+    const data = await res.json().catch(() => ({}));
+    if(res.ok && data.title){
+      const d = archDoc(companyName);
+      const live = d && d.elements.find(x => x.id === el.id);
+      if(live){ live.text = data.title; if(data.favicon) live.favicon = data.favicon; saveArch(companyName); rerenderArch(companyName); }
+    }
+  } catch(err){ /* keep the host-only card */ }
+}
+
+// Paste onto the canvas: an image on the clipboard -> upload; a URL -> link card.
+function archViewportPaste(e, companyName){
+  const dt = e.clipboardData;
+  if(!dt) return;
+  const imgItem = [...(dt.items || [])].find(it => it.kind === 'file' && /^image\//.test(it.type));
+  if(imgItem){
+    const f = imgItem.getAsFile();
+    if(f){ e.preventDefault(); archUploadAndInsert(companyName, f); return; }
+  }
+  const text = (dt.getData('text/uri-list') || dt.getData('text/plain') || '').trim().split(/\s+/)[0];
+  if(ARCH_URL_RE.test(text)){ e.preventDefault(); archInsertLink(companyName, text); }
+}
+function archViewportDragOver(e){ if(e.dataTransfer && ([...e.dataTransfer.types].includes('Files') || [...e.dataTransfer.types].includes('text/uri-list'))){ e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } }
+function archViewportDrop(e, companyName){
+  const dt = e.dataTransfer;
+  if(!dt) return;
+  const files = [...(dt.files || [])].filter(f => /^(image\/|application\/pdf)/.test(f.type));
+  if(files.length){ e.preventDefault(); files.slice(0, 8).forEach(f => archUploadAndInsert(companyName, f)); return; }
+  const url = (dt.getData('text/uri-list') || dt.getData('text/plain') || '').trim().split(/\s+/)[0];
+  if(ARCH_URL_RE.test(url)){ e.preventDefault(); archInsertLink(companyName, url); }
 }
 
 function archInsertPreset(companyName, presetKey){
@@ -16593,6 +16697,25 @@ function archElInnerHtml(companyName, el){
           : `<div class="arch-chart-empty muted">No data yet — double-click to add</div>`}
       </div>`;
   }
+  if(el.type === 'image'){
+    return `<div class="arch-el-bg" style="background:${esc(el.fill)};border:1.5px solid ${esc(el.stroke)};border-radius:6px;overflow:hidden;"></div>
+      ${el.src ? `<img src="${esc(el.src)}" alt="" draggable="false" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;border-radius:6px;pointer-events:none;">`
+        : `<div class="arch-chart-empty muted" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;">Uploading…</div>`}`;
+  }
+  if(el.type === 'link'){
+    const label = el.text || el.href || 'Link';
+    return `<div class="arch-el-bg" style="background:#ffffff;border:1.5px solid ${esc(el.stroke)};border-radius:10px;"></div>
+      <div style="position:absolute;inset:0;display:flex;align-items:center;gap:8px;padding:0 10px;">
+        ${el.isPdf
+          ? '<i class="ti ti-file-type-pdf" style="font-size:18px;color:#dc2626;flex:none;"></i>'
+          : `<img src="${esc(el.favicon || archFaviconFor(el.href))}" alt="" style="width:16px;height:16px;flex:none;border-radius:3px;" onerror="this.style.visibility='hidden'">`}
+        <div style="min-width:0;flex:1;">
+          <div style="font-size:12px;font-weight:600;color:${esc(el.textColor)};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(label)}</div>
+          <div class="muted" style="font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(archHostOf(el.href))}</div>
+        </div>
+        <a href="${esc(el.href||'#')}" target="_blank" rel="noopener" class="arch-card-open btn btn-ghost btn-sm" style="flex:none;" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()"><i class="ti ti-external-link"></i></a>
+      </div>`;
+  }
   if(el.type === 'contact' || el.type === 'company'){
     const name = (el.ref && el.ref.name) || 'Unlinked';
     const kindLabel = el.type === 'company' ? 'COMPANY' : (el.subtitle ? esc(el.subtitle) : 'CONTACT');
@@ -16770,6 +16893,8 @@ function renderChangeArchitectureCanvas(companyName){
             <div class="arch-menu-item" onclick="archPickEntity('${esc(companyName)}','company')"><i class="ti ti-building"></i> Company card</div>`}
             <div class="arch-menu-item" onclick="archInsert('${esc(companyName)}',{type:'sticky',w:170,h:150,text:'',fill:'#fef3c7',stroke:'transparent'})"><i class="ti ti-note"></i> Sticky note</div>
             <div class="arch-menu-item" onclick="archInsert('${esc(companyName)}',{type:'text',w:200,h:40,text:'Text',fill:'transparent',stroke:'transparent'})"><i class="ti ti-typography"></i> Text</div>
+            <div class="arch-menu-item" onclick="archPickFile('${esc(companyName)}')"><i class="ti ti-photo-up"></i> Image / PDF</div>
+            <div class="arch-menu-item" onclick="archAddLinkPrompt('${esc(companyName)}')"><i class="ti ti-link"></i> Link</div>
             <div class="arch-menu-sep"></div>
             <div class="arch-menu-label">Shapes</div>
             ${ARCH_SHAPES.map(s => `<div class="arch-menu-item" onclick="archInsert('${esc(companyName)}',{type:'shape',shape:'${s.key}',w:170,h:80,text:''})"><i class="ti ${s.icon}"></i> ${s.label}</div>`).join('')}
@@ -16790,9 +16915,9 @@ function renderChangeArchitectureCanvas(companyName){
         </div>
       </div>
     </div>
-    <div class="muted" style="font-size:11.5px;margin-bottom:8px;">Freeform board — drag empty space to pan, scroll to zoom. Insert cards, shapes, sticky notes and charts; double-click to edit text; select an element for colour, shape and connectors.${d.layers.orgMap ? ' The live contact map updates itself as the CRM changes.' : ''} Everything autosaves.</div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:8px;">Freeform board — drag empty space to pan, scroll to zoom. Insert cards, shapes, sticky notes and charts; double-click to edit text; select an element for colour, shape and connectors. Paste or drop an image, PDF or link straight onto the board.${d.layers.orgMap ? ' The live contact map updates itself as the CRM changes.' : ''} Everything autosaves.</div>
     <div id="archToolbarHolder">${archInlineToolbarHtml(companyName)}</div>
-    <div id="archViewport" class="arch-viewport" onmousedown="archViewportMouseDown(event)" onwheel="archWheel(event)">
+    <div id="archViewport" class="arch-viewport" tabindex="0" onmousedown="archViewportMouseDown(event)" onwheel="archWheel(event)" onpaste="archViewportPaste(event,'${esc(companyName)}')" ondragover="archViewportDragOver(event)" ondrop="archViewportDrop(event,'${esc(companyName)}')">
       <div id="archScene" class="arch-scene" style="width:${ARCH_SCENE_W}px;height:${ARCH_SCENE_H}px;">
         <svg id="archEdges" class="arch-edges" width="${ARCH_SCENE_W}" height="${ARCH_SCENE_H}"></svg>
         <div id="archEdgeLabels" class="arch-edge-labels"></div>
