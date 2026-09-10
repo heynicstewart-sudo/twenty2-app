@@ -10801,6 +10801,138 @@ app.post('/api/companies/:name/signal', async (req, res) => {
   }
 });
 
+// ---- Targets pin board ------------------------------------------------------
+// Companies Marcus has flagged to work, via Companies.'Pinned Target' (a
+// checkbox on the base). The Targets page (formerly "Today's Actions") is a
+// board of these; each card opens the account canvas + recent campaign
+// messages.
+
+app.post('/api/companies/:name/pin', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const pinned = !!(req.body && req.body.pinned);
+  try {
+    const companyRecord = await findRecordByFieldName('Companies', 'Company Name', decodeURIComponent(req.params.name));
+    if (!companyRecord) return res.status(404).json({ error: 'Company not found' });
+    await airtableWriteAllowingMissingCtaFields('PATCH', 'Companies', {
+      records: [{ id: companyRecord.id, fields: { 'Pinned Target': pinned } }], typecast: true
+    });
+    res.json({ success: true, pinned });
+  } catch (err) {
+    console.error('Company pin error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/targets', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const [companyRecords, contactRecords, tpRecords, campaignContactRows, campaignRecords] = await Promise.all([
+      airtableFetchAllRecords('Companies'),
+      airtableFetchAllRecords('Contacts'),
+      airtableFetchAllRecords('Touch Points').catch(() => []),
+      fetchCampaignContactsRows(),
+      airtableFetchAllRecords('Campaigns')
+    ]);
+
+    const pinned = companyRecords.filter(r => !!(r.fields || {})['Pinned Target']);
+    const contactsById = {}; contactRecords.forEach(r => { contactsById[r.id] = r; });
+    const campaignsById = {}; campaignRecords.forEach(r => { campaignsById[r.id] = r; });
+
+    const targets = pinned.map(companyRecord => {
+      const cf = companyRecord.fields || {};
+      const myContactIds = new Set(
+        contactRecords.filter(c => (c.fields['Company'] || [])[0] === companyRecord.id).map(c => c.id)
+      );
+      (cf['Contacts'] || []).forEach(id => myContactIds.add(id));
+
+      const touchingCampaignNames = new Set();
+      campaignContactRows.forEach(row => {
+        const contactId = (row.fields['Contact'] || [])[0];
+        if (!contactId || !myContactIds.has(contactId)) return;
+        (row.fields['Campaign'] || []).forEach(cid => {
+          const c = campaignsById[cid];
+          if (c) touchingCampaignNames.add(c.fields['Name'] || c.fields['Campaign Name'] || '');
+        });
+      });
+
+      let lastActivity = null;
+      tpRecords.forEach(r => {
+        if (!(r.fields['Contact'] || []).some(cid => myContactIds.has(cid))) return;
+        const d = r.fields['Date'] || '';
+        if (d && (!lastActivity || d > lastActivity)) lastActivity = d;
+      });
+
+      const campaigns = [...touchingCampaignNames].filter(Boolean);
+      return {
+        name: cf['Company Name'] || '',
+        industry: cf['Industry'] || '',
+        sector: cf['Sector'] || '',
+        icpTag: cf['ICP Tag'] || null,
+        icpFitScore: Number.isFinite(Number(cf['ICP Fit Score'])) ? Number(cf['ICP Fit Score']) : null,
+        latestSignal: cf['Latest Signal'] || '',
+        signalDate: cf['Signal Date'] || '',
+        programs: parseCompanyPrograms(cf).filter(programIsActive),
+        inCampaign: campaigns.length > 0,
+        campaigns,
+        lastActivity
+      };
+    });
+
+    targets.sort((a, b) => (b.lastActivity || '').localeCompare(a.lastActivity || '') || a.name.localeCompare(b.name));
+    res.json({ targets });
+  } catch (err) {
+    console.error('Targets list error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Recent outreach messages for every contact at one company, across every
+// campaign - the "campaign history" half of a target card.
+app.get('/api/companies/:name/messages', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const companyRecord = await findRecordByFieldName('Companies', 'Company Name', decodeURIComponent(req.params.name));
+    if (!companyRecord) return res.status(404).json({ error: 'Company not found' });
+
+    const [contactRecords, campaignContactRows, campaignRecords] = await Promise.all([
+      airtableFetchAllRecords('Contacts'),
+      fetchCampaignContactsRows(),
+      airtableFetchAllRecords('Campaigns')
+    ]);
+    const contactsById = {}; contactRecords.forEach(r => { contactsById[r.id] = r; });
+    const campaignsById = {}; campaignRecords.forEach(r => { campaignsById[r.id] = r; });
+    const myContactIds = new Set(
+      contactRecords.filter(c => (c.fields['Company'] || [])[0] === companyRecord.id).map(c => c.id)
+    );
+    (companyRecord.fields['Contacts'] || []).forEach(id => myContactIds.add(id));
+
+    const messages = campaignContactRows
+      .filter(row => {
+        const cid = (row.fields['Contact'] || [])[0];
+        return cid && myContactIds.has(cid);
+      })
+      .map(row => {
+        const contact = contactsById[(row.fields['Contact'] || [])[0]];
+        const campaign = campaignsById[(row.fields['Campaign'] || [])[0]];
+        return {
+          contactName: contact ? (contact.fields['Full Name'] || '') : '',
+          campaignName: campaign ? (campaign.fields['Name'] || campaign.fields['Campaign Name'] || '') : '',
+          sequenceStage: row.fields['Sequence Stage'] || '',
+          finalMessageSent: row.fields['Final Message Sent'] || '',
+          nextMessageDraft: row.fields['Next Message Draft'] || '',
+          connectionSentDate: row.fields['Connection Sent Date'] || ''
+        };
+      })
+      .filter(m => m.contactName && (m.finalMessageSent || m.nextMessageDraft || m.sequenceStage))
+      .sort((a, b) => (b.connectionSentDate || '').localeCompare(a.connectionSentDate || ''));
+
+    res.json({ messages });
+  } catch (err) {
+    console.error('Company messages error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---- Add people to a company (paste / screenshot) ----------------------------
 
 // Person-level connection status, shared by the per-contact control on the
