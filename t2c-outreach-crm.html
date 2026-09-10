@@ -11,7 +11,7 @@
 </script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Urbanist:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Azeret+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
@@ -19,8 +19,8 @@
 <script>
 /* Shared Chart.js theming - applied to every chart in the app */
 if(window.Chart){
-  window.T2_CHART_COLORS = ['#3C4A5A','#8A8A80','#B7B7AC','#5C6470','#A6A69B','#D2D2C7','#1A1A17'];
-  Chart.defaults.font.family = "'Urbanist','Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif";
+  window.T2_CHART_COLORS = ['#181818','#C4DCC9','#DFCDBD','#8A8A82','#A9C7B0','#C9C9C0','#5C5C58'];
+  Chart.defaults.font.family = "'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif";
   Chart.defaults.font.size = 11;
   Chart.defaults.color = '#66706A';
   Chart.defaults.borderColor = 'rgba(31,36,33,0.06)';
@@ -42,55 +42,58 @@ if(window.Chart){
 :root{
   /* Minimal palette — near-monochrome + one restrained slate accent.
      Branding lands later by re-pointing --accent and the tint pairs. */
-  --bg:#F6F6F4;
+  --bg:#F1F1EF;
   --surface:#ffffff;
-  --surface-2:#EEEEEB;
+  --surface-2:#EAEAE6;
   --card-bg:#ffffff;
-  --border:#E4E4E0;
-  --border-light:#ECECE8;
-  --sidebar-bg:#FAFAF8;
-  --sidebar-text:#43433E;
-  --sidebar-muted:#6B6B64;
-  --sidebar-hover-bg:#EEEEEB;
+  --border:#E1E1DC;
+  --border-light:#EAEAE5;
+  --sidebar-bg:#F1F1EF;
+  --sidebar-text:#3D3D39;
+  --sidebar-muted:#6A6A63;
+  --sidebar-hover-bg:#E8E8E3;
   --sidebar-active-bg:#ffffff;
-  --sidebar-active-text:#1A1A17;
+  --sidebar-active-text:#181818;
   --sidebar-active-border:transparent;
-  --topbar-bg:#F6F6F4;
-  --ink:#1A1A17;
-  --primary:#1A1A17;
-  --accent:#3C4A5A;
-  --accent-strong:#2B3744;
+  --topbar-bg:#F1F1EF;
+  --ink:#181818;
+  --primary:#181818;
+  --accent:#181818;
+  --accent-strong:#000000;
   --accent-ink:#ffffff;
-  --accent-dim:rgba(60,74,90,0.10);
-  --accent-2:#3C4A5A;
-  --accent-2-dim:rgba(60,74,90,0.08);
-  --success:#3F6B4C;
-  --warning:#7A6636;
-  --danger:#8F4030;
-  --muted:#5B5B56;
-  --text-dim:#67675F;
-  --peach:#7A6636;
-  --blue:#3C4A5A;
+  --accent-dim:rgba(24,24,24,0.07);
+  --accent-2:#C4DCC9;
+  --accent-2-dim:rgba(196,220,201,0.30);
+  --sand:#DFCDBD;   --sand-soft:#EFE7DE;
+  --mint:#C4DCC9;   --mint-soft:#E1EEE4;
+  --success:#3A6B4C;
+  --warning:#7A5F3E;
+  --danger:#8A473A;
+  --muted:#5A5A55;
+  --text-dim:#6A6A62;
+  --peach:#7A5F3E;
+  --blue:#4A4C5C;
   --brown:#6B5A45;
-  --yellow:#7A6636;
-  --purple:#575269;
-  --text:#1A1A17;
-  /* Semantic tints, desaturated: green = positive, slate = info,
-     amber = attention, red = blocked. bg = pale fill, fg = readable label. */
-  --lime:#DEE3D8;   --lime-soft:#E8EDE3;   --lime-ink:#3F6B4C;
-  --sky:#DEE2E7;    --sky-soft:#E8EBEF;    --sky-ink:#3C4A5A;
-  --tint-blue-bg:#E8EBEF;   --tint-blue-fg:#3C4A5A;
-  --tint-green-bg:#E8EDE3;  --tint-green-fg:#3F6B4C;
-  --tint-amber-bg:#F0ECE1;  --tint-amber-fg:#7A6636;
-  --tint-gold-bg:#EEEBE0;   --tint-gold-fg:#6E6238;
-  --tint-purple-bg:#EAE9ED; --tint-purple-fg:#575269;
-  --tint-orange-bg:#F1EAE2; --tint-orange-fg:#8A5A3E;
-  --tint-red-bg:#F2E8E5;    --tint-red-fg:#8F4030;
-  --tint-grey-bg:#ECECE9;   --tint-grey-fg:#59594F;
-  --font-family:'Urbanist','Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
-  --font-size-base:14px;
-  --label-size:11px;
-  --label-tracking:0.04em;
+  --yellow:#7A5F3E;
+  --purple:#54505F;
+  --text:#181818;
+  /* Semantic tints on the sand/mint brand: mint = positive, sand = attention,
+     grey = neutral, rose = blocked. bg = pale fill, fg = readable label. */
+  --lime:#C4DCC9;   --lime-soft:#E1EEE4;   --lime-ink:#2F5D42;
+  --sky:#DEDEE4;    --sky-soft:#EAEAEE;    --sky-ink:#44465A;
+  --tint-blue-bg:#EAEAEE;   --tint-blue-fg:#44465A;
+  --tint-green-bg:#E1EEE4;  --tint-green-fg:#2F5D42;
+  --tint-amber-bg:#EFE7DE;  --tint-amber-fg:#7A5F3E;
+  --tint-gold-bg:#EEE8DE;   --tint-gold-fg:#6E5C40;
+  --tint-purple-bg:#E9E8EC; --tint-purple-fg:#54505F;
+  --tint-orange-bg:#EFE4DB; --tint-orange-fg:#835540;
+  --tint-red-bg:#EFDFDB;    --tint-red-fg:#8A473A;
+  --tint-grey-bg:#E9E9E5;   --tint-grey-fg:#57574E;
+  --font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  --font-display:'Azeret Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --font-size-base:13.5px;
+  --label-size:10.5px;
+  --label-tracking:0.02em;
   --header-weight:700;
   --radius-card:16px;
   --radius-card-sm:12px;
@@ -107,10 +110,17 @@ body{
   background:var(--bg);
   color:var(--text);
   font-size:var(--font-size-base);
-  line-height:1.45;
-  letter-spacing:-0.006em;
+  line-height:1.5;
+  letter-spacing:-0.003em;
   -webkit-font-smoothing:antialiased;
   text-rendering:optimizeLegibility;
+}
+/* Azeret Mono is the display voice — headings, labels, nav, buttons, figures */
+.page-h1,.section-title,.topbar-title,.logo-name,label,.nav-item,.btn,
+.metric-card .m-label,.metric-card .m-value,.tcol-name,.tcol-count,.count-pill,
+.seq-tab,.kanban-col-header,.worklist-group,.perf-table th,.m-delta,
+.campaign-status,.tag,.tpill,.uco-icp,.tcard-icp,.page-meta{
+  font-family:var(--font-display);
 }
 ::selection{background:var(--accent-dim);}
 *{caret-color:var(--accent);}
@@ -138,8 +148,8 @@ a{color:inherit;text-decoration:none;}
 .sidebar-logo{display:flex;align-items:center;gap:11px;padding:6px 6px 4px;}
 .logo-mark{width:34px;height:34px;min-width:34px;background:var(--ink);border-radius:11px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:13px;}
 .logo-text{display:flex;flex-direction:column;}
-.logo-name{font-size:16px;font-weight:700;letter-spacing:-0.01em;color:var(--text);line-height:1.2;}
-.logo-sub{font-size:11px;color:var(--sidebar-muted);margin-top:2px;}
+.logo-name{font-size:13px;font-weight:600;letter-spacing:-0.02em;color:var(--text);line-height:1.25;}
+.logo-sub{font-size:11px;color:var(--sidebar-muted);margin-top:3px;text-transform:uppercase;letter-spacing:.04em;}
 .sidebar-nav{display:flex;flex-direction:column;gap:4px;margin-top:22px;}
 .nav-item{
   display:flex;align-items:center;gap:12px;
@@ -201,19 +211,21 @@ html.sidebar-collapsed .sidebar-logo{justify-content:center;padding-left:0;paddi
 .client-switcher-item.paused{opacity:.5;}
 .client-switcher-sep{height:1px;background:var(--border-light);margin:5px 2px;}
 .client-switcher-label{padding:7px 10px 4px;font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--sidebar-muted);}
-.page{padding:28px 32px 72px;max-width:1560px;}
-.stack-16{display:flex;flex-direction:column;gap:16px;}
+.page{padding:32px 36px 80px;max-width:1500px;}
+.stack-16{display:flex;flex-direction:column;gap:20px;}
 .stack-16 > .card,.stack-16 > .metric-strip{margin-bottom:0 !important;}
-/* Page header — big display title, optional subtitle + inline meta pills */
-.page-head{margin-bottom:24px;}
-.page-h1{font-size:30px;font-weight:800;letter-spacing:-0.022em;line-height:1.15;color:var(--ink);display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
-.page-h1 .ti{font-size:24px;color:var(--text-dim);}
-.page-sub{font-size:14px;color:var(--muted);margin-top:7px;max-width:60ch;line-height:1.5;}
-.page-meta{display:inline-flex;align-items:center;gap:6px;padding:3px 11px;border-radius:var(--radius-pill);background:var(--surface-2);color:var(--muted);font-size:12px;font-weight:600;}
-.page-meta strong{color:var(--ink);font-weight:800;}
+/* Page header — mono display title, optional subtitle + inline meta pills */
+.page-head{margin-bottom:26px;}
+.page-h1{font-size:24px;font-weight:600;letter-spacing:-0.02em;line-height:1.2;color:var(--ink);display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
+.page-h1 .ti{font-size:22px;color:var(--text-dim);}
+.page-sub{font-size:13px;color:var(--text-dim);margin-top:8px;max-width:64ch;line-height:1.55;}
+.page-meta{display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:var(--radius-pill);background:var(--surface-2);color:var(--muted);font-size:11px;font-weight:600;}
+.page-meta strong{color:var(--ink);font-weight:700;}
+/* Quiet section explainer — recedes, never competes with the content */
+.desc{font-size:11px;color:var(--text-dim);line-height:1.55;max-width:66ch;margin:-2px 0 16px;}
 
 /* Cards / buttons */
-.card{background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius-card);padding:20px;box-shadow:var(--shadow-sm);}
+.card{background:var(--card-bg);border:1px solid var(--border-light);border-radius:20px;padding:22px;box-shadow:var(--shadow-sm);}
 .btn{
   display:inline-flex;align-items:center;gap:6px;
   padding:9px 16px;border-radius:var(--radius-input);border:1px solid transparent;
@@ -256,8 +268,8 @@ label{font-size:var(--label-size);font-weight:700;color:var(--muted);display:blo
 .stat-card .num{font-size:26px;font-weight:800;margin-top:6px;}
 .stat-card .label{font-size:12px;font-weight:600;opacity:0.9;}
 .two-col{display:grid;grid-template-columns:1.3fr 1fr;gap:16px;margin-bottom:16px;}
-.section-title{font-size:16px;font-weight:700;letter-spacing:-0.015em;margin-bottom:14px;display:flex;align-items:center;gap:9px;color:var(--ink);}
-.section-title i{color:var(--accent);font-size:18px;}
+.section-title{font-size:14px;font-weight:600;letter-spacing:-0.01em;margin-bottom:14px;display:flex;align-items:center;gap:8px;color:var(--ink);}
+.section-title i{color:var(--text-dim);font-size:16px;}
 
 /* Metric strip — the reference's KPI cards: label + big figure + delta pill + icon */
 .metric-strip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-bottom:24px;}
@@ -398,7 +410,7 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .shot-file-chip{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-badge);padding:3px 6px 3px 10px;font-size:11px;font-weight:600;display:inline-flex;align-items:center;gap:6px;}
 .shot-file-chip button{background:none;border:none;color:var(--muted);cursor:pointer;font-size:13px;line-height:1;}
 .status-bar{display:flex;align-items:center;gap:8px;margin-top:16px;font-size:12px;color:var(--muted);}
-.live-dot{width:8px;height:8px;border-radius:50%;background:var(--success);animation:pulse 1.6s infinite;}
+.live-dot{width:7px;height:7px;border-radius:50%;background:var(--success);}
 @keyframes pulse{0%{opacity:1;}50%{opacity:.35;}100%{opacity:1;}}
 @keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
 
@@ -432,6 +444,24 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 
 /* Targets board (its own styling - the .kanban above is tuned for the
    contact Roadmap, which has different card content and no editable columns) */
+/* Targets mini-dashboard */
+.tgt-dash{display:flex;flex-direction:column;gap:16px;margin-bottom:22px;}
+.tgt-dash-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr);gap:16px;align-items:start;}
+@media(max-width:1000px){.tgt-dash-row{grid-template-columns:1fr;}}
+.tgt-chart-wrap{max-width:220px;margin:4px auto 12px;}
+.tgt-legend{display:flex;flex-wrap:wrap;gap:6px 16px;justify-content:center;font-size:11px;color:var(--muted);font-family:var(--font-display);}
+.tgt-legend .dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:5px;vertical-align:0;}
+.tgt-legend b{color:var(--ink);font-weight:600;margin-left:2px;}
+.tgt-key-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px;}
+.tgt-key{border:1px solid var(--border-light);border-radius:12px;padding:11px 12px;cursor:pointer;transition:background .12s ease;}
+.tgt-key:hover{background:var(--surface-2);}
+.tgt-key-pillar{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.03em;color:var(--text-dim);font-family:var(--font-display);margin-bottom:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.tgt-key-person{display:flex;align-items:center;gap:9px;}
+.tgt-key-ava{width:28px;height:28px;min-width:28px;border-radius:8px;background:var(--surface-2);color:var(--ink);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:12px;font-family:var(--font-display);}
+.tgt-key-name{font-size:12.5px;font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.tgt-key-role{font-size:11px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.tgt-key-empty{font-size:11.5px;color:var(--text-dim);}
+
 .tboard-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
   background:var(--surface);border:1px solid var(--border-light);border-radius:14px;padding:8px 10px;margin-bottom:16px;}
 .tboard-search{position:relative;width:min(320px,100%);flex:none;}
@@ -2631,6 +2661,7 @@ function afterRender(page){
   if(page === 'replies' && window.__repliesQueue === undefined && !window.__repliesLoading) loadRepliesQueue();
   if(page === 'home' && window.__targets === undefined && !window.__targetsLoading) loadTargets();
   if(page === 'home' && window.__targetBoard === undefined && !window.__targetBoardLoading) loadTargetBoard();
+  if(page === 'home' && !window.__targetOpen) initTargetsDashboardChart();
   if(page === 'home' && window.__targetOpen){
     const name = window.__targetOpen;
     loadCompanyMessages(name);
@@ -3003,16 +3034,93 @@ function renderHome(){
 
   const rows = Array.isArray(window.__targets) ? window.__targets : [];
   const meta = rows.length
-    ? `<span class="page-meta"><span class="tcol-dot" style="background:var(--accent);"></span> ${rows.length} pinned</span>`
+    ? `<span class="page-meta"><strong>${rows.length}</strong> pinned</span>`
     : '';
   return `
   <div class="page-head">
     <h1 class="page-h1">Targets ${meta}</h1>
-    <div class="page-sub">Companies you want to work. Drag a card between columns as an account warms up.</div>
+    <div class="page-sub">The accounts you're working. Drag a card between columns as an account warms up.</div>
   </div>
 
+  ${renderTargetsDashboard(rows)}
   ${renderTargetsBoard()}
   `;
+}
+
+// Mini dashboard at the top of Targets — how the targeting is tracking for
+// the pinned accounts, plus the key person at each one.
+function renderTargetsDashboard(rows){
+  if(!rows.length) return '';
+  const cols = targetBoardColumns();
+  const byStage = cols.map(c => ({
+    label: c.label,
+    hex: targetColHex(c.color),
+    n: rows.filter(r => (r.targetStage||'').trim().toLowerCase() === c.label.toLowerCase()).length
+  }));
+  const unplaced = rows.length - byStage.reduce((s,x)=>s+x.n,0);
+  if(unplaced > 0 && byStage[0]) byStage[0].n += unplaced;
+
+  const inCampaign = rows.filter(r => r.inCampaign).length;
+  const withProgram = rows.filter(r => (r.programs||[]).length).length;
+  const fits = rows.map(r => r.icpFitScore).filter(v => v != null);
+  const avgFit = fits.length ? Math.round(fits.reduce((a,b)=>a+b,0)/fits.length) : null;
+
+  const metrics = `
+    <div class="metric-strip four">
+      <div class="metric-card"><div><div class="m-label">Pinned</div><div class="m-value">${rows.length}</div></div></div>
+      <div class="metric-card"><div><div class="m-label">In a campaign</div><div class="m-value">${inCampaign}<small>/ ${rows.length}</small></div></div></div>
+      <div class="metric-card"><div><div class="m-label">Active program</div><div class="m-value">${withProgram}</div></div></div>
+      <div class="metric-card"><div><div class="m-label">Avg ICP fit</div><div class="m-value">${avgFit != null ? avgFit : '—'}${avgFit != null ? '<small>/100</small>' : ''}</div></div></div>
+    </div>`;
+
+  // Key contact per pinned company: prefer a decision-maker-ish role, else first.
+  const rank = t => /chief|head|director|vp|founder|owner|c[toe]o|transformation|change/i.test(t||'') ? 0 : 1;
+  const keyCards = rows.slice(0, 8).map(r => {
+    const people = (state.contacts || []).filter(c => (c.company||'').toLowerCase() === (r.name||'').toLowerCase());
+    people.sort((a,b) => rank(a.role) - rank(b.role));
+    const p = people[0];
+    return `
+      <div class="tgt-key" ${p ? `onclick="openContactDrawer('${esc(p.name)}', null)"` : `onclick="openTarget('${esc(r.name)}')"`}>
+        <div class="tgt-key-pillar">${esc(r.name)}</div>
+        ${p
+          ? `<div class="tgt-key-person"><span class="tgt-key-ava">${esc((p.name||'?').trim()[0]||'?').toUpperCase()}</span><div style="min-width:0;"><div class="tgt-key-name">${esc(p.name)}</div><div class="tgt-key-role">${esc(p.role||'—')}</div></div></div>`
+          : `<div class="tgt-key-empty">No contact yet — <span style="color:var(--ink);">add people</span></div>`}
+      </div>`;
+  }).join('');
+
+  return `
+  <div class="tgt-dash">
+    ${metrics}
+    <div class="tgt-dash-row">
+      <div class="card">
+        <div class="section-title">By stage</div>
+        <div class="tgt-chart-wrap"><canvas id="targetsStageChart" height="150"></canvas></div>
+        <div class="tgt-legend">${byStage.map(s => `<span><span class="dot" style="background:${s.hex};"></span>${esc(s.label)} <b>${s.n}</b></span>`).join('')}</div>
+      </div>
+      <div class="card">
+        <div class="section-title">Key contacts</div>
+        <div class="desc">One person per pinned account — the company is the pillar. Click to open.</div>
+        <div class="tgt-key-grid">${keyCards}</div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function initTargetsDashboardChart(){
+  const el = document.getElementById('targetsStageChart');
+  if(!el || !window.Chart) return;
+  const rows = Array.isArray(window.__targets) ? window.__targets : [];
+  if(!rows.length) return;
+  const cols = targetBoardColumns();
+  const data = cols.map(c => rows.filter(r => (r.targetStage||'').trim().toLowerCase() === c.label.toLowerCase()).length);
+  const unplaced = rows.length - data.reduce((a,b)=>a+b,0);
+  if(unplaced > 0) data[0] += unplaced;
+  if(el.__chart) el.__chart.destroy();
+  el.__chart = new Chart(el, {
+    type: 'doughnut',
+    data: { labels: cols.map(c => c.label), datasets: [{ data, backgroundColor: cols.map(c => targetColHex(c.color)), borderWidth: 2, borderColor: '#fff' }] },
+    options: { cutout: '64%', plugins: { legend: { display: false } }, animation: { duration: 300 } }
+  });
 }
 
 /* ===================== TARGETS PIN BOARD ===================== */
@@ -3076,8 +3184,8 @@ const TARGET_BOARD_DEFAULT_COLUMNS = [
   { id:'hot', label:'Hot', color:'red' }
 ];
 const TARGET_COL_COLORS = {
-  slate:'#7C8A7E', blue:'#5880DA', teal:'#4F9E93', green:'#6E9E3E',
-  amber:'#C98A3A', violet:'#7C6CD0', red:'#D4634F', pink:'#C86AA0'
+  slate:'#9A9A90', blue:'#8FA9B4', teal:'#8FB4A8', green:'#A9C7B0',
+  amber:'#D9C3A6', violet:'#B0AAC0', red:'#CDA9A2', pink:'#CBB0BE'
 };
 function targetColHex(name){ return TARGET_COL_COLORS[name] || TARGET_COL_COLORS.slate; }
 function targetBoardColumns(){
@@ -4912,7 +5020,7 @@ function renderLoggerConnectionsMode(){
     </div>
     <div class="learning-panel" ${dropZoneAttrs('loggerConnImageInput')} style="margin:12px 0;">
       <h4><i class="ti ti-brand-linkedin"></i> Or upload screenshot(s)</h4>
-      <p class="muted" style="font-size:11.5px;margin-bottom:10px;">Drag and drop screenshot(s) here, or click below to upload.</p>
+      <p class="desc">Drag and drop screenshot(s) here, or click below to upload.</p>
       <input type="file" id="loggerConnImageInput" accept="image/*" multiple style="display:none;" onchange="handleLoggerConnImageUpload(event)">
       <button class="btn btn-secondary btn-sm" onclick="document.getElementById('loggerConnImageInput').click()"><i class="ti ti-upload"></i> Upload screenshot(s)</button>
       <div id="loggerConnShotFiles" style="margin-top:8px;">${renderLoggerConnShotFiles()}</div>
@@ -7600,7 +7708,7 @@ function renderIcpBuilderPage(){
 
   <div class="card" style="margin-bottom:16px;">
     <div class="section-title" style="margin-bottom:2px;"><i class="ti ti-venn-diagram-2"></i> The fit test — the green spot</div>
-    <div class="muted" style="font-size:11.5px;margin-bottom:12px;">An ICP is the overlap: an <strong>urgent, important problem</strong> you solve, a segment with <strong>budget</strong> to fix it, and a space that's <strong>underserved</strong> enough for you to be 10&times; better. Rate each, then read the centre.</div>
+    <div class="desc">An ICP is the overlap: an <strong>urgent, important problem</strong> you solve, a segment with <strong>budget</strong> to fix it, and a space that's <strong>underserved</strong> enough for you to be 10&times; better. Rate each, then read the centre.</div>
     <div class="icp-fit-grid">
       <div class="icp-venn">
         ${renderIcpVennSvg(m)}
@@ -7626,7 +7734,7 @@ function renderIcpBuilderPage(){
 
   <div class="card" style="margin-bottom:16px;">
     <div class="section-title" style="margin-bottom:2px;"><i class="ti ti-arrows-diff"></i> Where you're 10&times; better</div>
-    <div class="muted" style="font-size:11.5px;margin-bottom:12px;">The default competitor is usually "a spreadsheet" or "do nothing" — and that's a real competitor. Name it, then name the one segment, angle or feature where you beat it by 10&times;.</div>
+    <div class="desc">The default competitor is usually "a spreadsheet" or "do nothing" — and that's a real competitor. Name it, then name the one segment, angle or feature where you beat it by 10&times;.</div>
     <div class="two-col" style="gap:14px;">
       <div class="field"><label>The default competitor</label>
         <div ${ce('edge.defaultCompetitor','e.g. an internal PMO with a spreadsheet / a big-4 firm on a 9-month SOW')} style="font-size:12.5px;line-height:1.55;${edit?'outline:none;border:1px dashed var(--border);border-radius:6px;padding:8px;min-height:40px;':''}">${show(m.edge.defaultCompetitor)}</div>
@@ -7645,7 +7753,7 @@ function renderIcpBuilderPage(){
         <button class="view-toggle-btn ${m.revenue.stage==='revenue'?'active':''}" onclick="icpSetRevenueStage('revenue')">Have revenue</button>
       </div>` : `<span class="pill tint-grey">${m.revenue.stage==='revenue'?'Have revenue':'Pre-revenue'}</span>`}
     </div>
-    <div class="muted" style="font-size:11.5px;margin-bottom:12px;">${m.revenue.stage==='revenue'
+    <div class="desc">${m.revenue.stage==='revenue'
       ? 'Mine the revenue data: where do you actually win, why, and what makes you different? Beat that back into the profile above.'
       : 'No revenue data yet — write the thesis, then test it as fast as possible and revisit this once deals land.'}</div>
     ${m.revenue.stage==='revenue' ? `
@@ -7659,7 +7767,7 @@ function renderIcpBuilderPage(){
 
   <div class="card" style="margin-bottom:16px;">
     <div class="section-title" style="margin-bottom:2px;"><i class="ti ti-route"></i> Track it through the funnel</div>
-    <div class="muted" style="font-size:11.5px;margin-bottom:12px;">Don't file the ICP and forget it. Tag every lead, opportunity and customer ICP / non-ICP, and watch the rates diverge — that's the evidence that mobilises the whole motion.</div>
+    <div class="desc">Don't file the ICP and forget it. Tag every lead, opportunity and customer ICP / non-ICP, and watch the rates diverge — that's the evidence that mobilises the whole motion.</div>
     ${renderIcpComputedPanel()}
     <div class="spreadsheet-wrap" style="margin-bottom:12px;">
       <table class="spreadsheet-table" style="min-width:520px;">
@@ -7697,7 +7805,7 @@ function renderIcpBuilderPage(){
 
   <div class="card" style="margin-bottom:16px;">
     <div class="section-title" style="margin-bottom:2px;"><i class="ti ti-list-details"></i> The attributes</div>
-    <div class="muted" style="font-size:11.5px;margin-bottom:12px;">The concrete filters — what you screen a company against before anyone drafts a word.</div>
+    <div class="desc">The concrete filters — what you screen a company against before anyone drafts a word.</div>
     ${m.attributes.map(a => `
       <div class="icp-attr-row">
         <div ${edit?`contenteditable="true" spellcheck="false" onblur="icpEditAttr('${a.id}','label',this)" class="icp-ce"`:''} style="font-weight:700;font-size:12px;width:190px;flex:none;${edit?'outline:none;border-bottom:1px dashed var(--border);':''}">${esc(a.label)}</div>
@@ -8732,7 +8840,7 @@ function openApolloSearchModal(){
         ${sizeBuckets.map(b => `<label style="display:inline-flex;align-items:center;gap:4px;font-weight:400;"><input type="checkbox" class="apolloSize" value="${b}" ${preselected.includes(b)?'checked':''} style="width:auto;"> ${b}</label>`).join('')}
       </div>
     </div>
-    <p class="muted" style="font-size:11.5px;margin-bottom:10px;">Job title accepts a comma-separated list. For multiple locations, separate them with semicolons. Leave all sizes unticked to not filter by headcount.</p>
+    <p class="desc">Job title accepts a comma-separated list. For multiple locations, separate them with semicolons. Leave all sizes unticked to not filter by headcount.</p>
     <button class="btn btn-primary btn-sm" id="apolloSearchBtn" onclick="runApolloSearch()"><i class="ti ti-search"></i> Search Apollo</button>
     <div id="apolloResultsArea" style="margin-top:14px;"></div>
   `;
@@ -11517,7 +11625,7 @@ function renderContactDrawerContent(data, campaignName){
 
   <div class="drawer-section">
     <div class="section-title" style="font-size:13px;"><i class="ti ti-clock"></i> Follow-up reminder</div>
-    <div class="muted" style="font-size:11.5px;margin-bottom:8px;">Sets a reminder that shows up in Today's Actions once it's due - use this instead of (or as well as) mentioning a date in a note.</div>
+    <div class="desc">Sets a reminder that shows up in Today's Actions once it's due - use this instead of (or as well as) mentioning a date in a note.</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;" id="followUpReminderBtns-${c.id}">
       ${FOLLOW_UP_REMINDER_PRESETS.map(days => `<button class="btn btn-secondary btn-sm" onclick="setContactFollowUpReminder(${days})">In ${days} days</button>`).join('')}
     </div>
@@ -11836,7 +11944,7 @@ function renderCompanyPeopleModal(){
   // review step
   const rows = s.proposals || [];
   openModal(`Review — ${esc(s.company)}`, `
-    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">${rows.length} ${rows.length===1?'person':'people'} found. Set a connection status for anyone you've already reached out to, then import.</div>
+    <div class="desc">${rows.length} ${rows.length===1?'person':'people'} found. Set a connection status for anyone you've already reached out to, then import.</div>
     <div style="display:flex;flex-direction:column;gap:8px;max-height:52vh;overflow-y:auto;">
       ${rows.map((p,i)=>`
         <div style="border:1px solid var(--border-light);border-radius:var(--radius-input);padding:8px 10px;${p._skip?'opacity:.45;':''}">
@@ -12027,7 +12135,7 @@ function renderCompanyDrawerContent(data){
 
   <div class="drawer-section">
     <div class="section-title" style="font-size:13px;"><i class="ti ti-mood-sad"></i> Log account deal</div>
-    <div class="muted" style="font-size:11.5px;margin-bottom:8px;">For a client-services deal (Twenty2's own pipeline, e.g. from Monday) rather than an outreach-generated one - no campaign/contact needed.</div>
+    <div class="desc">For a client-services deal (Twenty2's own pipeline, e.g. from Monday) rather than an outreach-generated one - no campaign/contact needed.</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
       <select id="dealOutcome-${esc(c.name)}" style="flex:1;min-width:100px;"><option value="Won">Won</option><option value="Lost" selected>Lost</option><option value="Paused">Paused / stalled</option><option value="Pending">Pending</option></select>
       <input id="dealValue-${esc(c.name)}" type="number" placeholder="Value ($)" style="flex:1;min-width:100px;">
@@ -13683,7 +13791,7 @@ function renderOfferSetupCard(chat){
     return `
     <div class="card" style="margin-top:14px;">
       <div class="section-title"><i class="ti ti-diamond"></i> Review the offer</div>
-      ${o.rationale ? `<p class="muted" style="font-size:11.5px;margin-bottom:10px;"><i class="ti ti-info-circle"></i> ${esc(o.rationale)}</p>` : ''}
+      ${o.rationale ? `<p class="desc"><i class="ti ti-info-circle"></i> ${esc(o.rationale)}</p>` : ''}
       <div class="field"><label>Dream outcome</label><textarea rows="2" oninput="updateOfferField('dreamOutcome',this.value)">${esc(o.dreamOutcome||'')}</textarea></div>
       <div class="field"><label>Speed (time to value)</label><textarea rows="2" oninput="updateOfferField('timeToValue',this.value)">${esc(o.timeToValue||'')}</textarea></div>
       <div class="field"><label>Effort &amp; sacrifice</label><textarea rows="2" oninput="updateOfferField('effortAndSacrifice',this.value)">${esc(o.effortAndSacrifice||'')}</textarea></div>
@@ -14110,7 +14218,7 @@ function renderImportCompanyModal(){
   const roles = [...new Set(contacts.map(c => (c.jobTitle||'').trim()).filter(Boolean))].sort();
   const icpCount = contacts.filter(c => c.icpRoleCategory || c.isDecisionMaker === true).length;
   openModal(`Import from ${esc(s.company)}`, `
-    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">${contacts.length} contact${contacts.length===1?'':'s'} on file at ${esc(s.company)}.</div>
+    <div class="desc">${contacts.length} contact${contacts.length===1?'':'s'} on file at ${esc(s.company)}.</div>
     <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;margin-bottom:6px;"><input type="radio" name="importCoMode" ${s.mode==='all'?'checked':''} onchange="window.__importCompany.mode='all';renderImportCompanyModal()"> All ${contacts.length} contacts</label>
     ${icpCount ? `<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;margin-bottom:6px;"><input type="radio" name="importCoMode" ${s.mode==='icp'?'checked':''} onchange="window.__importCompany.mode='icp';renderImportCompanyModal()"> ICP roles / decision-makers only (${icpCount})</label>` : ''}
     <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;margin-bottom:6px;"><input type="radio" name="importCoMode" ${s.mode==='roles'?'checked':''} onchange="window.__importCompany.mode='roles';renderImportCompanyModal()"> Pick roles</label>
@@ -15107,7 +15215,7 @@ function renderAccountSegmentationGrid(){
   const cellFor = (size, momentum) => data.companies.filter(c => c.sizeBand === size && c.momentum === momentum);
 
   return `
-    <div class="muted" style="font-size:11.5px;margin-bottom:8px;">${data.scoredCount} of ${data.totalCompanies} scored, account-wide.</div>
+    <div class="desc">${data.scoredCount} of ${data.totalCompanies} scored, account-wide.</div>
     <div style="overflow-x:auto;">
       <div style="display:grid;grid-template-columns:90px repeat(${SEGMENTATION_SIZE_COLS.length},minmax(120px,1fr));gap:4px;min-width:560px;">
         <div></div>
@@ -15250,7 +15358,7 @@ function renderProgramsCard(){
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-progress-bolt"></i> Active programs</div>
       <button class="btn btn-primary btn-sm" onclick="openProgramCapture()"><i class="ti ti-message-plus"></i> Log a finding</button>
     </div>
-    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Which companies are running a transformation program right now — Twenty2's first GTM step. A company with a program in delivery (or slipping) that isn't in a campaign yet is your next target.</div>
+    <div class="desc">Which companies are running a transformation program right now — Twenty2's first GTM step. A company with a program in delivery (or slipping) that isn't in a campaign yet is your next target.</div>
     ${(p && !p.error && p.companies.length) ? `
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
         <select onchange="window.__programsFilterType=this.value;renderPage()" style="font-size:12px;max-width:220px;">
@@ -15461,7 +15569,7 @@ function renderProgramBatchReview(){
   const chip = c => ({ high:'var(--success)', medium:'var(--warning)', low:'var(--muted)' }[c] || 'var(--muted)');
   const pend = rows.filter(r => r._status === 'pending').length;
   const body = `
-    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">${rows.length} finding(s) classified${s.truncated ? ' (first 25 only)' : ''}. Fix the company match if it's wrong, then Accept.</div>
+    <div class="desc">${rows.length} finding(s) classified${s.truncated ? ' (first 25 only)' : ''}. Fix the company match if it's wrong, then Accept.</div>
     <datalist id="progBulkCompanyList">${allNames.map(n => `<option value="${esc(n)}">`).join('')}</datalist>
     <div style="display:flex;flex-direction:column;gap:9px;max-height:52vh;overflow-y:auto;">
       ${rows.map((r,i) => {
@@ -17515,7 +17623,7 @@ function renderChangeArchitectureCanvas(companyName){
         </div>
       </div>
     </div>
-    <div class="muted" style="font-size:11.5px;margin-bottom:8px;">Freeform board — drag empty space to pan, scroll to zoom. Insert cards, shapes, sticky notes and charts; double-click to edit text; select an element for colour, shape and connectors. Paste or drop an image, PDF or link straight onto the board.${d.layers.orgMap ? ' The live contact map updates itself as the CRM changes.' : ''} Everything autosaves.</div>
+    <div class="desc">Freeform board — drag empty space to pan, scroll to zoom. Insert cards, shapes, sticky notes and charts; double-click to edit text; select an element for colour, shape and connectors. Paste or drop an image, PDF or link straight onto the board.${d.layers.orgMap ? ' The live contact map updates itself as the CRM changes.' : ''} Everything autosaves.</div>
     <div id="archToolbarHolder">${archInlineToolbarHtml(companyName)}</div>
     <div id="archViewport" class="arch-viewport" tabindex="0" onmousedown="archViewportMouseDown(event)" onwheel="archWheel(event)" onpaste="archViewportPaste(event,'${esc(companyName)}')" ondragover="archViewportDragOver(event)" ondrop="archViewportDrop(event,'${esc(companyName)}')">
       <div id="archScene" class="arch-scene" style="width:${ARCH_SCENE_W}px;height:${ARCH_SCENE_H}px;">
@@ -17703,7 +17811,7 @@ function renderSegmentationGrid(campaign){
     const cellFor = (size, momentum) => data.companies.filter(c => c.sizeBand === size && c.momentum === momentum);
 
     return `
-      <div class="muted" style="font-size:11.5px;margin-bottom:8px;">${data.scoredCount} of ${data.totalCompanies} scored.</div>
+      <div class="desc">${data.scoredCount} of ${data.totalCompanies} scored.</div>
       <div style="overflow-x:auto;">
         <div style="display:grid;grid-template-columns:90px repeat(${SEGMENTATION_SIZE_COLS.length},minmax(120px,1fr));gap:4px;min-width:560px;">
           <div></div>
@@ -17728,7 +17836,7 @@ function renderSegmentationGrid(campaign){
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-grid-dots"></i> ICP segmentation</div>
       <button class="btn btn-secondary btn-sm" id="scoreIcpBtn-${campaign.id}" onclick="scoreIcpBulk('${campaign.id}')"><i class="ti ti-sparkles"></i> Score ICP</button>
     </div>
-    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Size x momentum - every company reachable from this campaign, scored on 3 attributes. Costs Engine tokens; already-scored companies are skipped automatically.</div>
+    <div class="desc">Size x momentum - every company reachable from this campaign, scored on 3 attributes. Costs Engine tokens; already-scored companies are skipped automatically.</div>
     ${body()}
   </div>`;
 }
@@ -18049,7 +18157,7 @@ function renderDraftTrustCard(campaign){
   return `
   <div class="card" style="margin-bottom:16px;">
     <div class="section-title" style="margin-bottom:4px;"><i class="ti ti-shield-check"></i> Draft trust</div>
-    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Share of AI drafts sent exactly as written - the signal for when a stage needs less review, not more.</div>
+    <div class="desc">Share of AI drafts sent exactly as written - the signal for when a stage needs less review, not more.</div>
     ${!data ? '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading…</div>' :
       data.error ? `<div class="muted">Could not load: ${esc(data.error)}</div>` :
       !data.total ? '<div class="empty-state">No sent drafts logged yet.</div>' : `
@@ -18089,7 +18197,7 @@ function renderVariantPerformanceCard(campaign){
   return `
   <div class="card" style="margin-bottom:16px;">
     <div class="section-title" style="margin-bottom:4px;"><i class="ti ti-git-branch"></i> Variant performance</div>
-    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Acceptance by whatever's tagged in Message Variant for this campaign's contacts.</div>
+    <div class="desc">Acceptance by whatever's tagged in Message Variant for this campaign's contacts.</div>
     <div class="mini-cards" style="grid-template-columns:repeat(${Math.min(4,Object.keys(stats).length)},1fr);margin-bottom:0;">
       ${Object.entries(stats).map(([label,s]) => `
         <div class="mini-card">
@@ -18106,7 +18214,7 @@ function renderCampaignMessagePerformance(){
   return `
   <div class="card" style="margin-bottom:16px;">
     <div class="section-title" style="margin-bottom:10px;"><i class="ti ti-arrow-back-up"></i> Message-level reply rate &amp; response time</div>
-    <div class="muted" style="font-size:11.5px;margin-bottom:12px;">How each message in the sequence performs on its own, ground-truthed off logged replies (not just "moved to the next stage" - sends can go out on schedule with no reply confirmed) - this is where a real drop-off shows.</div>
+    <div class="desc">How each message in the sequence performs on its own, ground-truthed off logged replies (not just "moved to the next stage" - sends can go out on schedule with no reply confirmed) - this is where a real drop-off shows.</div>
     ${!data ? '<div class="muted"><i class="ti ti-loader-2"></i> Loading...</div>' :
       data.error ? `<div class="muted">Could not load: ${esc(data.error)}</div>` :
       !data.messages.some(m=>m.sent) ? '<div class="empty-state">No messages sent in this campaign yet.</div>' : `
@@ -18183,7 +18291,7 @@ function renderAcceptedReviewCard(campaign){
   return `
   <div class="card" style="margin-bottom:16px;">
     <div class="section-title" style="margin-bottom:4px;"><i class="ti ti-list-search"></i> Review accepted contacts (${silent.length})</div>
-    <div class="muted" style="font-size:11.5px;margin-bottom:12px;">Accepted your request but haven't replied. Skim the roles and summaries against your ICP — a low reply rate is usually the wrong person, not just the wrong message. Exclude anyone who isn't a fit.</div>
+    <div class="desc">Accepted your request but haven't replied. Skim the roles and summaries against your ICP — a low reply rate is usually the wrong person, not just the wrong message. Exclude anyone who isn't a fit.</div>
     <div style="max-height:280px;overflow-y:auto;">
       ${silent.slice(0,40).map(c => `
         <div style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--border-light);">
@@ -18212,7 +18320,7 @@ function renderConnectionAbCard(ab){
   return `
   <div class="card" style="margin-bottom:16px;">
     <div class="section-title" style="margin-bottom:4px;"><i class="ti ti-git-branch"></i> Connection note A/B</div>
-    <div class="muted" style="font-size:11.5px;margin-bottom:12px;">Acceptance rate by whether the request went out with a note or not. ${ab.mode==='Split test' ? 'Contacts are assigned a 50/50 arm automatically.' : 'Set the mode on the Strategy tab.'}</div>
+    <div class="desc">Acceptance rate by whether the request went out with a note or not. ${ab.mode==='Split test' ? 'Contacts are assigned a 50/50 arm automatically.' : 'Set the mode on the Strategy tab.'}</div>
     <div class="mini-cards" style="grid-template-columns:repeat(2,1fr);margin-bottom:0;">
       ${arm('With note', ab.note)}
       ${arm('No note', ab.noNote)}
@@ -18284,7 +18392,7 @@ function renderAutopsyDigestCard(campaign){
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-stethoscope"></i> This week's GTM review</div>
       <button class="btn btn-secondary btn-sm" ${loading?'disabled':''} onclick="runAutopsyDigest('${campaign.id}')"><i class="ti ${loading?'ti-loader-2':'ti-refresh'}"></i> ${loading?'Reviewing…':(list?'Run again':'Run autopsy digest')}</button>
     </div>
-    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Reads every stalled contact's full thread and diagnoses the real reason - not just the logged outcome. Costs Engine tokens per run; nothing here sends anything.</div>
+    <div class="desc">Reads every stalled contact's full thread and diagnoses the real reason - not just the logged outcome. Costs Engine tokens per run; nothing here sends anything.</div>
     ${!list ? '<div class="muted" style="font-size:12.5px;">Not run yet this session.</div>' :
       !list.length ? '<div class="empty-state">Nothing stalled to review right now.</div>' :
       list.map((r,idx) => {
@@ -18590,7 +18698,7 @@ function renderCampaignOfferPendingCard(pending){
   return `
   <div class="card" style="margin-bottom:16px;">
     <div class="section-title"><i class="ti ti-diamond"></i> New offer (not saved yet)</div>
-    ${pending.rationale ? `<p class="muted" style="font-size:11.5px;margin-bottom:10px;"><i class="ti ti-info-circle"></i> ${esc(pending.rationale)}</p>` : ''}
+    ${pending.rationale ? `<p class="desc"><i class="ti ti-info-circle"></i> ${esc(pending.rationale)}</p>` : ''}
     <div class="mini-cards" style="grid-template-columns:repeat(2,1fr);margin-bottom:12px;">
       <div class="mini-card" style="text-align:left;padding:12px 14px;"><div class="label" style="margin-top:0;">Dream outcome</div><div style="font-size:12.5px;margin-top:4px;">${esc(pending.dreamOutcome||'—')}</div></div>
       <div class="mini-card" style="text-align:left;padding:12px 14px;"><div class="label" style="margin-top:0;">Speed</div><div style="font-size:12.5px;margin-top:4px;">${esc(pending.timeToValue||'—')}</div></div>
@@ -18786,7 +18894,7 @@ function renderPipelineFunnel(data){
   return `
   <div class="card" style="margin-bottom:16px;">
     <div class="section-title"><i class="ti ti-filter"></i> Pipeline progress</div>
-    <div class="muted" style="font-size:11.5px;margin-bottom:12px;">Distinct contacts in this campaign who have reached each stage (from Campaign Contacts + Stage History), and the conversion into it. Meeting booked / Won / Lost come from the Deals table.${excluded ? ` ${excluded} contact${excluded===1?'':'s'} excluded, not counted below.` : ''}</div>
+    <div class="desc">Distinct contacts in this campaign who have reached each stage (from Campaign Contacts + Stage History), and the conversion into it. Meeting booked / Won / Lost come from the Deals table.${excluded ? ` ${excluded} contact${excluded===1?'':'s'} excluded, not counted below.` : ''}</div>
     ${rows}
     <div class="funnel-row"><div class="funnel-label">Won</div><div class="funnel-track"><div class="funnel-fill won" style="width:${Math.max(4,Math.round(won/maxCount*100))}%">${won}</div></div><div class="funnel-conv">${meetingsCount?`${wonPct}% of meetings`:'—'}</div></div>
     <div class="funnel-row"><div class="funnel-label">Lost</div><div class="funnel-track"><div class="funnel-fill lost" style="width:${Math.max(4,Math.round(lost/maxCount*100))}%">${lost}</div></div><div class="funnel-conv">${meetingsCount?`${lostPct}% of meetings`:'—'}</div></div>
@@ -20117,7 +20225,7 @@ function renderIntelligence(){
   </div>
 
   <div class="engine-group-heading"><i class="ti ti-brain"></i> Engine results</div>
-  <div id="intelMeta" class="muted" style="font-size:11.5px;margin-bottom:10px;"></div>
+  <div id="intelMeta" class="desc"></div>
   <div class="card" style="margin-bottom:12px;">
     <div class="section-title"><i class="ti ti-chart-line"></i> Campaign performance</div>
     <div class="perf-table-wrap" id="campaignPerformanceWrap">
@@ -22613,8 +22721,8 @@ function renderSeoServicePreviewPanel(){
   </div>
   <div class="two-col">
     <div class="card">
-      ${p.usedCustomVoiceProfile === true ? `<div class="muted" style="font-size:11.5px;margin-bottom:10px;"><i class="ti ti-circle-check" style="color:#2f9e44;"></i> Generated using your saved SEO Voice Profile</div>` : ''}
-      ${p.usedCustomVoiceProfile === false ? `<div class="muted" style="font-size:11.5px;margin-bottom:10px;"><i class="ti ti-alert-triangle" style="color:#a1701c;"></i> Generated using T2C's default voice profile</div>` : ''}
+      ${p.usedCustomVoiceProfile === true ? `<div class="desc"><i class="ti ti-circle-check" style="color:#2f9e44;"></i> Generated using your saved SEO Voice Profile</div>` : ''}
+      ${p.usedCustomVoiceProfile === false ? `<div class="desc"><i class="ti ti-alert-triangle" style="color:#a1701c;"></i> Generated using T2C's default voice profile</div>` : ''}
       ${p.linkWarning ? `<div style="font-size:11.5px;margin-bottom:10px;color:#a1701c;background:rgba(161,112,28,.08);border:1px solid rgba(161,112,28,.25);border-radius:6px;padding:7px 10px;"><i class="ti ti-link-off"></i> ${esc(p.linkWarning)}</div>` : ''}
       <div class="field"><label>Keyword</label><input value="${esc(p.keyword)}" disabled></div>
       <div class="field"><label>Title</label><input id="seoServicePreviewTitle" value="${esc(p.title)}"></div>
@@ -22877,7 +22985,7 @@ function renderSeoVoiceProfileEditor(){
     <div class="field">
       <textarea id="seoVoiceProfileInput" rows="6" placeholder="Describe T2C's tone, writing style, opinions, stats, and stories...">${esc(v.voiceProfile)}</textarea>
     </div>
-    ${!v.voiceProfile ? `<p class="muted" style="font-size:11.5px;margin-bottom:10px;">Currently blank - generated posts use T2C's default profile until you save one here.</p>` : ''}
+    ${!v.voiceProfile ? `<p class="desc">Currently blank - generated posts use T2C's default profile until you save one here.</p>` : ''}
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
       <button class="btn btn-primary btn-sm" onclick="saveSeoVoiceProfile()"><i class="ti ti-device-floppy"></i> Save voice profile</button>
       <button class="btn btn-secondary btn-sm" id="refreshCompanyProfileBtn" onclick="refreshCompanyProfile(this)"><i class="ti ti-refresh"></i> Refresh Company Profile</button>
@@ -23012,8 +23120,8 @@ function renderSeoPreviewPanel(){
   </div>
   <div class="two-col">
     <div class="card">
-      ${p.usedCustomVoiceProfile === true ? `<div class="muted" style="font-size:11.5px;margin-bottom:10px;"><i class="ti ti-circle-check" style="color:#2f9e44;"></i> Generated using your saved SEO Voice Profile</div>` : ''}
-      ${p.usedCustomVoiceProfile === false ? `<div class="muted" style="font-size:11.5px;margin-bottom:10px;"><i class="ti ti-alert-triangle" style="color:#a1701c;"></i> Generated using T2C's default voice profile - no custom profile was saved at generation time</div>` : ''}
+      ${p.usedCustomVoiceProfile === true ? `<div class="desc"><i class="ti ti-circle-check" style="color:#2f9e44;"></i> Generated using your saved SEO Voice Profile</div>` : ''}
+      ${p.usedCustomVoiceProfile === false ? `<div class="desc"><i class="ti ti-alert-triangle" style="color:#a1701c;"></i> Generated using T2C's default voice profile - no custom profile was saved at generation time</div>` : ''}
       ${p.linkWarning ? `<div style="font-size:11.5px;margin-bottom:10px;color:#a1701c;background:rgba(161,112,28,.08);border:1px solid rgba(161,112,28,.25);border-radius:6px;padding:7px 10px;"><i class="ti ti-link-off"></i> ${esc(p.linkWarning)}</div>` : ''}
       <div class="field"><label>Title</label><input id="seoPreviewTitle" value="${esc(p.title)}"></div>
       <div class="field"><label>Meta title <span class="muted">(${(p.metaTitle||'').length}/60)</span></label><input id="seoPreviewMetaTitle" value="${esc(p.metaTitle)}"></div>
@@ -24949,7 +25057,7 @@ function renderEmailCopyPreview(){
   if(ref.id){
     tplNote = ctx.templateStructureUsed
       ? `<p class="muted" style="font-size:11.5px;margin-bottom:12px;color:var(--success,#1a7f37);"><i class="ti ti-check"></i> Matched <strong>${esc(ref.name || 'template')}</strong>'s structure.</p>`
-      : `<p class="muted" style="font-size:11.5px;margin-bottom:12px;"><i class="ti ti-alert-triangle"></i> Couldn't load <strong>${esc(ref.name || 'that template')}</strong>'s layout from Omnisend, so this was generated freely.</p>`;
+      : `<p class="desc"><i class="ti ti-alert-triangle"></i> Couldn't load <strong>${esc(ref.name || 'that template')}</strong>'s layout from Omnisend, so this was generated freely.</p>`;
   }
 
   return `
@@ -25193,7 +25301,7 @@ function renderEmailCampaignsTab(){
     return '<div class="card"><div class="empty-state">No Omnisend campaigns yet.</div></div>';
   }
   const statsErr = window.__omnisendStatsError
-    ? `<div class="muted" style="font-size:11.5px;margin-bottom:12px;"><i class="ti ti-alert-triangle"></i> Rates unavailable: ${esc(window.__omnisendStatsError)}</div>`
+    ? `<div class="desc"><i class="ti ti-alert-triangle"></i> Rates unavailable: ${esc(window.__omnisendStatsError)}</div>`
     : '';
   return `
   <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
@@ -25540,7 +25648,7 @@ function renderUniverseMetricStrip(){
     const noCampaign = progCompanies.filter(r => !r.inCampaign).length;
     cards.push(`<div class="metric-card">
       <div>
-        <div class="m-label"><span class="dot" style="background:var(--tint-gold-fg);"></span> Companies with an active program</div>
+        <div class="m-label"><span class="dot" style="background:var(--tint-gold-fg);"></span> Companies with a program</div>
         <div class="m-value">${active}</div>
         <span class="m-delta ${noCampaign ? 'down' : ''}">${noCampaign ? noCampaign + ' not in a campaign' : 'all in a campaign'}</span>
       </div>
@@ -25549,7 +25657,7 @@ function renderUniverseMetricStrip(){
   } else if(haveW){
     cards.push(`<div class="metric-card">
       <div>
-        <div class="m-label"><span class="dot" style="background:var(--tint-gold-fg);"></span> Companies with an active program</div>
+        <div class="m-label"><span class="dot" style="background:var(--tint-gold-fg);"></span> Companies with a program</div>
         <div class="m-value">${(w.withActiveProgram || []).length}</div>
         <span class="m-delta flat">from the worklist</span>
       </div>
@@ -25961,7 +26069,7 @@ function renderMarketPulseBody(pulse){
   if(!pulse.eventCount && !pulse.notGenerated) return '<div class="empty-state">Upload a research event transcript above to start building Market Pulse.</div>';
   if(pulse.notGenerated) return '<div class="muted" style="font-size:12.5px;">No Market Pulse generated yet. Press Refresh when you want the Engine to analyse across all research events.</div>';
   return `
-  <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Aggregated across ${pulse.eventCount} research event${pulse.eventCount===1?'':'s'}.${pulse.storedAt || pulse.generatedAt ? ` Generated ${esc(new Date(pulse.storedAt||pulse.generatedAt).toLocaleString('en-AU',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}))}.` : ''}</div>
+  <div class="desc">Aggregated across ${pulse.eventCount} research event${pulse.eventCount===1?'':'s'}.${pulse.storedAt || pulse.generatedAt ? ` Generated ${esc(new Date(pulse.storedAt||pulse.generatedAt).toLocaleString('en-AU',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}))}.` : ''}</div>
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;">
     <div>
       <h5>Top recurring pain points</h5>
