@@ -5,3 +5,8 @@ node_modules/
 .claude/worktrees/
 gtm-demo.html
 gtm-demo-README.md
+.design-ref/
+
+# Impeccable design skill (reinstall with: npx impeccable install)
+.claude/skills/
+.claude/agents/
