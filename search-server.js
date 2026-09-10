@@ -3846,6 +3846,113 @@ const PROGRAM_TYPES = ['ERP / SAP', 'Agile / SAFe rollout', 'Digital / business 
 const PROGRAM_PHASES = ['Announced', 'Mobilising', 'In delivery', 'Stabilising', 'Slipping', 'Complete', 'Unknown'];
 const PROGRAM_HOT_PHASES = ['In delivery', 'Slipping', 'Mobilising'];
 
+// ---- Program "heat": how good an OPPORTUNITY a finding is, separate from the
+// agent's confidence that the finding is real. Driven by phase (the real
+// signal), ICP fit, whether the account is already being worked, and recency.
+const PROGRAM_PHASE_HEAT = {
+  Announced: 40, Slipping: 40, 'In delivery': 30, Mobilising: 26,
+  Stabilising: 10, Unknown: 12, Complete: 0
+};
+const PROGRAM_PHASE_READ = {
+  Announced: 'Just announced — budget is forming and delivery partners are being scoped. The earliest and best window to shape how they approach delivery.',
+  Mobilising: 'Standing up the PMO and choosing a method. Early enough to land on a single workstream and expand.',
+  'In delivery': 'Mid-flight — the phase where programs lose momentum and scope creeps. This is the "help a programme that has stalled" conversation.',
+  Stabilising: 'Winding down and embedding. Adoption and capability-transfer work only from here.',
+  Slipping: 'Publicly behind schedule — the exec sponsor is exposed and actively looking for help. Highest urgency.',
+  Complete: 'Finished. Nothing to act on unless a follow-on programme starts.',
+  Unknown: 'Phase unclear — worth a quick look to confirm it is real and live before acting.'
+};
+const PROGRAM_TYPE_READ = {
+  'Operating model': "Operating-model redesign is Twenty2's core ground — structure plus ways of working.",
+  'ERP / SAP': 'ERP programmes fail on adoption, not configuration — that is the gap.',
+  'Agile / SAFe rollout': 'Agile rollouts stall on culture, not framework.',
+  'Digital / business transformation': 'A "make it stick across the business" problem — a change problem dressed as a tech one.',
+  'Cloud / data platform': 'Platform value depends on adoption; that is the change work.',
+  Other: ''
+};
+
+function daysSinceIsoDate(s) {
+  if (!s) return null;
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return null;
+  return Math.floor((Date.now() - d.getTime()) / 86400000);
+}
+
+// item: a discovery queue row. ctx: { icpTag, fitScore, inCampaign }
+function scoreProgramHeat(item, ctx) {
+  const phase = (item.program && item.program.phase) || 'Unknown';
+  let heat = PROGRAM_PHASE_HEAT[phase] ?? 12;
+  if (/resources icp/i.test(ctx.icpTag || '')) heat += 25;
+  else if (Number.isFinite(ctx.fitScore)) heat += Math.round((ctx.fitScore / 100) * 20);
+  if (!ctx.inCampaign) heat += 20;
+  const age = daysSinceIsoDate(item.foundAt);
+  if (age != null && age <= 45) heat += 12;
+  else if (age != null && age <= 120) heat += 5;
+  if (item.confidence === 'low') heat -= 12;
+  else if (item.confidence === 'high') heat += 6;
+  heat = Math.max(0, Math.min(100, heat));
+  const band = heat >= 58 ? 'hot' : heat >= 34 ? 'warm' : 'cold';
+  return { heat, band };
+}
+
+function programWhyItMatters(item, ctx) {
+  const p = item.program || {};
+  const parts = [PROGRAM_PHASE_READ[p.phase] || PROGRAM_PHASE_READ.Unknown];
+  if (PROGRAM_TYPE_READ[p.type]) parts.push(PROGRAM_TYPE_READ[p.type]);
+  if (ctx.inCampaign) parts.push('This account is already in a campaign — a reason to escalate, not to start cold.');
+  else if (/resources icp/i.test(ctx.icpTag || '')) parts.push('On the Resources ICP and not yet in a campaign.');
+  return parts.join(' ');
+}
+
+// Best-effort enrichment of the pending discovery queue with heat + a one-line
+// read. Falls back to the raw rows on any failure (cron-safe, same contract as
+// the rest of discovery).
+async function enrichProgramDiscoveryQueue(pending) {
+  if (!pending.length) return pending;
+  try {
+    const [companyRecords, ccRows, contactRecords] = await Promise.all([
+      airtableFetchAllRecords('Companies'),
+      fetchCampaignContactsRows(),
+      airtableFetchAllRecords('Contacts')
+    ]);
+    const byName = {};
+    companyRecords.forEach(r => { byName[(r.fields['Company Name'] || '').toLowerCase()] = r; });
+    const byId = {};
+    companyRecords.forEach(r => { byId[r.id] = r; });
+    const contactCompany = {};
+    contactRecords.forEach(r => { contactCompany[r.id] = (r.fields['Company'] || [])[0]; });
+    const companiesInCampaign = new Set();
+    ccRows.forEach(row => {
+      const cid = (row.fields['Contact'] || [])[0];
+      const comp = cid ? contactCompany[cid] : null;
+      if (comp) companiesInCampaign.add(comp);
+    });
+
+    return pending.map(q => {
+      const rec = byName[(q.companyName || '').toLowerCase()] || (q.companyId && byId[q.companyId]) || null;
+      const ctx = {
+        icpTag: rec ? rec.fields['ICP Tag'] : null,
+        fitScore: rec ? Number(rec.fields['ICP Fit Score']) : NaN,
+        inCampaign: rec ? companiesInCampaign.has(rec.id) : false
+      };
+      if (q.destination === 'program') {
+        const { heat, band } = scoreProgramHeat(q, ctx);
+        return { ...q, heat, heatBand: band, inCampaign: ctx.inCampaign, icpTag: ctx.icpTag || null, whyItMatters: programWhyItMatters(q, ctx) };
+      }
+      let heat = q.confidence === 'high' ? 30 : q.confidence === 'low' ? 8 : 18;
+      const age = daysSinceIsoDate(q.foundAt);
+      if (age != null && age <= 45) heat += 10;
+      return {
+        ...q, heat, heatBand: heat >= 34 ? 'warm' : 'cold', inCampaign: ctx.inCampaign, icpTag: ctx.icpTag || null,
+        whyItMatters: 'A leadership, funding or structural change — not a programme itself, but often what precedes one. Worth logging against the account.'
+      };
+    }).sort((a, b) => (b.heat || 0) - (a.heat || 0));
+  } catch (err) {
+    console.warn('Program discovery queue enrichment failed (non-fatal):', err.message);
+    return pending;
+  }
+}
+
 function parseCompanyPrograms(cf) {
   const raw = parseJsonSafe((cf || {})['Programs (JSON)']);
   const arr = Array.isArray(raw) ? raw : (Array.isArray(raw && raw.programs) ? raw.programs : []);
@@ -11326,10 +11433,11 @@ app.get('/api/programs/discovery', async (req, res) => {
   try {
     const state = await loadProgramDiscoveryState();
     const pending = state.queue.filter(q => q.status === 'pending');
+    const enriched = await enrichProgramDiscoveryQueue(pending);
     const lastRun = state.log[state.log.length - 1] || null;
     res.json({
       settings: state.settings,
-      queue: pending,
+      queue: enriched,
       pendingCount: pending.length,
       log: state.log.slice(-10).reverse(),
       lastRunAt: lastRun ? lastRun.ranAt : null,
