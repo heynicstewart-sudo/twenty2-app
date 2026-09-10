@@ -14421,8 +14421,8 @@ app.post('/api/monday/webhook', async (req, res) => {
     // Which column carries the company name depends on the board.
     const companyNameRaw =
       boardMeta.kind === 'pipeline' ? (row['Client'] || row.name)
-      : boardMeta.kind === 'contacts' ? (row['Associated Company'] || '')
-      : boardMeta.kind === 'radar' ? (row['Organisation'] || '')
+      : boardMeta.kind === 'contacts' ? (row['Company'] || row['Associated Company'] || row['Account'] || '')
+      : boardMeta.kind === 'radar' ? (row['Organisation'] || row['Organization'] || row['Company'] || '')
       : boardMeta.kind === 'marketmap' ? row.name
       : row.name.split(' — ')[0].split(' - ')[0].split(' –')[0].trim();  // deal: "Company — Deal Name"
 
