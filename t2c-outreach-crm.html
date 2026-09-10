@@ -253,8 +253,21 @@ label{font-size:var(--label-size);font-weight:700;color:var(--muted);display:blo
 .stat-card .num{font-size:26px;font-weight:800;margin-top:6px;}
 .stat-card .label{font-size:12px;font-weight:600;opacity:0.9;}
 .two-col{display:grid;grid-template-columns:1.3fr 1fr;gap:16px;margin-bottom:16px;}
-.section-title{font-size:15px;font-weight:var(--header-weight);letter-spacing:-0.01em;margin-bottom:12px;display:flex;align-items:center;gap:8px;}
-.section-title i{color:var(--accent);font-size:17px;}
+.section-title{font-size:16px;font-weight:700;letter-spacing:-0.015em;margin-bottom:14px;display:flex;align-items:center;gap:9px;color:var(--ink);}
+.section-title i{color:var(--accent);font-size:18px;}
+
+/* Metric strip — the reference's KPI cards: label + big figure + delta pill + icon */
+.metric-strip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-bottom:24px;}
+.metric-strip.four{grid-template-columns:repeat(4,minmax(0,1fr));}
+.metric-card{background:var(--surface);border:1px solid var(--border-light);border-radius:var(--radius-card);padding:18px 20px;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;box-shadow:var(--shadow-sm);}
+.metric-card .m-label{display:flex;align-items:center;gap:7px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:var(--text-dim);}
+.metric-card .m-label .dot{width:7px;height:7px;border-radius:50%;background:var(--accent);flex:none;}
+.metric-card .m-value{font-size:26px;font-weight:800;letter-spacing:-0.02em;color:var(--ink);margin-top:8px;display:flex;align-items:baseline;gap:6px;}
+.metric-card .m-value small{font-size:13px;font-weight:600;color:var(--muted);letter-spacing:0;}
+.metric-card .m-delta{display:inline-flex;align-items:center;gap:3px;margin-top:9px;padding:2px 8px;border-radius:var(--radius-pill);font-size:11px;font-weight:700;background:var(--lime-soft);color:var(--lime-ink);}
+.metric-card .m-delta.flat{background:var(--surface-2);color:var(--muted);}
+.metric-card .m-delta.down{background:var(--tint-red-bg);color:var(--tint-red-fg);}
+.metric-card .m-icon{width:44px;height:44px;min-width:44px;border-radius:13px;background:var(--surface-2);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:21px;}
 /* Accent-filled hero card (dashboard / stat highlights) */
 .card-hero{background:linear-gradient(135deg,#5880DA 0%,#7CA0E8 100%);color:#fff;border:none;}
 .card-hero .section-title,.card-hero .section-title i,.card-hero .muted,.card-hero .num,.card-hero .label{color:#fff;}
@@ -2726,12 +2739,14 @@ function renderReplies(){
     body = rows.map(renderReplyCard).join('');
   }
   return `
-    <div style="max-width:760px;margin:0 auto;">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
-        <h2 style="margin:0;">Replies${rows && rows.length ? ` <span class="count-pill has">${rows.length}</span>` : ''}</h2>
+    <div style="max-width:780px;margin:0 auto;">
+      <div class="page-head" style="display:flex;align-items:flex-end;justify-content:space-between;gap:16px;">
+        <div>
+          <h1 class="page-h1">Replies ${rows && rows.length ? `<span class="page-meta"><span class="tcol-dot" style="background:var(--accent);"></span> ${rows.length} waiting</span>` : ''}</h1>
+          <div class="page-sub">Every contact who has replied and is waiting on us, most useful first. The draft is already written — review it, steer it, approve.</div>
+        </div>
         <button class="btn btn-secondary btn-sm" onclick="loadRepliesQueue()"><i class="ti ti-refresh"></i> Refresh</button>
       </div>
-      <p class="muted" style="margin-top:0;font-size:12.5px;">Every contact who has replied and is waiting on us, most useful first. The draft is already written — review it, steer it if needed, then approve and paste.</p>
       ${body}
     </div>`;
 }
@@ -13352,12 +13367,15 @@ function campaignContactStatus(c){
 function renderCampaignListView(){
   const campaigns = state.campaigns.slice().sort((a,b) => new Date(b.updatedAt||b.createdAt) - new Date(a.updatedAt||a.createdAt));
   return `
+  <div class="page-head" style="display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;">
+    <div>
+      <h1 class="page-h1">Campaigns</h1>
+      <div class="page-sub">Multi-channel, trigger-based outreach sequences and their message roadmaps.</div>
+    </div>
+    <button class="btn btn-primary" onclick="openNewCampaignChat()"><i class="ti ti-plus"></i> New Campaign</button>
+  </div>
   ${renderCampaignsAreaSubNav('campaigns')}
   <div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
-      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-rocket"></i> Campaigns</div>
-      <button class="btn btn-primary" onclick="openNewCampaignChat()"><i class="ti ti-plus"></i> New Campaign</button>
-    </div>
     ${campaigns.length ? `
     <div class="perf-table-wrap">
       <table class="perf-table">
@@ -15801,11 +15819,17 @@ function deleteCompanyProgram(companyName, idx){
 function renderCompanyUniverse(){
   window.__ctxCampaignTag = null;
   return `
-  <div style="display:flex;justify-content:flex-end;gap:6px;margin-bottom:12px;">
-    <button class="btn btn-ghost btn-sm" onclick="goToRunIntelligence()"><i class="ti ti-brain"></i> Run Engine</button>
-    <button class="btn btn-ghost btn-sm" onclick="navigate('icpbuilder')"><i class="ti ti-crosshair"></i> ICP builder</button>
-    <button class="btn btn-ghost btn-sm" onclick="navigate('competitormap')"><i class="ti ti-affiliate"></i> Competitor map</button>
-    <button class="btn btn-ghost btn-sm" onclick="navigate('gtmmotion')"><i class="ti ti-topology-star-3"></i> See our GTM motion</button>
+  <div class="page-head" style="display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;">
+    <div>
+      <h1 class="page-h1">Company Universe</h1>
+      <div class="page-sub">Every target account on file — transformation programs, buying triggers and ICP qualification in one directory.</div>
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;">
+      <button class="btn btn-ghost btn-sm" onclick="goToRunIntelligence()"><i class="ti ti-brain"></i> Run Engine</button>
+      <button class="btn btn-ghost btn-sm" onclick="navigate('icpbuilder')"><i class="ti ti-crosshair"></i> ICP builder</button>
+      <button class="btn btn-ghost btn-sm" onclick="navigate('competitormap')"><i class="ti ti-affiliate"></i> Competitor map</button>
+      <button class="btn btn-ghost btn-sm" onclick="navigate('gtmmotion')"><i class="ti ti-topology-star-3"></i> GTM motion</button>
+    </div>
   </div>
 
   ${renderIcpWorklistStrip()}
