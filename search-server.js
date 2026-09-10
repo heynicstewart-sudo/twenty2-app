@@ -14129,9 +14129,14 @@ async function postSlackNudge(text) {
 //    trial (Viewer got "User unauthorized to perform action" on
 //    create_webhook even though it can read the board fine).
 const MONDAY_WATCHED_BOARDS = {
-  '2045166966': { kind: 'deal' },     // Deals (CRM workspace)
-  '5027918836': { kind: 'pipeline' }  // Twenty2 Business Pipeline
+  '2045166966': { kind: 'deal' },       // Deals (CRM workspace) - appends to Monday Live Sync Log + resyncs the account canvas
+  '5027918836': { kind: 'pipeline' },   // Twenty2 Business Pipeline - same
+  '2045166971': { kind: 'contacts' },   // Contacts (CRM workspace) - per-person "Context Notes" -> account-canvas CONTACTS & CONTEXT
+  '5027907051': { kind: 'radar' },      // Relationship Radar - per-relationship "Context Notes" -> same
+  '5030685862': { kind: 'marketmap' }   // WA Market Map - tier/sector, stakeholder map, "Notes / Next Action" -> account canvas
 };
+// Which board kinds should trigger an account-canvas rebuild when an item changes.
+const MONDAY_CANVAS_BOARD_KINDS = new Set(['contacts', 'radar', 'marketmap', 'deal', 'pipeline']);
 
 // Same normalization as the Python backfill script used (strip parens,
 // punctuation, common suffixes) - kept in sync by hand since the backfill
@@ -14413,33 +14418,465 @@ app.post('/api/monday/webhook', async (req, res) => {
     // Pipeline board's own Client column names the account directly; Deals-
     // board item names are "Company — Deal Name" style (same em/en-dash
     // splitting the one-off backfill script used).
-    const companyNameRaw = boardMeta.kind === 'pipeline'
-      ? (row['Client'] || row.name)
-      : row.name.split(' — ')[0].split(' - ')[0].split(' –')[0].trim();
+    // Which column carries the company name depends on the board.
+    const companyNameRaw =
+      boardMeta.kind === 'pipeline' ? (row['Client'] || row.name)
+      : boardMeta.kind === 'contacts' ? (row['Company'] || row['Associated Company'] || row['Account'] || '')
+      : boardMeta.kind === 'radar' ? (row['Organisation'] || row['Organization'] || row['Company'] || '')
+      : boardMeta.kind === 'marketmap' ? row.name
+      : row.name.split(' — ')[0].split(' - ')[0].split(' –')[0].trim();  // deal: "Company — Deal Name"
 
     const companyRecord = await findAirtableCompanyByMondayName(companyNameRaw);
     if (!companyRecord) { await mondayRecordSyncHealth({ lastSuccessAt: new Date().toISOString() }); return; } // not one of this account's outreach prospects - nothing to flag, but the sync itself worked
+    const companyName = companyRecord.fields['Company Name'];
 
-    const today = new Date().toISOString().slice(0, 10);
-    const stage = row['Stage'] || row['Outcome'] || '';
-    const value = row['Deal Value'] || row['Estimated Value ($)'] || '';
-    const summaryLine = `[${today}, live sync] ${row.name}${stage ? ` — stage=${stage}` : ''}${value ? `, value=$${value}` : ''}`.trim();
+    // Deal / pipeline boards keep the original behaviour: a running log line
+    // + a first-time relationship status, feeding the message-drafting flag.
+    if (boardMeta.kind === 'deal' || boardMeta.kind === 'pipeline') {
+      const today = new Date().toISOString().slice(0, 10);
+      const stage = row['Stage'] || row['Outcome'] || '';
+      const value = row['Deal Value'] || row['Estimated Value ($)'] || '';
+      const summaryLine = `[${today}, live sync] ${row.name}${stage ? ` — stage=${stage}` : ''}${value ? `, value=$${value}` : ''}`.trim();
+      const cf = companyRecord.fields || {};
+      const existingLog = cf['Monday Live Sync Log'] || '';
+      const patchFields = { 'Monday Live Sync Log': (existingLog ? `${existingLog}\n${summaryLine}` : summaryLine).slice(-9000) };
+      if (!cf['Twenty2 Relationship Status']) patchFields['Twenty2 Relationship Status'] = 'Warm Relationship';
+      await airtableRequest('PATCH', 'Companies', { records: [{ id: companyRecord.id, fields: patchFields }] });
+      console.log(`[Monday webhook] ${companyName}: ${summaryLine}`);
+    }
 
-    const cf = companyRecord.fields || {};
-    const existingLog = cf['Monday Live Sync Log'] || '';
-    const newLog = (existingLog ? `${existingLog}\n${summaryLine}` : summaryLine).slice(-9000);
-    const patchFields = { 'Monday Live Sync Log': newLog };
-    // Never overwrites the backfill's human-reviewed status/notes - only
-    // sets a status when this company didn't already have one, so a brand
-    // new deal on a prospect nobody had flagged yet still gets caught.
-    if (!cf['Twenty2 Relationship Status']) patchFields['Twenty2 Relationship Status'] = 'Warm Relationship';
-
-    await airtableRequest('PATCH', 'Companies', { records: [{ id: companyRecord.id, fields: patchFields }] });
+    // Any watched board that feeds the account canvas triggers a rebuild of
+    // that one company's canvas from live Monday data (Context Notes,
+    // stakeholder map, next-action note). Merges - never wipes hand-drawn
+    // elements. See syncAccountCanvasFromMonday below.
+    if (MONDAY_CANVAS_BOARD_KINDS.has(boardMeta.kind)) {
+      const r = await syncAccountCanvasFromMonday(companyName);
+      console.log(`[Monday webhook] canvas sync ${companyName}: ${r.status}${r.contacts != null ? ` (${r.contacts} contacts)` : ''}`);
+    }
     await mondayRecordSyncHealth({ lastSuccessAt: new Date().toISOString() });
-    console.log(`[Monday webhook] ${companyRecord.fields['Company Name']}: ${summaryLine}`);
   } catch (err) {
     console.error('Monday webhook processing error (non-fatal, already acked):', err.message);
     await mondayRecordSyncHealth({ lastErrorAt: new Date().toISOString(), lastErrorMessage: err.message });
+  }
+});
+
+// ===================== MONDAY.COM -> ACCOUNT CANVAS LIVE SYNC =====================
+// Ported from the one-off 10 Sep 2026 canvas seed (that session's
+// scratchpad/gen-canvases.js). Rebuilds ONE company's Account canvas from live
+// Monday data whenever a watched item changes:
+//   - per-contact "Context Notes" (Contacts board 2045166971 + Relationship
+//     Radar 5027907051)          -> the CONTACTS & CONTEXT sticky column
+//   - WA Market Map 5030685862 "Notes / Next Action"  -> the NEXT ACTION sticky
+// Everything else on the canvas (WINS, DEALS, PIPELINE, LOST, PROGRAMS, SIGNAL,
+// KEY STAKEHOLDERS) is still sourced from the Airtable Companies record, which
+// the Monday CRM backfill + the deal/pipeline webhook above keep fresh.
+//
+// MERGE, never wipe: auto elements get deterministic ids `elmon-<slug>-<n>`; on
+// every re-sync the old `elmon*` / `elgen*` (the seed's prefix) elements are
+// dropped and rebuilt, but any element a human placed by hand (any other id
+// prefix) and every edge is kept - so Marcus's hand edits and Hancock's manual
+// pills survive a sync.
+const MONDAY_CONTACTS_BOARD_ID = '2045166971';
+const MONDAY_RADAR_BOARD_ID = '5027907051';
+const MONDAY_MARKETMAP_BOARD_ID = '5030685862';
+const MONDAY_CANVAS_CACHE_TTL_MS = 90 * 1000;
+let _mondayCanvasCache = { at: 0, promise: null, data: null };
+
+async function mondayFetchAllItemsByTitle(boardId) {
+  const items = [];
+  let cursor = null;
+  do {
+    const cursorArg = cursor ? `, cursor: ${JSON.stringify(cursor)}` : '';
+    const data = await mondayGraphQL(`{
+      boards(ids: [${boardId}]) {
+        items_page(limit: 100${cursorArg}) {
+          cursor
+          items { id name column_values { column { title } text } }
+        }
+      }
+    }`);
+    const page = data.boards[0].items_page;
+    for (const it of page.items) {
+      const cols = {};
+      (it.column_values || []).forEach(cv => { if (cv.column && cv.column.title) cols[cv.column.title] = cv.text || ''; });
+      items.push({ id: it.id, name: it.name, cols });
+    }
+    cursor = page.cursor;
+  } while (cursor);
+  return items;
+}
+
+// Monday boards are hand-maintained free-text; column titles drift. Pick the
+// first non-empty value among a list of likely titles (case-insensitive).
+function _mondayCol(cols, ...titles) {
+  for (const t of titles) {
+    const k = Object.keys(cols).find(kk => kk.toLowerCase() === t.toLowerCase());
+    if (k && cols[k]) return cols[k];
+  }
+  return '';
+}
+
+async function _loadMondayCanvasCache(force) {
+  const now = Date.now();
+  if (!force && _mondayCanvasCache.data && (now - _mondayCanvasCache.at) < MONDAY_CANVAS_CACHE_TTL_MS) return _mondayCanvasCache.data;
+  if (!force && _mondayCanvasCache.promise) return _mondayCanvasCache.promise;
+
+  const p = (async () => {
+    const companies = await airtableFetchAllRecords('Companies');
+    const canonicalByNorm = {};
+    for (const c of companies) {
+      const nm = c.fields['Company Name'];
+      if (nm) canonicalByNorm[mondayNormalizeCompanyName(nm)] = nm;
+    }
+    const resolve = (raw) => {
+      if (!raw) return '';
+      const first = String(raw).split(',')[0].trim();
+      return canonicalByNorm[mondayNormalizeCompanyName(first)] || '';
+    };
+
+    const contactsByCompany = {};
+    const addContact = (company, entry) => {
+      if (!company || !entry.note) return;
+      const arr = contactsByCompany[company] = contactsByCompany[company] || [];
+      if (arr.some(e => (e.name || '').toLowerCase() === (entry.name || '').toLowerCase())) return;
+      arr.push(entry);
+    };
+
+    let contactItems = [], radarItems = [], marketItems = [];
+    try { contactItems = await mondayFetchAllItemsByTitle(MONDAY_CONTACTS_BOARD_ID); }
+    catch (e) { console.warn('Monday canvas cache: Contacts board fetch failed (non-fatal):', e.message); }
+    try { radarItems = await mondayFetchAllItemsByTitle(MONDAY_RADAR_BOARD_ID); }
+    catch (e) { console.warn('Monday canvas cache: Relationship Radar fetch failed (non-fatal):', e.message); }
+    try { marketItems = await mondayFetchAllItemsByTitle(MONDAY_MARKETMAP_BOARD_ID); }
+    catch (e) { console.warn('Monday canvas cache: WA Market Map fetch failed (non-fatal):', e.message); }
+
+    // Contacts board (2045166971) actual column titles, per Nic 10 Sep 2026:
+    //   Company | Notes (the contact's running note history) | Role | Relationship
+    for (const it of contactItems) {
+      const note = _mondayCol(it.cols, 'Notes', 'Notes history of the contact', 'Context Notes', 'Context Note', 'Context');
+      if (!note) continue;
+      addContact(resolve(_mondayCol(it.cols, 'Company', 'Associated Company', 'Account', 'Organisation', 'Organization', 'Client')), {
+        name: it.name,
+        role: _mondayCol(it.cols, 'Role', 'Title', 'Job Title', 'Position'),
+        stage: _mondayCol(it.cols, 'Relationship', 'Relationship Stage', 'Stage', 'Journey Stage', 'Status'),
+        li: _mondayCol(it.cols, 'LinkedIn Touches', 'LI Touches', 'Touches'),
+        note: note.replace(/\s+/g, ' ').trim(),
+      });
+    }
+    for (const it of radarItems) {
+      const note = _mondayCol(it.cols, 'Context Notes', 'Context Note', 'Notes', 'Context');
+      if (!note) continue;
+      addContact(resolve(_mondayCol(it.cols, 'Organisation', 'Organization', 'Company', 'Account', 'Client')), {
+        name: it.name,
+        role: _mondayCol(it.cols, 'Role', 'Title', 'Position'),
+        stage: _mondayCol(it.cols, 'Relationship Strength', 'Strength', 'Stage', 'Status'),
+        li: '',
+        note: note.replace(/\s+/g, ' ').trim(),
+      });
+    }
+
+    const marketMap = {};
+    for (const it of marketItems) {
+      const company = canonicalByNorm[mondayNormalizeCompanyName(it.name)];
+      if (company) marketMap[company] = it.cols;
+    }
+
+    return { contactsByCompany, marketMap };
+  })();
+
+  _mondayCanvasCache.promise = p;
+  try {
+    const data = await p;
+    _mondayCanvasCache = { at: Date.now(), promise: null, data };
+    return data;
+  } catch (e) {
+    if (_mondayCanvasCache.promise === p) _mondayCanvasCache.promise = null;
+    throw e;
+  }
+}
+
+// ---- canvas layout (ported verbatim from gen-canvases.js) ----
+function _archBoxH(text, w, fs, min, max) {
+  fs = fs || 13; min = (min == null ? 60 : min); max = (max == null ? 240 : max);
+  const charsPerLine = Math.max(8, Math.floor(w / (fs * 0.56)));
+  const lines = String(text).split('\n').reduce((a, ln) => a + Math.max(1, Math.ceil((ln.length || 1) / charsPerLine)), 0);
+  return Math.min(max, Math.max(min, 26 + lines * (fs + 5)));
+}
+function _archClip(s, n) { s = String(s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s; }
+function _archSplitLines(s) { return String(s || '').split('\n').map(l => l.trim()).filter(Boolean); }
+
+function parseCompanyForCanvas(rec) {
+  const f = rec.fields || {};
+  const rel = _archSplitLines(f['Twenty2 Relationship Notes']);
+  const amAll = _archSplitLines(f['Account Map (Key Stakeholders)']);
+  const wins = [], deals = [], pipeline = [], lost = [], misc = [];
+  let profile = '';
+  for (const ln of rel) {
+    if (/^Past project/i.test(ln)) {
+      const m = ln.match(/^Past project\s*\(([^)]*)\):\s*(.*)$/i);
+      wins.push(m ? `${m[1].replace(/,\s*/, ' · ')} — ${m[2].trim()}` : ln.replace(/^Past project\s*/i, '').trim());
+    }
+    else if (/^Profile:/i.test(ln)) profile = ln.replace(/^Profile:\s*/i, '').trim();
+    else if (/^ACTIVE DEAL/i.test(ln)) deals.push(ln.replace(/^ACTIVE DEAL\s*[-–]\s*/i, '').trim());
+    else if (/^ACTIVE PIPELINE/i.test(ln)) pipeline.push(ln.replace(/^ACTIVE PIPELINE\s*[-–]\s*/i, '').trim());
+    else if (/^LOST\b/i.test(ln)) lost.push(ln.replace(/^LOST\s*[-–]?\s*/i, '').trim());
+    else if (/WON\b/i.test(ln) && /\$/.test(ln)) wins.push(ln.trim());
+    else misc.push(ln.trim());
+  }
+  const stakeholders = [];
+  let nextAction = [];
+  for (const ln of amAll) {
+    const m = ln.match(/^Next Action:\s*(.*)$/i);
+    if (m) { nextAction.push(m[1].trim()); continue; }
+    const fm = ln.match(/^([^:]{3,60}):\s*(.+)$/);
+    if (fm) stakeholders.push({ fn: fm[1].trim(), who: fm[2].trim() });
+    else if (ln.length) stakeholders.push({ fn: '', who: ln });
+  }
+  for (const ln of rel) { const m = ln.match(/Next Action:\s*(.*)$/i); if (m) nextAction.push(m[1].trim()); }
+  nextAction = [...new Set(nextAction)];
+  let programs = [];
+  try { const pr = JSON.parse(f['Programs (JSON)'] || '[]'); if (Array.isArray(pr)) programs = pr; } catch (e) {}
+  return {
+    id: rec.id, name: f['Company Name'],
+    status: f['Twenty2 Relationship Status'] || '',
+    tier: f['Tier'] || '', industry: f['Industry'] || '', sector: f['Sector'] || '',
+    signal: f['Latest Signal'] || '', existingCA: f['Change Architecture (JSON)'] || '',
+    profile, wins, deals, pipeline, lost, misc, stakeholders, nextAction, programs,
+  };
+}
+
+function _ctxForCompany(cache, companyName) {
+  const arr = (cache.contactsByCompany && cache.contactsByCompany[companyName]) || [];
+  return arr.map(x => ({
+    name: x.name,
+    title: [x.role, x.stage && String(x.stage).replace(/^[^\w]+/, '').trim(), x.li ? `LI ${x.li}` : ''].filter(Boolean).join('  ·  '),
+    ctx: String(x.note || '').replace(/\s+/g, ' ').trim(),
+  })).filter(x => x.ctx);
+}
+function _mmNextAction(cache, companyName) {
+  const m = cache.marketMap && cache.marketMap[companyName];
+  if (!m) return '';
+  const k = Object.keys(m).find(kk => /notes?\s*\/?\s*next\s*action/i.test(kk));
+  return k ? String(m[k] || '').replace(/\s+/g, ' ').trim() : '';
+}
+
+function buildAccountCanvasElements(co, cache) {
+  const slug = (mondayNormalizeCompanyName(co.name).replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')) || 'co';
+  let n = 0;
+  const mk = (o) => {
+    const base = { id: `elmon-${slug}-${n++}`, type: 'shape', x: 0, y: 0, w: 200, h: 64, text: '', fill: '#ffffff', stroke: '#d4d4d8' };
+    const m = Object.assign(base, o);
+    const out = { id: m.id, type: m.type, x: Math.round(m.x), y: Math.round(m.y), w: Math.round(m.w), h: Math.round(m.h), text: m.text, fill: m.fill, stroke: m.stroke };
+    if (m.shape && m.shape !== 'rectangle') out.shape = m.shape;
+    if (m.fontSize) out.fontSize = m.fontSize;
+    if (m.textColor) out.textColor = m.textColor;
+    if (m.ref) out.ref = m.ref;
+    return out;
+  };
+  const txt = (o) => mk(Object.assign({ type: 'text', fill: 'transparent', stroke: 'transparent' }, o));
+  const els = [];
+  const COL_L = 40, COL_C = 520, COL_R = 1010;
+  const W_L = 430, W_C = 450, W_R = 380;
+
+  els.push(mk({ type: 'company', x: COL_C, y: 40, w: 250, h: 78, text: '', fill: '#ffffff', stroke: '#2A6B7C', fontSize: 20, ref: { kind: 'company', id: co.name, name: co.name } }));
+
+  const STATUS_STYLE = {
+    'Active Deal In Progress': { fill: '#d9efe1', label: '● Active deal in progress' },
+    'Warm Relationship': { fill: '#dde9f5', label: '● Warm relationship' },
+    'Past Client': { fill: '#e8e9ec', label: '● Past client' },
+    'Cold': { fill: '#f6ded9', label: '● Cold' },
+  };
+  const ss = STATUS_STYLE[co.status];
+  if (ss) els.push(mk({ shape: 'pill', x: COL_C + 275, y: 55, w: 230, h: 50, text: ss.label, fill: ss.fill, stroke: '#d4d4d8', fontSize: 12 }));
+
+  const meta = [co.tier && ('Tier ' + co.tier), co.sector || co.industry].filter(Boolean).join('  ·  ');
+  if (meta) els.push(txt({ x: COL_C, y: 122, w: 250, h: 26, text: meta, fontSize: 11, textColor: '#5f5f68' }));
+  if (co.profile) els.push(txt({ x: COL_C, y: 150, w: 300, h: _archBoxH(_archClip(co.profile, 180), 300, 12, 30, 90), text: _archClip(co.profile, 180), fontSize: 12, textColor: '#5f5f68' }));
+
+  const naParts = [];
+  const naKey = s => s.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 40);
+  const mmNA = _mmNextAction(cache, co.name);
+  if (mmNA) naParts.push(mmNA);
+  co.nextAction.forEach(a => { if (!naParts.some(pp => naKey(pp) === naKey(a))) naParts.push(a); });
+  if (naParts.length) {
+    const t = 'NEXT ACTION\n' + naParts.map(a => _archClip(a, 300)).join('\n\n');
+    els.push(mk({ type: 'sticky', x: COL_C + 275, y: 120, w: 320, h: _archBoxH(t, 320, 13, 90, 280), text: t, fill: '#fef3c7', stroke: 'transparent', fontSize: 12 }));
+  }
+
+  let y = 210;
+  if (co.wins.length) {
+    els.push(txt({ x: COL_L, y, w: W_L, h: 24, text: 'WINS & HISTORY', fontSize: 12, textColor: '#177a49' }));
+    y += 30;
+    for (const w0 of co.wins) {
+      const w = _archClip(w0, 200); const h = _archBoxH(w, W_L, 12, 56, 150);
+      els.push(mk({ shape: 'rectangle', x: COL_L, y, w: W_L, h, text: w, fill: '#d9efe1', stroke: '#d4d4d8', fontSize: 12 }));
+      y += h + 12;
+    }
+  }
+  const convos = _ctxForCompany(cache, co.name);
+  if (convos.length) {
+    els.push(txt({ x: COL_L, y: y + 8, w: W_L, h: 24, text: 'CONTACTS & CONTEXT', fontSize: 12, textColor: '#6444bd' }));
+    y += 38;
+    for (const cv of convos.slice(0, 14)) {
+      const t = `${cv.name}${cv.title ? '\n' + cv.title : ''}\n\n${_archClip(cv.ctx, 460)}`;
+      const h = _archBoxH(t, W_L, 11, 84, 300);
+      els.push(mk({ type: 'sticky', x: COL_L, y, w: W_L, h, text: t, fill: '#ece3f7', stroke: 'transparent', fontSize: 11 }));
+      y += h + 12;
+    }
+  }
+
+  y = 250;
+  const centreGroups = [
+    ['ACTIVE DEALS', co.deals, '#d3e8e4'],
+    ['PIPELINE', co.pipeline, '#f7eccf'],
+    ['LOST / RE-ENGAGE', co.lost, '#f6ded9'],
+  ];
+  for (const [label, arr, fill] of centreGroups) {
+    if (!arr.length) continue;
+    els.push(txt({ x: COL_C, y, w: W_C, h: 24, text: label, fontSize: 12, textColor: '#5f5f68' }));
+    y += 30;
+    for (const item0 of arr) {
+      const item = _archClip(item0, 220); const h = _archBoxH(item, W_C, 12, 58, 170);
+      els.push(mk({ shape: 'rectangle', x: COL_C, y, w: W_C, h, text: item, fill, stroke: '#d4d4d8', fontSize: 12 }));
+      y += h + 12;
+    }
+    y += 8;
+  }
+  if (co.programs.length) {
+    els.push(txt({ x: COL_C, y, w: W_C, h: 24, text: 'TRANSFORMATION PROGRAMS', fontSize: 12, textColor: '#5f5f68' }));
+    y += 30;
+    for (const pr of co.programs.slice(0, 6)) {
+      const t = (pr.name || pr.title || 'Program') + (pr.status ? ` — ${pr.status}` : '') + (pr.note ? `\n${pr.note}` : '');
+      const h = _archBoxH(t, W_C, 12, 58, 150);
+      els.push(mk({ shape: 'rectangle', x: COL_C, y, w: W_C, h, text: t, fill: '#dde9f5', stroke: '#d4d4d8', fontSize: 12 }));
+      y += h + 12;
+    }
+  }
+  if (co.misc.length) {
+    const t = co.misc.map(m => _archClip(m, 220)).join('\n\n');
+    els.push(mk({ type: 'sticky', x: COL_C, y: y + 6, w: W_C, h: _archBoxH(t, W_C, 11, 70, 240), text: t, fill: '#f2f2f4', stroke: 'transparent', fontSize: 11 }));
+  }
+
+  y = (co.nextAction.length || mmNA) ? 400 : 210;
+  if (co.stakeholders.length) {
+    els.push(txt({ x: COL_R, y, w: W_R, h: 24, text: 'KEY STAKEHOLDERS', fontSize: 12, textColor: '#1b6ba6' }));
+    y += 30;
+    for (const s of co.stakeholders) {
+      const t = (s.fn ? s.fn + '\n' : '') + _archClip(s.who, 200);
+      const grey = /no named contact/i.test(s.who);
+      const h = _archBoxH(t, W_R, 12, 56, 150);
+      els.push(mk({ shape: 'rectangle', x: COL_R, y, w: W_R, h, text: t, fill: grey ? '#e8e9ec' : '#dde9f5', stroke: '#d4d4d8', fontSize: 12 }));
+      y += h + 12;
+    }
+  }
+  if (co.signal) {
+    els.push(mk({ type: 'sticky', x: COL_R, y: y + 8, w: W_R, h: _archBoxH(co.signal, W_R, 11, 60, 160), text: 'SIGNAL\n' + _archClip(co.signal, 220), fill: '#fef3c7', stroke: 'transparent', fontSize: 11 }));
+  }
+  return els;
+}
+
+function _canvasHasContent(co, cache) {
+  return !!(co.status || co.profile || co.wins.length || co.deals.length || co.pipeline.length ||
+    co.lost.length || co.stakeholders.length || co.misc.length || co.programs.length ||
+    _ctxForCompany(cache, co.name).length || _mmNextAction(cache, co.name));
+}
+
+// Returns { id, fields, meta } ready for an Airtable PATCH, or null when there
+// is nothing to sync and nothing we previously generated (leave a blank canvas
+// blank). Merges: keeps every hand-placed element + all edges + any other
+// named canvases; rebuilds only the auto elements on the "Account canvas".
+function buildAccountCanvasPatch(companyRecord, cache) {
+  const co = parseCompanyForCanvas(companyRecord);
+  if (!co.name) return null;
+  const auto = buildAccountCanvasElements(co, cache);
+  const hasContent = _canvasHasContent(co, cache);
+
+  let doc = parseJsonSafe(co.existingCA);
+  if (!doc || typeof doc !== 'object') doc = null;
+  let canvases;
+  if (doc && Array.isArray(doc.canvases)) canvases = doc.canvases;
+  else if (doc && Array.isArray(doc.elements)) canvases = [{ id: 'canvas-main', name: 'Account canvas', elements: doc.elements, edges: doc.edges || [], viewport: doc.viewport, layers: { orgMap: false } }];
+  else canvases = [];
+
+  let target = canvases.find(c => (c.name || '').toLowerCase() === 'account canvas')
+    || canvases.find(c => c.id === (doc && doc.activeCanvasId))
+    || canvases[0];
+  if (!target) {
+    if (!hasContent) return null;
+    target = { id: 'canvas-account', name: 'Account canvas', elements: [], edges: [], layers: { orgMap: false } };
+    canvases.push(target);
+  }
+  // Auto elements: `elmon-*` (this sync) + `elgen*` (the 10 Sep 2026 seed).
+  // Anything else on the canvas was placed by a human and is kept as-is.
+  const isAuto = (id) => /^elmon-/.test(String(id)) || /^elgen/.test(String(id));
+  const prevAuto = (target.elements || []).filter(e => e && e.id && isAuto(e.id));
+  if (!hasContent && !prevAuto.length) return null;
+
+  const preserved = (target.elements || []).filter(e => e && e.id && !isAuto(e.id));
+  target.elements = preserved.concat(auto);
+  target.edges = target.edges || [];
+  if (!target.layers) target.layers = { orgMap: false };
+
+  const newDoc = { version: 3, activeCanvasId: (doc && doc.activeCanvasId) || target.id, canvases };
+  return {
+    id: companyRecord.id,
+    fields: { 'Change Architecture (JSON)': JSON.stringify(newDoc) },
+    meta: { contacts: _ctxForCompany(cache, co.name).length, autoElements: auto.length, preserved: preserved.length },
+  };
+}
+
+// Single-company sync - called by the Monday webhook and the "Sync from Monday"
+// button on the canvas.
+async function syncAccountCanvasFromMonday(companyName) {
+  if (!AIRTABLE_API_KEY || !process.env.MONDAY_API_KEY) return { status: 'skipped', reason: 'MONDAY_API_KEY / AIRTABLE_API_KEY not configured' };
+  const rec = await findRecordByFieldName('Companies', 'Company Name', companyName);
+  if (!rec) return { status: 'not_found' };
+  const cache = await _loadMondayCanvasCache();
+  const patch = buildAccountCanvasPatch(rec, cache);
+  if (!patch) return { status: 'no_content' };
+  await airtableWriteAllowingMissingCtaFields('PATCH', 'Companies', { records: [{ id: patch.id, fields: patch.fields }] });
+  return { status: 'synced', ...patch.meta };
+}
+
+// Button: refresh one company's canvas from Monday now.
+app.post('/api/companies/:name/canvas/sync-monday', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.MONDAY_API_KEY) return res.status(500).json({ error: 'MONDAY_API_KEY not configured on the server' });
+  try {
+    const r = await syncAccountCanvasFromMonday(decodeURIComponent(req.params.name));
+    if (r.status === 'not_found') return res.status(404).json({ error: 'Company not found' });
+    await mondayRecordSyncHealth({ lastSuccessAt: new Date().toISOString() });
+    res.json({ success: true, ...r });
+  } catch (err) {
+    console.error('Canvas sync-monday error:', err.message);
+    await mondayRecordSyncHealth({ lastErrorAt: new Date().toISOString(), lastErrorMessage: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin: rebuild every company's canvas from Monday in one pass (batched writes).
+app.post('/api/monday/canvas/sync-all', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  if (!process.env.MONDAY_API_KEY) return res.status(500).json({ error: 'MONDAY_API_KEY not configured on the server' });
+  try {
+    const cache = await _loadMondayCanvasCache(true);
+    const companies = await airtableFetchAllRecords('Companies');
+    const patches = [];
+    for (const rec of companies) {
+      try { const p = buildAccountCanvasPatch(rec, cache); if (p) patches.push(p); }
+      catch (e) { console.warn('canvas sync-all: build failed for', (rec.fields || {})['Company Name'], '-', e.message); }
+    }
+    for (let i = 0; i < patches.length; i += 10) {
+      await airtableWriteAllowingMissingCtaFields('PATCH', 'Companies', {
+        records: patches.slice(i, i + 10).map(p => ({ id: p.id, fields: p.fields }))
+      });
+    }
+    await mondayRecordSyncHealth({ lastSuccessAt: new Date().toISOString() });
+    res.json({ success: true, synced: patches.length, companiesScanned: companies.length });
+  } catch (err) {
+    console.error('Canvas sync-all error:', err.message);
+    await mondayRecordSyncHealth({ lastErrorAt: new Date().toISOString(), lastErrorMessage: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 
