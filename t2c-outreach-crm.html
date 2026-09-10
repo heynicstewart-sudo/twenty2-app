@@ -19,7 +19,7 @@
 <script>
 /* Shared Chart.js theming - applied to every chart in the app */
 if(window.Chart){
-  window.T2_CHART_COLORS = ['#5880DA','#C9F17E','#BCDBFA','#3E63C4','#8FB84E','#A9C9F5','#1F2421'];
+  window.T2_CHART_COLORS = ['#3C4A5A','#8A8A80','#B7B7AC','#5C6470','#A6A69B','#D2D2C7','#1A1A17'];
   Chart.defaults.font.family = "'Urbanist','Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif";
   Chart.defaults.font.size = 11;
   Chart.defaults.color = '#66706A';
@@ -40,52 +40,53 @@ if(window.Chart){
 </script>
 <style>
 :root{
-  --bg:#F4F7F3;
+  /* Minimal palette — near-monochrome + one restrained slate accent.
+     Branding lands later by re-pointing --accent and the tint pairs. */
+  --bg:#F6F6F4;
   --surface:#ffffff;
-  --surface-2:#ECF1EC;
+  --surface-2:#EEEEEB;
   --card-bg:#ffffff;
-  --border:#E4EAE2;
-  --border-light:#EEF1ED;
-  --sidebar-bg:#FBFCFA;
-  --sidebar-text:#434D45;
-  --sidebar-muted:#6C766D;
-  --sidebar-hover-bg:#ECF1EC;
+  --border:#E4E4E0;
+  --border-light:#ECECE8;
+  --sidebar-bg:#FAFAF8;
+  --sidebar-text:#43433E;
+  --sidebar-muted:#6B6B64;
+  --sidebar-hover-bg:#EEEEEB;
   --sidebar-active-bg:#ffffff;
-  --sidebar-active-text:#1F2421;
+  --sidebar-active-text:#1A1A17;
   --sidebar-active-border:transparent;
-  --topbar-bg:#F4F7F3;
-  --ink:#1F2421;
-  --primary:#1F2421;
-  --accent:#5880DA;
-  --accent-strong:#3E63C4;
+  --topbar-bg:#F6F6F4;
+  --ink:#1A1A17;
+  --primary:#1A1A17;
+  --accent:#3C4A5A;
+  --accent-strong:#2B3744;
   --accent-ink:#ffffff;
-  --accent-dim:rgba(88,128,218,0.12);
-  --accent-2:#BCDBFA;
-  --accent-2-dim:rgba(188,219,250,0.30);
-  --success:#3B7A2E;
-  --warning:#8F5F11;
-  --danger:#BA1A1A;
-  --muted:#5C665F;
-  --text-dim:#646D65;
-  --peach:#8F4500;
-  --blue:#5880DA;
-  --brown:#8a5a2b;
-  --yellow:#8F5F11;
-  --purple:#5A5CC8;
-  --text:#1F2421;
-  /* Signal colours: lime = positive / new, sky = info / highlight,
-     peach = follow-up / caution, red = blocked / error. bg = pale fill,
-     fg = readable label. */
-  --lime:#C9F17E;   --lime-soft:#E5F9C0;   --lime-ink:#3B5A0E;
-  --sky:#BCDBFA;    --sky-soft:#D6E4FD;    --sky-ink:#1E3A8A;
-  --tint-blue-bg:#D6E4FD;   --tint-blue-fg:#1E3A8A;
-  --tint-green-bg:#E5F9C0;  --tint-green-fg:#3B5A0E;
-  --tint-amber-bg:#FFEAD6;  --tint-amber-fg:#8F4500;
-  --tint-gold-bg:#F1EFD6;   --tint-gold-fg:#6E6212;
-  --tint-purple-bg:#E7E6FA; --tint-purple-fg:#4B45B8;
-  --tint-orange-bg:#FFEAD6; --tint-orange-fg:#9A4A1E;
-  --tint-red-bg:#FFDAD6;    --tint-red-fg:#93000A;
-  --tint-grey-bg:#E7EBE6;   --tint-grey-fg:#5A625B;
+  --accent-dim:rgba(60,74,90,0.10);
+  --accent-2:#3C4A5A;
+  --accent-2-dim:rgba(60,74,90,0.08);
+  --success:#3F6B4C;
+  --warning:#7A6636;
+  --danger:#8F4030;
+  --muted:#5B5B56;
+  --text-dim:#67675F;
+  --peach:#7A6636;
+  --blue:#3C4A5A;
+  --brown:#6B5A45;
+  --yellow:#7A6636;
+  --purple:#575269;
+  --text:#1A1A17;
+  /* Semantic tints, desaturated: green = positive, slate = info,
+     amber = attention, red = blocked. bg = pale fill, fg = readable label. */
+  --lime:#DEE3D8;   --lime-soft:#E8EDE3;   --lime-ink:#3F6B4C;
+  --sky:#DEE2E7;    --sky-soft:#E8EBEF;    --sky-ink:#3C4A5A;
+  --tint-blue-bg:#E8EBEF;   --tint-blue-fg:#3C4A5A;
+  --tint-green-bg:#E8EDE3;  --tint-green-fg:#3F6B4C;
+  --tint-amber-bg:#F0ECE1;  --tint-amber-fg:#7A6636;
+  --tint-gold-bg:#EEEBE0;   --tint-gold-fg:#6E6238;
+  --tint-purple-bg:#EAE9ED; --tint-purple-fg:#575269;
+  --tint-orange-bg:#F1EAE2; --tint-orange-fg:#8A5A3E;
+  --tint-red-bg:#F2E8E5;    --tint-red-fg:#8F4030;
+  --tint-grey-bg:#ECECE9;   --tint-grey-fg:#59594F;
   --font-family:'Urbanist','Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
   --font-size-base:14px;
   --label-size:11px;
@@ -114,8 +115,8 @@ body{
 ::selection{background:var(--accent-dim);}
 *{caret-color:var(--accent);}
 *::-webkit-scrollbar{width:11px;height:11px;}
-*::-webkit-scrollbar-thumb{background:#D3DAD1;border-radius:999px;border:3px solid transparent;background-clip:content-box;}
-*::-webkit-scrollbar-thumb:hover{background:#BCC4BA;background-clip:content-box;}
+*::-webkit-scrollbar-thumb{background:#D6D6D0;border-radius:999px;border:3px solid transparent;background-clip:content-box;}
+*::-webkit-scrollbar-thumb:hover{background:#BFBFB8;background-clip:content-box;}
 *::-webkit-scrollbar-track{background:transparent;}
 a{color:inherit;text-decoration:none;}
 .app{display:flex;min-height:100vh;}
@@ -201,6 +202,8 @@ html.sidebar-collapsed .sidebar-logo{justify-content:center;padding-left:0;paddi
 .client-switcher-sep{height:1px;background:var(--border-light);margin:5px 2px;}
 .client-switcher-label{padding:7px 10px 4px;font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--sidebar-muted);}
 .page{padding:28px 32px 72px;max-width:1560px;}
+.stack-16{display:flex;flex-direction:column;gap:16px;}
+.stack-16 > .card,.stack-16 > .metric-strip{margin-bottom:0 !important;}
 /* Page header — big display title, optional subtitle + inline meta pills */
 .page-head{margin-bottom:24px;}
 .page-h1{font-size:30px;font-weight:800;letter-spacing:-0.022em;line-height:1.15;color:var(--ink);display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
@@ -285,7 +288,7 @@ label{font-size:var(--label-size);font-weight:700;color:var(--muted);display:blo
 .uco-prog .v{font-size:12.5px;color:var(--ink);font-weight:600;line-height:1.35;}
 .uco-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px;padding-top:11px;border-top:1px solid var(--border-light);font-size:11.5px;color:var(--muted);}
 /* Accent-filled hero card (dashboard / stat highlights) */
-.card-hero{background:linear-gradient(135deg,#5880DA 0%,#7CA0E8 100%);color:#fff;border:none;}
+.card-hero{background:var(--ink);color:#fff;border:none;}
 .card-hero .section-title,.card-hero .section-title i,.card-hero .muted,.card-hero .num,.card-hero .label{color:#fff;}
 .card-hero .muted{color:rgba(255,255,255,0.82);}
 /* Semantic pastel icon tiles - replaces scattered inline background/color hex pairs */
@@ -1723,7 +1726,7 @@ function goToRunIntelligence(){
 const NAV = [
   { id:'home', label:'Targets', icon:'ti-pin' },
   { id:'companyuniverse', label:'Company Universe', icon:'ti-building-skyscraper' },
-  { id:'content', label:'Funnel', icon:'ti-news' },
+  { id:'content', label:'Marketing', icon:'ti-news' },
   { id:'campaigns', label:'Campaigns', icon:'ti-rocket' },
   { id:'profile', label:'Profile', icon:'ti-hierarchy-2' },
   { id:'gtmmotion', label:'GTM Motion', icon:'ti-topology-star-3', hidden:true },
@@ -15833,72 +15836,86 @@ function deleteCompanyProgram(companyName, idx){
 }
 
 
+const UNIVERSE_TABS = [
+  ['accounts', 'Accounts', 'ti-building-skyscraper'],
+  ['programs', 'Programs', 'ti-progress-bolt'],
+  ['review',   'Review',   'ti-chart-histogram'],
+];
+function setUniverseTab(t){ window.__universeTab = t; renderPage(); }
+
 function renderCompanyUniverse(){
   window.__ctxCampaignTag = null;
+  const tab = window.__universeTab || 'accounts';
+
+  const accounts = `
+    ${renderUniverseMetricStrip()}
+    ${renderIcpWorklistStrip()}
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+        <div class="section-title" style="margin-bottom:0;"><i class="ti ti-grid-dots"></i> ICP segmentation</div>
+        <button class="btn btn-secondary btn-sm" id="scoreIcpBtnUniverse" onclick="scoreIcpBulkAccountWide()"><i class="ti ti-sparkles"></i> Score ICP</button>
+      </div>
+      <div class="muted" style="font-size:12.5px;margin:-4px 0 14px;">Size &times; momentum — every company on file scored on three attributes, so you work the biggest, warmest accounts first. Click a company to open its profile.</div>
+      ${renderAccountSegmentationGrid()}
+    </div>`;
+
+  const programs = `
+    ${renderProgramsCard()}
+    ${renderProgramDiscoveryCard()}`;
+
+  const review = `
+    <div class="muted" style="font-size:12.5px;margin:-2px 0 16px;max-width:70ch;">The learning loop — what the account base is telling you, so the next campaign is built on evidence instead of a guess.</div>
+    <div class="card">
+      <div class="section-title"><i class="ti ti-chart-histogram"></i> What's actually converting</div>
+      <div class="muted" style="font-size:12.5px;margin:-6px 0 14px;">Every outreach touch on file, rolled up by ICP segment — not one campaign in isolation.</div>
+      <div id="gtmPerformanceSection">${renderGtmPerformanceSection(window.__gtmPerformance)}</div>
+    </div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+        <div class="section-title" style="margin-bottom:0;"><i class="ti ti-stethoscope"></i> Account-wide GTM review</div>
+        <button class="btn btn-secondary btn-sm" ${window.__accountAutopsyLoading?'disabled':''} onclick="runAccountAutopsyDigest()"><i class="ti ${window.__accountAutopsyLoading?'ti-loader-2':'ti-refresh'}"></i> ${window.__accountAutopsyLoading?'Reviewing…':(window.__accountAutopsyDigest?'Run again':'Run review')}</button>
+      </div>
+      <div class="muted" style="font-size:12.5px;margin:-4px 0 14px;">Diagnoses every stalled contact across every campaign and groups the real reasons, so a recurring objection shows up once, not thirty times.</div>
+      ${renderAccountAutopsySection(window.__accountAutopsyDigest)}
+    </div>
+    <div class="card">
+      <div class="section-title"><i class="ti ti-mood-sad"></i> Why deals are lost</div>
+      <div class="muted" style="font-size:12.5px;margin:-6px 0 14px;">Every Lost deal on file, structured by reason — Twenty2's own pipeline as well as outreach-generated.</div>
+      <div id="lostDealsSection">${renderLostDealsSection(window.__lostDeals)}</div>
+    </div>
+    <div class="card">
+      <div class="section-title"><i class="ti ti-cloud-pause"></i> Stalled relationships</div>
+      <div class="muted" style="font-size:12.5px;margin:-6px 0 14px;">Gone quiet, paused, or an early warning — worth knowing before it becomes a loss.</div>
+      <div id="stalledRelationshipsSection">${renderStalledRelationshipsSection(window.__stalledRelationships)}</div>
+    </div>
+    ${renderGlobalAngleLibrarySection()}
+    <div class="card">
+      <div class="section-title"><i class="ti ti-notebook"></i> Context capture</div>
+      <div class="muted" style="font-size:12.5px;margin:-6px 0 14px;">Anything you learn about a contact or company that isn't tied to one campaign.</div>
+      ${renderContext()}
+    </div>`;
+
   return `
   <div class="page-head" style="display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;">
     <div>
       <h1 class="page-h1">Company Universe</h1>
-      <div class="page-sub">Every target account on file — transformation programs, buying triggers and ICP qualification in one directory.</div>
+      <div class="page-sub">Find and qualify the accounts worth working — ICP fit, live transformation programs, and what the account base is teaching you.</div>
     </div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;">
-      <button class="btn btn-ghost btn-sm" onclick="goToRunIntelligence()"><i class="ti ti-brain"></i> Run Engine</button>
-      <button class="btn btn-ghost btn-sm" onclick="navigate('icpbuilder')"><i class="ti ti-crosshair"></i> ICP builder</button>
-      <button class="btn btn-ghost btn-sm" onclick="navigate('competitormap')"><i class="ti ti-affiliate"></i> Competitor map</button>
+      <button class="btn btn-secondary btn-sm" onclick="navigate('icpbuilder')"><i class="ti ti-crosshair"></i> Edit ICP</button>
       <button class="btn btn-ghost btn-sm" onclick="navigate('gtmmotion')"><i class="ti ti-topology-star-3"></i> GTM motion</button>
+      <button class="btn btn-ghost btn-sm" onclick="navigate('competitormap')"><i class="ti ti-affiliate"></i> Competitor map</button>
     </div>
   </div>
 
-  ${renderUniverseMetricStrip()}
-
-  ${renderIcpWorklistStrip()}
-
-  <div class="card" style="margin-bottom:16px;">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-grid-dots"></i> ICP segmentation</div>
-      <button class="btn btn-secondary btn-sm" id="scoreIcpBtnUniverse" onclick="scoreIcpBulkAccountWide()"><i class="ti ti-sparkles"></i> Score ICP</button>
-    </div>
-    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Size x momentum - every company on file, scored on 3 attributes. Click a company to open its profile. Costs Engine tokens; already-scored companies are skipped automatically.</div>
-    ${renderAccountSegmentationGrid()}
+  <div class="seq-tabs">
+    ${UNIVERSE_TABS.map(([k,label,icon]) => `<div class="seq-tab ${tab===k?'active':''}" onclick="setUniverseTab('${k}')"><i class="ti ${icon}" style="font-size:15px;vertical-align:-2px;margin-right:5px;"></i>${label}</div>`).join('')}
   </div>
 
-  ${renderProgramsCard()}
-
-  ${renderProgramDiscoveryCard()}
-
-  <div class="card" style="margin-bottom:16px;">
-    <div class="section-title" style="margin-bottom:4px;"><i class="ti ti-chart-histogram"></i> What's actually converting</div>
-    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every outreach touch on file, rolled up by ICP segment - not one campaign's numbers in isolation. This is the evidence for how the NEXT campaign should be built.</div>
-    <div id="gtmPerformanceSection">${renderGtmPerformanceSection(window.__gtmPerformance)}</div>
-  </div>
-
-  <div class="card" style="margin-bottom:16px;">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-stethoscope"></i> Account-wide GTM review</div>
-      <button class="btn btn-secondary btn-sm" ${window.__accountAutopsyLoading?'disabled':''} onclick="runAccountAutopsyDigest()"><i class="ti ${window.__accountAutopsyLoading?'ti-loader-2':'ti-refresh'}"></i> ${window.__accountAutopsyLoading?'Reviewing…':(window.__accountAutopsyDigest?'Run again':'Run account-wide review')}</button>
-    </div>
-    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Reads every stalled contact across EVERY campaign and diagnoses the real reason - grouped by pattern, so a recurring objection shows up once instead of thirty separate times. Costs Engine tokens per run; nothing here sends anything.</div>
-    ${renderAccountAutopsySection(window.__accountAutopsyDigest)}
-  </div>
-
-  <div class="card" style="margin-bottom:16px;">
-    <div class="section-title" style="margin-bottom:4px;"><i class="ti ti-mood-sad"></i> Why deals are lost</div>
-    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every Lost deal on file, structured by reason - client-services deals from Twenty2's own pipeline as well as outreach-generated ones. Log a new one from a company's drawer or Profile board.</div>
-    <div id="lostDealsSection">${renderLostDealsSection(window.__lostDeals)}</div>
-  </div>
-
-  <div class="card" style="margin-bottom:16px;">
-    <div class="section-title" style="margin-bottom:4px;"><i class="ti ti-cloud-pause"></i> Stalled relationships</div>
-    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Gone quiet, paused, or an early warning - not a confirmed loss, but worth knowing before it becomes one. Log one from a company's drawer or Settings > Scan Monday.</div>
-    <div id="stalledRelationshipsSection">${renderStalledRelationshipsSection(window.__stalledRelationships)}</div>
-  </div>
-
-  ${renderGlobalAngleLibrarySection()}
-
-  <div class="card">
-    <div class="section-title"><i class="ti ti-notebook"></i> Context capture</div>
-    <div class="muted" style="font-size:12px;margin-bottom:10px;">General knowledge about a contact or company not tied to any one campaign - moved here from the old top-level Engine tab.</div>
-    ${renderContext()}
+  <div class="stack-16">
+    ${tab==='accounts' ? accounts : ''}
+    ${tab==='programs' ? programs : ''}
+    ${tab==='review' ? review : ''}
   </div>
   `;
 }
