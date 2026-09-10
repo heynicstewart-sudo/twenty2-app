@@ -481,6 +481,8 @@ const OPTIONAL_LATE_ADDED_FIELDS = [
   'Deep Research (JSON)',
   // Manual change-architecture whiteboard / freeform account canvas (Companies table).
   'Change Architecture (JSON)',
+  // Images / PDFs pasted or dropped onto the account canvas (Companies table).
+  'Canvas Assets',
   // Freeform sticky notes pinned to the auto Account board (Companies table).
   'Account Board Notes (JSON)',
   // Per-client editable GTM motion / ICP profile / competitor map (Settings table).
@@ -9969,6 +9971,72 @@ app.post('/api/companies/:name/change-architecture', async (req, res) => {
   } catch (err) {
     console.error('Change architecture save error:', err.message);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Account canvas: paste-in images / PDFs / links ----
+
+// Upload one image or PDF (sent as a base64 data URL) to the company's
+// 'Canvas Assets' attachment field via Airtable's content API, and hand back
+// the Airtable-hosted URL for the canvas element to reference. The canvas doc
+// itself is a JSON long-text field - storing bytes there would blow its size
+// limit, so the file lives on the attachment field and the element just
+// carries the URL.
+const CANVAS_ASSET_MAX_BYTES = 5 * 1024 * 1024; // Airtable's per-file upload cap
+const CANVAS_ASSET_TYPES = /^(image\/(png|jpe?g|gif|webp|svg\+xml)|application\/pdf)$/i;
+app.post('/api/companies/:name/canvas-asset', express.json({ limit: '12mb' }), async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { dataUrl, filename } = req.body || {};
+  const m = /^data:([^;,]+);base64,(.+)$/s.exec(dataUrl || '');
+  if (!m) return res.status(400).json({ error: 'dataUrl (base64) is required' });
+  const contentType = m[1].toLowerCase();
+  const base64 = m[2];
+  if (!CANVAS_ASSET_TYPES.test(contentType)) return res.status(400).json({ error: 'Only images and PDFs can go on the canvas' });
+  const bytes = Math.floor(base64.length * 3 / 4);
+  if (bytes > CANVAS_ASSET_MAX_BYTES) return res.status(413).json({ error: 'File is over the 5MB limit' });
+  try {
+    const companyRecord = await findRecordByFieldName('Companies', 'Company Name', decodeURIComponent(req.params.name));
+    if (!companyRecord) return res.status(404).json({ error: 'Company not found' });
+    const safeName = (filename || `canvas-${Date.now()}`).toString().replace(/[^\w.\- ]+/g, '_').slice(0, 120)
+      || `canvas-${Date.now()}`;
+    const up = await fetch(`https://content.airtable.com/v0/${currentTenant().baseId}/${companyRecord.id}/${encodeURIComponent('Canvas Assets')}/uploadAttachment`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contentType, file: base64, filename: safeName })
+    });
+    const body = await up.json().catch(() => ({}));
+    if (!up.ok) throw new Error(body.error && (body.error.message || body.error) || `Airtable upload failed (${up.status})`);
+    // Response shape: { id, createdTime, fields: { 'Canvas Assets': [ {id,url,filename,type,...} ] } }
+    const list = (body.fields && body.fields['Canvas Assets']) || [];
+    const added = list.find(a => a.filename === safeName) || list[list.length - 1];
+    if (!added || !added.url) throw new Error('Upload succeeded but no URL came back');
+    res.json({ url: added.url, filename: added.filename || safeName, type: contentType, isPdf: contentType === 'application/pdf' });
+  } catch (err) {
+    console.error('Canvas asset upload error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Lightweight link card data for a pasted URL: page <title> + a favicon URL.
+// Favicon uses Google's resolver (an <img> the client could load directly,
+// but returned here too so the element has it without a second round trip).
+app.get('/api/link-preview', async (req, res) => {
+  let target;
+  try { target = new URL(String(req.query.url || '')); } catch (e) { return res.status(400).json({ error: 'valid url is required' }); }
+  if (!/^https?:$/.test(target.protocol)) return res.status(400).json({ error: 'only http(s) URLs' });
+  const favicon = `https://www.google.com/s2/favicons?sz=64&domain=${encodeURIComponent(target.hostname)}`;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 6000);
+    const r = await fetch(target.href, { redirect: 'follow', signal: ctrl.signal, headers: { 'User-Agent': 'Mozilla/5.0 (compatible; T2C-Outreach/1.0)' } });
+    clearTimeout(t);
+    const html = (await r.text()).slice(0, 60000);
+    const og = /<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i.exec(html);
+    const ti = /<title[^>]*>([^<]+)<\/title>/i.exec(html);
+    const title = ((og && og[1]) || (ti && ti[1]) || target.hostname).replace(/\s+/g, ' ').trim().slice(0, 200);
+    res.json({ title, favicon, url: target.href });
+  } catch (err) {
+    res.json({ title: target.hostname, favicon, url: target.href });
   }
 });
 
