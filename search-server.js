@@ -10874,7 +10874,8 @@ app.get('/api/targets', async (req, res) => {
         programs: parseCompanyPrograms(cf).filter(programIsActive),
         inCampaign: campaigns.length > 0,
         campaigns,
-        lastActivity
+        lastActivity,
+        targetStage: cf['Target Stage'] || ''
       };
     });
 
@@ -10882,6 +10883,91 @@ app.get('/api/targets', async (req, res) => {
     res.json({ targets });
   } catch (err) {
     console.error('Targets list error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Which Kanban column a pinned company sits in. `stage` is the column LABEL
+// (also the Companies.'Target Stage' single-select value).
+app.post('/api/companies/:name/target-stage', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const stage = ((req.body && req.body.stage) || '').toString().trim().slice(0, 40);
+  try {
+    const companyRecord = await findRecordByFieldName('Companies', 'Company Name', decodeURIComponent(req.params.name));
+    if (!companyRecord) return res.status(404).json({ error: 'Company not found' });
+    await airtableWriteAllowingMissingCtaFields('PATCH', 'Companies', {
+      records: [{ id: companyRecord.id, fields: { 'Target Stage': stage || null } }], typecast: true
+    });
+    res.json({ success: true, stage });
+  } catch (err) {
+    console.error('Target stage error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Targets Kanban column config: { columns:[{id,label,color}] }, order = array
+// order. Stored in Settings.'Target Board (JSON)'. Renaming a column (same id,
+// new label) migrates every Companies.'Target Stage' holding the old label.
+const TARGET_BOARD_DEFAULT = {
+  columns: [
+    { id: 'new', label: 'New', color: 'slate' },
+    { id: 'warm', label: 'Warm', color: 'amber' },
+    { id: 'nurture', label: 'Nurture', color: 'violet' },
+    { id: 'hot', label: 'Hot', color: 'red' }
+  ]
+};
+
+app.get('/api/target-board', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const record = await getSettingsRecord();
+    const saved = record ? parseJsonSafe(record.fields['Target Board (JSON)']) : null;
+    res.json(saved && Array.isArray(saved.columns) && saved.columns.length ? saved : TARGET_BOARD_DEFAULT);
+  } catch (err) {
+    console.error('Get target-board error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/target-board', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const cols = req.body && Array.isArray(req.body.columns) ? req.body.columns : null;
+  if (!cols || !cols.length) return res.status(400).json({ error: 'columns array is required' });
+  const clean = cols.slice(0, 12).map((c, i) => ({
+    id: (c.id || 'col' + i).toString().slice(0, 40),
+    label: (c.label || 'Column').toString().slice(0, 40),
+    color: (c.color || 'slate').toString().slice(0, 20)
+  }));
+  try {
+    const settingsRecord = await getOrCreateSettingsRecord();
+    const prev = parseJsonSafe(settingsRecord.fields['Target Board (JSON)']);
+    const prevById = {};
+    if (prev && Array.isArray(prev.columns)) prev.columns.forEach(c => { prevById[c.id] = c.label; });
+    const renames = clean
+      .filter(c => prevById[c.id] && prevById[c.id] !== c.label)
+      .map(c => ({ from: prevById[c.id], to: c.label }));
+
+    await airtableWriteAllowingMissingCtaFields('PATCH', SETTINGS_TABLE, {
+      records: [{ id: settingsRecord.id, fields: { 'Target Board (JSON)': JSON.stringify({ columns: clean }) } }]
+    });
+
+    let migrated = 0;
+    if (renames.length) {
+      const companies = await airtableFetchAllRecords('Companies');
+      const patches = [];
+      companies.forEach(r => {
+        const hit = renames.find(x => x.from === r.fields['Target Stage']);
+        if (hit) patches.push({ id: r.id, fields: { 'Target Stage': hit.to } });
+      });
+      for (let i = 0; i < patches.length; i += 10) {
+        const slice = patches.slice(i, i + 10);
+        await airtableWriteAllowingMissingCtaFields('PATCH', 'Companies', { records: slice, typecast: true });
+        migrated += slice.length;
+      }
+    }
+    res.json({ success: true, columns: clean, migrated });
+  } catch (err) {
+    console.error('Save target-board error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

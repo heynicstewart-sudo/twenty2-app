@@ -367,6 +367,7 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .kanban-col[data-col="booked"]{border-top-color:var(--tint-gold-fg);}
 .kanban-col[data-col="booked"] .kanban-col-header{color:var(--tint-gold-fg);}
 .kanban-cards{display:flex;flex-direction:column;gap:10px;min-height:60px;}
+.kanban-col.dragover{background:var(--accent-dim);}
 .kcard{background:var(--surface);border:1px solid var(--border-light);border-radius:var(--radius-card);padding:12px;cursor:grab;box-shadow:var(--shadow-sm);}
 .kcard.dragging{opacity:0.4;}
 .kcard-head{display:flex;justify-content:space-between;align-items:flex-start;cursor:pointer;}
@@ -2484,6 +2485,8 @@ function afterRender(page){
     ensureTodaysActionsSequenceStagesLoaded();
     if(window.__dueReminders === undefined) loadDueReminders();
     if(window.__wrongPersonaAccounts === undefined) loadWrongPersonaAccounts();
+    // Contact signals (job changes) live on the Campaigns list now.
+    if(window.__homeContactSignals === undefined) loadHomeContactSignals();
   }
   if(page === 'campaigns' && window.__campaignView === 'detail'){
     const tab = window.__campaignDetailTab;
@@ -2517,6 +2520,9 @@ function afterRender(page){
     if(window.__lostDeals === undefined) loadLostDeals();
     if(window.__stalledRelationships === undefined) loadStalledRelationships();
     if(window.__programs === undefined) loadPrograms();
+    // ICP worklist + the program-discovery queue moved here from Targets.
+    loadIcpWorklist();
+    if(window.__programDiscovery === undefined) loadProgramDiscovery();
     ensureContextDataLoaded();
   }
   if(page === 'gtmmotion' && window.__gtmMotion === undefined && !window.__gtmMotionLoading) loadGtmMotion();
@@ -2531,6 +2537,7 @@ function afterRender(page){
   }
   if(page === 'replies' && window.__repliesQueue === undefined && !window.__repliesLoading) loadRepliesQueue();
   if(page === 'home' && window.__targets === undefined && !window.__targetsLoading) loadTargets();
+  if(page === 'home' && window.__targetBoard === undefined && !window.__targetBoardLoading) loadTargetBoard();
   if(page === 'home' && window.__targetOpen){
     const name = window.__targetOpen;
     loadCompanyMessages(name);
@@ -2583,9 +2590,7 @@ function afterRender(page){
     if(tab === 'settings' && window.__contentSettings === undefined) loadContentSettings();
   }
   if(page === 'contentcalendar' && window.__contentCalendarItems === undefined) loadContentCalendarItems();
-  if(page === 'home' && window.__homeContactSignals === undefined) loadHomeContactSignals();
-  if(page === 'home') loadIcpWorklist();
-  if((page === 'home' || page === 'settings') && window.__programDiscovery === undefined) loadProgramDiscovery();
+  if(page === 'settings' && window.__programDiscovery === undefined) loadProgramDiscovery();
   if((page === 'profile' || page === 'companyuniverse') && window.__targets === undefined && !window.__targetsLoading) loadTargets();
   if(page === 'research'){
     const tab = window.__researchSubTab || 'market';
@@ -2891,22 +2896,20 @@ async function replyApprove(id){
 /* ===================== HOME ===================== */
 
 // The "home" page id is kept internally (many state.currentPage === 'home'
-// checks) but the page is now "Targets" - a pin board of companies Marcus
-// wants to work, each opening that account's canvas + recent campaign
-// messages. The old landing-page contents moved out: the four quick-action
-// cards were dropped, "Your Grids" became a Campaigns sub-tab
-// (renderGridsListView), and "Today's actions" became a per-campaign tab
-// (renderCampaignActionsTab). The three intelligence strips stay here.
+// checks) but the page is now "Targets" - a Kanban board of companies Marcus
+// wants to work, each card opening that account's canvas + campaign history.
+// The old landing-page contents all moved out: the quick-action cards were
+// dropped; "Your Grids" -> Campaigns sub-tab (renderGridsListView);
+// "Today's actions" -> per-campaign tab (renderCampaignActionsTab); the ICP
+// worklist + Programs-found discovery queue -> Company Universe; Contact
+// signals -> the Campaigns list page.
 function renderHome(){
   if(window.__targetOpen) return renderTargetDetail(window.__targetOpen);
 
   return `
   <div class="section-title" style="font-size:24px;margin-bottom:2px;"><i class="ti ti-pin"></i> Targets</div>
-  <div class="muted" style="margin-bottom:22px;">Companies you want to work — pinned, with their account canvas and campaign history one click away.</div>
+  <div class="muted" style="margin-bottom:22px;">Companies you want to work. Drag a card between columns as an account warms up.</div>
 
-  ${renderIcpWorklistStrip()}
-  ${renderProgramDiscoveryCard()}
-  ${renderContactSignalsStrip()}
   ${renderTargetsBoard()}
   `;
 }
@@ -2960,34 +2963,108 @@ async function setTargetPinned(name, pinned){
   if(['profile','companyuniverse'].includes(state.currentPage)) renderPage();
 }
 
+/* ---- Kanban board ---- */
+// Columns come from Settings.'Target Board (JSON)' (GET/POST /api/target-board),
+// falling back to these four. Each column's `label` is also the value stored
+// in Companies.'Target Stage' - the server migrates that value when a column
+// is renamed (same id, new label).
+const TARGET_BOARD_DEFAULT_COLUMNS = [
+  { id:'new', label:'New', color:'slate' },
+  { id:'warm', label:'Warm', color:'amber' },
+  { id:'nurture', label:'Nurture', color:'violet' },
+  { id:'hot', label:'Hot', color:'red' }
+];
+const TARGET_COL_COLORS = {
+  slate:'#64748b', blue:'#2563eb', teal:'#2A6B7C', green:'#16a34a',
+  amber:'#d97706', violet:'#7c3aed', red:'#dc2626', pink:'#db2777'
+};
+function targetColHex(name){ return TARGET_COL_COLORS[name] || TARGET_COL_COLORS.slate; }
+function targetBoardColumns(){
+  const b = window.__targetBoard;
+  return (b && Array.isArray(b.columns) && b.columns.length) ? b.columns : TARGET_BOARD_DEFAULT_COLUMNS;
+}
+
+async function loadTargetBoard(){
+  if(window.__targetBoardLoading) return;
+  window.__targetBoardLoading = true;
+  try {
+    const res = await fetch('/api/target-board');
+    const data = await res.json();
+    if(res.ok && data && Array.isArray(data.columns)) window.__targetBoard = data;
+    else if(window.__targetBoard === undefined) window.__targetBoard = { columns: TARGET_BOARD_DEFAULT_COLUMNS };
+  } catch(err){
+    if(window.__targetBoard === undefined) window.__targetBoard = { columns: TARGET_BOARD_DEFAULT_COLUMNS };
+  }
+  window.__targetBoardLoading = false;
+  if(state.currentPage === 'home') renderPage();
+}
+
 function renderTargetsBoard(){
   const t = window.__targets;
   const loading = t === undefined || window.__targetsLoading;
   const rows = Array.isArray(t) ? t : [];
+  const cols = targetBoardColumns();
 
-  return `
-  <div class="card">
+  // Group targets by column. Match Target Stage to a column label
+  // (case-insensitive); anything blank / unrecognised falls in the first column.
+  const byCol = {};
+  cols.forEach(c => { byCol[c.id] = []; });
+  rows.forEach(x => {
+    const hit = cols.find(c => c.label.toLowerCase() === (x.targetStage||'').trim().toLowerCase());
+    byCol[(hit || cols[0]).id].push(x);
+  });
+
+  const head = `
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-pin"></i> Pinned targets ${rows.length ? `<span class="count-pill has" style="margin-left:6px;">${rows.length}</span>` : ''}</div>
-      <input id="targetPinSearch" type="text" placeholder="Pin a company…" oninput="renderTargetPinSuggestions(this.value)" style="max-width:260px;">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <input id="targetPinSearch" type="text" placeholder="Pin a company…" oninput="renderTargetPinSuggestions(this.value)" style="max-width:240px;">
+        <button class="btn btn-ghost btn-sm" onclick="openTargetBoardEditor()"><i class="ti ti-adjustments"></i> Edit columns</button>
+      </div>
     </div>
-    <div id="targetPinSuggestions"></div>
-    ${loading ? '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading…</div>'
-      : (t && t.error) ? `<div class="muted" style="font-size:12.5px;">Could not load targets: ${esc(t.error)}</div>`
-      : !rows.length ? '<div class="empty-state">No targets pinned yet. Search a company above, or use “Pin as target” from a company’s profile.</div>'
-      : `<div class="home-actions" style="margin-top:4px;">${rows.map(renderTargetCard).join('')}</div>`}
-  </div>`;
+    <div id="targetPinSuggestions"></div>`;
+
+  if(window.__targetBoardEditing) return `<div class="card">${head}${renderTargetBoardEditor()}</div>`;
+  if(loading) return `<div class="card">${head}<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading…</div></div>`;
+  if(t && t.error) return `<div class="card">${head}<div class="muted" style="font-size:12.5px;">Could not load targets: ${esc(t.error)}</div></div>`;
+
+  const board = `
+    <div class="kanban" style="grid-template-columns:repeat(${cols.length}, minmax(0,1fr));">
+      ${cols.map(col => {
+        const hex = targetColHex(col.color);
+        const list = byCol[col.id] || [];
+        return `
+        <div class="kanban-col" data-colid="${esc(col.id)}" data-collabel="${esc(col.label)}"
+             style="border-top-color:${hex};"
+             ondragover="onTargetColDragOver(event)" ondragleave="onTargetColDragLeave(event)" ondrop="onTargetColDrop(event,'${esc(col.label)}')">
+          <div class="kanban-col-header" style="color:${hex};">
+            <span>${esc(col.label)}</span>
+            <span class="count" style="color:${hex};">${list.length}</span>
+          </div>
+          <div class="kanban-cards">
+            ${list.map(renderTargetKCard).join('') || '<div class="empty-state" style="padding:14px;font-size:11.5px;">Drop here</div>'}
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+    ${!rows.length ? '<div class="empty-state" style="margin-top:14px;">No targets pinned yet. Search a company above, or use “Pin as target” from a company’s profile.</div>' : ''}`;
+
+  return `<div class="card">${head}${board}</div>`;
 }
 
-function renderTargetCard(x){
+function renderTargetKCard(x){
   const nm = esc(x.name);
   const prog = (x.programs || []).find(Boolean);
   return `
-  <div class="home-action-card" onclick="openTarget('${nm}')" style="cursor:pointer;position:relative;">
-    <button class="btn btn-ghost btn-sm" title="Unpin" onclick="event.stopPropagation();unpinTarget('${nm}')" style="position:absolute;top:8px;right:8px;"><i class="ti ti-pin-filled"></i></button>
-    <div class="home-action-title" style="padding-right:28px;">${nm}</div>
-    <div class="muted" style="font-size:11.5px;margin-top:2px;">${esc(x.sector || x.industry || '—')}</div>
-    <div style="margin-top:8px;display:flex;gap:4px;flex-wrap:wrap;">
+  <div class="kcard" draggable="true" data-name="${nm}" ondragstart="onTargetCardDragStart(event,'${nm}')" ondragend="onTargetCardDragEnd(event)">
+    <div class="kcard-head" onclick="openTarget('${nm}')">
+      <div style="min-width:0;">
+        <div class="kcard-name">${nm}</div>
+        <div class="kcard-role">${esc(x.sector || x.industry || '—')}</div>
+      </div>
+      <button class="btn btn-ghost btn-sm" style="padding:2px 6px;flex:none;" title="Unpin" onclick="event.stopPropagation();unpinTarget('${nm}')"><i class="ti ti-pin-filled"></i></button>
+    </div>
+    <div style="margin-top:8px;display:flex;gap:4px;flex-wrap:wrap;" onclick="openTarget('${nm}')">
       ${/resources icp/i.test(x.icpTag||'') ? '<span class="badge" style="background:var(--tint-green-bg);color:var(--tint-green-fg);font-size:10px;">ICP</span>' : (x.icpFitScore!=null ? `<span class="badge" style="background:var(--surface-2);font-size:10px;">Fit ${x.icpFitScore}</span>` : '')}
       ${prog ? `<span class="badge" style="background:var(--tint-gold-bg);color:var(--tint-gold-fg);font-size:10px;"><i class="ti ti-progress-bolt"></i> ${esc(prog.name || 'Active program')}</span>` : ''}
       ${x.inCampaign ? `<span class="badge" style="background:var(--tint-blue-bg);color:var(--tint-blue-fg);font-size:10px;">In ${x.campaigns && x.campaigns.length ? x.campaigns.length : 1} campaign${(x.campaigns && x.campaigns.length > 1) ? 's' : ''}</span>` : '<span class="badge" style="background:var(--danger-bg,#fee);color:var(--danger);font-size:10px;">Not in a campaign</span>'}
@@ -2995,6 +3072,111 @@ function renderTargetCard(x){
     ${x.latestSignal ? `<div class="muted" style="font-size:11px;margin-top:8px;">${esc(x.latestSignal)}</div>` : ''}
     ${x.lastActivity ? `<div class="muted" style="font-size:10.5px;margin-top:6px;">Last activity ${fmtDate(x.lastActivity)}</div>` : ''}
   </div>`;
+}
+
+/* ---- Kanban drag ---- */
+let __targetDragName = null;
+function onTargetCardDragStart(e, name){ __targetDragName = name; e.currentTarget.classList.add('dragging'); e.dataTransfer.effectAllowed='move'; }
+function onTargetCardDragEnd(e){ e.currentTarget.classList.remove('dragging'); }
+function onTargetColDragOver(e){ e.preventDefault(); e.currentTarget.classList.add('dragover'); }
+function onTargetColDragLeave(e){ e.currentTarget.classList.remove('dragover'); }
+async function onTargetColDrop(e, columnLabel){
+  e.preventDefault();
+  e.currentTarget.classList.remove('dragover');
+  const name = __targetDragName;
+  __targetDragName = null;
+  if(!name) return;
+  const row = (window.__targets || []).find(x => x.name === name);
+  if(!row || row.targetStage === columnLabel) return;
+  const prev = row.targetStage;
+  row.targetStage = columnLabel;               // optimistic
+  renderPage();
+  try {
+    const res = await fetch('/api/companies/'+encodeURIComponent(name)+'/target-stage', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ stage: columnLabel })
+    });
+    if(!res.ok){ const d = await res.json().catch(()=>({})); throw new Error(d.error || 'Request failed'); }
+  } catch(err){
+    row.targetStage = prev;                     // roll back
+    toast('Could not move card: '+err.message, 'error');
+    renderPage();
+  }
+}
+
+/* ---- Column editor ---- */
+function openTargetBoardEditor(){
+  // Deep copy so Cancel discards edits.
+  window.__targetBoardDraft = JSON.parse(JSON.stringify({ columns: targetBoardColumns() }));
+  window.__targetBoardEditing = true;
+  renderPage();
+}
+function closeTargetBoardEditor(){
+  window.__targetBoardEditing = false;
+  window.__targetBoardDraft = null;
+  renderPage();
+}
+function renderTargetBoardEditor(){
+  const cols = (window.__targetBoardDraft && window.__targetBoardDraft.columns) || [];
+  const swatches = Object.keys(TARGET_COL_COLORS);
+  return `
+  <div style="max-width:640px;">
+    <div class="muted" style="font-size:12px;margin-bottom:12px;">Rename, recolour and reorder the board columns. Renaming a column re-labels every target currently in it.</div>
+    ${cols.map((c,i) => `
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border-light);">
+        <div style="display:flex;flex-direction:column;gap:2px;">
+          <button class="btn btn-ghost btn-sm" style="padding:0 4px;" ${i===0?'disabled':''} onclick="moveTargetCol(${i},-1)"><i class="ti ti-chevron-up"></i></button>
+          <button class="btn btn-ghost btn-sm" style="padding:0 4px;" ${i===cols.length-1?'disabled':''} onclick="moveTargetCol(${i},1)"><i class="ti ti-chevron-down"></i></button>
+        </div>
+        <input type="text" value="${esc(c.label)}" oninput="window.__targetBoardDraft.columns[${i}].label=this.value" style="flex:1;">
+        <div style="display:flex;gap:4px;">
+          ${swatches.map(s => `<button title="${s}" onclick="setTargetColColor(${i},'${s}')" style="width:18px;height:18px;border-radius:50%;border:2px solid ${c.color===s?'var(--text)':'transparent'};background:${TARGET_COL_COLORS[s]};cursor:pointer;"></button>`).join('')}
+        </div>
+        ${cols.length>2 ? `<button class="btn btn-ghost btn-sm" title="Remove column" onclick="removeTargetCol(${i})"><i class="ti ti-trash"></i></button>` : ''}
+      </div>`).join('')}
+    <div style="display:flex;justify-content:space-between;margin-top:14px;">
+      <button class="btn btn-ghost btn-sm" ${cols.length>=8?'disabled':''} onclick="addTargetCol()"><i class="ti ti-plus"></i> Add column</button>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-secondary btn-sm" onclick="closeTargetBoardEditor()">Cancel</button>
+        <button class="btn btn-primary btn-sm" onclick="saveTargetBoard()"><i class="ti ti-device-floppy"></i> Save</button>
+      </div>
+    </div>
+  </div>`;
+}
+function moveTargetCol(i, dir){
+  const arr = window.__targetBoardDraft.columns;
+  const j = i + dir;
+  if(j < 0 || j >= arr.length) return;
+  [arr[i], arr[j]] = [arr[j], arr[i]];
+  renderPage();
+}
+function setTargetColColor(i, color){ window.__targetBoardDraft.columns[i].color = color; renderPage(); }
+function removeTargetCol(i){ window.__targetBoardDraft.columns.splice(i, 1); renderPage(); }
+function addTargetCol(){
+  window.__targetBoardDraft.columns.push({ id:'col'+Date.now().toString(36), label:'New column', color:'blue' });
+  renderPage();
+}
+async function saveTargetBoard(){
+  const columns = (window.__targetBoardDraft.columns || []).map(c => ({
+    id: c.id || ('col'+Math.random().toString(36).slice(2,8)),
+    label: (c.label||'Column').trim().slice(0,40) || 'Column',
+    color: c.color || 'slate'
+  }));
+  try {
+    const res = await fetch('/api/target-board', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ columns })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__targetBoard = { columns: data.columns || columns };
+    toast('Board updated' + (data.migrated ? ` · ${data.migrated} target${data.migrated===1?'':'s'} re-labelled` : ''), 'success');
+  } catch(err){
+    toast('Could not save board: '+err.message, 'error');
+    return;
+  }
+  window.__targetBoardEditing = false;
+  window.__targetBoardDraft = null;
+  window.__targets = undefined;
+  loadTargets();
 }
 
 // Company name suggestions for the "Pin a company" box - same client-side
@@ -13125,6 +13307,8 @@ function renderCampaignListView(){
       </table>
     </div>` : `<div class="empty-state">No campaigns yet — start one with New Campaign.</div>`}
   </div>
+
+  ${renderContactSignalsStrip()}
   `;
 }
 
@@ -15271,7 +15455,7 @@ async function loadProgramDiscovery(){
     const res = await fetch('/api/programs/discovery');
     window.__programDiscovery = res.ok ? await res.json() : { error: true };
   } catch(err){ window.__programDiscovery = { error: true }; }
-  if(['home','settings'].includes(state.currentPage)) renderPage();
+  if(['home','settings','companyuniverse'].includes(state.currentPage)) renderPage();
 }
 function renderProgramDiscoveryCard(){
   const d = window.__programDiscovery;
@@ -15282,7 +15466,14 @@ function renderProgramDiscoveryCard(){
   const mode = window.__programDiscoveryMode || 'both';
   const modeOpt = (v,label) => `<option value="${v}" ${mode===v?'selected':''}>${label}</option>`;
   const sorted = progQueueSorted(d.queue || []);
-  const preview = sorted.slice(0, 5);
+  // Low-confidence findings are noise by default (the agent scraping weak
+  // sources) - hide them behind a toggle so the panel only shows what's worth
+  // a look.
+  const lowCount = sorted.filter(q => q.confidence === 'low').length;
+  const visible = window.__progShowLow ? sorted : sorted.filter(q => q.confidence !== 'low');
+  const shownCount = visible.length;
+  const preview = visible.slice(0, 5);
+  const lowToggle = lowCount ? `<button class="btn btn-ghost btn-sm" onclick="window.__progShowLow=!window.__progShowLow;renderPage();">${window.__progShowLow ? 'Hide' : 'Show'} ${lowCount} low-confidence</button>` : '';
   const previewHtml = preview.length ? `
     <div style="margin-top:12px;display:flex;flex-direction:column;gap:1px;border:1px solid var(--border-light);border-radius:var(--radius-input);overflow:hidden;">
       ${preview.map((q,i) => `
@@ -15292,14 +15483,15 @@ function renderProgramDiscoveryCard(){
           <span class="muted" style="font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;">${progQueueWhat(q)}</span>
           ${progConfTag(q.confidence)}
         </div>`).join('')}
-      ${n > preview.length ? `<div onclick="openProgramDiscoveryQueue()" style="cursor:pointer;padding:8px 12px;font-size:11px;font-weight:700;color:var(--accent);border-top:1px solid var(--border-light);background:var(--surface);">Show all ${n} →</div>` : ''}
-    </div>` : '';
+      ${shownCount > preview.length ? `<div onclick="openProgramDiscoveryQueue()" style="cursor:pointer;padding:8px 12px;font-size:11px;font-weight:700;color:var(--accent);border-top:1px solid var(--border-light);background:var(--surface);">Show all ${shownCount} →</div>` : ''}
+    </div>` : (n ? `<div class="muted" style="font-size:12px;margin-top:12px;">Nothing above low confidence right now.${lowCount ? ` ${lowCount} low-confidence finding${lowCount===1?'':'s'} hidden.` : ''}</div>` : '');
   return `
   <div class="card" style="margin-bottom:22px;">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
-      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-robot"></i> Programs found ${n ? `<span class="count-pill has" style="margin-left:6px;">${n}</span>` : ''}</div>
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-robot"></i> Programs found ${shownCount ? `<span class="count-pill has" style="margin-left:6px;">${shownCount}</span>` : ''}</div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
-        ${n ? `<button class="btn btn-ghost btn-sm" onclick="openProgramDiscoveryQueue()"><i class="ti ti-list-check"></i> Review${n>5?` all ${n}`:''}</button>` : ''}
+        ${lowToggle}
+        ${shownCount ? `<button class="btn btn-ghost btn-sm" onclick="openProgramDiscoveryQueue()"><i class="ti ti-list-check"></i> Review${shownCount>5?` all ${shownCount}`:''}</button>` : ''}
         <select onchange="window.__programDiscoveryMode=this.value" style="font-size:11.5px;" ${running?'disabled':''}>
           ${modeOpt('both','Known + new')}${modeOpt('monitor','Known accounts only')}${modeOpt('discover','New companies only')}
         </select>
@@ -15345,19 +15537,21 @@ async function pollProgramDiscovery(){
       renderPage();
       return;
     }
-    if(['home','settings'].includes(state.currentPage)) renderPage();
+    if(['home','settings','companyuniverse'].includes(state.currentPage)) renderPage();
   }
   window.__programDiscoveryRunning = false; renderPage();
   toast('Discovery is taking longer than expected — check back shortly.', 'warn');
 }
 function progDiscoQueueDone(){
   closeModal();
-  if(['home','settings'].includes(state.currentPage)) renderPage();
+  if(['home','settings','companyuniverse'].includes(state.currentPage)) renderPage();
 }
 const PROG_Q_EMPTY_HTML = '<div class="empty-state" style="padding:24px;">Nothing waiting. High-confidence findings are filed automatically; anything the agent is unsure about lands here.</div>';
 function openProgramDiscoveryQueue(){
   const d = window.__programDiscovery;
-  const sorted = progQueueSorted((d && d.queue) || []);
+  const allSorted = progQueueSorted((d && d.queue) || []);
+  const lowCount = allSorted.filter(q => q.confidence === 'low').length;
+  const sorted = window.__progShowLow ? allSorted : allSorted.filter(q => q.confidence !== 'low');
   const allNames = [...new Set([...(state.contacts||[]).map(c => c.company).filter(Boolean), ...((window.__programs && window.__programs.companies || []).map(c => c.companyName))])].sort();
   const groupHead = label => `<div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:6px 2px 2px;">${label}</div>`;
   const rowHtml = q => `
@@ -15383,9 +15577,10 @@ function openProgramDiscoveryQueue(){
       </div>`;
   const progs = sorted.filter(q => q.destination === 'program');
   const sigs = sorted.filter(q => q.destination !== 'program');
-  const body = !sorted.length ? PROG_Q_EMPTY_HTML : `
+  const lowToggleHtml = lowCount ? `<a href="#" onclick="event.preventDefault();window.__progShowLow=!window.__progShowLow;openProgramDiscoveryQueue();" style="font-size:11.5px;font-weight:700;">${window.__progShowLow ? 'Hide' : 'Show'} ${lowCount} low-confidence</a>` : '';
+  const body = !sorted.length ? (lowCount ? `<div class="muted" style="font-size:12px;">Nothing above low confidence. ${lowToggleHtml}</div>` : PROG_Q_EMPTY_HTML) : `
     <div class="muted" style="font-size:11.5px;line-height:1.5;margin-bottom:14px;">
-      ${sorted.length} finding${sorted.length>1?'s':''} the agent wasn’t sure about. <b>Accept</b> files one against the company shown and drops it from the list; <b>Dismiss</b> just drops it. Nothing here is in your data yet.
+      ${sorted.length} finding${sorted.length>1?'s':''} worth a look. <b>Accept</b> files one against the company shown and drops it from the list; <b>Dismiss</b> just drops it. Nothing here is in your data yet. ${lowToggleHtml}
     </div>
     <datalist id="progQCompanyList">${allNames.map(n => `<option value="${esc(n)}">`).join('')}</datalist>
     <div id="progQScroll" style="display:flex;flex-direction:column;gap:10px;max-height:60vh;overflow-y:auto;padding-right:4px;">
@@ -15527,6 +15722,9 @@ function renderCompanyUniverse(){
     <button class="btn btn-ghost btn-sm" onclick="navigate('competitormap')"><i class="ti ti-affiliate"></i> Competitor map</button>
     <button class="btn btn-ghost btn-sm" onclick="navigate('gtmmotion')"><i class="ti ti-topology-star-3"></i> See our GTM motion</button>
   </div>
+
+  ${renderIcpWorklistStrip()}
+
   <div class="card" style="margin-bottom:16px;">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-grid-dots"></i> ICP segmentation</div>
@@ -15537,6 +15735,8 @@ function renderCompanyUniverse(){
   </div>
 
   ${renderProgramsCard()}
+
+  ${renderProgramDiscoveryCard()}
 
   <div class="card" style="margin-bottom:16px;">
     <div class="section-title" style="margin-bottom:4px;"><i class="ti ti-chart-histogram"></i> What's actually converting</div>
@@ -20226,7 +20426,7 @@ async function loadHomeContactSignals(){
   } catch(err){
     window.__homeContactSignals = { error: err.message };
   }
-  if(state.currentPage === 'home') renderPage();
+  if(['home','campaigns'].includes(state.currentPage)) renderPage();
 }
 
 async function loadCampaignContentSignals(campaign){
@@ -25141,7 +25341,7 @@ async function loadIcpWorklist(){
   } catch(err){
     window.__icpWorklist = { error: true };
   }
-  if(['home','gtmmotion'].includes(state.currentPage)) renderPage();
+  if(['home','gtmmotion','companyuniverse'].includes(state.currentPage)) renderPage();
 }
 function renderIcpWorklistStrip(){
   const w = window.__icpWorklist;
@@ -25155,9 +25355,8 @@ function renderIcpWorklistStrip(){
   <div class="card" style="margin-bottom:22px;">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-crosshair"></i> ICP worklist</div>
-      <button class="btn btn-ghost btn-sm" onclick="navigate('companyuniverse')">Company Universe <i class="ti ti-arrow-right"></i></button>
     </div>
-    <div class="muted" style="font-size:11.5px;margin:6px 0 12px;">${w.inCampaignCount} of ${w.icpCompanyCount} ICP accounts are in a campaign. ${w.untouchedTotal} are not.</div>
+    <div class="muted" style="font-size:11.5px;margin:6px 0 12px;">${w.inCampaignCount} of ${w.icpCompanyCount} ICP accounts are in a campaign. ${w.untouchedTotal} are not. Click one to open its profile, then pin it to your Targets board.</div>
     ${progTargets.length ? `
       <div style="font-size:11px;font-weight:700;color:var(--danger);margin-bottom:4px;"><i class="ti ti-progress-bolt"></i> Active program, not in a campaign — start here</div>
       ${progTargets.slice(0,6).map(x => `
