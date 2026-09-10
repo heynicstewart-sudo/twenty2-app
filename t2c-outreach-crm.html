@@ -13280,7 +13280,7 @@ function renderCampaigns(){
 // to have. `navigate()` still works with these ids - they're hidden from
 // the sidebar (NAV entries marked hidden:true), not removed from dispatch.
 function renderCampaignsAreaSubNav(activeId){
-  const items = [['campaigns','All Campaigns'],['grids','Grids'],['calendar','Pipeline'],['logger','Log an interaction']];
+  const items = [['campaigns','Campaigns'],['grids','Contact grids'],['calendar','Deal pipeline'],['logger','Log interaction']];
   return `<div class="seq-tabs" style="margin-bottom:16px;">
     ${items.map(([id,label]) => `<div class="seq-tab ${activeId===id?'active':''}" onclick="navigate('${id}')">${label}</div>`).join('')}
   </div>`;
@@ -13892,7 +13892,7 @@ function editCampaign(campaignId){
 
 /* ---- Detail view ---- */
 
-const CAMPAIGN_DETAIL_TABS = [['actions','Actions'],['intelligence','Engine'],['grid','Grid'],['roadmap','Roadmap'],['pipeline','Pipeline'],['strategy','Strategy'],['analytics','Analytics'],['sales','Sales'],['content','Content']];
+const CAMPAIGN_DETAIL_TABS = [['actions','Actions'],['grid','Contacts'],['roadmap','Sequence'],['strategy','Setup'],['pipeline','Coverage'],['analytics','Results'],['sales','Deals'],['content','Content'],['intelligence','Notes']];
 
 // tab param lets callers (e.g. the Grid page's back button) land on a
 // specific tab instead of always resetting to the first one.
@@ -13983,11 +13983,11 @@ function renderCampaignDetail(){
   const tab = window.__campaignDetailTab || 'actions';
   const statusClass = CAMPAIGN_STATUS_CLASS[campaign.status] || 'campaign-status-draft';
   return `
-  <button class="btn btn-ghost btn-sm" style="margin-bottom:10px;" onclick="backToCampaignList()"><i class="ti ti-arrow-left"></i> Campaigns</button>
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+  <button class="btn btn-ghost btn-sm" style="margin-bottom:12px;margin-left:-8px;" onclick="backToCampaignList()"><i class="ti ti-arrow-left"></i> All campaigns</button>
+  <div class="page-head" style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;">
     <div>
-      <div class="section-title" style="margin-bottom:2px;">${esc(campaign.name)}</div>
-      <div class="muted" style="font-size:12.5px;">${esc(campaign.goal||'')}</div>
+      <h1 class="page-h1" style="font-size:26px;">${esc(campaign.name)}</h1>
+      ${campaign.goal ? `<div class="page-sub">${esc(campaign.goal)}</div>` : ''}
     </div>
     <div style="display:flex;align-items:center;gap:10px;">
       <span class="campaign-status ${statusClass} clickable" onclick="toggleCampaignStatusMenu(event,'${campaign.id}')">${esc(campaign.status)} <i class="ti ti-chevron-down" style="font-size:10px;"></i></span>
