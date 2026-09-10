@@ -14550,13 +14550,15 @@ async function _loadMondayCanvasCache(force) {
     try { marketItems = await mondayFetchAllItemsByTitle(MONDAY_MARKETMAP_BOARD_ID); }
     catch (e) { console.warn('Monday canvas cache: WA Market Map fetch failed (non-fatal):', e.message); }
 
+    // Contacts board (2045166971) actual column titles, per Nic 10 Sep 2026:
+    //   Company | Notes (the contact's running note history) | Role | Relationship
     for (const it of contactItems) {
-      const note = _mondayCol(it.cols, 'Context Notes', 'Context Note', 'Notes', 'Context');
+      const note = _mondayCol(it.cols, 'Notes', 'Notes history of the contact', 'Context Notes', 'Context Note', 'Context');
       if (!note) continue;
-      addContact(resolve(_mondayCol(it.cols, 'Associated Company', 'Company', 'Account', 'Organisation', 'Organization', 'Client')), {
+      addContact(resolve(_mondayCol(it.cols, 'Company', 'Associated Company', 'Account', 'Organisation', 'Organization', 'Client')), {
         name: it.name,
-        role: _mondayCol(it.cols, 'Title', 'Role', 'Job Title', 'Position'),
-        stage: _mondayCol(it.cols, 'Stage', 'Journey Stage', 'Relationship Stage', 'Status'),
+        role: _mondayCol(it.cols, 'Role', 'Title', 'Job Title', 'Position'),
+        stage: _mondayCol(it.cols, 'Relationship', 'Relationship Stage', 'Stage', 'Journey Stage', 'Status'),
         li: _mondayCol(it.cols, 'LinkedIn Touches', 'LI Touches', 'Touches'),
         note: note.replace(/\s+/g, ' ').trim(),
       });
