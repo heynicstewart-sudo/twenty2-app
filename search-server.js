@@ -14231,11 +14231,14 @@ async function mondayGraphQL(query) {
 }
 
 async function mondayFetchItem(itemId) {
-  const data = await mondayGraphQL(`{ items(ids:[${itemId}]) { id name column_values { column { title } text } } }`);
+  const data = await mondayGraphQL(`{ items(ids:[${itemId}]) { id name column_values { column { title id } text } } }`);
   const item = data.items && data.items[0];
   if (!item) return null;
   const row = { name: item.name };
-  item.column_values.forEach(cv => { row[cv.column.title] = cv.text; });
+  item.column_values.forEach(cv => {
+    if (cv.column && cv.column.title) row[cv.column.title] = cv.text;
+    if (cv.column && cv.column.id) row[cv.column.id] = cv.text;   // also key by id
+  });
   return row;
 }
 
@@ -14487,14 +14490,17 @@ app.post('/api/monday/webhook', async (req, res) => {
     // board item names are "Company — Deal Name" style (same em/en-dash
     // splitting the one-off backfill script used).
     // Which column carries the company name depends on the board.
-    const companyNameRaw =
+    const companyNameRaw = (
       boardMeta.kind === 'pipeline' ? (row['Client'] || row.name)
-      : boardMeta.kind === 'contacts' ? (row['Company'] || row['Associated Company'] || row['Account'] || '')
-      : boardMeta.kind === 'radar' ? (row['Organisation'] || row['Organization'] || row['Company'] || '')
+      : boardMeta.kind === 'contacts' ? (row['contact_account'] || row['Accounts'] || row['text8'] || row['Associated Company'] || '')
+      : boardMeta.kind === 'radar' ? (row['board_relation_mm47rb4t'] || row['Client Account'] || row['text_mm2hhwph'] || row['Organisation'] || '')
       : boardMeta.kind === 'marketmap' ? row.name
-      : row.name.split(' — ')[0].split(' - ')[0].split(' –')[0].trim();  // deal: "Company — Deal Name"
+      : row.name.split(' — ')[0].split(' - ')[0].split(' –')[0].trim()  // deal: "Company — Deal Name"
+    );
+    // board_relation text can be "Acme, Acme Corp" - take the first linked item.
+    const companyNameFirst = String(companyNameRaw || '').split(',')[0].trim();
 
-    const companyRecord = await findAirtableCompanyByMondayName(companyNameRaw);
+    const companyRecord = await findAirtableCompanyByMondayName(companyNameFirst);
     if (!companyRecord) { await mondayRecordSyncHealth({ lastSuccessAt: new Date().toISOString() }); return; } // not one of this account's outreach prospects - nothing to flag, but the sync itself worked
     const companyName = companyRecord.fields['Company Name'];
 
@@ -14566,7 +14572,11 @@ async function mondayFetchAllItemsByTitle(boardId) {
     const page = data.boards[0].items_page;
     for (const it of page.items) {
       const cols = {};
-      (it.column_values || []).forEach(cv => { if (cv.column && cv.column.title) cols[cv.column.title] = cv.text || ''; });
+      (it.column_values || []).forEach(cv => {
+        const v = cv.text || '';
+        if (cv.column && cv.column.title) cols[cv.column.title] = v;
+        if (cv.column && cv.column.id) cols[cv.column.id] = v;   // also key by id - titles drift, ids don't
+      });
       items.push({ id: it.id, name: it.name, cols });
     }
     cursor = page.cursor;
@@ -14618,27 +14628,35 @@ async function _loadMondayCanvasCache(force) {
     try { marketItems = await mondayFetchAllItemsByTitle(MONDAY_MARKETMAP_BOARD_ID); }
     catch (e) { console.warn('Monday canvas cache: WA Market Map fetch failed (non-fatal):', e.message); }
 
-    // Contacts board (2045166971) actual column titles, per Nic 10 Sep 2026:
-    //   Company | Notes (the contact's running note history) | Role | Relationship
+    // Contacts board (2045166971) - real columns verified 10 Sep 2026 (id first,
+    // title as fallback): contact_account "Accounts" (board_relation, the real
+    // company link) | text8 "Associated Company" (legacy free-text) |
+    // long_text_mm6s252f "Context Notes" (the running relationship-note history,
+    // e.g. the Tania Miller-Jones "coffee at Hemingway" notes) |
+    // text_mm6skcjs "Role" | color_mm6ssnjv "Relationship Stage" |
+    // numeric_mm6sagcv "LinkedIn Touches".
     for (const it of contactItems) {
-      const note = _mondayCol(it.cols, 'Notes', 'Notes history of the contact', 'Context Notes', 'Context Note', 'Context');
+      const note = _mondayCol(it.cols, 'long_text_mm6s252f', 'Context Notes', 'long_text4', 'Notes', 'engagement_history', 'Engagement History');
       if (!note) continue;
-      addContact(resolve(_mondayCol(it.cols, 'Company', 'Associated Company', 'Account', 'Organisation', 'Organization', 'Client')), {
+      addContact(resolve(_mondayCol(it.cols, 'contact_account', 'Accounts', 'text8', 'Associated Company', 'Company', 'Account')), {
         name: it.name,
-        role: _mondayCol(it.cols, 'Role', 'Title', 'Job Title', 'Position'),
-        stage: _mondayCol(it.cols, 'Relationship', 'Relationship Stage', 'Stage', 'Journey Stage', 'Status'),
-        li: _mondayCol(it.cols, 'LinkedIn Touches', 'LI Touches', 'Touches'),
+        role: _mondayCol(it.cols, 'text_mm6skcjs', 'Role', 'Title', 'Position'),
+        stage: _mondayCol(it.cols, 'color_mm6ssnjv', 'Relationship Stage', 'Stage', 'Status'),
+        li: _mondayCol(it.cols, 'numeric_mm6sagcv', 'LinkedIn Touches', 'LI Touches'),
         note: note.replace(/\s+/g, ' ').trim(),
       });
     }
+    // Relationship Radar (5027907051): text_mm2hhwph "Organisation" +
+    // board_relation_mm47rb4t "Client Account" | long_text_mm2hgjk4
+    // "Context Notes" | text_mm2h1f74 "Role" | numeric_mm2hbm8w "LinkedIn Touches".
     for (const it of radarItems) {
-      const note = _mondayCol(it.cols, 'Context Notes', 'Context Note', 'Notes', 'Context');
+      const note = _mondayCol(it.cols, 'long_text_mm2hgjk4', 'Context Notes', 'Context Note', 'Notes');
       if (!note) continue;
-      addContact(resolve(_mondayCol(it.cols, 'Organisation', 'Organization', 'Company', 'Account', 'Client')), {
+      addContact(resolve(_mondayCol(it.cols, 'board_relation_mm47rb4t', 'Client Account', 'text_mm2hhwph', 'Organisation', 'Organization', 'Company')), {
         name: it.name,
-        role: _mondayCol(it.cols, 'Role', 'Title', 'Position'),
-        stage: _mondayCol(it.cols, 'Relationship Strength', 'Strength', 'Stage', 'Status'),
-        li: '',
+        role: _mondayCol(it.cols, 'text_mm2h1f74', 'Role', 'Title', 'Position'),
+        stage: '',
+        li: _mondayCol(it.cols, 'numeric_mm2hbm8w', 'LinkedIn Touches', 'LI Touches'),
         note: note.replace(/\s+/g, ' ').trim(),
       });
     }
@@ -14724,8 +14742,8 @@ function _ctxForCompany(cache, companyName) {
 function _mmNextAction(cache, companyName) {
   const m = cache.marketMap && cache.marketMap[companyName];
   if (!m) return '';
-  const k = Object.keys(m).find(kk => /notes?\s*\/?\s*next\s*action/i.test(kk));
-  return k ? String(m[k] || '').replace(/\s+/g, ' ').trim() : '';
+  // WA Market Map (5030685862): long_text_mm6ahyk4 "Notes / Next Action".
+  return String(_mondayCol(m, 'long_text_mm6ahyk4', 'Notes / Next Action') || '').replace(/\s+/g, ' ').trim();
 }
 
 function buildAccountCanvasElements(co, cache) {
