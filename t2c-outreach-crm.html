@@ -9131,6 +9131,15 @@ async function hydrateCompaniesFromAirtable(){
 
     state.grids.forEach(g => { g.companies = []; g.companyLinkedIn = {}; });
 
+    // Canonical, complete company list for the whole app - every record in
+    // the Companies table, whether or not it's on a grid or has any contacts
+    // yet. The Profile search and the canvas "Add company card" picker both
+    // read this via allCompanyNames() so a research-only company (created in
+    // Profile before it joins a campaign) is pickable everywhere.
+    window.__allCompanies = records
+      .map(r => ({ id: r.id, name: (r.fields || {})['Company Name'] || '' }))
+      .filter(c => c.name);
+
     records.forEach(r => {
       const f = r.fields || {};
       const name = f['Company Name'];
@@ -15271,16 +15280,62 @@ function renderCompanyUniverse(){
 // a person OR a company; a company's profile shows the stem of connections
 // between job titles and people, scoped to all campaigns or just one.
 
+// The complete set of company names known to the app: every record in the
+// Companies table (window.__allCompanies, from hydrateCompaniesFromAirtable),
+// plus any company a contact references, plus any created this session and
+// not yet re-hydrated. Deduped case-insensitively, sorted. Used by the
+// Profile search and the canvas "Add company card" picker so both agree.
+function allCompanyNames(){
+  const seen = new Map();
+  const add = n => { const k = (n||'').trim(); if(k && !seen.has(k.toLowerCase())) seen.set(k.toLowerCase(), k); };
+  (window.__allCompanies || []).forEach(c => add(c.name));
+  (state.contacts || []).forEach(c => add(c.company));
+  (window.__sessionCompanies || []).forEach(add);
+  return [...seen.values()].sort((a, b) => a.localeCompare(b));
+}
+
+// Create (or find) a company record and open its Profile canvas. Used from
+// the Profile search when the typed name isn't an existing company yet -
+// lets research start on an account before it joins a campaign.
+async function createProfileCompany(name){
+  name = (name || '').trim();
+  if(name.length < 2) return;
+  const existing = allCompanyNames().find(n => n.toLowerCase() === name.toLowerCase());
+  if(existing){ selectProfileCompany(existing); return; }
+  window.__sessionCompanies = window.__sessionCompanies || [];
+  try {
+    const res = await fetch('/api/airtable/company', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+    const data = await res.json().catch(() => ({}));
+    if(!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    if(!window.__sessionCompanies.includes(name)) window.__sessionCompanies.push(name);
+    window.__allCompanies = window.__allCompanies || [];
+    if(data.recordId && !window.__allCompanies.some(c => c.id === data.recordId)){
+      window.__allCompanies.push({ id: data.recordId, name });
+    }
+    toast(data.skipped ? `Opened ${name}` : `Created ${name}`, 'success');
+    window.__profileQuery = '';
+    selectProfileCompany(name);
+  } catch(err){
+    toast('Could not create company: ' + err.message, 'warn');
+  }
+}
+
 function renderProfilePage(){
   const query = (window.__profileQuery || '').trim().toLowerCase();
 
   let peopleResults = [];
   let companyResults = [];
+  let exactCompanyMatch = false;
   if(query.length >= 2){
     peopleResults = state.contacts.filter(c => (c.name||'').toLowerCase().includes(query)).slice(0, 20);
-    const companyNames = [...new Set(state.contacts.map(c => c.company).filter(Boolean))];
+    const companyNames = allCompanyNames();
     companyResults = companyNames.filter(name => name.toLowerCase().includes(query)).slice(0, 20);
+    exactCompanyMatch = companyNames.some(name => name.toLowerCase() === query);
   }
+  const rawQuery = (window.__profileQuery || '').trim();
 
   const selectedCompany = window.__profileSelectedCompany || '';
   // Once a company is picked the search collapses to a slim bar so the canvas
@@ -15293,8 +15348,11 @@ function renderProfilePage(){
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-hierarchy-2"></i> Profile</div>
       ${selectedCompany ? `<button class="btn btn-ghost btn-sm" onclick="collapseProfileSearch()"><i class="ti ti-x"></i></button>` : ''}
     </div>
-    <div class="muted" style="font-size:12px;margin:6px 0 10px;">Search for a person or a company. A company's profile opens its account canvas.</div>
-    <input id="profileSearchInput" type="text" placeholder="Search a person or company..." value="${esc(window.__profileQuery||'')}" oninput="setProfileQuery(this.value)" style="width:100%;max-width:420px;">
+    <div class="muted" style="font-size:12px;margin:6px 0 10px;">Search for a person or a company. A company's profile opens its account canvas. Type a new name and hit <strong>Create</strong> to start researching a company before it's in a campaign.</div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <input id="profileSearchInput" type="text" placeholder="Search or create a company…" value="${esc(window.__profileQuery||'')}" oninput="setProfileQuery(this.value)" onkeydown="if(event.key==='Enter'&&this.value.trim().length>=2)createProfileCompany(this.value.trim())" style="flex:1;min-width:240px;max-width:420px;">
+      ${rawQuery.length >= 2 && !exactCompanyMatch ? `<button class="btn btn-primary btn-sm" onclick="createProfileCompany('${esc(rawQuery.replace(/'/g,"\\'"))}')"><i class="ti ti-plus"></i> Create "${esc(rawQuery)}"</button>` : ''}
+    </div>
     ${query.length >= 2 ? `
       <div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:14px;">
         <div style="min-width:200px;">
@@ -15303,7 +15361,7 @@ function renderProfilePage(){
         </div>
         <div style="min-width:200px;">
           <div class="muted" style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Companies</div>
-          ${companyResults.length ? companyResults.map(name => `<div class="tp-item ${selectedCompany===name?'active':''}" style="cursor:pointer;" onclick="selectProfileCompany('${esc(name)}')"><strong>${esc(name)}</strong></div>`).join('') : '<div class="muted" style="font-size:12px;">No matches.</div>'}
+          ${companyResults.length ? companyResults.map(name => `<div class="tp-item ${selectedCompany===name?'active':''}" style="cursor:pointer;" onclick="selectProfileCompany('${esc(name)}')"><strong>${esc(name)}</strong></div>`).join('') : `<div class="muted" style="font-size:12px;">No matches — hit <strong>Create "${esc(rawQuery)}"</strong> above to add it.</div>`}
         </div>
       </div>
     ` : ''}
@@ -15644,6 +15702,35 @@ async function loadChangeArchitecture(key){
   if(archCurrentKey() === key) rerenderArch(key);
 }
 
+// Pull this company's Monday.com data (per-contact Context Notes, stakeholder
+// map, "Notes / Next Action") and rebuild the account canvas from it. The
+// server merges: auto content is regenerated, but every element you placed by
+// hand and every connector is kept. See syncAccountCanvasFromMonday in
+// search-server.js.
+async function archSyncFromMonday(key){
+  if(!key || archIsCompetitor(key)) return;
+  const btn = document.getElementById('archMondayBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Syncing…'; }
+  try {
+    const res = await fetch(`/api/companies/${encodeURIComponent(key)}/canvas/sync-monday`, { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    if(!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    if(data.status === 'synced'){
+      await loadChangeArchitecture(key);
+      toast(`Synced from Monday — ${data.contacts || 0} contact note${data.contacts === 1 ? '' : 's'}, ${data.preserved || 0} of your own element${data.preserved === 1 ? '' : 's'} kept.`, 'success');
+    } else if(data.status === 'no_content'){
+      toast('Nothing in Monday for this company yet — canvas left as is.', 'warn');
+    } else {
+      toast('Monday sync skipped: ' + (data.reason || data.status || 'unknown'), 'warn');
+    }
+  } catch(err){
+    toast('Monday sync failed: ' + err.message, 'warn');
+  } finally {
+    const b = document.getElementById('archMondayBtn');
+    if(b){ b.disabled = false; b.innerHTML = '<i class="ti ti-refresh"></i> Sync from Monday'; }
+  }
+}
+
 let __archSaveTimer = null;
 function saveArch(key){
   const el = document.getElementById('archSaveStatus');
@@ -15854,8 +15941,9 @@ function archPickEntity(companyName, kind){
     const rest = (state.contacts || []).filter(c => (c.company || '') !== companyName);
     options = here.concat(rest).map(c => ({ id: c.id || c.name, name: c.name, sub: (c.role || '') + (c.company ? ' · ' + c.company : '') }));
   } else {
-    const names = [...new Set((state.contacts || []).map(c => c.company).filter(Boolean))].sort();
-    options = names.map(n => ({ id: n, name: n, sub: '' }));
+    // Same complete company list as the Profile search - every Companies
+    // record, not just those a contact happens to reference.
+    options = allCompanyNames().map(n => ({ id: n, name: n, sub: '' }));
   }
   const rows = options.map((o, i) => `<div class="arch-pick-row" data-i="${i}" onclick="archConfirmEntity('${esc(companyName)}','${kind}',${i})"><strong>${esc(o.name)}</strong>${o.sub ? `<span class="muted"> — ${esc(o.sub)}</span>` : ''}</div>`).join('');
   window.__archPickOptions = options;
@@ -16606,7 +16694,8 @@ function renderChangeArchitectureCanvas(companyName){
       </div>
       <div style="display:flex;gap:6px;align-items:center;">
         <span id="archSaveStatus" class="muted" style="font-size:11px;"></span>
-        ${isComp ? '' : `<button class="btn ${d.layers.orgMap?'btn-primary':'btn-secondary'} btn-sm" title="Show the live CRM contact map on this canvas" onclick="archToggleOrgMap('${esc(companyName)}')"><i class="ti ti-sitemap"></i> Org map</button>`}
+        ${isComp ? '' : `<button class="btn ${d.layers.orgMap?'btn-primary':'btn-secondary'} btn-sm" title="Show the live CRM contact map on this canvas" onclick="archToggleOrgMap('${esc(companyName)}')"><i class="ti ti-sitemap"></i> Org map</button>
+        <button class="btn btn-secondary btn-sm" id="archMondayBtn" title="Rebuild this canvas from the latest Monday.com context notes, stakeholder map and next actions — keeps anything you placed by hand" onclick="archSyncFromMonday('${esc(companyName)}')"><i class="ti ti-refresh"></i> Sync from Monday</button>`}
         <div class="arch-menu" id="archInsertMenu">
           <button class="btn btn-primary btn-sm" onclick="event.stopPropagation();archToggleInsertMenu()"><i class="ti ti-plus"></i> Insert</button>
           <div class="arch-menu-list">
