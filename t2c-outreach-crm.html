@@ -47,8 +47,8 @@ if(window.Chart){
   --border:#E4EAE2;
   --border-light:#EEF1ED;
   --sidebar-bg:#FBFCFA;
-  --sidebar-text:#4A544C;
-  --sidebar-muted:#9AA39B;
+  --sidebar-text:#434D45;
+  --sidebar-muted:#6C766D;
   --sidebar-hover-bg:#ECF1EC;
   --sidebar-active-bg:#ffffff;
   --sidebar-active-text:#1F2421;
@@ -65,8 +65,8 @@ if(window.Chart){
   --success:#3B7A2E;
   --warning:#8F5F11;
   --danger:#BA1A1A;
-  --muted:#66706A;
-  --text-dim:#8A948A;
+  --muted:#5C665F;
+  --text-dim:#646D65;
   --peach:#8F4500;
   --blue:#5880DA;
   --brown:#8a5a2b;
@@ -91,13 +91,14 @@ if(window.Chart){
   --label-size:11px;
   --label-tracking:0.04em;
   --header-weight:700;
-  --radius-card:18px;
+  --radius-card:16px;
+  --radius-card-sm:12px;
   --radius-input:12px;
   --radius-badge:8px;
   --radius-pill:999px;
-  --shadow-sm:0 1px 3px rgba(31,36,33,.04), 0 4px 12px rgba(31,36,33,.03);
-  --shadow-md:0 8px 24px rgba(31,36,33,.08);
-  --shadow-lg:0 16px 40px rgba(31,36,33,.12);
+  --shadow-sm:0 1px 2px rgba(31,36,33,.04);
+  --shadow-md:0 6px 20px rgba(31,36,33,.07);
+  --shadow-lg:0 12px 32px rgba(31,36,33,.12);
 }
 *{box-sizing:border-box;margin:0;padding:0;}
 body{
@@ -288,7 +289,7 @@ label{font-size:var(--label-size);font-weight:700;color:var(--muted);display:blo
 .perf-table td.perf-name{white-space:normal;font-weight:700;}
 .home-actions{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px;}
 .home-action-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card);padding:18px;cursor:pointer;box-shadow:var(--shadow-sm);transition:border-color .15s,box-shadow .15s,transform .15s;}
-.home-action-card:hover{border-color:var(--sky);box-shadow:var(--shadow-md);transform:translateY(-1px);}
+.home-action-card:hover{border-color:var(--border);box-shadow:var(--shadow-md);transform:translateY(-1px);}
 .home-action-icon{width:38px;height:38px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:17px;margin-bottom:12px;}
 .home-action-title{font-weight:800;font-size:14px;margin-bottom:4px;}
 .home-action-desc{font-size:12px;color:var(--muted);}
@@ -389,8 +390,8 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .kanban-col[data-col="booked"] .kanban-col-header{color:var(--tint-gold-fg);}
 .kanban-cards{display:flex;flex-direction:column;gap:10px;min-height:60px;}
 .kanban-col.dragover{background:var(--accent-dim);}
-.kcard{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:13px 14px;cursor:grab;box-shadow:var(--shadow-sm);transition:box-shadow .14s ease,border-color .14s ease;}
-.kcard:hover{box-shadow:var(--shadow-md);border-color:var(--sky);}
+.kcard{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card-sm);padding:14px;cursor:grab;box-shadow:var(--shadow-sm);transition:box-shadow .14s ease;}
+.kcard:hover{box-shadow:var(--shadow-md);}
 .kcard.dragging{opacity:0.4;}
 .kcard-head{display:flex;justify-content:space-between;align-items:flex-start;cursor:pointer;}
 .kcard-name{font-weight:700;font-size:13.5px;}
@@ -399,9 +400,9 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 
 /* Targets board (its own styling - the .kanban above is tuned for the
    contact Roadmap, which has different card content and no editable columns) */
-.tboard-toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;
-  background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:10px 12px;margin-bottom:16px;box-shadow:var(--shadow-sm);}
-.tboard-search{position:relative;flex:1;min-width:240px;max-width:420px;}
+.tboard-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  background:var(--surface);border:1px solid var(--border-light);border-radius:14px;padding:8px 10px;margin-bottom:16px;}
+.tboard-search{position:relative;width:min(320px,100%);flex:none;}
 .tboard-search i{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--text-dim);font-size:16px;pointer-events:none;}
 .tboard-search input{padding-left:34px;width:100%;background:var(--surface-2);border-color:transparent;}
 .tboard-search input:focus{background:var(--surface);}
@@ -414,8 +415,8 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .tcol-count{margin-left:auto;font-size:11px;font-weight:700;color:#fff;background:var(--ink);border-radius:var(--radius-pill);min-width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;padding:0 6px;}
 .tcol-body{display:flex;flex-direction:column;gap:12px;min-height:52px;}
 .tcol-empty{padding:14px 10px 6px;text-align:center;font-size:11.5px;color:var(--text-dim);}
-.tcard{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;box-shadow:var(--shadow-sm);cursor:grab;transition:box-shadow .16s ease,transform .16s ease;}
-.tcard:hover{box-shadow:0 4px 16px rgba(88,128,218,.10);transform:translateY(-1px);}
+.tcard{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card-sm);padding:16px;box-shadow:var(--shadow-sm);cursor:grab;transition:box-shadow .16s ease,transform .16s ease,border-color .16s ease;}
+.tcard:hover{box-shadow:var(--shadow-md);border-color:var(--border);transform:translateY(-1px);}
 .tcard:active{cursor:grabbing;}
 .tcard.dragging{opacity:.4;}
 .tcard-chiprow{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:11px;}
@@ -510,7 +511,7 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
    Grid page's own #gridNotification banner. Shown while a run-search job
    is in flight, hidden the moment it finishes - see
    renderGridSearchStatus/finishGridSearchUI. */
-.grid-search-status-bar{position:fixed;bottom:20px;right:20px;z-index:150;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card);box-shadow:var(--shadow-lg);padding:12px 16px;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:8px;max-width:320px;}
+.grid-search-status-bar{position:fixed;bottom:20px;right:20px;z-index:150;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card);box-shadow:0 4px 16px rgba(31,36,33,.10);padding:12px 16px;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:8px;max-width:320px;}
 
 /* Sequences */
 .seq-tabs{display:flex;gap:8px;margin-bottom:18px;border-bottom:1px solid var(--border);}
@@ -3124,9 +3125,7 @@ function renderTargetKCard(x){
     : (icp != null ? `<span class="tcard-icp${icp < 70 ? ' low' : ''}">${icp} ICP</span>` : '');
   const pills = [];
   if(prog) pills.push(`<span class="tpill" style="background:var(--tint-gold-bg);color:var(--tint-gold-fg);"><i class="ti ti-progress-bolt" style="font-size:10px;"></i> ${esc(prog.name || 'Active program')}</span>`);
-  pills.push(x.inCampaign
-    ? `<span class="tpill" style="background:var(--tint-blue-bg);color:var(--tint-blue-fg);"><i class="ti ti-rocket" style="font-size:10px;"></i> ${x.campaigns && x.campaigns.length ? x.campaigns.length : 1} campaign${(x.campaigns && x.campaigns.length > 1) ? 's' : ''}</span>`
-    : `<span class="tpill" style="background:var(--tint-grey-bg);color:var(--tint-grey-fg);">No campaign</span>`);
+  if(x.inCampaign) pills.push(`<span class="tpill" style="background:var(--tint-blue-bg);color:var(--tint-blue-fg);"><i class="ti ti-rocket" style="font-size:10px;"></i> ${x.campaigns && x.campaigns.length ? x.campaigns.length : 1} campaign${(x.campaigns && x.campaigns.length > 1) ? 's' : ''}</span>`);
   const signal = x.latestSignal ? esc(x.latestSignal.length > 130 ? x.latestSignal.slice(0,130)+'…' : x.latestSignal) : '';
   return `
   <div class="tcard" draggable="true" data-name="${nm}" onclick="openTarget('${nm}')"
