@@ -14940,31 +14940,71 @@ app.post('/api/companies/:name/canvas/sync-monday', async (req, res) => {
   }
 });
 
-// Admin: rebuild every company's canvas from Monday in one pass (batched writes).
+// Rebuild every company's canvas from Monday in one pass. Only writes the
+// canvases whose JSON actually changed, so a no-op run does zero Airtable
+// writes. Shared by the admin endpoint and the background poller below.
+async function runMondayCanvasSyncAll() {
+  if (!AIRTABLE_API_KEY || !process.env.MONDAY_API_KEY) return { status: 'skipped', reason: 'keys not configured' };
+  const cache = await _loadMondayCanvasCache(true);
+  const companies = await airtableFetchAllRecords('Companies');
+  const changed = [];
+  for (const rec of companies) {
+    try {
+      const p = buildAccountCanvasPatch(rec, cache);
+      if (p && p.fields['Change Architecture (JSON)'] !== (rec.fields['Change Architecture (JSON)'] || '')) changed.push(p);
+    } catch (e) {
+      console.warn('canvas sync-all: build failed for', (rec.fields || {})['Company Name'], '-', e.message);
+    }
+  }
+  for (let i = 0; i < changed.length; i += 10) {
+    await airtableWriteAllowingMissingCtaFields('PATCH', 'Companies', {
+      records: changed.slice(i, i + 10).map(p => ({ id: p.id, fields: p.fields }))
+    });
+  }
+  await mondayRecordSyncHealth({ lastSuccessAt: new Date().toISOString() });
+  return { status: 'synced', updated: changed.length, companiesScanned: companies.length };
+}
+
+// Admin button: force a full refresh now.
 app.post('/api/monday/canvas/sync-all', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   if (!process.env.MONDAY_API_KEY) return res.status(500).json({ error: 'MONDAY_API_KEY not configured on the server' });
   try {
-    const cache = await _loadMondayCanvasCache(true);
-    const companies = await airtableFetchAllRecords('Companies');
-    const patches = [];
-    for (const rec of companies) {
-      try { const p = buildAccountCanvasPatch(rec, cache); if (p) patches.push(p); }
-      catch (e) { console.warn('canvas sync-all: build failed for', (rec.fields || {})['Company Name'], '-', e.message); }
-    }
-    for (let i = 0; i < patches.length; i += 10) {
-      await airtableWriteAllowingMissingCtaFields('PATCH', 'Companies', {
-        records: patches.slice(i, i + 10).map(p => ({ id: p.id, fields: p.fields }))
-      });
-    }
-    await mondayRecordSyncHealth({ lastSuccessAt: new Date().toISOString() });
-    res.json({ success: true, synced: patches.length, companiesScanned: companies.length });
+    res.json({ success: true, ...(await runMondayCanvasSyncAll()) });
   } catch (err) {
     console.error('Canvas sync-all error:', err.message);
     await mondayRecordSyncHealth({ lastErrorAt: new Date().toISOString(), lastErrorMessage: err.message });
     res.status(500).json({ error: err.message });
   }
 });
+
+// Background poll: keep the account canvases in step with Monday without any
+// Monday-side webhook setup. Twenty2's team edits a Context Note / stakeholder
+// map / next-action in Monday and it lands here within one interval. Only
+// changed canvases are written, so a quiet period costs one Monday read +
+// one Airtable read and no writes. Interval is MONDAY_CANVAS_POLL_MINUTES
+// (default 30, set to 0 to disable). Runs only where both keys are set, i.e.
+// the deployed server, never local dev.
+const MONDAY_CANVAS_POLL_MINUTES = Number(process.env.MONDAY_CANVAS_POLL_MINUTES || 30);
+let _mondayCanvasPollRunning = false;
+async function _mondayCanvasPollTick() {
+  if (_mondayCanvasPollRunning) return;               // never overlap runs
+  _mondayCanvasPollRunning = true;
+  try {
+    const r = await runMondayCanvasSyncAll();
+    if (r.status === 'synced' && r.updated) console.log(`[Monday poll] refreshed ${r.updated} canvas(es)`);
+  } catch (err) {
+    console.warn('[Monday poll] failed (non-fatal):', err.message);
+    await mondayRecordSyncHealth({ lastErrorAt: new Date().toISOString(), lastErrorMessage: `poll: ${err.message}` });
+  } finally {
+    _mondayCanvasPollRunning = false;
+  }
+}
+if (process.env.MONDAY_API_KEY && AIRTABLE_API_KEY && MONDAY_CANVAS_POLL_MINUTES > 0) {
+  const ms = MONDAY_CANVAS_POLL_MINUTES * 60 * 1000;
+  setTimeout(() => { _mondayCanvasPollTick(); setInterval(_mondayCanvasPollTick, ms); }, 90 * 1000); // first run 90s after boot
+  console.log(`[Monday poll] account-canvas sync every ${MONDAY_CANVAS_POLL_MINUTES} min`);
+}
 
 // A contact is "fair game" for autopsy once they're Connected or later and
 // the sequence isn't a clean win - i.e. there's an actual story to diagnose,
