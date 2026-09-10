@@ -374,6 +374,35 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .kcard-name{font-weight:700;font-size:13.5px;}
 .kcard-role{font-size:11.5px;color:var(--muted);margin-top:2px;}
 .kcard-flag{margin-top:8px;background:var(--tint-red-bg);color:var(--tint-red-fg);border-radius:var(--radius-badge);padding:6px 8px;font-size:11.5px;display:flex;justify-content:space-between;align-items:center;font-weight:700;}
+
+/* Targets board (its own styling - the .kanban above is tuned for the
+   contact Roadmap, which has different card content and no editable columns) */
+.tboard-head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;}
+.tboard-search{position:relative;}
+.tboard-search i{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text-dim);font-size:15px;pointer-events:none;}
+.tboard-search input{padding-left:30px;width:230px;}
+.tboard{display:flex;gap:14px;overflow-x:auto;align-items:flex-start;padding:2px 2px 14px;}
+.tcol{flex:1 1 0;min-width:248px;max-width:360px;background:var(--surface-2);border-radius:14px;padding:8px 8px 10px;transition:background .12s,box-shadow .12s;}
+.tcol.dragover{background:var(--accent-dim);box-shadow:inset 0 0 0 2px var(--accent);}
+.tcol-head{display:flex;align-items:center;gap:8px;padding:6px 6px 12px;}
+.tcol-dot{width:9px;height:9px;border-radius:50%;flex:none;}
+.tcol-name{font-weight:800;font-size:12.5px;letter-spacing:.01em;}
+.tcol-count{margin-left:auto;font-size:11px;font-weight:700;color:var(--text-dim);background:var(--surface);border-radius:var(--radius-pill);padding:1px 8px;}
+.tcol-body{display:flex;flex-direction:column;gap:8px;min-height:64px;}
+.tcol-empty{border:1.5px dashed var(--border);border-radius:10px;padding:22px 10px;text-align:center;font-size:11px;color:var(--text-dim);}
+.tcard{background:var(--surface);border:1px solid var(--border-light);border-radius:11px;padding:11px 12px;box-shadow:0 1px 2px rgba(24,24,27,.05);cursor:grab;transition:box-shadow .12s ease,transform .12s ease;}
+.tcard:hover{box-shadow:0 8px 22px rgba(24,24,27,.11);transform:translateY(-1px);}
+.tcard:active{cursor:grabbing;}
+.tcard.dragging{opacity:.4;}
+.tcard-top{display:flex;justify-content:space-between;align-items:flex-start;gap:6px;}
+.tcard-name{font-weight:700;font-size:13px;line-height:1.3;}
+.tcard-sub{font-size:11px;color:var(--muted);margin-top:1px;}
+.tcard-unpin{border:none;background:transparent;color:var(--text-dim);cursor:pointer;padding:2px;line-height:1;opacity:0;transition:opacity .12s,color .12s;flex:none;}
+.tcard:hover .tcard-unpin{opacity:1;}
+.tcard-unpin:hover{color:var(--danger);}
+.tcard-meta{display:flex;flex-wrap:wrap;gap:4px;margin-top:9px;}
+.tpill{font-size:10px;font-weight:600;padding:2px 7px;border-radius:var(--radius-pill);display:inline-flex;align-items:center;gap:3px;line-height:1.5;}
+.tcard-foot{margin-top:9px;padding-top:8px;border-top:1px solid var(--border-light);font-size:10.5px;color:var(--text-dim);display:flex;align-items:center;gap:4px;}
 .thread{margin-top:12px;border-top:1px solid var(--border);padding-top:10px;display:flex;flex-direction:column;gap:10px;}
 .thread-step{display:flex;flex-direction:column;gap:6px;background:var(--surface-2);border-radius:var(--radius-badge);padding:10px;}
 .thread-step-head{display:flex;justify-content:space-between;align-items:center;font-weight:700;font-size:12px;}
@@ -3015,10 +3044,10 @@ function renderTargetsBoard(){
   });
 
   const head = `
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+    <div class="tboard-head">
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-pin"></i> Pinned targets ${rows.length ? `<span class="count-pill has" style="margin-left:6px;">${rows.length}</span>` : ''}</div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-        <input id="targetPinSearch" type="text" placeholder="Pin a company…" oninput="renderTargetPinSuggestions(this.value)" style="max-width:240px;">
+        <span class="tboard-search"><i class="ti ti-search"></i><input id="targetPinSearch" type="text" placeholder="Pin a company…" oninput="renderTargetPinSuggestions(this.value)"></span>
         <button class="btn btn-ghost btn-sm" onclick="openTargetBoardEditor()"><i class="ti ti-adjustments"></i> Edit columns</button>
       </div>
     </div>
@@ -3028,49 +3057,56 @@ function renderTargetsBoard(){
   if(loading) return `<div class="card">${head}<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading…</div></div>`;
   if(t && t.error) return `<div class="card">${head}<div class="muted" style="font-size:12.5px;">Could not load targets: ${esc(t.error)}</div></div>`;
 
+  if(!rows.length){
+    return `<div class="card">${head}<div class="empty-state" style="margin-top:6px;">No targets pinned yet. Search a company above, or use “Pin as target” from a company’s profile.</div></div>`;
+  }
+
   const board = `
-    <div class="kanban" style="grid-template-columns:repeat(${cols.length}, minmax(0,1fr));">
+    <div class="tboard">
       ${cols.map(col => {
         const hex = targetColHex(col.color);
         const list = byCol[col.id] || [];
         return `
-        <div class="kanban-col" data-colid="${esc(col.id)}" data-collabel="${esc(col.label)}"
-             style="border-top-color:${hex};"
+        <div class="tcol" data-colid="${esc(col.id)}" data-collabel="${esc(col.label)}"
              ondragover="onTargetColDragOver(event)" ondragleave="onTargetColDragLeave(event)" ondrop="onTargetColDrop(event,'${esc(col.label)}')">
-          <div class="kanban-col-header" style="color:${hex};">
-            <span>${esc(col.label)}</span>
-            <span class="count" style="color:${hex};">${list.length}</span>
+          <div class="tcol-head">
+            <span class="tcol-dot" style="background:${hex};"></span>
+            <span class="tcol-name" style="color:${hex};">${esc(col.label)}</span>
+            <span class="tcol-count">${list.length}</span>
           </div>
-          <div class="kanban-cards">
-            ${list.map(renderTargetKCard).join('') || '<div class="empty-state" style="padding:14px;font-size:11.5px;">Drop here</div>'}
+          <div class="tcol-body">
+            ${list.map(renderTargetKCard).join('') || '<div class="tcol-empty">Nothing here yet</div>'}
           </div>
         </div>`;
       }).join('')}
-    </div>
-    ${!rows.length ? '<div class="empty-state" style="margin-top:14px;">No targets pinned yet. Search a company above, or use “Pin as target” from a company’s profile.</div>' : ''}`;
+    </div>`;
 
-  return `<div class="card">${head}${board}</div>`;
+  return `<div class="card" style="padding-bottom:6px;">${head}${board}</div>`;
 }
 
 function renderTargetKCard(x){
   const nm = esc(x.name);
   const prog = (x.programs || []).find(Boolean);
+  const pills = [];
+  if(/resources icp/i.test(x.icpTag||'')) pills.push(`<span class="tpill" style="background:var(--tint-green-bg);color:var(--tint-green-fg);">ICP</span>`);
+  else if(x.icpFitScore != null) pills.push(`<span class="tpill" style="background:var(--tint-grey-bg);color:var(--tint-grey-fg);">Fit ${x.icpFitScore}</span>`);
+  if(prog) pills.push(`<span class="tpill" style="background:var(--tint-gold-bg);color:var(--tint-gold-fg);"><i class="ti ti-progress-bolt" style="font-size:10px;"></i> ${esc(prog.name || 'Active program')}</span>`);
+  pills.push(x.inCampaign
+    ? `<span class="tpill" style="background:var(--tint-blue-bg);color:var(--tint-blue-fg);"><i class="ti ti-rocket" style="font-size:10px;"></i> ${x.campaigns && x.campaigns.length ? x.campaigns.length : 1} campaign${(x.campaigns && x.campaigns.length > 1) ? 's' : ''}</span>`
+    : `<span class="tpill" style="background:var(--tint-red-bg);color:var(--tint-red-fg);">No campaign</span>`);
   return `
-  <div class="kcard" draggable="true" data-name="${nm}" ondragstart="onTargetCardDragStart(event,'${nm}')" ondragend="onTargetCardDragEnd(event)">
-    <div class="kcard-head" onclick="openTarget('${nm}')">
+  <div class="tcard" draggable="true" data-name="${nm}" onclick="openTarget('${nm}')"
+       ondragstart="onTargetCardDragStart(event,'${nm}')" ondragend="onTargetCardDragEnd(event)">
+    <div class="tcard-top">
       <div style="min-width:0;">
-        <div class="kcard-name">${nm}</div>
-        <div class="kcard-role">${esc(x.sector || x.industry || '—')}</div>
+        <div class="tcard-name">${nm}</div>
+        <div class="tcard-sub">${esc(x.sector || x.industry || '—')}</div>
       </div>
-      <button class="btn btn-ghost btn-sm" style="padding:2px 6px;flex:none;" title="Unpin" onclick="event.stopPropagation();unpinTarget('${nm}')"><i class="ti ti-pin-filled"></i></button>
+      <button class="tcard-unpin" title="Unpin" onclick="event.stopPropagation();unpinTarget('${nm}')"><i class="ti ti-pinned-off"></i></button>
     </div>
-    <div style="margin-top:8px;display:flex;gap:4px;flex-wrap:wrap;" onclick="openTarget('${nm}')">
-      ${/resources icp/i.test(x.icpTag||'') ? '<span class="badge" style="background:var(--tint-green-bg);color:var(--tint-green-fg);font-size:10px;">ICP</span>' : (x.icpFitScore!=null ? `<span class="badge" style="background:var(--surface-2);font-size:10px;">Fit ${x.icpFitScore}</span>` : '')}
-      ${prog ? `<span class="badge" style="background:var(--tint-gold-bg);color:var(--tint-gold-fg);font-size:10px;"><i class="ti ti-progress-bolt"></i> ${esc(prog.name || 'Active program')}</span>` : ''}
-      ${x.inCampaign ? `<span class="badge" style="background:var(--tint-blue-bg);color:var(--tint-blue-fg);font-size:10px;">In ${x.campaigns && x.campaigns.length ? x.campaigns.length : 1} campaign${(x.campaigns && x.campaigns.length > 1) ? 's' : ''}</span>` : '<span class="badge" style="background:var(--danger-bg,#fee);color:var(--danger);font-size:10px;">Not in a campaign</span>'}
-    </div>
-    ${x.latestSignal ? `<div class="muted" style="font-size:11px;margin-top:8px;">${esc(x.latestSignal)}</div>` : ''}
-    ${x.lastActivity ? `<div class="muted" style="font-size:10.5px;margin-top:6px;">Last activity ${fmtDate(x.lastActivity)}</div>` : ''}
+    <div class="tcard-meta">${pills.join('')}</div>
+    ${x.latestSignal ? `<div class="muted" style="font-size:10.5px;margin-top:8px;line-height:1.4;">${esc(x.latestSignal.length > 120 ? x.latestSignal.slice(0,120)+'…' : x.latestSignal)}</div>` : ''}
+    ${x.lastActivity ? `<div class="tcard-foot"><i class="ti ti-clock" style="font-size:11px;"></i> ${fmtDate(x.lastActivity)}</div>` : ''}
   </div>`;
 }
 
@@ -3119,21 +3155,24 @@ function renderTargetBoardEditor(){
   const cols = (window.__targetBoardDraft && window.__targetBoardDraft.columns) || [];
   const swatches = Object.keys(TARGET_COL_COLORS);
   return `
-  <div style="max-width:640px;">
-    <div class="muted" style="font-size:12px;margin-bottom:12px;">Rename, recolour and reorder the board columns. Renaming a column re-labels every target currently in it.</div>
+  <div style="max-width:560px;">
+    <div class="muted" style="font-size:12px;margin-bottom:14px;">Rename, recolour and reorder the board columns. Renaming a column re-labels every target currently in it.</div>
+    <div style="display:flex;flex-direction:column;gap:8px;">
     ${cols.map((c,i) => `
-      <div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border-light);">
-        <div style="display:flex;flex-direction:column;gap:2px;">
-          <button class="btn btn-ghost btn-sm" style="padding:0 4px;" ${i===0?'disabled':''} onclick="moveTargetCol(${i},-1)"><i class="ti ti-chevron-up"></i></button>
-          <button class="btn btn-ghost btn-sm" style="padding:0 4px;" ${i===cols.length-1?'disabled':''} onclick="moveTargetCol(${i},1)"><i class="ti ti-chevron-down"></i></button>
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface-2);border-radius:10px;">
+        <span class="tcol-dot" style="background:${targetColHex(c.color)};width:11px;height:11px;"></span>
+        <input type="text" value="${esc(c.label)}" oninput="window.__targetBoardDraft.columns[${i}].label=this.value" style="flex:1;min-width:0;font-weight:700;">
+        <div style="display:flex;gap:5px;">
+          ${swatches.map(s => `<button title="${s}" onclick="setTargetColColor(${i},'${s}')" style="width:17px;height:17px;border-radius:50%;border:2px solid ${c.color===s?'var(--text)':'var(--surface)'};box-shadow:0 0 0 1px var(--border);background:${TARGET_COL_COLORS[s]};cursor:pointer;padding:0;"></button>`).join('')}
         </div>
-        <input type="text" value="${esc(c.label)}" oninput="window.__targetBoardDraft.columns[${i}].label=this.value" style="flex:1;">
-        <div style="display:flex;gap:4px;">
-          ${swatches.map(s => `<button title="${s}" onclick="setTargetColColor(${i},'${s}')" style="width:18px;height:18px;border-radius:50%;border:2px solid ${c.color===s?'var(--text)':'transparent'};background:${TARGET_COL_COLORS[s]};cursor:pointer;"></button>`).join('')}
+        <div style="display:flex;gap:1px;">
+          <button class="btn btn-ghost btn-sm" style="padding:2px 5px;" ${i===0?'disabled':''} onclick="moveTargetCol(${i},-1)" title="Move up"><i class="ti ti-arrow-up"></i></button>
+          <button class="btn btn-ghost btn-sm" style="padding:2px 5px;" ${i===cols.length-1?'disabled':''} onclick="moveTargetCol(${i},1)" title="Move down"><i class="ti ti-arrow-down"></i></button>
+          ${cols.length>2 ? `<button class="btn btn-ghost btn-sm" style="padding:2px 5px;" title="Remove column" onclick="removeTargetCol(${i})"><i class="ti ti-trash"></i></button>` : ''}
         </div>
-        ${cols.length>2 ? `<button class="btn btn-ghost btn-sm" title="Remove column" onclick="removeTargetCol(${i})"><i class="ti ti-trash"></i></button>` : ''}
       </div>`).join('')}
-    <div style="display:flex;justify-content:space-between;margin-top:14px;">
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:16px;">
       <button class="btn btn-ghost btn-sm" ${cols.length>=8?'disabled':''} onclick="addTargetCol()"><i class="ti ti-plus"></i> Add column</button>
       <div style="display:flex;gap:8px;">
         <button class="btn btn-secondary btn-sm" onclick="closeTargetBoardEditor()">Cancel</button>
