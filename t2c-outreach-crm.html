@@ -785,7 +785,7 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .kpi-delta.is-down{background:var(--tint-red-bg);color:var(--tint-red-fg);}
 .kpi-sub{font-size:11px;color:var(--muted);margin-top:3px;}
 .scorecard-diag{margin-top:12px;font-size:12px;line-height:1.5;background:var(--warning-bg);border:1px solid var(--sand);color:var(--warning);border-radius:8px;padding:9px 12px;}
-.scorecard-warn{margin-top:8px;font-size:11.5px;line-height:1.5;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;border-radius:8px;padding:8px 11px;}
+.scorecard-warn{margin-top:8px;font-size:11.5px;line-height:1.5;background:var(--warning-bg);border:1px solid var(--sand);color:var(--warning);border-radius:8px;padding:8px 11px;}
 @media(max-width:900px){.kpi-row{grid-template-columns:repeat(2,1fr);}}
 .heatmap-grid{display:grid;grid-template-columns:70px repeat(5,1fr);gap:3px;font-size:10.5px;}
 .heatmap-grid .hm-head{font-weight:700;text-align:center;color:var(--muted);padding:4px 2px;}
@@ -11374,10 +11374,10 @@ let __tpRenderCounter = 0;
 function touchPointTypeBadgeColors(type){
   const key = (type || '').toLowerCase().trim();
   if(key === 'meeting') return { bg:'var(--tint-gold-bg)', color:'var(--tint-gold-fg)' };
-  if(key.startsWith('linkedin')) return { bg:'#e3edfb', color:'#2d5da8' };
-  if(key === 'email') return { bg:'#e2f3e6', color:'#2c7a43' };
-  if(key === 'call' || key === 'phone call') return { bg:'#f1e6fa', color:'#7a3fa8' };
-  return { bg:'#eeeeee', color:'#666666' };
+  if(key.startsWith('linkedin')) return { bg:'var(--tint-blue-bg)', color:'var(--tint-blue-fg)' };
+  if(key === 'email') return { bg:'var(--tint-green-bg)', color:'var(--tint-green-fg)' };
+  if(key === 'call' || key === 'phone call') return { bg:'var(--tint-purple-bg)', color:'var(--tint-purple-fg)' };
+  return { bg:'var(--tint-grey-bg)', color:'var(--tint-grey-fg)' };
 }
 
 function toggleTouchPointBody(domId, link){
@@ -19734,7 +19734,7 @@ function initSalesConversionCharts(intel){
       type: 'bar',
       data: { labels: intel.messageStepToBooking.map(s=>s.step), datasets: [
         { label:'Total reached', data: intel.messageStepToBooking.map(s=>s.total), backgroundColor:'#0079B5' },
-        { label:'Booked', data: intel.messageStepToBooking.map(s=>s.booked), backgroundColor:'#1f9d57' }
+        { label:'Booked', data: intel.messageStepToBooking.map(s=>s.booked), backgroundColor:'#2F7A50' }
       ]},
       options: { responsive:true, maintainAspectRatio:false, scales:{ y:{ beginAtZero:true, ticks:{ precision:0 } } }, plugins:{ legend:{ position:'bottom', labels:{ boxWidth:10, font:{ size:11 } } } } }
     });
@@ -19744,8 +19744,8 @@ function initSalesConversionCharts(intel){
     window.__salesCharts.cta = new Chart(ctaEl, {
       type: 'bar',
       data: { labels: intel.ctaToBooking.map(c=>c.cta), datasets: [
-        { label:'Touches', data: intel.ctaToBooking.map(c=>c.touches), backgroundColor:'#bd7c0c' },
-        { label:'Bookings', data: intel.ctaToBooking.map(c=>c.bookings), backgroundColor:'#1f9d57' }
+        { label:'Touches', data: intel.ctaToBooking.map(c=>c.touches), backgroundColor:'#FFD05D' },
+        { label:'Bookings', data: intel.ctaToBooking.map(c=>c.bookings), backgroundColor:'#2F7A50' }
       ]},
       options: { responsive:true, maintainAspectRatio:false, indexAxis:'y', scales:{ x:{ beginAtZero:true, ticks:{ precision:0 } } }, plugins:{ legend:{ position:'bottom', labels:{ boxWidth:10, font:{ size:11 } } } } }
     });
@@ -19754,7 +19754,7 @@ function initSalesConversionCharts(intel){
   if(typeEl && intel.responseRateByType.length){
     window.__salesCharts.type = new Chart(typeEl, {
       type: 'bar',
-      data: { labels: intel.responseRateByType.map(t=>t.type), datasets: [{ label:'Response rate %', data: intel.responseRateByType.map(t=>t.rate), backgroundColor:'#3f9c8f' }] },
+      data: { labels: intel.responseRateByType.map(t=>t.type), datasets: [{ label:'Response rate %', data: intel.responseRateByType.map(t=>t.rate), backgroundColor:'#0079B5' }] },
       options: { responsive:true, maintainAspectRatio:false, scales:{ y:{ beginAtZero:true, max:100 } }, plugins:{ legend:{ display:false } } }
     });
   }
