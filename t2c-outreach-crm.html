@@ -7516,7 +7516,7 @@ function renderGtmLiveStrip(){
     <div class="muted" style="font-size:10.5px;">${label}</div></div>`;
   return `
   <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px;">
-    ${w && w.icpConfigured ? tile('ICP accounts in a campaign', `${w.inCampaignCount}/${w.icpCompanyCount}`) : ''}
+    ${w && w.icpConfigured ? tile('ICP accounts in a campaign', `${w.inCampaignCount ?? '—'}/${w.icpCompanyCount ?? '—'}`) : ''}
     ${c ? tile('ICP leads', `${c.leadsIcp}/${c.leadsTotal}`) : ''}
     ${c ? tile('ICP opportunities', `${c.oppsIcp}/${c.oppsTotal}`) : ''}
     ${c ? tile('ICP customers', `${c.customersIcp}/${c.customersTotal}`) : ''}
