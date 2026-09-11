@@ -1869,7 +1869,7 @@ const NAV = [
   { id:'competitormap', label:'Competitor Map', icon:'ti-affiliate', hidden:true },
   { id:'replies', label:'Replies', icon:'ti-message-reply', hidden:true },
   { id:'logger', label:'Logger', icon:'ti-clipboard-text', hidden:true },
-  { id:'calendar', label:'Sales', icon:'ti-calendar', hidden:true },
+  { id:'calendar', label:'Calendar', icon:'ti-calendar', hidden:true },
   { id:'intelligence', label:'Engine', icon:'ti-brain', hidden:true },
   { id:'settings', label:'Settings', icon:'ti-settings', hidden:true },
   { id:'contentcalendar', label:'Calendar', icon:'ti-calendar-month', hidden:true },
@@ -1879,21 +1879,9 @@ const NAV = [
 
 function renderSidebar(){
   const nav = document.getElementById('sidebarNav');
-  // "New actions ready" - total pending Today's Actions across every Live
-  // campaign, shown as a badge on the Campaigns nav item (actions are a
-  // per-campaign tab now, not a page of their own).
-  let actionTotal = 0;
-  try {
-    actionTotal = state.campaigns
-      .filter(c => c.status === 'Live')
-      .reduce((s, c) => s + (campaignActionCount(c) || 0), 0);
-  } catch(e){ actionTotal = 0; }
-  nav.innerHTML = NAV.filter(n => !n.hidden).map(n => {
-    const badge = (n.id === 'campaigns' && actionTotal)
-      ? ' <span class="count-pill has" style="margin-left:auto;">'+actionTotal+'</span>'
-      : '';
-    return '<button class="nav-item '+(state.currentPage===n.id?'active':'')+'" onclick="navigate(\''+n.id+'\')"><i class="ti '+n.icon+'"></i><span>'+n.label+badge+'</span></button>';
-  }).join('');
+  nav.innerHTML = NAV.filter(n => !n.hidden).map(n =>
+    '<button class="nav-item '+(state.currentPage===n.id?'active':'')+'" onclick="navigate(\''+n.id+'\')"><i class="ti '+n.icon+'"></i><span>'+n.label+'</span></button>'
+  ).join('');
 }
 
 /* ===================== AGENCY CONTROLLER (client switcher) ===================== */
@@ -2835,8 +2823,6 @@ function afterRender(page){
     ensureTodaysActionsSequenceStagesLoaded();
     if(window.__dueReminders === undefined) loadDueReminders();
     if(window.__wrongPersonaAccounts === undefined) loadWrongPersonaAccounts();
-    // Contact signals (job changes) live on the Campaigns list now.
-    if(window.__homeContactSignals === undefined) loadHomeContactSignals();
   }
   if(page === 'campaigns' && window.__campaignView === 'detail'){
     const tab = window.__campaignDetailTab;
@@ -2888,6 +2874,9 @@ function afterRender(page){
   }
   if(page === 'replies' && window.__repliesQueue === undefined && !window.__repliesLoading) loadRepliesQueue();
   if(page === 'home' && window.__targets === undefined && !window.__targetsLoading) loadTargets();
+  // Contact signals (job changes) live on the Targets board now, scoped to
+  // pinned-target contacts only (see checkContactJobChanges).
+  if(page === 'home' && window.__homeContactSignals === undefined) loadHomeContactSignals();
   if(page === 'home' && Array.isArray(window.__targets) && window.__targets.length){
     const name = activeTargetName(window.__targets);
     loadCompanyMessages(name);
@@ -2904,16 +2893,12 @@ function afterRender(page){
   }
   if(page === 'logger' && window.__repsCache === undefined) loadRepsCache();
   if(page === 'logger' && window.__loggerCampaigns === undefined) loadLoggerCampaigns();
+  // "Overview" (campaign health + pipeline summary) was dropped - it just
+  // duplicated columns already on the Campaigns list table. This page is
+  // the scheduling Calendar only now.
   if(page === 'calendar'){
-    const salesTab = window.__salesSubTab || 'overview';
-    if(salesTab === 'calendar'){
-      if(window.__calendarEvents === undefined) loadCalendarEvents();
-      if(window.__repsCache === undefined) loadRepsCache();
-    }
-    if(salesTab === 'overview'){
-      if(window.__salesHealthData === undefined) loadSalesHealthData();
-      if(window.__salesInsights === undefined) loadSalesInsights();
-    }
+    if(window.__calendarEvents === undefined) loadCalendarEvents();
+    if(window.__repsCache === undefined) loadRepsCache();
   }
   if(page === 'content'){
     const tab = window.__contentSubTab || 'signals';
@@ -3294,7 +3279,7 @@ function renderHome(){
 
   const name = activeTargetName(rows);
   window.__targetOpen = name;
-  return renderAccountDashboard(name, rows);
+  return `${renderContactSignalsStrip()}${renderAccountDashboard(name, rows)}`;
 }
 
 function activeTargetName(rows){
@@ -13701,7 +13686,7 @@ function renderCampaigns(){
 // to have. `navigate()` still works with these ids - they're hidden from
 // the sidebar (NAV entries marked hidden:true), not removed from dispatch.
 function renderCampaignsAreaSubNav(activeId){
-  const items = [['campaigns','Campaigns'],['grids','Contact grids'],['calendar','Deal pipeline'],['logger','Log interaction']];
+  const items = [['campaigns','Campaigns'],['grids','Contact grids'],['calendar','Calendar'],['logger','Log interaction']];
   return `<div class="seq-tabs" style="margin-bottom:16px;">
     ${items.map(([id,label]) => `<div class="seq-tab ${activeId===id?'active':''}" onclick="navigate('${id}')">${label}</div>`).join('')}
   </div>`;
@@ -13836,8 +13821,6 @@ function renderCampaignListView(){
       </table>
     </div>` : `<div class="empty-state">No campaigns yet — start one with New Campaign.</div>`}
   </div>
-
-  ${renderContactSignalsStrip()}
   `;
 }
 
@@ -13846,13 +13829,9 @@ function renderCampaignListRow(campaign){
   const statusClass = CAMPAIGN_STATUS_CLASS[campaign.status] || 'campaign-status-draft';
   const n = v => (v === null || v === undefined) ? '·' : v;
   const cell = m.loading ? '<span class="muted">·</span>' : (m.error ? '<span class="muted" title="'+esc(m.error)+'">!</span>' : null);
-  const actionCount = campaignActionCount(campaign);
-  const actionPill = actionCount > 0
-    ? ` <span class="pill" style="background:var(--tint-blue-bg);color:var(--tint-blue-fg);font-weight:700;"><i class="ti ti-bell" style="font-size:11px;"></i> ${actionCount} new action${actionCount === 1 ? '' : 's'} ready</span>`
-    : '';
   return `
   <tr class="home-grid-row" onclick="openCampaignDetail('${campaign.id}')">
-    <td class="perf-name">${esc(campaign.name)}${actionPill}${m.excluded ? ` <span class="muted" style="font-weight:400;">· ${m.excluded} excluded</span>` : ''}</td>
+    <td class="perf-name">${esc(campaign.name)}${m.excluded ? ` <span class="muted" style="font-weight:400;">· ${m.excluded} excluded</span>` : ''}</td>
     <td><span class="campaign-status ${statusClass}">${esc(campaign.status)}</span></td>
     <td>${m.contactCount}</td>
     <td>${campaignIcpCell(campaign)}</td>
@@ -14841,8 +14820,6 @@ async function loadCampaignSequenceStages(campaign){
   // stage column), and Grid does too since gridConnectionSentDateFor started
   // backing its day badge with Connection Sent Date.
   if(state.currentPage === 'grid') renderPage();
-  // The Campaigns list "N new actions ready" pills and the sidebar badge
-  // read campaignActionCount(), which needs these maps.
   if(state.currentPage === 'campaigns'){ renderPage(); renderSidebar(); }
   if(state.currentPage === 'home') renderPage();
 }
@@ -20427,13 +20404,9 @@ function setSalesSubTab(tab){
 }
 
 function renderSalesPage(){
-  const tab = window.__salesSubTab || 'overview';
   return `
   ${renderCampaignsAreaSubNav('calendar')}
-  <div class="seq-tabs">
-    ${SALES_SUBTABS.map(([key,label]) => `<div class="seq-tab ${tab===key?'active':''}" onclick="setSalesSubTab('${key}')">${label}</div>`).join('')}
-  </div>
-  ${tab==='overview' ? renderSalesOverviewTab() : renderCalendar()}
+  ${renderCalendar()}
   `;
 }
 
@@ -21435,7 +21408,7 @@ async function loadHomeContactSignals(){
   } catch(err){
     window.__homeContactSignals = { error: err.message };
   }
-  if(['home','campaigns'].includes(state.currentPage)) renderPage();
+  if(state.currentPage === 'home') renderPage();
 }
 
 async function loadCampaignContentSignals(campaign){
@@ -26724,7 +26697,7 @@ function renderContactSignalsStrip(){
         </button>
       </div>
     </div>
-    <div class="muted" style="font-size:11.5px;margin:6px 0 10px;">These contacts have changed roles recently - a fresh job change is one of the strongest windows to reach out. Automatic scanning is off; press <strong>Scan for signals</strong> to check now.${window.__contactSignalsLastScan ? ` Last scan ${esc(window.__contactSignalsLastScan)}.` : ''}</div>
+    <div class="muted" style="font-size:11.5px;margin:6px 0 10px;">Contacts at your pinned target companies who've changed roles recently - a fresh job change is one of the strongest windows to reach out. Automatic scanning is off; press <strong>Scan for signals</strong> to check now.${window.__contactSignalsLastScan ? ` Last scan ${esc(window.__contactSignalsLastScan)}.` : ''}</div>
     ${renderContactSignalCards(signals)}
   </div>`;
 }

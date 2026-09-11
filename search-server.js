@@ -8517,9 +8517,20 @@ async function checkContactJobChanges() {
     airtableFetchAllRecords('Companies')
   ]);
   const companiesById = {};
-  companyRecords.forEach(r => { companiesById[r.id] = r.fields['Company Name'] || ''; });
+  // Scoped to pinned targets (Companies.'Pinned Target') - this now lives on
+  // the Targets board, so it should only burn Serper calls on the accounts
+  // actually being worked, not every contact in the base.
+  const pinnedCompanyIds = new Set();
+  companyRecords.forEach(r => {
+    companiesById[r.id] = r.fields['Company Name'] || '';
+    if (r.fields['Pinned Target']) pinnedCompanyIds.add(r.id);
+  });
 
-  const targets = contacts.filter(c => c.fields['LinkedIn URL'] && c.fields['Job Title']);
+  const targets = contacts.filter(c => {
+    if (!c.fields['LinkedIn URL'] || !c.fields['Job Title']) return false;
+    const companyId = (c.fields['Company'] || [])[0];
+    return companyId && pinnedCompanyIds.has(companyId);
+  });
   const updates = [];
 
   for (const contact of targets) {
