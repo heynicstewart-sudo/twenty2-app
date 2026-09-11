@@ -2659,7 +2659,7 @@ function renderPage(){
 
   // 'research' deleted outright (redesign plan §1) - renderResearch() is
   // left defined (harmless dead code) but no longer reachable via dispatch.
-  const renderers = { home: renderHome, companyuniverse: renderCompanyUniverse, programstrategy: renderProgramStrategyPage, reviewdetail: renderReviewDetailPage, profile: renderProfilePage, gtmmotion: renderGtmMotionPage, icpbuilder: renderIcpBuilderPage, competitormap: renderCompetitorMapPage, replies: renderReplies, logger: renderLoggerPage, howitworks: renderHowItWorks, grids: renderGridsListView, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, contentcalendar: renderContentCalendarPage, settings: renderSettings, agency: renderAgencyPage };
+  const renderers = { home: renderHome, companyuniverse: renderCompanyUniverse, programstrategy: renderProgramStrategyPage, reviewdetail: renderReviewDetailPage, profile: renderProfilePage, gtmmotion: renderGtmMotionPage, icpbuilder: renderIcpBuilderPage, competitormap: renderCompetitorMapPage, replies: renderReplies, logger: renderLoggerPage, grids: renderGridsListView, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, contentcalendar: renderContentCalendarPage, settings: renderSettings, agency: renderAgencyPage };
   el.innerHTML = renderers[state.currentPage]();
   afterRender(state.currentPage);
 
@@ -7164,87 +7164,6 @@ async function copyContactBrief(cid){
     document.body.removeChild(ta);
   }
   toast('Brief copied to clipboard', 'success');
-}
-
-/* ===================== HOW IT WORKS PAGE ===================== */
-
-function renderHowItWorks(){
-  return `
-  <div class="howto-hero">
-    <h2>Welcome to T2C Outreach</h2>
-    <p>This is where you find the right people across WA's biggest employers, connect with them on LinkedIn, work them through a message sequence in your voice, and track every conversation through to a booked delivery and a closed deal. Here's how it fits together.</p>
-    <div class="pipeline-visual">
-      <span class="tag tag-found">Found</span><span class="arrow"><i class="ti ti-arrow-right"></i></span>
-      <span class="tag tag-opened">Opened</span><span class="arrow"><i class="ti ti-arrow-right"></i></span>
-      <span class="tag tag-connected">Connected</span><span class="arrow"><i class="ti ti-arrow-right"></i></span>
-      <span class="tag tag-messaging">Messaging</span><span class="arrow"><i class="ti ti-arrow-right"></i></span>
-      <span class="tag tag-booked">Booked</span>
-    </div>
-  </div>
-
-  <div class="howto-grid">
-    <div class="howto-item">
-      <div class="howto-item-head"><div class="howto-num">1</div><h4><i class="ti ti-home"></i> Home — your grids and today's actions</h4></div>
-      <p>Today's actions surfaces exactly who needs a message, a follow-up or a re-engage today, oldest first. Below that, Your Grids lists every company x job-title grid you've built - each row is a company, each column a job title. Click <strong>Run daily search</strong> inside a grid to fill empty cells with verified LinkedIn profiles.</p>
-      <ul>
-        <li>New Grid, Import from CSV, New Campaign and Run Engine are one click away from the top of Home</li>
-        <li>A grid linked to a campaign shows that campaign's name right on its row</li>
-        <li>After sending connection requests in LinkedIn, drop a screenshot of your connections list into a grid to mark accepted contacts as connected</li>
-      </ul>
-    </div>
-    <div class="howto-item">
-      <div class="howto-item-head"><div class="howto-num">2</div><h4><i class="ti ti-rocket"></i> Campaigns — where the work happens</h4></div>
-      <p>Every campaign has its own six tabs: Engine, Grid, Roadmap, Strategy, Analytics and Sales. Open a campaign and work through them left to right.</p>
-      <ul>
-        <li><strong>Engine</strong> - log touch points and upload context, tagged to this campaign so it also feeds account-level intelligence</li>
-        <li><strong>Grid</strong> - link an existing grid from Home or create a new one; grids are never duplicated, just referenced</li>
-        <li><strong>Roadmap</strong> - the kanban board (Connection pending / made / Messaging / Booked) scoped to this campaign's contacts</li>
-        <li><strong>Strategy</strong> - the campaign brief plus its messaging templates, CTAs and Engine redrafts - the controller for what gets said and to whom</li>
-        <li><strong>Analytics</strong> - a leads/meetings/sales-won line chart and a lead-status pie chart for this campaign only, with a time range selector</li>
-        <li><strong>Sales</strong> - scorecards, a deal log, and transcript scoring against this campaign's Strategy</li>
-      </ul>
-    </div>
-    <div class="howto-item">
-      <div class="howto-item-head"><div class="howto-num">3</div><h4><i class="ti ti-calendar-check"></i> Booking a meeting</h4></div>
-      <p>From a campaign's Roadmap, once a contact is ready, click <strong>Mark as meeting booked</strong> (or right-click their card).</p>
-      <ul>
-        <li>Choose the service they've booked, the delivery date, and what CTA actually converted them</li>
-        <li>Add a short note on what tipped it over the line, useful later for spotting patterns</li>
-        <li>Confirming automatically moves the card to Booked and adds the event to the Sales Calendar</li>
-      </ul>
-    </div>
-    <div class="howto-item">
-      <div class="howto-item-head"><div class="howto-num">4</div><h4><i class="ti ti-calendar"></i> Sales Calendar — see what's delivering</h4></div>
-      <p>A straightforward month view of every booked delivery across every campaign. Colour tells you the type of service at a glance: green for Agile/Sprint/Scrum work, blue for Team/Reset/Change, peach for Training/Certification/Workshops.</p>
-      <ul><li>Hover any event chip for the full contact, company and date</li></ul>
-    </div>
-    <div class="howto-item">
-      <div class="howto-item-head"><div class="howto-num">5</div><h4><i class="ti ti-brain"></i> Engine — account-level view</h4></div>
-      <p>Engine has two sub-tabs. <strong>Context</strong> (first) is the same touch-point logger and upload tools as a campaign's Engine tab, just untagged. <strong>Engine</strong> pulls every contact, touch point, campaign and conversion for campaign ideas, cold contacts and ready-to-send drafts, plus the account-wide numbers - strategy tally, CTA performance, bookings by service, connection speed.</p>
-      <ul><li>Click <strong>Run Engine</strong> at the top of the Engine tab to run the full analysis, insights, health and a plain-English strategy read all in one go</li></ul>
-    </div>
-  </div>
-
-  <div class="card">
-    <div class="section-title"><i class="ti ti-settings"></i> Before you start: check Settings</div>
-    <div class="faq-item">
-      <h5>LinkedIn accounts</h5>
-      <p>Add every LinkedIn account you're sending from and tell each one which job title columns it owns, so grids know who's responsible for which searches.</p>
-    </div>
-    <div class="faq-item">
-      <h5>Connection timeout</h5>
-      <p>Controls the day count that triggers the "Remove?" flag on a campaign's Roadmap. Default is 10 days — tighten it if you want to churn dead connections faster.</p>
-    </div>
-    <div class="faq-item">
-      <h5>Bookable services</h5>
-      <p>This list feeds the dropdown in the booking modal. Add or remove services here first if something's missing when you try to log a booking.</p>
-    </div>
-    <div class="faq-item">
-      <h5>Outreach strategy &amp; lead magnets</h5>
-      <p>Sets the tone, cadence and voice instructions used whenever a message is generated, plus the CTAs (like the Change Value Check) offered at the end of a sequence.</p>
-    </div>
-  </div>
-  `;
 }
 
 /* ===================== GTM MOTION (Jeanne vision pivot §1) ===================== */
