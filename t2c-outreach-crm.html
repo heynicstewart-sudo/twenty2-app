@@ -19,7 +19,7 @@
 <script>
 /* Shared Chart.js theming - applied to every chart in the app */
 if(window.Chart){
-  window.T2_CHART_COLORS = ['#0084C5','#44A574','#FFD05D','#FF834C','#B34850','#88BFFF','#532822'];
+  window.T2_CHART_COLORS = ['#0079B5','#44A574','#FFD05D','#FF834C','#B34850','#88BFFF','#532822'];
   Chart.defaults.font.family = "'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif";
   Chart.defaults.font.size = 11;
   Chart.defaults.color = '#7A5A50';
@@ -461,7 +461,7 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .grid-table td{padding:10px 14px;border-bottom:1px solid var(--border);vertical-align:top;min-width:190px;}
 .grid-table tr:last-child td{border-bottom:none;}
 .grid-col-remove{margin-left:6px;border:none;background:transparent;color:var(--muted);cursor:pointer;font-size:13px;line-height:1;padding:2px 4px;border-radius:4px;vertical-align:middle;}
-.grid-col-remove:hover{background:var(--danger,#c0392b);color:#fff;}
+.grid-col-remove:hover{background:var(--danger);color:#fff;}
 .grid-col-search{margin-left:4px;border:none;background:transparent;color:var(--muted);cursor:pointer;font-size:13px;line-height:1;padding:2px 4px;border-radius:4px;vertical-align:middle;}
 .grid-col-search:hover{background:var(--accent,#0079B5);color:#fff;}
 .grid-col-search:disabled{opacity:.4;cursor:default;}
@@ -2519,7 +2519,7 @@ function refreshMarketingNote(){
 function clientFormFieldHtml(f, val){
   const v = esc(val == null ? '' : String(val));
   const hint = f.hint ? `<div class="muted" style="font-size:11px;margin-top:3px;">${esc(f.hint)}</div>` : '';
-  const req = f.required ? ' <span style="color:#c0392b;">*</span>' : '';
+  const req = f.required ? ' <span style="color:var(--danger);">*</span>' : '';
   let input;
   if(f.type === 'textarea'){
     input = `<textarea id="cf_${f.k}" rows="3" placeholder="${esc(f.ph||'')}">${v}</textarea>`;
@@ -2545,7 +2545,7 @@ async function openClientForm(slug){
     } catch(err){ toast('Could not load client: ' + err.message, 'warn'); return; }
   }
   const body = `
-    <div id="clientFormError" class="muted" style="color:#c0392b;font-size:12px;margin-bottom:10px;display:none;"></div>
+    <div id="clientFormError" class="muted" style="color:var(--danger);font-size:12px;margin-bottom:10px;display:none;"></div>
     ${CLIENT_FORM_SPEC.map(f => f.section
       ? `<div class="section-title" style="font-size:12px;margin:16px 0 8px;text-transform:uppercase;letter-spacing:.06em;">${esc(f.section)}</div>`
       : f.marketingNote
@@ -2575,10 +2575,10 @@ async function validateClientBase(){
       el.style.color = '#1e7e34';
       el.textContent = 'Reachable - Contacts' + (d.tables.Companies ? ', Companies' : '') + (d.tables.Campaigns ? ', Campaigns' : '') + ' found';
     } else {
-      el.style.color = '#c0392b';
+      el.style.color = 'var(--danger)';
       el.textContent = d.error || 'Not reachable';
     }
-  } catch(err){ el.style.color = '#c0392b'; el.textContent = err.message; }
+  } catch(err){ el.style.color = 'var(--danger)'; el.textContent = err.message; }
 }
 
 async function submitClientForm(slug){
@@ -3760,7 +3760,7 @@ function initAccountDashboardCharts(name){
   if(!months.length) return;
 
   const css = getComputedStyle(document.documentElement);
-  const accent = (css.getPropertyValue('--accent') || '#0084C5').trim();
+  const accent = (css.getPropertyValue('--accent') || '#0079B5').trim();
   const muted = (css.getPropertyValue('--muted') || '#888').trim();
   const gridColor = (css.getPropertyValue('--border-light') || 'rgba(128,128,128,.15)').trim();
   const monthLabel = m => { const [y, mo] = m.split('-'); return new Date(Number(y), Number(mo) - 1, 1).toLocaleDateString('en-US', { month: 'short' }); };
@@ -4338,7 +4338,7 @@ async function runContextParseScreenshot(){
     if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
 
     if(!data.success){
-      if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;color:#b3413a;">${esc(data.reason)}</p>`;
+      if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;color:var(--danger);">${esc(data.reason)}</p>`;
       return;
     }
 
@@ -4405,7 +4405,7 @@ async function submitContextLogContent(){
     if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
 
     if(!data.success){
-      if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;color:#b3413a;">${esc(data.reason)}</p>`;
+      if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;color:var(--danger);">${esc(data.reason)}</p>`;
       return;
     }
 
@@ -4523,7 +4523,7 @@ async function submitContextHistoricalUpload(){
     if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
 
     if(!data.success){
-      if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;color:#b3413a;">${esc(data.reason)}</p>`;
+      if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;color:var(--danger);">${esc(data.reason)}</p>`;
       return;
     }
 
@@ -9596,7 +9596,7 @@ function renderGridCellHTML(c){
   const effectiveState = gridCellState(c);
   const uncertainName = hasUncertainName(c.name);
   return `<td><div class="grid-cell cell-${effectiveState}">
-      <div class="cell-name" style="cursor:pointer;" onclick="openContactDrawer('${esc(c.name)}', ${currentGridCampaignName() ? `'${esc(currentGridCampaignName())}'` : 'null'})">${esc(c.name)}${uncertainName ? ` <i class="ti ti-alert-triangle" style="color:#a1701c;font-size:12px;" title="Name may not be accurate - last name was masked by Apollo, verify manually"></i>` : ''}${c.url ? ` <a href="${esc(c.url)}" target="_blank" rel="noopener" onclick="handleContactLinkedInOpened('${c.id}', event)" title="Open on LinkedIn" style="margin-left:2px;color:var(--blue);"><i class="ti ti-brand-linkedin"></i></a>` : ''}</div>
+      <div class="cell-name" style="cursor:pointer;" onclick="openContactDrawer('${esc(c.name)}', ${currentGridCampaignName() ? `'${esc(currentGridCampaignName())}'` : 'null'})">${esc(c.name)}${uncertainName ? ` <i class="ti ti-alert-triangle" style="color:var(--warning);font-size:12px;" title="Name may not be accurate - last name was masked by Apollo, verify manually"></i>` : ''}${c.url ? ` <a href="${esc(c.url)}" target="_blank" rel="noopener" onclick="handleContactLinkedInOpened('${c.id}', event)" title="Open on LinkedIn" style="margin-left:2px;color:var(--blue);"><i class="ti ti-brand-linkedin"></i></a>` : ''}</div>
       <div class="cell-meta">
         <span class="day-badge ${dayBadgeClass(days)}">${days}d</span>
         <span class="tag tag-${effectiveState}">${effectiveState}</span>
@@ -11775,17 +11775,17 @@ function renderContactDrawerContent(data, campaignName){
   <button class="drawer-close" onclick="closeDrawer()">&times;</button>
   ${hasUncertainName(c.fullName) ? `
   <div class="job-change-badge">
-    <i class="ti ti-alert-triangle" style="color:#a1701c;flex-shrink:0;margin-top:1px;"></i>
+    <i class="ti ti-alert-triangle" style="color:var(--warning);flex-shrink:0;margin-top:1px;"></i>
     <div>
-      <div style="font-weight:700;font-size:12.5px;color:#a1701c;">Name may not be accurate</div>
+      <div style="font-weight:700;font-size:12.5px;color:var(--warning);">Name may not be accurate</div>
       <div style="font-size:12.5px;margin-top:2px;">Apollo masked this contact's last name - verify their identity manually before relying on this record.</div>
     </div>
   </div>` : ''}
   ${c.jobChangeSignal ? `
   <div class="job-change-badge">
-    <i class="ti ti-alert-triangle" style="color:#a1701c;flex-shrink:0;margin-top:1px;"></i>
+    <i class="ti ti-alert-triangle" style="color:var(--warning);flex-shrink:0;margin-top:1px;"></i>
     <div>
-      <div style="font-weight:700;font-size:12.5px;color:#a1701c;">Job change detected</div>
+      <div style="font-weight:700;font-size:12.5px;color:var(--warning);">Job change detected</div>
       <div style="font-size:12.5px;margin-top:2px;">${esc(c.jobChangeSignal)}</div>
     </div>
   </div>` : ''}
@@ -21113,7 +21113,7 @@ async function runLearningAnalysis(kind, records){
     renderLearningResult(kind, data, records.length);
     toast(`${cfg.label} analysis complete`, 'success');
   } catch(err){
-    resultEl.innerHTML = `<p class="muted" style="font-size:12px;color:#b3413a;">Could not analyse that file: ${esc(err.message)}</p>`;
+    resultEl.innerHTML = `<p class="muted" style="font-size:12px;color:var(--danger);">Could not analyse that file: ${esc(err.message)}</p>`;
     toast('Learning upload failed: ' + err.message, 'warn');
   } finally {
     btn.disabled = false;
@@ -26601,7 +26601,7 @@ function renderContactSignalCards(signals){
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">
         <div style="flex:1;min-width:220px;">
           <div style="display:flex;align-items:center;gap:6px;">
-            <i class="ti ti-alert-triangle" style="color:#a1701c;"></i>
+            <i class="ti ti-alert-triangle" style="color:var(--warning);"></i>
             <div style="font-weight:700;font-size:13.5px;">${esc(s.contactName)}${s.company ? ` <span class="muted" style="font-weight:400;">&middot; ${esc(s.company)}</span>` : ''}</div>
           </div>
           <div style="font-size:12.5px;margin-top:6px;">${esc(s.jobChangeSignal)}</div>
@@ -26868,7 +26868,7 @@ async function submitResearchTranscript(){
     loadResearchEvents();
     loadMarketPulse();
   } catch(err){
-    if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;color:#b3413a;">Could not save: ${esc(err.message)}</p>`;
+    if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;color:var(--danger);">Could not save: ${esc(err.message)}</p>`;
     toast('Could not save transcript: ' + err.message, 'warn');
   } finally {
     btn.disabled = false;
