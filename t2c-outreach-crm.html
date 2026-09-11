@@ -361,6 +361,9 @@ label{font-size:var(--label-size);font-weight:700;color:var(--muted);display:blo
 .uco-logo-edit:hover{background:var(--accent);}
 .uco-name b{font-size:15px;font-weight:700;letter-spacing:-0.01em;color:var(--ink);}
 .uco-prog{background:var(--surface-2);border-radius:10px;padding:9px 11px;}
+.uco-prog-row{background:var(--surface-2);border-radius:10px;padding:9px 11px;cursor:pointer;}
+.uco-prog-row:hover{background:var(--accent-dim);}
+.uco-prog-row+.uco-prog-row{margin-top:6px;}
 .uco-prog .k{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:var(--text-dim);display:block;margin-bottom:2px;}
 .uco-prog .v{font-size:12.5px;color:var(--ink);font-weight:600;line-height:1.35;}
 .uco-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
@@ -15609,14 +15612,127 @@ function renderProgramCoCard(r){
   const icpChip = r.fitScore != null
     ? `<span class="uco-icp${r.fitScore < 70 ? ' low' : ''}">${r.fitScore} ICP</span>`
     : (/resources icp/i.test(r.icpTag||'') ? `<span class="uco-icp">ICP</span>` : '');
-  const box = `<div class="uco-prog"><span class="k">${r.programs.length > 1 ? 'Active programs' : 'Active program'}</span><span class="v">${r.programs.map(pr => esc(pr.name) + (pr.phase ? ` <span style="color:${programPhaseColor(pr.phase)};">· ${esc(pr.phase)}</span>` : '')).join('<br>')}</span></div>`;
+  // Each program is its own clickable row (a company can be mid-flight on
+  // more than one) - it opens that program's Engine-written strategy brief
+  // (openProgramStrategyModal), not the card's own click-through to profile.
+  // Shows the stored 1-2 sentence summary once generated; a plain prompt
+  // beforehand.
+  const progRows = r.programs.map(pr => `
+    <div class="uco-prog-row" onclick="event.stopPropagation();openProgramStrategyModal('${nm}','${esc(pr.name).replace(/'/g,"\\'")}')">
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline;">
+        <b style="font-size:12.5px;">${esc(pr.name)}</b>
+        <span style="font-size:10.5px;font-weight:700;white-space:nowrap;color:${programPhaseColor(pr.phase)};">${esc(pr.phase)}</span>
+      </div>
+      <div class="muted" style="font-size:11px;line-height:1.4;margin-top:2px;">${pr.strategy && pr.strategy.summary ? esc(pr.strategy.summary) : `${esc(pr.type)} · tap for strategy &amp; who to target`}</div>
+    </div>`).join('');
   return `
   <div class="uco-card" onclick="navigate('profile');selectProfileCompany('${nm}')">
     <div class="uco-top">${icpChip}${prio ? `<span class="tpill" style="background:var(--surface-2);color:var(--muted);">${prio}</span>` : ''}</div>
     <div class="uco-name"><span class="uco-ava">${r.logoUrl ? `<img src="${esc(r.logoUrl)}" alt="">` : initial}</span><b>${nm}</b></div>
-    ${box}
+    ${progRows}
     <div class="uco-foot"><span>${r.inCampaign ? 'In a campaign' : 'Not in a campaign'}</span><span style="color:var(--accent);font-weight:700;">Open <i class="ti ti-arrow-right" style="font-size:12px;vertical-align:-1px;"></i></span></div>
   </div>`;
+}
+
+// ---- Program strategy modal (pain points, job titles, GTM-tied approach) ----
+function openProgramStrategyModal(companyName, programName){
+  window.__progStrategyFor = { companyName, programName };
+  renderProgramStrategyModal();
+  const key = companyName + '::' + programName;
+  if(!(window.__progStrategy && window.__progStrategy[key] !== undefined)) loadProgramStrategy(companyName, programName);
+}
+async function loadProgramStrategy(companyName, programName, refresh){
+  window.__progStrategy = window.__progStrategy || {};
+  const key = companyName + '::' + programName;
+  window.__progStrategy[key] = null;
+  renderProgramStrategyModal();
+  try {
+    const res = await fetch(`/api/companies/${encodeURIComponent(companyName)}/programs/${encodeURIComponent(programName)}/strategy${refresh ? '?refresh=1' : ''}`);
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__progStrategy[key] = data.strategy;
+    // Keep the card's own cached copy in sync so the summary shows without a reload.
+    if(window.__programs && Array.isArray(window.__programs.companies)){
+      const co = window.__programs.companies.find(c => c.companyName === companyName);
+      const pr = co && co.programs.find(p => p.name === programName);
+      if(pr) pr.strategy = data.strategy;
+    }
+  } catch(err){
+    window.__progStrategy[key] = { error: err.message };
+  }
+  renderProgramStrategyModal();
+}
+function renderProgramStrategyModal(){
+  const ctx = window.__progStrategyFor;
+  if(!ctx) return;
+  const key = ctx.companyName + '::' + ctx.programName;
+  const s = window.__progStrategy && window.__progStrategy[key];
+  const refreshBtn = `<button class="btn btn-ghost btn-sm" onclick="loadProgramStrategy('${esc(ctx.companyName)}','${esc(ctx.programName)}',true)"><i class="ti ti-refresh"></i> ${s && !s.error ? 'Regenerate' : 'Try again'}</button>`;
+
+  let body;
+  if(s === undefined || s === null){
+    body = '<div class="muted" style="font-size:12.5px;padding:6px 0;"><i class="ti ti-loader-2"></i> Generating strategy…</div>';
+  } else if(s.error){
+    body = `<div class="muted" style="font-size:12.5px;">Couldn't generate a strategy. ${refreshBtn}</div>`;
+  } else {
+    body = `
+      <div class="section-title" style="margin-bottom:6px;font-size:13px;">What's likely happening</div>
+      <div style="font-size:12.5px;line-height:1.6;margin-bottom:16px;">${esc(s.whatsHappening || '')}</div>
+      <div class="section-title" style="margin-bottom:6px;font-size:13px;">Who to target</div>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;">
+        ${(s.jobTitles||[]).length ? s.jobTitles.map(j => `<div class="tp-item"><b>${esc(j.title)}</b><div class="muted" style="font-size:11px;">${esc(j.reason||'')}</div></div>`).join('') : '<div class="muted" style="font-size:12px;">No roles suggested yet.</div>'}
+      </div>
+      <div class="section-title" style="margin-bottom:6px;font-size:13px;">Recommended strategy</div>
+      <div style="font-size:12.5px;line-height:1.6;">${esc(s.strategy || '')}</div>
+      <div class="muted" style="font-size:10.5px;margin-top:12px;">${s.generatedAt ? 'Generated ' + relativeSyncLabel(new Date(s.generatedAt).getTime()) : ''} ${refreshBtn}</div>`;
+  }
+
+  openModal(esc(ctx.companyName) + ' — ' + esc(ctx.programName), body, `
+    <button class="btn btn-secondary" onclick="closeModal()">Close</button>
+    <button class="btn btn-primary" ${(!s || s.error) ? 'disabled' : ''} onclick="createCampaignFromProgramStrategy('${esc(ctx.companyName)}','${esc(ctx.programName)}')"><i class="ti ti-rocket"></i> Turn this into a campaign</button>`);
+  const box = document.querySelector('#modalOverlay .modal');
+  if(box) box.style.maxWidth = '560px';
+}
+
+// Builds a Draft campaign the same way the campaign-chat builder does
+// (saveCampaignToDraft) - same local object shape, same syncCampaignToAirtable
+// call - just pre-filled from the program's stored strategy report instead of
+// a conversation. Job titles fold into targetSegmentSummary/strategyBrief
+// rather than a dedicated field since the real Campaigns table has none
+// (same "Target ICP Role" gap the rest of the app already works around).
+function createCampaignFromProgramStrategy(companyName, programName){
+  const key = companyName + '::' + programName;
+  const s = window.__progStrategy && window.__progStrategy[key];
+  if(!s || s.error) return;
+  const jobTitles = (s.jobTitles||[]).filter(j => j.title);
+
+  const campaign = { id: uid('camp'), createdAt: isoDate(TODAY) };
+  state.campaigns.push(campaign);
+  Object.assign(campaign, {
+    name: `${companyName} — ${programName}`,
+    goal: `Open a conversation with ${companyName} around their ${programName}`,
+    targetSegmentSummary: jobTitles.length ? `${jobTitles.map(j=>j.title).join(', ')} at ${companyName}` : companyName,
+    product: '',
+    pitchAngle: '',
+    objectionHandling: '',
+    successMetric: '',
+    contactIds: [],
+    sequence: {},
+    strategyBrief: [
+      `Program: ${programName} at ${companyName}`,
+      s.whatsHappening ? `What's happening: ${s.whatsHappening}` : '',
+      jobTitles.length ? `Target job titles: ${jobTitles.map(j => j.title + (j.reason ? ' — ' + j.reason : '')).join('; ')}` : '',
+      s.strategy ? `Strategy: ${s.strategy}` : ''
+    ].filter(Boolean).join('\n\n'),
+    status: 'Draft',
+    type: 'linkedin',
+    updatedAt: isoDate(TODAY)
+  });
+  syncCampaignToAirtable(campaign);
+  toast(`Campaign "${campaign.name}" created as a draft`, 'success');
+  closeModal();
+  navigate('campaigns');
+  openCampaignDetail(campaign.id);
 }
 
 function renderProgramsCard(){

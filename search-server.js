@@ -3966,7 +3966,12 @@ function parseCompanyPrograms(cf) {
     confidence: ['high', 'medium', 'low'].includes(p.confidence) ? p.confidence : 'medium',
     note: (p.note || '').toString().slice(0, 1000),
     detectedAt: p.detectedAt || new Date().toISOString().slice(0, 10),
-    addedBy: ['chat', 'agent'].includes(p.addedBy) ? p.addedBy : 'manual'
+    addedBy: ['chat', 'agent'].includes(p.addedBy) ? p.addedBy : 'manual',
+    // Engine-written pain-points/job-titles/strategy report, generated on
+    // demand from the Programs-found card and cached here (not in the
+    // ambient-insight cache) so the Engine can read it back later - e.g. when
+    // drafting messages for a campaign built from this program.
+    strategy: (p.strategy && typeof p.strategy === 'object') ? p.strategy : null
   }));
 }
 function programIsActive(p) { return p && p.phase !== 'Complete'; }
@@ -11077,6 +11082,80 @@ app.post('/api/companies/:name/programs', async (req, res) => {
     res.json({ success: true, programs: clean });
   } catch (err) {
     console.error('Programs save error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Engine-written strategy report for one Active program: 1-2 sentence
+// summary (Programs-found card), pain points, job titles to target, and a
+// recommended stage-1 approach tied to Twenty2's own GTM motion. Persisted
+// straight onto that program's entry in Companies.'Programs (JSON)' - not
+// the usual ambient-insight cache - so it's a durable, editable part of the
+// program record the Engine (and a campaign built from it) can read back
+// later. GET returns the stored report if present; ?refresh=1 regenerates
+// and overwrites it.
+// Addressed by program NAME, not id - parseCompanyPrograms assigns a fresh
+// random id to any legacy program whose stored JSON never had one, so an id
+// handed back by a GET can be stale by the next parse. Name is already the
+// de-facto unique key within one company (see applyProgramUpdate's own
+// dedup match), so it's the stable identifier here.
+app.get('/api/companies/:name/programs/:programName/strategy', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  try {
+    const companyRecord = await findRecordByFieldName('Companies', 'Company Name', decodeURIComponent(req.params.name));
+    if (!companyRecord) return res.status(404).json({ error: 'Company not found' });
+    const cf = companyRecord.fields || {};
+    const programs = parseCompanyPrograms(cf);
+    const wantedName = decodeURIComponent(req.params.programName).toLowerCase();
+    const program = programs.find(p => p.name.toLowerCase() === wantedName);
+    if (!program) return res.status(404).json({ error: 'Program not found' });
+
+    if (program.strategy && !wantsRefresh(req)) return res.json({ strategy: program.strategy });
+    if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+    const [icpProfile, gtmMotion] = await Promise.all([getIcpProfile(), getGtmMotion()]);
+    const icpBlock = icpProfilePromptBlock(icpProfile);
+    const motionBlock = (gtmMotion && Array.isArray(gtmMotion.stages) && gtmMotion.stages.length)
+      ? `\n\nTWENTY2'S GTM MOTION (lead the strategy with this, especially the Stage 1 play):\n${gtmMotion.stages.map(s => `${s.title}: ${s.body}`).join('\n')}`
+      : '';
+    const companyBlock = `Company: ${cf['Company Name'] || ''}\nIndustry / sector: ${cf['Industry'] || ''} / ${cf['Sector'] || ''}\nICP tag: ${cf['ICP Tag'] || 'not scored'}${cf['ICP Fit Score'] != null ? ` (${cf['ICP Fit Score']}/100)` : ''}\nLatest signal on file: ${cf['Latest Signal'] || 'none'}`;
+    const programBlock = `Program: ${program.name}\nType: ${program.type}\nPhase: ${program.phase}${program.evidence ? `\nEvidence: ${program.evidence}` : ''}${program.note ? `\nNote: ${program.note}` : ''}`;
+
+    const prompt = `You are the Engine inside Twenty2 Collective's outreach CRM, writing a strategy brief so the operator can decide whether to turn this program into an outreach campaign.
+
+${companyBlock}
+
+${programBlock}
+${icpBlock}${motionBlock}
+
+Write a short, concrete brief - grounded in what a program at this phase/type typically looks like, not generic consulting language. Return ONLY valid JSON, no markdown, in exactly this shape:
+{
+  "summary": "1-2 sentences for a card preview - what's happening and why it matters, right now",
+  "whatsHappening": "2-4 sentences: what this company is likely experiencing at this phase of this program - the real pain points",
+  "jobTitles": [{"title": "job title to search for at this company", "reason": "one short sentence why this role matters here"}],
+  "strategy": "2-3 sentences: the recommended stage-1 approach for this account, tied to Twenty2's own GTM motion and ICP edge where given, including who to lead with"
+}
+jobTitles should have 3-5 entries, ordered by priority.`;
+
+    const parsed = await callClaudeJson(clientize(prompt), 1200, AMBIENT_MODEL);
+    const strategy = {
+      summary: (parsed.summary || '').toString().slice(0, 400),
+      whatsHappening: (parsed.whatsHappening || '').toString().slice(0, 1200),
+      jobTitles: Array.isArray(parsed.jobTitles) ? parsed.jobTitles.slice(0, 6).map(j => ({
+        title: (j && j.title || '').toString().slice(0, 120),
+        reason: (j && j.reason || '').toString().slice(0, 300)
+      })).filter(j => j.title) : [],
+      strategy: (parsed.strategy || '').toString().slice(0, 1200),
+      generatedAt: new Date().toISOString()
+    };
+
+    const updatedPrograms = programs.map(p => p.name.toLowerCase() === wantedName ? { ...p, strategy } : p);
+    await airtableWriteAllowingMissingCtaFields('PATCH', 'Companies', {
+      records: [{ id: companyRecord.id, fields: { 'Programs (JSON)': JSON.stringify(updatedPrograms) } }]
+    });
+    res.json({ strategy });
+  } catch (err) {
+    console.error('Program strategy error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
