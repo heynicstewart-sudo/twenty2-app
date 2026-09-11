@@ -9970,6 +9970,75 @@ Write ONE short paragraph (3-4 sentences, no bullet points, no markdown, no prea
   }
 });
 
+// ===================== THE ENGINE (global chat drawer) =====================
+// One conversational endpoint behind the app-wide Engine drawer (see
+// renderEngineDrawer() in t2c-outreach-crm.html) - a single universal
+// shortcut set sends canned prompts here rather than each page wiring its
+// own bespoke integration into 5+ different existing flows. Context is
+// deliberately light: the account currently open on the Targets dashboard,
+// when there is one (the one page "account" is unambiguous), plus the page
+// name otherwise. Runs on Sonnet (AMBIENT_MODEL), not Opus - a converse/
+// summarise surface that can be called many times a session, not a
+// message-drafting one. History is client-side only, capped at 12 turns.
+app.post('/api/engine/chat', async (req, res) => {
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  const message = ((req.body && req.body.message) || '').toString().trim().slice(0, 2000);
+  if (!message) return res.status(400).json({ error: 'message is required' });
+  const history = Array.isArray(req.body && req.body.history) ? req.body.history.slice(-12) : [];
+  const context = (req.body && req.body.context) || {};
+
+  try {
+    let accountBlock = '';
+    if (context.accountName && AIRTABLE_API_KEY) {
+      const companyRecord = await findRecordByFieldName('Companies', 'Company Name', context.accountName);
+      if (companyRecord) {
+        const cf = companyRecord.fields || {};
+        const programs = parseCompanyPrograms(cf);
+        const [contactRecords, dealRecords] = await Promise.all([
+          airtableFetchAllRecords('Contacts'),
+          airtableFetchAllRecords('Deals')
+        ]);
+        const myContactCount = contactRecords.filter(r => (r.fields['Company'] || [])[0] === companyRecord.id).length;
+        const deals = dealRecords
+          .filter(r => (r.fields['Company'] || []).includes(companyRecord.id))
+          .map(r => `${r.fields['Outcome'] || ''}${r.fields['Deal Value'] ? ' $' + r.fields['Deal Value'] : ''}`);
+
+        accountBlock = `
+The user is currently viewing the Targets dashboard for this account:
+Company: ${context.accountName}
+Industry: ${cf['Industry'] || 'unknown'} / ${cf['Sector'] || 'unknown'}
+ICP fit: ${cf['ICP Fit Score'] != null ? cf['ICP Fit Score'] + '/100' : 'not scored'}
+Latest signal: ${cf['Latest Signal'] || 'none logged'}
+Active programs: ${programs.length ? programs.map(p => `${p.name} (${p.phase} phase)`).join(', ') : 'none detected'}
+Contacts on file: ${myContactCount}
+Deals on file: ${deals.length ? deals.join('; ') : 'none'}`;
+      }
+    }
+
+    const pageBlock = context.pageLabel ? `The user is currently on the "${context.pageLabel}" page of the CRM.` : '';
+    const transcript = history.map(h => `${h.role === 'user' ? 'User' : 'Engine'}: ${h.content}`).join('\n');
+
+    const systemPrompt = `You are the Engine, an assistant embedded directly inside T2C Outreach, a B2B outreach CRM. You help the operator work faster on whatever they're looking at right now.
+
+${pageBlock}
+${accountBlock}
+
+Rules:
+- Answer conversationally, in plain text, 1-3 short paragraphs unless asked for a longer draft.
+- Ground every factual claim in the data given above - never invent a program, contact, deal, signal, or number that isn't listed.
+- If you don't have enough data to answer, say so plainly and name the actual page where the user could look instead, rather than guessing.
+- If asked to draft a message, write the full draft directly in your reply with no extra commentary before or after it.
+- Never refer to yourself as "AI" or "Claude" - you are "the Engine". Never say "Airtable" - say "the database" if you need to reference where data lives.`;
+
+    const prompt = transcript ? `Conversation so far:\n${transcript}\n\nUser: ${message}` : message;
+    const reply = (await callClaudeMessages(prompt, 700, systemPrompt, AMBIENT_MODEL)).trim();
+    res.json({ reply });
+  } catch (err) {
+    console.error('Engine chat error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Real external research (LinkedIn + news via Serper, synthesized by
 // Claude) - as opposed to scoreIcpForCompany below, which only CLASSIFIES
 // whatever's already on file and silently defaults to "Small/Flat/Other"
