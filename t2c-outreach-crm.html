@@ -336,6 +336,16 @@ label{font-size:var(--label-size);font-weight:700;color:var(--muted);display:blo
 .uf-search{border:1px solid var(--border);border-radius:var(--radius-input);padding:7px 12px;font-size:12.5px;font-family:inherit;min-width:200px;}
 .uf-meta{display:flex;justify-content:space-between;align-items:center;font-size:11.5px;color:var(--text-dim);margin-top:14px;}
 .uf-clear{color:var(--text-dim);text-decoration:underline;}
+.uf-dd{position:relative;}
+.uf-dd-btn{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border);background:var(--surface);border-radius:var(--radius-input);padding:7px 11px;font-size:12px;font-family:inherit;color:var(--text);cursor:pointer;}
+.uf-dd-btn.on{border-color:var(--ink);color:var(--ink);font-weight:600;}
+.uf-dd-btn i{font-size:13px;color:var(--text-dim);}
+.uf-dd-panel{position:absolute;top:100%;left:0;z-index:60;margin-top:4px;min-width:230px;max-height:280px;overflow-y:auto;background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius-card-sm);box-shadow:var(--shadow-lg);padding:8px;}
+.uf-dd-opt{display:flex;align-items:center;gap:8px;padding:6px 6px;font-size:12.5px;color:var(--text);cursor:pointer;white-space:nowrap;border-radius:6px;}
+.uf-dd-opt:hover{background:var(--surface-2);}
+.uni-ind{font-size:12px;font-weight:700;color:var(--ink);white-space:nowrap;}
+.uni-ind.ok{color:var(--success);}
+.uni-ind .muted{font-weight:500;font-size:11px;}
 .expand-row{display:flex;justify-content:center;margin:16px 0 6px;}
 .uco-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;margin-bottom:6px;}
 .uco-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card-sm);padding:15px;cursor:pointer;box-shadow:var(--shadow-sm);transition:box-shadow .15s ease,transform .15s ease;display:flex;flex-direction:column;gap:10px;}
@@ -16207,7 +16217,6 @@ function renderCompanyUniverse(){
   const tab = window.__universeTab || 'accounts';
 
   const accounts = `
-    ${renderUniverseMetricStrip()}
     ${renderUniverseAccountsList()}`;
 
   const programs = `
@@ -16252,10 +16261,13 @@ function renderCompanyUniverse(){
       <h1 class="page-h1">Company Universe</h1>
       <div class="page-sub">Find and qualify the accounts worth working — ICP fit, live transformation programs, and what the account base is teaching you.</div>
     </div>
-    <div style="display:flex;gap:6px;flex-wrap:wrap;">
-      <button class="btn btn-secondary btn-sm" onclick="navigate('icpbuilder')"><i class="ti ti-crosshair"></i> Edit ICP</button>
-      <button class="btn btn-ghost btn-sm" onclick="navigate('gtmmotion')"><i class="ti ti-topology-star-3"></i> GTM motion</button>
-      <button class="btn btn-ghost btn-sm" onclick="navigate('competitormap')"><i class="ti ti-affiliate"></i> Competitor map</button>
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+      ${renderUniverseHeaderIndicators()}
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">
+        <button class="btn btn-secondary btn-sm" onclick="navigate('icpbuilder')"><i class="ti ti-crosshair"></i> Edit ICP</button>
+        <button class="btn btn-ghost btn-sm" onclick="navigate('gtmmotion')"><i class="ti ti-topology-star-3"></i> GTM motion</button>
+        <button class="btn btn-ghost btn-sm" onclick="navigate('competitormap')"><i class="ti ti-affiliate"></i> Competitor map</button>
+      </div>
     </div>
   </div>
 
@@ -25858,6 +25870,26 @@ async function loadIcpWorklist(){
 // Summary strip for Company Universe — real numbers from the ICP worklist +
 // programs feeds, styled as the reference's KPI cards. Renders nothing until
 // at least one feed has landed.
+// Compact version of renderUniverseMetricStrip() below - same numbers, as
+// small inline indicators in the page header next to Edit ICP/GTM
+// motion/Competitor map, instead of three full-width KPI cards.
+function renderUniverseHeaderIndicators(){
+  const w = window.__icpWorklist;
+  const p = window.__programs;
+  const haveW = w && !w.error && w.icpConfigured;
+  const progCompanies = (p && !p.error && Array.isArray(p.companies)) ? p.companies : null;
+  if(!haveW && !progCompanies) return '';
+  const parts = [];
+  if(haveW && w.icpCompanyCount){
+    const pct = Math.round((w.inCampaignCount / w.icpCompanyCount) * 100);
+    parts.push(`<span class="uni-ind">${w.inCampaignCount}/${w.icpCompanyCount} <span class="muted">in a campaign</span></span>`);
+    parts.push(`<span class="uni-ind ${pct >= 60 ? 'ok' : ''}">${pct}% <span class="muted">ICP coverage</span></span>`);
+  }
+  const withProgram = progCompanies ? progCompanies.length : (haveW ? (w.withActiveProgram || []).length : 0);
+  parts.push(`<span class="uni-ind">${withProgram} <span class="muted">with a program</span></span>`);
+  return `<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">${parts.join('')}</div>`;
+}
+
 function renderUniverseMetricStrip(){
   const w = window.__icpWorklist;
   const p = window.__programs;
@@ -26036,6 +26068,13 @@ function toggleUniverseFilter(group, value){
   window.__universeBatch = 20;
   renderPage();
 }
+// One filter dropdown open at a time, closed via its own "Done" button -
+// checking an option inside it (toggleUniverseFilter) doesn't touch this,
+// so the panel stays open across multiple checks.
+function toggleUniverseFilterPanel(field){
+  window.__universeOpenFilter = (window.__universeOpenFilter === field) ? null : field;
+  renderPage();
+}
 function setUniversePreset(preset){
   window.__universeFilters = window.__universeFilters || {};
   window.__universeFilters.preset = (window.__universeFilters.preset === preset) ? null : preset;
@@ -26045,6 +26084,7 @@ function setUniversePreset(preset){
 function clearUniverseFilters(){
   window.__universeFilters = { size:[], momentum:[], industry:[], sector:[], priority:[], relationship:[], programStatus:[], campaignStatus:[], preset:null, search:'' };
   window.__universeBatch = 20;
+  window.__universeOpenFilter = null;
   renderPage();
 }
 let __universeSearchDebounce = null;
@@ -26072,10 +26112,19 @@ function renderUniverseAccountsList(){
   const filtered = universeFilteredCompanies();
   const { grid, expand, meta } = universeResultsHtml(filtered, all);
 
-  const chipGroup = (label, field, options) => options.length ? `
-    <div class="uf-group"><span class="uf-label">${esc(label)}</span>
-      ${options.map(o => `<button class="uf-chip ${(f[field]||[]).includes(o) ? 'on' : ''}" onclick="toggleUniverseFilter('${field}','${esc(o).replace(/'/g,"\\'")}')">${esc(o)}</button>`).join('')}
-    </div>` : '';
+  const ddGroup = (label, field, options) => {
+    if(!options.length) return '';
+    const sel = f[field] || [];
+    const open = window.__universeOpenFilter === field;
+    return `
+    <div class="uf-dd">
+      <button class="uf-dd-btn ${sel.length ? 'on' : ''}" onclick="toggleUniverseFilterPanel('${field}')">${esc(label)}${sel.length ? ` (${sel.length})` : ''} <i class="ti ti-chevron-down"></i></button>
+      ${open ? `<div class="uf-dd-panel">
+        ${options.map(o => `<label class="uf-dd-opt"><input type="checkbox" ${sel.includes(o) ? 'checked' : ''} onchange="toggleUniverseFilter('${field}','${esc(o).replace(/'/g,"\\'")}')"> ${esc(o)}</label>`).join('')}
+        <button class="btn btn-ghost btn-sm" style="width:100%;margin-top:6px;" onclick="toggleUniverseFilterPanel('${field}')">Done</button>
+      </div>` : ''}
+    </div>`;
+  };
   const presetChip = (label, key) => `<button class="uf-preset ${f.preset===key?'on':''}" onclick="setUniversePreset('${key}')">${label}</button>`;
   const activeCount = ['size','momentum','industry','sector','priority','relationship','programStatus','campaignStatus'].reduce((n,k) => n + (f[k]||[]).length, 0) + (f.preset ? 1 : 0) + (f.search ? 1 : 0);
 
@@ -26088,14 +26137,16 @@ function renderUniverseAccountsList(){
     <div class="muted" style="font-size:12.5px;margin:-4px 0 0;">Every company on file, filterable by size, industry, relationship, program and campaign status — filter down instead of hunting through fixed sections.</div>
     <div class="uf-bar">
       <div class="uf-group"><input type="text" class="uf-search" id="universeSearchInput" placeholder="Search company name…" value="${esc(f.search||'')}" oninput="setUniverseSearchLive(this.value)"></div>
-      ${chipGroup('Size', 'size', universeDistinct(all,'sizeBand'))}
-      ${chipGroup('Momentum', 'momentum', universeDistinct(all,'momentum'))}
-      ${chipGroup('ICP priority', 'priority', universeDistinct(all,'priority'))}
-      ${chipGroup('Industry', 'industry', universeDistinct(all,'industry'))}
-      ${chipGroup('Sector', 'sector', universeDistinct(all,'sector'))}
-      ${chipGroup('Relationship', 'relationship', universeDistinct(all,'relationshipStatus'))}
-      ${chipGroup('Program', 'programStatus', ['Has program','No program'])}
-      ${chipGroup('Campaign', 'campaignStatus', ['In campaign','Not in campaign'])}
+      ${ddGroup('Size', 'size', universeDistinct(all,'sizeBand'))}
+      ${ddGroup('Momentum', 'momentum', universeDistinct(all,'momentum'))}
+      ${ddGroup('ICP priority', 'priority', universeDistinct(all,'priority'))}
+      ${ddGroup('Industry', 'industry', universeDistinct(all,'industry'))}
+      ${ddGroup('Sector', 'sector', universeDistinct(all,'sector'))}
+      ${ddGroup('Relationship', 'relationship', universeDistinct(all,'relationshipStatus'))}
+      ${ddGroup('Program', 'programStatus', ['Has program','No program'])}
+      ${ddGroup('Campaign', 'campaignStatus', ['In campaign','Not in campaign'])}
+    </div>
+    <div class="uf-bar" style="margin-top:8px;">
       <div class="uf-group"><span class="uf-label">Quick filters</span>
         ${presetChip('⚡ Buying trigger detected','trigger')}
         ${presetChip('Active program · no campaign','program-no-campaign')}
