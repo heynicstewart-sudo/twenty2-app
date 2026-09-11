@@ -354,11 +354,19 @@ label{font-size:var(--label-size);font-weight:700;color:var(--muted);display:blo
 .uco-icp{font-size:11px;font-weight:800;padding:2px 7px;border-radius:6px;background:var(--lime-soft);color:var(--lime-ink);}
 .uco-icp.low{background:var(--tint-grey-bg);color:var(--tint-grey-fg);}
 .uco-name{display:flex;align-items:center;gap:9px;}
-.uco-ava{width:30px;height:30px;min-width:30px;border-radius:9px;background:var(--surface-2);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;}
+.uco-ava{width:30px;height:30px;min-width:30px;border-radius:9px;background:var(--surface-2);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;overflow:hidden;}
+.uco-ava img{width:100%;height:100%;object-fit:cover;}
+.uco-logo-wrap{position:relative;flex:none;}
+.uco-logo-edit{position:absolute;right:-5px;bottom:-5px;width:17px;height:17px;border-radius:50%;background:var(--ink);color:#fff;border:1.5px solid var(--surface);display:flex;align-items:center;justify-content:center;font-size:9px;cursor:pointer;padding:0;}
+.uco-logo-edit:hover{background:var(--accent);}
 .uco-name b{font-size:15px;font-weight:700;letter-spacing:-0.01em;color:var(--ink);}
 .uco-prog{background:var(--surface-2);border-radius:10px;padding:9px 11px;}
 .uco-prog .k{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:var(--text-dim);display:block;margin-bottom:2px;}
 .uco-prog .v{font-size:12.5px;color:var(--ink);font-weight:600;line-height:1.35;}
+.uco-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
+.uco-stat{background:var(--surface-2);border-radius:8px;padding:6px 8px;}
+.uco-stat .k{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.03em;color:var(--text-dim);display:block;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.uco-stat .v{font-size:12.5px;color:var(--ink);font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .uco-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px;padding-top:11px;border-top:1px solid var(--border-light);font-size:11.5px;color:var(--muted);}
 /* Accent-filled hero card (dashboard / stat highlights) */
 .card-hero{background:var(--ink);color:#fff;border:none;box-shadow:0 1px 2px rgba(0,0,0,.18);}
@@ -3608,7 +3616,7 @@ function renderDashPipeline(profile){
   return `
   <div class="card adg-pipeline">
     <div class="section-title" style="margin-bottom:6px;">Sales pipeline</div>
-    <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap;">
+    <div style="display:flex;align-items:center;justify-content:center;gap:20px;flex-wrap:wrap;">
       ${pipelineCylinderSvg(buckets)}
       <div style="display:flex;flex-direction:column;gap:8px;">
         ${buckets.map((b, i) => `
@@ -16456,12 +16464,20 @@ function renderProfileAccountDashboard(name){
   const profile = window.__acctDash && window.__acctDash[name];
   const syncedAt = window.__acctDashLoadedAt && window.__acctDashLoadedAt[name];
   const sector = profile && profile.company ? (profile.company.sector || profile.company.industry) : '';
+  const logoUrl = profile && profile.company ? profile.company.logoUrl : null;
+  const initial = esc((name || '?').trim()[0] || '?').toUpperCase();
 
   const header = `
   <div class="page-head" style="align-items:flex-start;margin-top:0;">
-    <div>
-      <h1 class="page-h1" style="margin-bottom:4px;">${nm}</h1>
-      <div class="page-sub">${esc(sector || 'Account dashboard')}</div>
+    <div style="display:flex;align-items:flex-start;gap:12px;">
+      <div class="uco-logo-wrap" style="margin-top:2px;">
+        <span class="uco-ava" style="width:40px;height:40px;min-width:40px;border-radius:11px;font-size:16px;">${logoUrl ? `<img src="${esc(logoUrl)}" alt="">` : initial}</span>
+        <button class="uco-logo-edit" title="Upload logo" onclick="triggerCompanyLogoUpload('${nm}')"><i class="ti ti-camera"></i></button>
+      </div>
+      <div>
+        <h1 class="page-h1" style="margin-bottom:4px;">${nm}</h1>
+        <div class="page-sub">${esc(sector || 'Account dashboard')}</div>
+      </div>
     </div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
       ${syncedAt ? `<span class="muted" style="font-size:11px;white-space:nowrap;">Synced ${relativeSyncLabel(syncedAt)}</span>
@@ -26038,14 +26054,78 @@ function renderUniverseCoCard(c){
   }
   const sub = [c.industry, c.sector].filter(Boolean).join(' · ');
   const footLeft = c.knownContacts ? `${c.knownContacts} known contact${c.knownContacts === 1 ? '' : 's'}` : (c.inCampaign ? 'In a campaign' : 'Not in a campaign');
+  const stats = `
+    <div class="uco-stats">
+      <div class="uco-stat"><span class="k">Contacts</span><span class="v">${c.knownContacts || 0}</span></div>
+      <div class="uco-stat"><span class="k">Relationship</span><span class="v">${esc(c.relationshipStatus || '—')}</span></div>
+      <div class="uco-stat"><span class="k">Momentum</span><span class="v">${esc(c.momentum || '—')}</span></div>
+    </div>`;
   return `
   <div class="uco-card" onclick="navigate('profile');selectProfileCompany('${nm}')">
     <div class="uco-top">${icpChip}${prio ? `<span class="tpill" style="background:var(--surface-2);color:var(--muted);">${prio}</span>` : ''}</div>
-    <div class="uco-name"><span class="uco-ava">${initial}</span><b>${nm}</b></div>
+    <div class="uco-name">
+      <div class="uco-logo-wrap">
+        <span class="uco-ava">${c.logoUrl ? `<img src="${esc(c.logoUrl)}" alt="">` : initial}</span>
+        <button class="uco-logo-edit" title="Upload logo" onclick="event.stopPropagation();triggerCompanyLogoUpload('${nm}')"><i class="ti ti-camera"></i></button>
+      </div>
+      <b>${nm}</b>
+    </div>
     ${sub ? `<div class="muted" style="font-size:11px;margin:-4px 0 0 38px;">${esc(sub)}</div>` : ''}
+    ${stats}
     ${box}
     <div class="uco-foot"><span>${footLeft}</span><span style="color:var(--accent);font-weight:700;">Open <i class="ti ti-arrow-right" style="font-size:12px;vertical-align:-1px;"></i></span></div>
   </div>`;
+}
+
+// Hidden file input reused by every card's upload-logo button (created once,
+// lazily) - avoids stamping one <input> per card. Reads the picked file as a
+// data URL client-side and posts it to the company's Logo attachment field.
+function triggerCompanyLogoUpload(name){
+  let input = document.getElementById('companyLogoFileInput');
+  if(!input){
+    input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/png,image/jpeg,image/gif,image/webp,image/svg+xml';
+    input.id = 'companyLogoFileInput';
+    input.style.display = 'none';
+    document.body.appendChild(input);
+  }
+  input.onchange = () => {
+    const file = input.files && input.files[0];
+    input.value = '';
+    if(file) uploadCompanyLogo(name, file);
+  };
+  input.click();
+}
+
+async function uploadCompanyLogo(name, file){
+  if(file.size > 5 * 1024 * 1024){ toast('Logo must be under 5MB', 'warn'); return; }
+  const reader = new FileReader();
+  reader.onload = async () => {
+    try {
+      const res = await fetch('/api/companies/' + encodeURIComponent(name) + '/logo', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataUrl: reader.result, filename: file.name })
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || 'Upload failed');
+      // Patch every cached copy of this company's data so the new logo shows
+      // immediately without a full reload - segmentation grid, profile
+      // dashboard header, and account-canvas header all read from these.
+      if(window.__accountSegmentation && Array.isArray(window.__accountSegmentation.companies)){
+        const row = window.__accountSegmentation.companies.find(c => c.companyName === name);
+        if(row) row.logoUrl = data.url;
+      }
+      if(window.__acctDash && window.__acctDash[name] && window.__acctDash[name].company){
+        window.__acctDash[name].company.logoUrl = data.url;
+      }
+      toast('Logo updated', 'success');
+      renderPage();
+    } catch(err){
+      toast('Could not upload logo: ' + err.message, 'error');
+    }
+  };
+  reader.readAsDataURL(file);
 }
 
 /* ===== Merged ICP worklist + segmentation (Company Universe, Accounts tab) =====
@@ -26078,7 +26158,7 @@ function universeMergedCompanies(){
       id: c.companyId, name: c.companyName,
       sizeBand: c.sizeBand, momentum: c.momentum, industry: c.industry, sector: c.sector,
       relationshipStatus: c.relationshipStatus, tier: c.tier, fitScore: c.fitScore,
-      icpTag: c.icpTag, priority: c.accountPriority, scored: c.scored,
+      icpTag: c.icpTag, priority: c.accountPriority, scored: c.scored, logoUrl: c.logoUrl || null,
       trigger: wl.trigger || null, programs: wl.programs || null,
       inCampaign: !!wl.inCampaign, knownContacts: wl.knownContacts || 0
     };

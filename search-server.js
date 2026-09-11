@@ -9874,7 +9874,8 @@ app.get('/api/companies/profile', async (req, res) => {
         procurementThreshold: cf['Procurement Threshold ($)'] || null,
         icpFitScore: Number.isFinite(Number(cf['ICP Fit Score'])) ? Number(cf['ICP Fit Score']) : null,
         icpTriggerDetected: cf['ICP Trigger Detected'] || null,
-        programs: parseCompanyPrograms(cf)
+        programs: parseCompanyPrograms(cf),
+        logoUrl: (cf['Logo'] && cf['Logo'][0] && cf['Logo'][0].url) || null
       },
       relationshipFlag,
       matchingCaseStudies,
@@ -10225,6 +10226,49 @@ app.post('/api/companies/:name/change-architecture', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('Change architecture save error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Company Universe: logo upload ----
+// One image on the Companies.'Logo' attachment field per company - uploaded
+// the same way canvas assets are (Airtable's content API takes a base64
+// data URL), then immediately re-patched to just the new attachment so the
+// field never accumulates old logos the way 'Canvas Assets' is allowed to.
+const COMPANY_LOGO_MAX_BYTES = 5 * 1024 * 1024;
+const COMPANY_LOGO_TYPES = /^image\/(png|jpe?g|gif|webp|svg\+xml)$/i;
+app.post('/api/companies/:name/logo', express.json({ limit: '12mb' }), async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const { dataUrl, filename } = req.body || {};
+  const m = /^data:([^;,]+);base64,(.+)$/s.exec(dataUrl || '');
+  if (!m) return res.status(400).json({ error: 'dataUrl (base64) is required' });
+  const contentType = m[1].toLowerCase();
+  const base64 = m[2];
+  if (!COMPANY_LOGO_TYPES.test(contentType)) return res.status(400).json({ error: 'Logo must be an image (PNG, JPG, GIF, WEBP or SVG)' });
+  const bytes = Math.floor(base64.length * 3 / 4);
+  if (bytes > COMPANY_LOGO_MAX_BYTES) return res.status(413).json({ error: 'Logo is over the 5MB limit' });
+  try {
+    const companyRecord = await findRecordByFieldName('Companies', 'Company Name', decodeURIComponent(req.params.name));
+    if (!companyRecord) return res.status(404).json({ error: 'Company not found' });
+    const safeName = (filename || `logo-${Date.now()}`).toString().replace(/[^\w.\- ]+/g, '_').slice(0, 120)
+      || `logo-${Date.now()}`;
+    const up = await fetch(`https://content.airtable.com/v0/${currentTenant().baseId}/${companyRecord.id}/${encodeURIComponent('Logo')}/uploadAttachment`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contentType, file: base64, filename: safeName })
+    });
+    const body = await up.json().catch(() => ({}));
+    if (!up.ok) throw new Error(body.error && (body.error.message || body.error) || `Airtable upload failed (${up.status})`);
+    const list = (body.fields && body.fields['Logo']) || [];
+    const added = list.find(a => a.filename === safeName) || list[list.length - 1];
+    if (!added || !added.url) throw new Error('Upload succeeded but no URL came back');
+    // Prune to just this one attachment so old logos don't linger.
+    await airtableRequest('PATCH', 'Companies', {
+      records: [{ id: companyRecord.id, fields: { 'Logo': [{ url: added.url, filename: added.filename || safeName }] } }]
+    });
+    res.json({ url: added.url, filename: added.filename || safeName });
+  } catch (err) {
+    console.error('Company logo upload error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -11749,7 +11793,8 @@ async function buildSegmentation(campaignId) {
     tier: c.fields['Tier'] || null,
     icpTag: c.fields['ICP Tag'] || null,
     fitScore: Number.isFinite(Number(c.fields['ICP Fit Score'])) ? Number(c.fields['ICP Fit Score']) : null,
-    accountPriority: c.fields['Account Priority'] || null
+    accountPriority: c.fields['Account Priority'] || null,
+    logoUrl: (c.fields['Logo'] && c.fields['Logo'][0] && c.fields['Logo'][0].url) || null
   }));
   return { companies, totalCompanies: companies.length, scoredCount: companies.filter(c => c.scored).length };
 }
