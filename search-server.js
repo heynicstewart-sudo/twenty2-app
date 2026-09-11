@@ -11050,6 +11050,7 @@ app.get('/api/programs', async (req, res) => {
         fitScore: Number.isFinite(Number(x.c.fields['ICP Fit Score'])) ? Number(x.c.fields['ICP Fit Score']) : null,
         inCampaign: (contactsByCompany[x.c.id] || []).some(id => inACampaign.has(id)),
         knownContacts: (contactsByCompany[x.c.id] || []).length,
+        logoUrl: (x.c.fields['Logo'] && x.c.fields['Logo'][0] && x.c.fields['Logo'][0].url) || null,
         programs: x.programs
       }));
 

@@ -15602,41 +15602,64 @@ async function loadPrograms(){
   if(state.currentPage === 'companyuniverse') renderPage();
 }
 
+function renderProgramCoCard(r){
+  const nm = esc(r.companyName);
+  const initial = esc((r.companyName || '?').trim()[0] || '?').toUpperCase();
+  const prio = r.accountPriority ? esc(r.accountPriority.replace(/\s*\(.*\)/, '')) : '';
+  const icpChip = r.fitScore != null
+    ? `<span class="uco-icp${r.fitScore < 70 ? ' low' : ''}">${r.fitScore} ICP</span>`
+    : (/resources icp/i.test(r.icpTag||'') ? `<span class="uco-icp">ICP</span>` : '');
+  const box = `<div class="uco-prog"><span class="k">${r.programs.length > 1 ? 'Active programs' : 'Active program'}</span><span class="v">${r.programs.map(pr => esc(pr.name) + (pr.phase ? ` <span style="color:${programPhaseColor(pr.phase)};">· ${esc(pr.phase)}</span>` : '')).join('<br>')}</span></div>`;
+  return `
+  <div class="uco-card" onclick="navigate('profile');selectProfileCompany('${nm}')">
+    <div class="uco-top">${icpChip}${prio ? `<span class="tpill" style="background:var(--surface-2);color:var(--muted);">${prio}</span>` : ''}</div>
+    <div class="uco-name"><span class="uco-ava">${r.logoUrl ? `<img src="${esc(r.logoUrl)}" alt="">` : initial}</span><b>${nm}</b></div>
+    ${box}
+    <div class="uco-foot"><span>${r.inCampaign ? 'In a campaign' : 'Not in a campaign'}</span><span style="color:var(--accent);font-weight:700;">Open <i class="ti ti-arrow-right" style="font-size:12px;vertical-align:-1px;"></i></span></div>
+  </div>`;
+}
+
 function renderProgramsCard(){
   const p = window.__programs;
-  const filterType = window.__programsFilterType || '';
-  const onlyNoCampaign = !!window.__programsOnlyNoCampaign;
-  let rows = (p && !p.error && Array.isArray(p.companies)) ? p.companies.slice() : [];
-  if(filterType) rows = rows.filter(r => r.programs.some(pr => pr.type === filterType));
-  if(onlyNoCampaign) rows = rows.filter(r => !r.inCampaign);
+  window.__programsFilters = window.__programsFilters || { type: [], phase: [], campaign: [] };
+  const f = window.__programsFilters;
+  const all = (p && !p.error && Array.isArray(p.companies)) ? p.companies : [];
+  let rows = all.slice();
+  if(f.type.length) rows = rows.filter(r => r.programs.some(pr => f.type.includes(pr.type)));
+  if(f.phase.length) rows = rows.filter(r => r.programs.some(pr => f.phase.includes(pr.phase)));
+  if(f.campaign.length === 1) rows = rows.filter(r => r.inCampaign === (f.campaign[0] === 'In a campaign'));
   rows.sort((a,b) => {
     const heat = r => Math.min(...r.programs.map(pr => PROGRAM_PHASE_HEAT[pr.phase] ?? 5));
     return (a.inCampaign - b.inCampaign) || (heat(a) - heat(b));
   });
 
+  // Same dropdown-chip filter pattern as the Accounts tab (renderUniverseAccountsList) -
+  // copied rather than shared since it closes over this function's own field/options.
+  const ddGroup = (label, field, options) => {
+    if(!options.length) return '';
+    const sel = f[field] || [];
+    const open = window.__programsOpenFilter === field;
+    return `
+    <div class="uf-dd">
+      <button class="uf-dd-btn ${sel.length ? 'on' : ''}" onclick="toggleProgramsFilterPanel('${field}')">${esc(label)}${sel.length ? ` (${sel.length})` : ''} <i class="ti ti-chevron-down"></i></button>
+      ${open ? `<div class="uf-dd-panel">
+        ${options.map(o => `<label class="uf-dd-opt"><input type="checkbox" ${sel.includes(o) ? 'checked' : ''} onchange="toggleProgramsFilter('${field}','${esc(o).replace(/'/g,"\\'")}')"> ${esc(o)}</label>`).join('')}
+        <button class="btn btn-ghost btn-sm" style="width:100%;margin-top:6px;" onclick="toggleProgramsFilterPanel('${field}')">Done</button>
+      </div>` : ''}
+    </div>`;
+  };
+  const types = [...new Set(all.flatMap(r => r.programs.map(pr => pr.type)).filter(Boolean))];
+  const phases = [...new Set(all.flatMap(r => r.programs.map(pr => pr.phase)).filter(Boolean))];
+  const activeCount = f.type.length + f.phase.length + f.campaign.length;
+
   const body = () => {
     if(p === undefined || p === null) return '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading…</div>';
     if(p.error) return '<div class="muted" style="font-size:12.5px;">Could not load.</div>';
-    if(!p.companies.length) return `<div class="empty-state" style="padding:24px;">No programs logged yet. Press <b>Log a finding</b> and paste anything you've found — a news line, a LinkedIn post, a note from a call — and the Engine files it against the right company.</div>`;
+    if(!all.length) return `<div class="empty-state" style="padding:24px;">No programs logged yet. Press <b>Log a finding</b> and paste anything you've found — a news line, a LinkedIn post, a note from a call — and the Engine files it against the right company.</div>`;
     if(!rows.length) return '<div class="muted" style="font-size:12px;">No companies match this filter.</div>';
-    return `
-    <div class="perf-table-wrap">
-      <table class="perf-table">
-        <thead><tr><th>Company</th><th>Programs</th><th>ICP</th><th>In a campaign?</th></tr></thead>
-        <tbody>
-          ${rows.map(r => `
-          <tr class="home-grid-row" onclick="openEntityDeep('company','${esc(r.companyName)}')">
-            <td class="perf-name">${esc(r.companyName)}${r.accountPriority ? `<div class="muted" style="font-weight:400;font-size:10.5px;">${esc(r.accountPriority)}</div>` : ''}</td>
-            <td>${r.programs.map(pr => `<span class="badge" style="background:var(--surface-2);font-size:10.5px;margin:1px 2px 1px 0;display:inline-block;">${esc(pr.name)} <span style="color:${programPhaseColor(pr.phase)};font-weight:700;">· ${esc(pr.phase)}</span></span>`).join('')}</td>
-            <td>${/resources icp/i.test(r.icpTag||'') ? '<span class="badge" style="background:var(--tint-green-bg);color:var(--tint-green-fg);font-size:10px;">ICP</span>' : (r.fitScore!=null ? `<span class="muted" style="font-size:11px;">${r.fitScore}</span>` : '<span class="muted">—</span>')}</td>
-            <td>${r.inCampaign ? '<span class="muted">Yes</span>' : '<span style="color:var(--danger);font-weight:700;font-size:11.5px;">Not yet</span>'}</td>
-          </tr>`).join('')}
-        </tbody>
-      </table>
-    </div>`;
+    return `<div class="uco-grid">${rows.map(r => renderProgramCoCard(r)).join('')}</div>`;
   };
 
-  const types = (p && p.types) || PROGRAM_TYPES;
   return `
   <div class="card" style="margin-bottom:16px;">
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:4px;">
@@ -15644,16 +15667,26 @@ function renderProgramsCard(){
       <button class="btn btn-primary btn-sm" onclick="openProgramCapture()"><i class="ti ti-message-plus"></i> Log a finding</button>
     </div>
     <div class="desc">Which companies are running a transformation program right now — Twenty2's first GTM step. A company with a program in delivery (or slipping) that isn't in a campaign yet is your next target.</div>
-    ${(p && !p.error && p.companies.length) ? `
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
-        <select onchange="window.__programsFilterType=this.value;renderPage()" style="font-size:12px;max-width:220px;">
-          <option value="">All program types</option>
-          ${types.map(t => `<option value="${esc(t)}" ${filterType===t?'selected':''}>${esc(t)}</option>`).join('')}
-        </select>
-        <label style="font-size:11.5px;display:flex;align-items:center;gap:5px;"><input type="checkbox" ${onlyNoCampaign?'checked':''} onchange="window.__programsOnlyNoCampaign=this.checked;renderPage()" style="width:auto;"> Not in a campaign</label>
+    ${(p && !p.error && all.length) ? `
+      <div class="uf-bar" style="margin-bottom:10px;">
+        ${ddGroup('Program type', 'type', types)}
+        ${ddGroup('Phase', 'phase', phases)}
+        ${ddGroup('Campaign', 'campaign', ['In a campaign', 'Not in a campaign'])}
+        ${activeCount ? `<a href="#" class="uf-clear" onclick="window.__programsFilters={type:[],phase:[],campaign:[]};renderPage();return false;">Clear all filters</a>` : ''}
       </div>` : ''}
     ${body()}
   </div>`;
+}
+function toggleProgramsFilter(field, value){
+  window.__programsFilters = window.__programsFilters || { type: [], phase: [], campaign: [] };
+  const arr = window.__programsFilters[field] = window.__programsFilters[field] || [];
+  const i = arr.indexOf(value);
+  if(i === -1) arr.push(value); else arr.splice(i, 1);
+  renderPage();
+}
+function toggleProgramsFilterPanel(field){
+  window.__programsOpenFilter = (window.__programsOpenFilter === field) ? null : field;
+  renderPage();
 }
 
 // ---- capture chat ----
