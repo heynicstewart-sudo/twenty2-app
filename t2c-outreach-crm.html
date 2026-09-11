@@ -16422,7 +16422,7 @@ async function resolveProgramQueueItem(id, action){
 function renderProgramDiscoverySettingsCard(){
   const d = window.__programDiscovery;
   if(!d) return '';
-  if(d.error) return `<div class="settings-section card"><div class="section-title"><i class="ti ti-robot"></i> Program discovery</div><div class="muted" style="font-size:12px;">Could not load. The Settings fields may not exist on this base yet.</div></div>`;
+  if(d.error) return `<div class="settings-section card"><div class="section-title"><i class="ti ti-robot"></i> Program discovery</div><div class="muted" style="font-size:12px;">Could not load. The Settings fields may not exist in your database yet.</div></div>`;
   const st = d.settings || {};
   const running = !!window.__programDiscoveryRunning;
   const log = d.log || [];
@@ -27113,6 +27113,7 @@ function renderSettings(){
   const session = window.__session;
   const isMultiClient = !!(session && (session.controlPlane || (session.clients && session.clients.length > 1)));
   return `
+  <div class="page-head"><h1 class="page-h1">Settings</h1><div class="page-sub">Accounts, strategy defaults, scans and one-off tools for how this workspace runs.</div></div>
   ${isMultiClient ? renderAgencyPage() : ''}
   <div class="settings-section card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
     <div>
