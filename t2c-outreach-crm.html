@@ -17220,7 +17220,7 @@ async function loadChangeArchitecture(key){
     if(!res.ok) throw new Error(data.error || 'Request failed');
     raw = data || {};
   } catch(err){
-    window.__arch[key] = normalizeArchDoc({});
+    window.__arch[key] = normalizeArchDoc({}, archIsCompetitor(key) ? 'Competitor map' : undefined);
     window.__arch[key].error = err.message;
     if(archCurrentKey() === key) rerenderArch(key);
     return;
@@ -18399,7 +18399,7 @@ function renderChangeArchitectureCanvas(companyName){
         <div id="archEdgeLabels" class="arch-edge-labels"></div>
         ${els}
       </div>
-      ${!allEls.length ? '<div class="arch-empty muted">Empty canvas — press <b>Insert</b>, or turn on <b>Org map</b> to pull in the contact tree.</div>' : ''}
+      ${!allEls.length ? `<div class="arch-empty muted">Empty canvas — press <b>Insert</b>${isComp ? '' : ', or turn on <b>Org map</b> to pull in the contact tree'}.</div>` : ''}
     </div>
   </div>`;
 }
