@@ -1860,10 +1860,10 @@ function goToRunIntelligence(){
 //                 dispatch entirely, not just hidden.
 const NAV = [
   { id:'home', label:'Targets', icon:'ti-pin' },
-  { id:'companyuniverse', label:'Company Universe', icon:'ti-building-skyscraper' },
-  { id:'content', label:'Marketing', icon:'ti-news' },
   { id:'campaigns', label:'Campaigns', icon:'ti-rocket' },
-  { id:'profile', label:'Profile', icon:'ti-hierarchy-2' },
+  { id:'companyuniverse', label:'Company Universe', icon:'ti-building-skyscraper' },
+  { id:'profile', label:'Contact Profiles', icon:'ti-hierarchy-2' },
+  { id:'content', label:'Marketing', icon:'ti-news' },
   { id:'gtmmotion', label:'GTM Motion', icon:'ti-topology-star-3', hidden:true },
   { id:'icpbuilder', label:'ICP Builder', icon:'ti-crosshair', hidden:true },
   { id:'competitormap', label:'Competitor Map', icon:'ti-affiliate', hidden:true },
@@ -16763,7 +16763,7 @@ function renderProfilePage(){
     </div>` : '';
 
   const searchCard = searchOpen ? `
-  ${!selectedCompany ? `<div class="page-head"><h1 class="page-h1">Profile</h1><div class="page-sub">Map an account's transformation and where Twenty2 fits — the free-value artifact you bring to the first conversation.</div></div>` : ''}
+  ${!selectedCompany ? `<div class="page-head"><h1 class="page-h1">Contact Profiles</h1><div class="page-sub">Map an account's transformation and where Twenty2 fits — the free-value artifact you bring to the first conversation.</div></div>` : ''}
   <div class="card" style="margin-bottom:12px;">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-search"></i> Find a company or person</div>
