@@ -58,10 +58,10 @@ if(window.Chart){
   --topbar-bg:#FFF2E9;
   --ink:#532822;
   --primary:#532822;
-  --accent:#0084C5;
+  --accent:#0079B5;
   --accent-strong:#00669C;
   --accent-ink:#ffffff;
-  --accent-dim:rgba(0,132,197,0.10);
+  --accent-dim:rgba(0,121,181,0.10);
   --accent-2:#A9EA76;
   --accent-2-dim:rgba(169,234,118,0.22);
   --sand:#FFD05D;   --sand-soft:#FFF3D9;
@@ -72,7 +72,7 @@ if(window.Chart){
   --muted:#7A5A50;
   --text-dim:#7C5C52;
   --peach:#FF834C;
-  --blue:#0084C5;
+  --blue:#0079B5;
   --brown:#532822;
   --yellow:#8A6314;
   --purple:#B34850;
@@ -549,7 +549,7 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .acct-dash-grid{display:grid;grid-template-columns:1.05fr .95fr .95fr;gap:16px;align-items:stretch;}
 .adg-actions{grid-column:1;grid-row:1;}
 .adg-cal{grid-column:2;grid-row:1;}
-.adg-icps{grid-column:3;grid-row:1 / span 2;}
+.adg-icps{grid-column:3;grid-row:1;}
 .adg-revenue{grid-column:1;grid-row:2;}
 .adg-pipeline{grid-column:2;grid-row:2;}
 .adg-enrich{grid-column:1 / -1;grid-row:3;}
@@ -1021,12 +1021,11 @@ table.spreadsheet-table{border-collapse:collapse;width:100%;min-width:960px;font
 
 /* Global niceties */
 ::selection{background:var(--accent-dim);}
-:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px;}
 *::-webkit-scrollbar{width:10px;height:10px;}
 *::-webkit-scrollbar-track{background:transparent;}
-*::-webkit-scrollbar-thumb{background:rgba(24,24,27,.18);border-radius:999px;border:2px solid transparent;background-clip:content-box;}
-*::-webkit-scrollbar-thumb:hover{background:rgba(24,24,27,.32);background-clip:content-box;}
-html{scrollbar-width:thin;scrollbar-color:rgba(24,24,27,.22) transparent;}
+*::-webkit-scrollbar-thumb{background:rgba(83,40,34,.16);border-radius:999px;border:2px solid transparent;background-clip:content-box;}
+*::-webkit-scrollbar-thumb:hover{background:rgba(83,40,34,.28);background-clip:content-box;}
+html{scrollbar-width:thin;scrollbar-color:rgba(83,40,34,.2) transparent;}
 
 /* Card-like containers - one consistent treatment everywhere */
 .flow-node,.todo-item,.howto-item,.signal-card,.account-row,.magnet-row,
