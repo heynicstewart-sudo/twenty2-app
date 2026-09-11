@@ -16129,11 +16129,18 @@ function renderProgramQueueCard(q){
   const nm = esc(q.companyName || '—');
   const initial = esc((q.companyName || '?').trim()[0] || '?').toUpperCase();
   const newBadge = q.isNewCompany ? `<span class="badge" style="background:var(--tint-blue-bg);color:var(--tint-blue-fg);font-size:9px;">NEW</span>` : '';
+  // A "program" finding's box opens the same strategy report as an Active
+  // program - clicking it files the finding first (same as Accept), since a
+  // report needs a real program record to attach to. Signal/note findings
+  // have no program to strategize about, so their box stays inert.
+  const progBox = (q.destination === 'program' && q.program && q.program.name)
+    ? `<div class="uco-prog uco-prog-row" onclick="event.stopPropagation();openQueueProgramStrategy('${q.id}')"><span class="k">${esc(progQueueTypeLabel(q))}</span><span class="v">${progQueueWhat(q)}</span></div>`
+    : `<div class="uco-prog"><span class="k">${esc(progQueueTypeLabel(q))}</span><span class="v">${progQueueWhat(q)}</span></div>`;
   return `
   <div class="uco-card" onclick="${nm !== '—' ? `navigate('profile');selectProfileCompany('${nm}')` : ''}">
     <div class="uco-top">${progHeatTag(q.heatBand)}${newBadge}</div>
     <div class="uco-name"><span class="uco-ava">${initial}</span><b>${nm}</b></div>
-    <div class="uco-prog"><span class="k">${esc(progQueueTypeLabel(q))}</span><span class="v">${progQueueWhat(q)}</span></div>
+    ${progBox}
     ${q.whyItMatters ? `<div class="muted" style="font-size:11px;line-height:1.4;">${esc(q.whyItMatters)}</div>` : ''}
     <div class="uco-foot" onclick="event.stopPropagation();">
       <span>${esc(q.confidence||'')} confidence</span>
@@ -16143,6 +16150,46 @@ function renderProgramQueueCard(q){
       </span>
     </div>
   </div>`;
+}
+// Opens the strategy modal for a still-pending "program" finding. Files it
+// (same path the Accept button uses) so there's a real program record for
+// the report to attach to, then generates the report exactly like an
+// Active-programs row does.
+function openQueueProgramStrategy(qid){
+  const q = window.__programDiscovery && (window.__programDiscovery.queue || []).find(x => x.id === qid);
+  if(!q || q.destination !== 'program' || !q.program || !q.program.name) return;
+  window.__progStrategyFor = { companyName: q.companyName, programName: q.program.name };
+  renderProgramStrategyModal();
+  loadQueueProgramStrategy(q);
+}
+async function loadQueueProgramStrategy(q){
+  const companyName = q.companyName, programName = q.program.name;
+  const key = companyName + '::' + programName;
+  window.__progStrategy = window.__progStrategy || {};
+  window.__progStrategy[key] = null;
+  renderProgramStrategyModal();
+  try {
+    const acceptRes = await fetch(`/api/programs/discovery/queue/${q.id}/accept`, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ companyName })
+    });
+    const acceptData = await acceptRes.json();
+    if(!acceptRes.ok || !acceptData.success) throw new Error(acceptData.error || 'Could not file this finding');
+    if(window.__programDiscovery && Array.isArray(window.__programDiscovery.queue)){
+      window.__programDiscovery.queue = window.__programDiscovery.queue.filter(x => x.id !== q.id);
+      window.__programDiscovery.pendingCount = window.__programDiscovery.queue.length;
+    }
+    window.__programs = undefined; loadPrograms();
+    window.__icpWorklist = undefined; loadIcpWorklist();
+    renderPage();
+
+    const res = await fetch(`/api/companies/${encodeURIComponent(companyName)}/programs/${encodeURIComponent(programName)}/strategy`);
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__progStrategy[key] = data.strategy;
+  } catch(err){
+    window.__progStrategy[key] = { error: err.message };
+  }
+  renderProgramStrategyModal();
 }
 async function resolveProgramQueueItemCard(id, action, companyName){
   try {
