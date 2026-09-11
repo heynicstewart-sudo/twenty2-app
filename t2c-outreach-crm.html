@@ -325,6 +325,18 @@ label{font-size:var(--label-size);font-weight:700;color:var(--muted);display:blo
 
 /* Universe company cards — Stitch's directory-card treatment applied to the
    real "companies to work" lists (worklist + programs). */
+/* Company Universe — merged worklist+segmentation filter bar */
+.uf-bar{display:flex;flex-wrap:wrap;gap:14px;margin-top:12px;}
+.uf-group{display:flex;align-items:center;flex-wrap:wrap;gap:6px;}
+.uf-label{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text-dim);margin-right:2px;}
+.uf-chip{border:1px solid var(--border);background:var(--surface);border-radius:var(--radius-pill);padding:5px 11px;font-size:11.5px;font-family:inherit;color:var(--text);cursor:pointer;}
+.uf-chip.on{background:var(--ink);color:#fff;border-color:var(--ink);}
+.uf-preset{border:1px dashed var(--border);background:transparent;border-radius:var(--radius-pill);padding:5px 11px;font-size:11px;font-family:inherit;color:var(--text-dim);cursor:pointer;}
+.uf-preset.on{border-style:solid;border-color:var(--accent);color:var(--accent-strong);background:var(--accent-dim);}
+.uf-search{border:1px solid var(--border);border-radius:var(--radius-input);padding:7px 12px;font-size:12.5px;font-family:inherit;min-width:200px;}
+.uf-meta{display:flex;justify-content:space-between;align-items:center;font-size:11.5px;color:var(--text-dim);margin-top:14px;}
+.uf-clear{color:var(--text-dim);text-decoration:underline;}
+.expand-row{display:flex;justify-content:center;margin:16px 0 6px;}
 .uco-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;margin-bottom:6px;}
 .uco-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card-sm);padding:15px;cursor:pointer;box-shadow:var(--shadow-sm);transition:box-shadow .15s ease,transform .15s ease;display:flex;flex-direction:column;gap:10px;}
 .uco-card:hover{box-shadow:var(--shadow-md);transform:translateY(-1px);}
@@ -16196,15 +16208,7 @@ function renderCompanyUniverse(){
 
   const accounts = `
     ${renderUniverseMetricStrip()}
-    ${renderIcpWorklistStrip()}
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
-        <div class="section-title" style="margin-bottom:0;"><i class="ti ti-grid-dots"></i> ICP segmentation</div>
-        <button class="btn btn-secondary btn-sm" id="scoreIcpBtnUniverse" onclick="scoreIcpBulkAccountWide()"><i class="ti ti-sparkles"></i> Score ICP</button>
-      </div>
-      <div class="muted" style="font-size:12.5px;margin:-4px 0 14px;">Size &times; momentum — every company on file scored on three attributes, so you work the biggest, warmest accounts first. Click a company to open its profile.</div>
-      ${renderAccountSegmentationGrid()}
-    </div>`;
+    ${renderUniverseAccountsList()}`;
 
   const programs = `
     ${renderProgramsCard()}
@@ -25905,56 +25909,204 @@ function renderUniverseMetricStrip(){
   return `<div class="metric-strip" style="grid-template-columns:repeat(${cards.length},minmax(0,1fr));">${cards.join('')}</div>`;
 }
 
-// One company in the ICP worklist, rendered in Stitch's directory-card style.
-function renderUniverseCoCard(c, opts){
-  opts = opts || {};
+// One company card, used by the merged Accounts list below. Reused
+// verbatim regardless of why the company matched the current filters -
+// there's no more separate "kind" (program/trigger/plain) since worklist
+// and segmentation are now one filtered list, not three fixed groupings.
+function renderUniverseCoCard(c){
   const nm = esc(c.name);
   const initial = esc((c.name || '?').trim()[0] || '?').toUpperCase();
   const prio = c.priority ? esc(c.priority.replace(/\s*\(.*\)/, '')) : '';
-  const icpChip = (c.icp === false)
-    ? `<span class="uco-icp low">Not ICP-tagged</span>`
-    : (c.fitScore != null ? `<span class="uco-icp${c.fitScore < 70 ? ' low' : ''}">${c.fitScore} ICP</span>` : `<span class="uco-icp">ICP</span>`);
+  const icpChip = c.fitScore != null
+    ? `<span class="uco-icp${c.fitScore < 70 ? ' low' : ''}">${c.fitScore} ICP</span>`
+    : (c.icpTag ? `<span class="uco-icp">ICP</span>` : '');
   let box = '';
-  if(opts.kind === 'program' && c.programs && c.programs.length){
+  if(c.programs && c.programs.length){
     box = `<div class="uco-prog"><span class="k">Active transformation program</span><span class="v">${c.programs.map(pr => esc(pr.name) + (pr.phase ? ' · ' + esc(pr.phase) : '')).join('<br>')}</span></div>`;
-  } else if(opts.kind === 'trigger' && c.trigger){
+  } else if(c.trigger){
     box = `<div class="uco-prog"><span class="k">Buying signal</span><span class="v" style="font-weight:500;">${esc(c.trigger)}</span></div>`;
   }
-  const footLeft = c.knownContacts ? `${c.knownContacts} known contact${c.knownContacts === 1 ? '' : 's'}` : (opts.kind === 'trigger' && !c.inCampaign ? 'Not in a campaign' : 'Not in a campaign');
+  const sub = [c.industry, c.sector].filter(Boolean).join(' · ');
+  const footLeft = c.knownContacts ? `${c.knownContacts} known contact${c.knownContacts === 1 ? '' : 's'}` : (c.inCampaign ? 'In a campaign' : 'Not in a campaign');
   return `
   <div class="uco-card" onclick="navigate('profile');selectProfileCompany('${nm}')">
     <div class="uco-top">${icpChip}${prio ? `<span class="tpill" style="background:var(--surface-2);color:var(--muted);">${prio}</span>` : ''}</div>
     <div class="uco-name"><span class="uco-ava">${initial}</span><b>${nm}</b></div>
+    ${sub ? `<div class="muted" style="font-size:11px;margin:-4px 0 0 38px;">${esc(sub)}</div>` : ''}
     ${box}
     <div class="uco-foot"><span>${footLeft}</span><span style="color:var(--accent);font-weight:700;">Open <i class="ti ti-arrow-right" style="font-size:12px;vertical-align:-1px;"></i></span></div>
   </div>`;
 }
 
-function renderIcpWorklistStrip(){
+/* ===== Merged ICP worklist + segmentation (Company Universe, Accounts tab) =====
+   One alphabetical, filterable list of every company instead of three fixed
+   worklist groupings stacked above a separate, unfiltered Size×Momentum
+   grid. Base list is window.__accountSegmentation.companies (every company
+   on file); window.__icpWorklist's trigger/program/inCampaign detail is
+   merged in by name where present. Filters are multi-select (OR within one
+   filter, AND across filters); sort is always alphabetical, independent of
+   which filters are active. */
+
+function universeMergedCompanies(){
+  const seg = window.__accountSegmentation;
+  if(!seg || seg.error || !Array.isArray(seg.companies)) return null;
   const w = window.__icpWorklist;
-  if(w === undefined || w === null || w.error || !w.icpConfigured) return '';
-  const programs = (w.withActiveProgram || []);
-  if(!w.icpCompanyCount && !programs.length) return '';
-  const triggers = w.triggers || [];
-  const untouched = w.untouched || [];
-  const progTargets = programs.filter(x => !x.inCampaign);
+  const byName = {};
+  if(w && !w.error && w.icpConfigured){
+    const merge = (name, patch) => {
+      const k = (name || '').toLowerCase();
+      if(!k) return;
+      byName[k] = Object.assign({}, byName[k], patch);
+    };
+    (w.withActiveProgram || []).forEach(x => merge(x.name, { programs: x.programs, inCampaign: x.inCampaign, knownContacts: x.knownContacts }));
+    (w.triggers || []).forEach(x => merge(x.name, { trigger: x.trigger, inCampaign: x.inCampaign }));
+    (w.untouched || []).forEach(x => merge(x.name, { trigger: x.trigger, knownContacts: x.knownContacts, inCampaign: false }));
+  }
+  return seg.companies.map(c => {
+    const wl = byName[(c.companyName || '').toLowerCase()] || {};
+    return {
+      id: c.companyId, name: c.companyName,
+      sizeBand: c.sizeBand, momentum: c.momentum, industry: c.industry, sector: c.sector,
+      relationshipStatus: c.relationshipStatus, tier: c.tier, fitScore: c.fitScore,
+      icpTag: c.icpTag, priority: c.accountPriority, scored: c.scored,
+      trigger: wl.trigger || null, programs: wl.programs || null,
+      inCampaign: !!wl.inCampaign, knownContacts: wl.knownContacts || 0
+    };
+  }).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+}
+
+function universeDistinct(all, field){
+  return [...new Set(all.map(c => c[field]).filter(Boolean))].sort();
+}
+
+function universeFilteredCompanies(){
+  const all = universeMergedCompanies() || [];
+  const f = window.__universeFilters || {};
+  const q = (f.search || '').trim().toLowerCase();
+  return all.filter(c => {
+    if(q && !(c.name || '').toLowerCase().includes(q)) return false;
+    if((f.size || []).length && !f.size.includes(c.sizeBand)) return false;
+    if((f.momentum || []).length && !f.momentum.includes(c.momentum)) return false;
+    if((f.industry || []).length && !f.industry.includes(c.industry)) return false;
+    if((f.sector || []).length && !f.sector.includes(c.sector)) return false;
+    if((f.priority || []).length && !f.priority.includes(c.priority)) return false;
+    if((f.relationship || []).length && !f.relationship.includes(c.relationshipStatus)) return false;
+    if((f.programStatus || []).length === 1){
+      const has = !!(c.programs && c.programs.length);
+      if(has !== (f.programStatus[0] === 'Has program')) return false;
+    }
+    if((f.campaignStatus || []).length === 1){
+      if(c.inCampaign !== (f.campaignStatus[0] === 'In campaign')) return false;
+    }
+    if(f.preset === 'trigger' && !c.trigger) return false;
+    if(f.preset === 'program-no-campaign' && !(c.programs && c.programs.length && !c.inCampaign)) return false;
+    if(f.preset === 'unscored' && c.scored) return false;
+    if(f.preset === 'no-campaign' && c.inCampaign) return false;
+    return true;
+  });
+}
+
+function universeResultsHtml(filtered, all){
+  const shown = filtered.slice(0, window.__universeBatch);
+  const grid = shown.length ? shown.map(c => renderUniverseCoCard(c)).join('') : '<div class="empty-state">No companies match these filters.</div>';
+  const remaining = filtered.length - shown.length;
+  const expand = remaining > 0
+    ? `<button class="btn btn-secondary btn-sm" onclick="expandUniverseBatch()"><i class="ti ti-chevron-down"></i> Show next ${Math.min(20, remaining)} <span class="muted">(${shown.length} of ${filtered.length})</span></button>`
+    : '';
+  return { grid, expand, meta: `${filtered.length} of ${all.length} companies match · sorted A–Z` };
+}
+
+function refreshUniverseResults(){
+  const all = universeMergedCompanies() || [];
+  const filtered = universeFilteredCompanies();
+  const { grid, expand, meta } = universeResultsHtml(filtered, all);
+  const gridEl = document.getElementById('universeResultsGrid');
+  const metaEl = document.getElementById('universeResultsMeta');
+  const expandEl = document.getElementById('universeExpandRow');
+  if(gridEl) gridEl.innerHTML = grid;
+  if(metaEl) metaEl.textContent = meta;
+  if(expandEl){ expandEl.innerHTML = expand; expandEl.style.display = expand ? '' : 'none'; }
+}
+
+function toggleUniverseFilter(group, value){
+  window.__universeFilters = window.__universeFilters || {};
+  const arr = window.__universeFilters[group] = window.__universeFilters[group] || [];
+  const i = arr.indexOf(value);
+  if(i === -1) arr.push(value); else arr.splice(i, 1);
+  window.__universeBatch = 20;
+  renderPage();
+}
+function setUniversePreset(preset){
+  window.__universeFilters = window.__universeFilters || {};
+  window.__universeFilters.preset = (window.__universeFilters.preset === preset) ? null : preset;
+  window.__universeBatch = 20;
+  renderPage();
+}
+function clearUniverseFilters(){
+  window.__universeFilters = { size:[], momentum:[], industry:[], sector:[], priority:[], relationship:[], programStatus:[], campaignStatus:[], preset:null, search:'' };
+  window.__universeBatch = 20;
+  renderPage();
+}
+let __universeSearchDebounce = null;
+function setUniverseSearchLive(v){
+  window.__universeFilters = window.__universeFilters || {};
+  window.__universeFilters.search = v;
+  window.__universeBatch = 20;
+  clearTimeout(__universeSearchDebounce);
+  __universeSearchDebounce = setTimeout(refreshUniverseResults, 180);
+}
+function expandUniverseBatch(){
+  window.__universeBatch = (window.__universeBatch || 20) + 20;
+  refreshUniverseResults();
+}
+
+function renderUniverseAccountsList(){
+  if(window.__accountSegmentation === undefined) return '<div class="card"><div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading…</div></div>';
+  if(window.__accountSegmentation && window.__accountSegmentation.error){
+    return `<div class="card"><div class="empty-state">Couldn't load companies. <button class="btn btn-ghost btn-sm" onclick="window.__accountSegmentation=undefined;loadAccountSegmentation();"><i class="ti ti-refresh"></i> Try again</button></div></div>`;
+  }
+  window.__universeFilters = window.__universeFilters || { size:[], momentum:[], industry:[], sector:[], priority:[], relationship:[], programStatus:[], campaignStatus:[], preset:null, search:'' };
+  window.__universeBatch = window.__universeBatch || 20;
+  const f = window.__universeFilters;
+  const all = universeMergedCompanies() || [];
+  const filtered = universeFilteredCompanies();
+  const { grid, expand, meta } = universeResultsHtml(filtered, all);
+
+  const chipGroup = (label, field, options) => options.length ? `
+    <div class="uf-group"><span class="uf-label">${esc(label)}</span>
+      ${options.map(o => `<button class="uf-chip ${(f[field]||[]).includes(o) ? 'on' : ''}" onclick="toggleUniverseFilter('${field}','${esc(o).replace(/'/g,"\\'")}')">${esc(o)}</button>`).join('')}
+    </div>` : '';
+  const presetChip = (label, key) => `<button class="uf-preset ${f.preset===key?'on':''}" onclick="setUniversePreset('${key}')">${label}</button>`;
+  const activeCount = ['size','momentum','industry','sector','priority','relationship','programStatus','campaignStatus'].reduce((n,k) => n + (f[k]||[]).length, 0) + (f.preset ? 1 : 0) + (f.search ? 1 : 0);
+
   return `
-  <div class="card" style="margin-bottom:22px;">
-    <div class="section-title"><i class="ti ti-crosshair"></i> ICP worklist</div>
-    <div class="muted" style="font-size:12.5px;margin:-6px 0 16px;">${w.inCampaignCount} of ${w.icpCompanyCount} ICP accounts are in a campaign. ${w.untouchedTotal} are not. Open one to profile it, then pin it to Targets.</div>
-    ${progTargets.length ? `
-      <div class="worklist-group" style="color:var(--danger);"><i class="ti ti-progress-bolt"></i> Active program · not in a campaign — start here</div>
-      <div class="uco-grid" style="margin-bottom:18px;">${progTargets.slice(0,6).map(x => renderUniverseCoCard(x, {kind:'program'})).join('')}</div>
-    ` : ''}
-    ${triggers.length ? `
-      <div class="worklist-group" style="color:var(--warning);"><i class="ti ti-bolt"></i> Buying trigger detected</div>
-      <div class="uco-grid" style="margin-bottom:18px;">${triggers.slice(0,6).map(t => renderUniverseCoCard(t, {kind:'trigger'})).join('')}</div>
-    ` : ''}
-    ${untouched.length ? `
-      <div class="worklist-group" style="color:var(--muted);">ICP accounts with no one in a campaign${w.untouchedTotal > untouched.length ? ` — top ${untouched.length} of ${w.untouchedTotal}` : ''}</div>
-      <div class="uco-grid">${untouched.slice(0,12).map(c => renderUniverseCoCard(c, {kind:'plain'})).join('')}</div>
-    ` : '<div class="muted" style="font-size:12.5px;">Every ICP account has someone in a campaign. Nice.</div>'}
-  </div>`;
+  <div class="card" style="margin-bottom:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-filter"></i> Accounts</div>
+      <button class="btn btn-secondary btn-sm" id="scoreIcpBtnUniverse" onclick="scoreIcpBulkAccountWide()"><i class="ti ti-sparkles"></i> Score ICP</button>
+    </div>
+    <div class="muted" style="font-size:12.5px;margin:-4px 0 0;">Every company on file, filterable by size, industry, relationship, program and campaign status — filter down instead of hunting through fixed sections.</div>
+    <div class="uf-bar">
+      <div class="uf-group"><input type="text" class="uf-search" id="universeSearchInput" placeholder="Search company name…" value="${esc(f.search||'')}" oninput="setUniverseSearchLive(this.value)"></div>
+      ${chipGroup('Size', 'size', universeDistinct(all,'sizeBand'))}
+      ${chipGroup('Momentum', 'momentum', universeDistinct(all,'momentum'))}
+      ${chipGroup('ICP priority', 'priority', universeDistinct(all,'priority'))}
+      ${chipGroup('Industry', 'industry', universeDistinct(all,'industry'))}
+      ${chipGroup('Sector', 'sector', universeDistinct(all,'sector'))}
+      ${chipGroup('Relationship', 'relationship', universeDistinct(all,'relationshipStatus'))}
+      ${chipGroup('Program', 'programStatus', ['Has program','No program'])}
+      ${chipGroup('Campaign', 'campaignStatus', ['In campaign','Not in campaign'])}
+      <div class="uf-group"><span class="uf-label">Quick filters</span>
+        ${presetChip('⚡ Buying trigger detected','trigger')}
+        ${presetChip('Active program · no campaign','program-no-campaign')}
+        ${presetChip('Unscored','unscored')}
+        ${presetChip('Not in a campaign','no-campaign')}
+      </div>
+    </div>
+    <div class="uf-meta"><span id="universeResultsMeta">${meta}</span>${activeCount ? `<a href="#" class="uf-clear" onclick="clearUniverseFilters();return false;">Clear all filters</a>` : ''}</div>
+  </div>
+  <div class="uco-grid" id="universeResultsGrid">${grid}</div>
+  <div class="expand-row" id="universeExpandRow" style="${expand ? '' : 'display:none;'}">${expand}</div>`;
 }
 
 function renderContactSignalsStrip(){

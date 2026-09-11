@@ -11738,7 +11738,18 @@ async function buildSegmentation(campaignId) {
     sizeBand: c.fields['ICP Size Band'] || null,
     momentum: c.fields['ICP Momentum'] || null,
     workloadType: c.fields['ICP Workload Type'] || null,
-    scored: !!c.fields['ICP Scored At']
+    scored: !!c.fields['ICP Scored At'],
+    // Added for the Company Universe merged worklist+segmentation filter
+    // bar - cheap single-field reads already on this same record, not a
+    // separate fetch. industry/sector/relationship/tier previously only
+    // existed on the single-company profile endpoint.
+    industry: c.fields['Industry'] || null,
+    sector: c.fields['Sector'] || null,
+    relationshipStatus: c.fields['Twenty2 Relationship Status'] || null,
+    tier: c.fields['Tier'] || null,
+    icpTag: c.fields['ICP Tag'] || null,
+    fitScore: Number.isFinite(Number(c.fields['ICP Fit Score'])) ? Number(c.fields['ICP Fit Score']) : null,
+    accountPriority: c.fields['Account Priority'] || null
   }));
   return { companies, totalCompanies: companies.length, scoredCount: companies.filter(c => c.scored).length };
 }
