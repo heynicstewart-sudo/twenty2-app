@@ -2834,7 +2834,6 @@ function afterRender(page){
       if(window.__repliesQueue === undefined && !window.__repliesLoading) loadRepliesQueue();
     }
     if(tab === 'roadmap') initRoadmapDrag();
-    if(tab === 'pipeline' && campaign) loadAccountPipeline(campaign);
     if(tab === 'intelligence') ensureContextDataLoaded();
     if(tab === 'analytics' && campaign) initCampaignAnalyticsCharts(campaign);
     if(tab === 'sales' && campaign){
@@ -2842,10 +2841,6 @@ function afterRender(page){
       if(window.__salesConversionIntel === undefined) loadConversionIntelligence(campaign);
       if(window.__salesData && window.__salesConversionIntel) initSalesConversionCharts(window.__salesConversionIntel);
       if(window.__campaignOffer === undefined) loadCampaignOffer(campaign);
-    }
-    if(tab === 'content' && campaign){
-      if(window.__campaignContentSignals === undefined) loadCampaignContentSignals(campaign);
-      if(window.__campaignContentDrafts === undefined) loadCampaignContentDrafts(campaign);
     }
   }
   if(page === 'intelligence' && (window.__intelSubTab||'intelligence') === 'context') ensureContextDataLoaded();
@@ -2862,6 +2857,13 @@ function afterRender(page){
   // Context capture lives on Profile now (was Company Universe > Review) -
   // attached to a specific account instead of a global dumping ground.
   if(page === 'profile') ensureContextDataLoaded();
+  // Dashboard's Coverage card needs the same cross-campaign contact-status
+  // rollup the canvas's Org map layer uses - load it regardless of whether
+  // Org map happens to be toggled on.
+  if(page === 'profile' && window.__profileSelectedCompany && (window.__profileView||'dashboard') === 'dashboard'){
+    const co = window.__profileSelectedCompany;
+    if(!(window.__profileBoardData && window.__profileBoardData[co] !== undefined) && !(window.__profileBoardLoading && window.__profileBoardLoading[co])) loadProfileBoard(co);
+  }
   if(page === 'gtmmotion' && window.__gtmMotion === undefined && !window.__gtmMotionLoading) loadGtmMotion();
   if(page === 'gtmmotion' && window.__icpProfile === undefined && !window.__icpProfileLoading) loadIcpProfile();
   if(page === 'gtmmotion' && window.__gtmMotionTemplates === undefined && !window.__gtmMotionTemplatesLoading) loadGtmMotionTemplates();
@@ -6466,7 +6468,7 @@ function renderWrongPersonaActionCard(a){
       </div>
     </div>
     <div class="todo-item-actions">
-      <button class="btn btn-primary btn-sm" onclick="navigate('campaigns');openCampaignDetail('${a.campaignId}','pipeline')"><i class="ti ti-sitemap"></i> Open in Pipeline</button>
+      <button class="btn btn-primary btn-sm" onclick="navigate('profile');selectProfileCompany('${esc(a.companyName).replace(/'/g,"\\'")}')"><i class="ti ti-user-check"></i> View coverage</button>
       <button class="btn btn-ghost btn-sm" onclick="handleMarkActionDone('${c.id}')"><i class="ti ti-check"></i> Mark as done</button>
     </div>
   </div>`;
@@ -12410,7 +12412,7 @@ function renderCompanyDrawerContent(data){
 
   ${(data.campaignsTouching||[]).length ? `<div class="drawer-section">
     <div class="muted" style="font-size:11px;font-weight:700;margin-bottom:6px;">CAMPAIGNS TOUCHING THIS ACCOUNT</div>
-    ${data.campaignsTouching.map(camp=>`<div class="tp-item" style="cursor:pointer;" onclick="closeDrawer();navigate('campaigns');openCampaignDetail('${camp.id}','pipeline')"><strong>${esc(camp.name)}</strong></div>`).join('')}
+    ${data.campaignsTouching.map(camp=>`<div class="tp-item" style="cursor:pointer;" onclick="closeDrawer();navigate('campaigns');openCampaignDetail('${camp.id}','roadmap')"><strong>${esc(camp.name)}</strong></div>`).join('')}
   </div>` : ''}
 
   ${renderAccountContactsSection(data.accountContacts, c.name)}
@@ -14292,7 +14294,7 @@ function editCampaign(campaignId){
 
 /* ---- Detail view ---- */
 
-const CAMPAIGN_DETAIL_TABS = [['actions','Actions'],['grid','Contacts'],['roadmap','Sequence'],['strategy','Setup'],['pipeline','Coverage'],['analytics','Results'],['sales','Deals'],['content','Content'],['intelligence','Notes']];
+const CAMPAIGN_DETAIL_TABS = [['actions','Actions'],['grid','Contacts'],['roadmap','Sequence'],['strategy','Setup'],['analytics','Results'],['sales','Deals'],['intelligence','Campaign Notes']];
 
 // tab param lets callers (e.g. the Grid page's back button) land on a
 // specific tab instead of always resetting to the first one.
@@ -14401,11 +14403,9 @@ function renderCampaignDetail(){
   ${tab==='intelligence' ? renderCampaignIntelligenceTab(campaign) : ''}
   ${tab==='grid' ? renderCampaignGridTab(campaign) : ''}
   ${tab==='roadmap' ? renderCampaignRoadmapTab(campaign) : ''}
-  ${tab==='pipeline' ? renderCampaignPipelineTab(campaign) : ''}
   ${tab==='strategy' ? renderCampaignStrategyTab(campaign) : ''}
   ${tab==='analytics' ? renderCampaignAnalyticsTab(campaign) : ''}
   ${tab==='sales' ? renderCampaignSalesTab(campaign) : ''}
-  ${tab==='content' ? renderCampaignContentTab(campaign) : ''}
   `;
 }
 
@@ -14658,9 +14658,7 @@ function unlinkGridFromCampaign(campaignId, gridId){
 function renderCampaignRoadmapTab(campaign){
   window.__roadmapCampaignId = campaign.id;
   if(!window.__campaignSequenceStages || !window.__campaignSequenceStages[campaign.id]) loadCampaignSequenceStages(campaign);
-  loadCampaignFunnel(campaign);
   return `
-  ${renderCampaignFunnelStrip(campaign)}
   <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:10px;">
     <button class="btn btn-ghost btn-sm" onclick="repairCampaignContacts('${campaign.id}')" id="repairCcBtn" title="Remove junction rows that don't link a contact, and de-duplicate contacts that ended up with more than one row"><i class="ti ti-tool"></i> Repair sync</button>
     <button class="btn btn-secondary btn-sm" onclick="openAddCampaignContactsModal('${campaign.id}')"><i class="ti ti-user-plus"></i> Add contacts</button>
@@ -16866,6 +16864,56 @@ function renderProfileAccountDashboard(name){
     ${renderDashRevenue(profile)}
     ${renderDashPipeline(profile)}
     ${renderDashEnrichment(name, profile)}
+  </div>
+  ${renderDashCoverage(name)}
+  ${renderDashDeals(profile)}`;
+}
+
+// Coverage - moved here from the old per-campaign "Coverage" tab (redundant
+// as a standalone campaign-wide list; this data is fundamentally per-company).
+// Rolled up ACROSS every campaign touching this account via the same
+// profile-board data the account canvas's Org map layer already uses
+// (contactBoardStatus server-side) - no single campaign's Decision Maker
+// Criteria to judge personas against for a whole-account view, so this
+// drops the "wrong persona" bucket the old per-campaign tab had.
+function renderDashCoverage(name){
+  const board = window.__profileBoardData && window.__profileBoardData[name];
+  if(board === undefined) return `<div class="card" style="margin-top:16px;"><div class="section-title" style="margin-bottom:6px;"><i class="ti ti-user-check"></i> Coverage</div><div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading…</div></div>`;
+  if(board.error) return `<div class="card" style="margin-top:16px;"><div class="section-title" style="margin-bottom:6px;"><i class="ti ti-user-check"></i> Coverage</div><div class="muted" style="font-size:12.5px;">Could not load: ${esc(board.error)}</div></div>`;
+  const contacts = board.contacts || [];
+  const order = ['Booked','Engaged','Right person reached','Not yet mapped'];
+  const colors = { 'Booked':'var(--success)', 'Engaged':'var(--accent)', 'Right person reached':'#3b82f6', 'Not yet mapped':'var(--muted)' };
+  const counts = {}; contacts.forEach(c => { counts[c.status] = (counts[c.status]||0) + 1; });
+  return `
+  <div class="card" style="margin-top:16px;">
+    <div class="section-title" style="margin-bottom:10px;"><i class="ti ti-user-check"></i> Coverage</div>
+    ${contacts.length ? `<div style="display:flex;gap:10px;flex-wrap:wrap;">
+      ${order.map(s => `<div style="flex:1;min-width:130px;border:1px solid var(--border-light);border-radius:var(--radius-input);padding:10px 12px;">
+        <div style="font-weight:700;font-size:18px;color:${colors[s]};">${counts[s]||0}</div>
+        <div class="muted" style="font-size:11px;">${esc(s)}</div>
+      </div>`).join('')}
+    </div>` : '<div class="empty-state">No contacts mapped for this account yet.</div>'}
+  </div>`;
+}
+
+// Deals - moved here from the old per-campaign "Deals" tab's read-only deal
+// list (the tab itself keeps its unique write actions: logging a deal, the
+// offer editor, conversion intelligence, transcript analysis - none of those
+// have another home). Same data /api/companies/profile already returns for
+// this dashboard, just not shown until now.
+function renderDashDeals(profile){
+  const deals = (profile && profile.deals) || [];
+  return `
+  <div class="card" style="margin-top:16px;">
+    <div class="section-title" style="margin-bottom:10px;"><i class="ti ti-briefcase"></i> Deals</div>
+    ${deals.length ? deals.map(d => `
+      <div style="padding:8px 0;border-bottom:1px solid var(--border-light);">
+        <div style="display:flex;justify-content:space-between;gap:8px;">
+          <strong style="font-size:12.5px;">${esc(d.outcome||'Pending')}</strong>
+          <span class="muted" style="font-size:11px;">${d.dealValue ? '$'+Number(d.dealValue).toLocaleString() : ''}${d.date ? ' · '+fmtDate(d.date) : ''}</span>
+        </div>
+        ${d.notes ? `<div class="muted" style="font-size:11.5px;margin-top:2px;">${esc(d.notes.slice(0,160))}${d.notes.length>160?'…':''}</div>` : ''}
+      </div>`).join('') : '<div class="empty-state">No deals logged for this account yet.</div>'}
   </div>`;
 }
 
@@ -19496,7 +19544,6 @@ function renderCampaignSalesTab(campaign){
   return `
     ${renderCampaignOfferSection(campaign)}
     ${renderSalesPeriodSelector(period)}
-    ${renderPipelineFunnel(data)}
     ${renderSalesScorecards(data, period)}
     ${renderConversionIntelligence(window.__salesConversionIntel)}
     ${renderSalesLog(campaign, data, period)}
