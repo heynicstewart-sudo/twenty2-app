@@ -3282,7 +3282,7 @@ function renderHome(){
 
   const name = activeTargetName(rows);
   window.__targetOpen = name;
-  return `${renderContactSignalsStrip()}${renderAccountDashboard(name, rows)}`;
+  return renderAccountDashboard(name, rows);
 }
 
 function activeTargetName(rows){
@@ -3550,9 +3550,17 @@ function renderDashTopIcps(profile){
   if(!profile) return dashCardLoading('adg-icps', 'Top ICPs to nurture');
   const all = profile.accountContacts || [];
   const contacts = all.slice(0, 8);
+  const signals = window.__homeContactSignals;
+  const signalCount = Array.isArray(signals) ? signals.length : 0;
   return `
   <div class="card adg-icps">
-    <div class="section-title" style="margin-bottom:6px;">Top ICPs to nurture</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+      <div class="section-title" style="margin-bottom:0;">Top ICPs to nurture</div>
+      <button class="btn btn-ghost btn-sm" style="position:relative;" title="Contact signals - job changes at your pinned targets" onclick="openContactSignalsModal()">
+        <i class="ti ti-bell${signalCount ? '-ringing' : ''}"></i>
+        ${signalCount ? `<span class="count-pill has" style="position:absolute;top:-4px;right:-4px;font-size:9px;padding:1px 5px;">${signalCount}</span>` : ''}
+      </button>
+    </div>
     <div style="display:flex;flex-direction:column;gap:8px;">
       ${contacts.length ? contacts.map(c => `
         <div class="tgt-key" tabindex="0" role="button" onclick="openContactDrawer('${esc(c.name)}', null)" onkeydown="onRowKeydown(event)">
@@ -21506,6 +21514,7 @@ async function loadHomeContactSignals(){
     window.__homeContactSignals = { error: err.message };
   }
   if(state.currentPage === 'home') renderPage();
+  if(window.__contactSignalsModalOpen) renderContactSignalsModal();
 }
 
 async function loadCampaignContentSignals(campaign){
@@ -26779,24 +26788,34 @@ function renderUniverseAccountsList(){
   <div class="expand-row" id="universeExpandRow" style="${expand ? '' : 'display:none;'}">${expand}</div>`;
 }
 
-function renderContactSignalsStrip(){
+// Contact signals moved off the Targets dashboard's top strip (permanent
+// space for something that's usually empty) into a bell button on "Top ICPs
+// to nurture" - badged only when there's an actual signal, opening this
+// modal on click instead.
+function openContactSignalsModal(){
+  window.__contactSignalsModalOpen = true;
+  renderContactSignalsModal();
+}
+function closeContactSignalsModal(){
+  window.__contactSignalsModalOpen = false;
+  closeModal();
+}
+function renderContactSignalsModal(){
   const signals = window.__homeContactSignals;
   const count = Array.isArray(signals) ? signals.length : 0;
   const scanning = !!window.__contactSignalsScanning;
-  return `
-  <div class="card" style="margin-bottom:22px;">
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
-      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-alert-triangle"></i> Contact signals ${count ? `<span class="count-pill has" style="margin-left:6px;">${count}</span>` : ''}</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        ${count ? `<button class="btn btn-ghost btn-sm" onclick="dismissAllContactSignals()" ${scanning ? 'disabled' : ''}><i class="ti ti-checks"></i> Mark all done</button>` : ''}
-        <button class="btn btn-secondary btn-sm" onclick="scanContactSignals()" ${scanning ? 'disabled' : ''}>
-          <i class="ti ${scanning ? 'ti-loader-2' : 'ti-radar'}"></i> ${scanning ? 'Scanning...' : 'Scan for signals'}
-        </button>
-      </div>
-    </div>
-    <div class="muted" style="font-size:11.5px;margin:6px 0 10px;">Contacts at your pinned target companies who've changed roles recently - a fresh job change is one of the strongest windows to reach out. Automatic scanning is off; press <strong>Scan for signals</strong> to check now.${window.__contactSignalsLastScan ? ` Last scan ${esc(window.__contactSignalsLastScan)}.` : ''}</div>
+  openModal('Contact signals', `
+    <div class="muted" style="font-size:12px;margin-bottom:12px;">Contacts at your pinned target companies who've changed roles recently - a fresh job change is one of the strongest windows to reach out. Automatic scanning is off; press <strong>Scan for signals</strong> to check now.${window.__contactSignalsLastScan ? ` Last scan ${esc(window.__contactSignalsLastScan)}.` : ''}</div>
     ${renderContactSignalCards(signals)}
-  </div>`;
+  `, `
+    ${count ? `<button class="btn btn-ghost btn-sm" onclick="dismissAllContactSignals()" ${scanning ? 'disabled' : ''}><i class="ti ti-checks"></i> Mark all done</button>` : ''}
+    <button class="btn btn-secondary btn-sm" onclick="scanContactSignals()" ${scanning ? 'disabled' : ''}>
+      <i class="ti ${scanning ? 'ti-loader-2' : 'ti-radar'}"></i> ${scanning ? 'Scanning...' : 'Scan for signals'}
+    </button>
+    <button class="btn btn-primary btn-sm" onclick="closeContactSignalsModal()">Done</button>
+  `);
+  const box = document.querySelector('#modalOverlay .modal');
+  if(box) box.style.maxWidth = '560px';
 }
 
 // Manual job-change signal scan - runs the Trigify + Serper detectors that
@@ -26807,6 +26826,7 @@ async function scanContactSignals(){
   if(window.__contactSignalsScanning) return;
   window.__contactSignalsScanning = true;
   renderPage();
+  if(window.__contactSignalsModalOpen) renderContactSignalsModal();
   try {
     const res = await fetch('/api/contacts/scan-job-changes', { method:'POST' });
     const data = await res.json();
@@ -26824,6 +26844,7 @@ async function scanContactSignals(){
   } finally {
     window.__contactSignalsScanning = false;
     renderPage();
+    if(window.__contactSignalsModalOpen) renderContactSignalsModal();
   }
 }
 
@@ -26858,6 +26879,7 @@ async function dismissContactSignals(contactIds){
     // optimistic: drop them from the strip right away
     window.__homeContactSignals = list.filter(s => !contactIds.includes(s.contactId));
     renderPage();
+    if(window.__contactSignalsModalOpen) renderContactSignalsModal();
   }
   try {
     const res = await fetch('/api/contacts/job-change-signals/dismiss', {
