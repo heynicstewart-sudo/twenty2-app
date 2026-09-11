@@ -11,7 +11,7 @@
 </script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Azeret+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
@@ -19,18 +19,18 @@
 <script>
 /* Shared Chart.js theming - applied to every chart in the app */
 if(window.Chart){
-  window.T2_CHART_COLORS = ['#181818','#C4DCC9','#DFCDBD','#8A8A82','#A9C7B0','#C9C9C0','#5C5C58'];
-  Chart.defaults.font.family = "'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif";
+  window.T2_CHART_COLORS = ['#0084C5','#44A574','#FFD05D','#FF834C','#B34850','#88BFFF','#532822'];
+  Chart.defaults.font.family = "'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif";
   Chart.defaults.font.size = 11;
-  Chart.defaults.color = '#66706A';
-  Chart.defaults.borderColor = 'rgba(31,36,33,0.06)';
+  Chart.defaults.color = '#7A5A50';
+  Chart.defaults.borderColor = 'rgba(83,40,34,0.08)';
   Chart.defaults.plugins.legend.labels.boxWidth = 8;
   Chart.defaults.plugins.legend.labels.usePointStyle = true;
   Chart.defaults.plugins.legend.labels.pointStyle = 'circle';
   Chart.defaults.plugins.legend.labels.padding = 14;
   Chart.defaults.plugins.tooltip.padding = 10;
   Chart.defaults.plugins.tooltip.cornerRadius = 10;
-  Chart.defaults.plugins.tooltip.backgroundColor = 'rgba(31,36,33,0.94)';
+  Chart.defaults.plugins.tooltip.backgroundColor = 'rgba(83,40,34,0.94)';
   Chart.defaults.elements.bar.borderRadius = 6;
   Chart.defaults.elements.line.tension = 0.35;
   Chart.defaults.elements.line.borderWidth = 2;
@@ -40,69 +40,69 @@ if(window.Chart){
 </script>
 <style>
 :root{
-  /* Minimal palette — near-monochrome + one restrained slate accent.
-     Branding lands later by re-pointing --accent and the tint pairs. */
-  --bg:#F1F1EF;
+  /* Brand palette: cream ground, dark maroon ink, blue as the operating
+     accent, gold/orange/pink/green as semantic accents used sparingly. */
+  --bg:#FFF2E9;
   --surface:#ffffff;
-  --surface-2:#EAEAE6;
+  --surface-2:#F7E6D9;
   --card-bg:#ffffff;
-  --border:#E1E1DC;
-  --border-light:#EAEAE5;
-  --sidebar-bg:#F1F1EF;
-  --sidebar-text:#3D3D39;
-  --sidebar-muted:#6A6A63;
-  --sidebar-hover-bg:#E8E8E3;
+  --border:#EDDACB;
+  --border-light:#F3E4D8;
+  --sidebar-bg:#FFF2E9;
+  --sidebar-text:#6B5049;
+  --sidebar-muted:#7A5A50;
+  --sidebar-hover-bg:#F7E6D9;
   --sidebar-active-bg:#ffffff;
-  --sidebar-active-text:#181818;
+  --sidebar-active-text:#532822;
   --sidebar-active-border:transparent;
-  --topbar-bg:#F1F1EF;
-  --ink:#181818;
-  --primary:#181818;
-  --accent:#181818;
-  --accent-strong:#000000;
+  --topbar-bg:#FFF2E9;
+  --ink:#532822;
+  --primary:#532822;
+  --accent:#0084C5;
+  --accent-strong:#00669C;
   --accent-ink:#ffffff;
-  --accent-dim:rgba(24,24,24,0.07);
-  --accent-2:#C4DCC9;
-  --accent-2-dim:rgba(196,220,201,0.30);
-  --sand:#DFCDBD;   --sand-soft:#EFE7DE;
-  --mint:#C4DCC9;   --mint-soft:#E1EEE4;
-  --success:#3A6B4C;
-  --warning:#7A5F3E;
-  --danger:#8A473A;
-  --muted:#5A5A55;
-  --text-dim:#6A6A62;
-  --peach:#7A5F3E;
-  --blue:#4A4C5C;
-  --brown:#6B5A45;
-  --yellow:#7A5F3E;
-  --purple:#54505F;
-  --text:#181818;
-  /* Semantic tints on the sand/mint brand: mint = positive, sand = attention,
-     grey = neutral, rose = blocked. bg = pale fill, fg = readable label. */
-  --lime:#C4DCC9;   --lime-soft:#E1EEE4;   --lime-ink:#2F5D42;
-  --sky:#DEDEE4;    --sky-soft:#EAEAEE;    --sky-ink:#44465A;
-  --tint-blue-bg:#EAEAEE;   --tint-blue-fg:#44465A;
-  --tint-green-bg:#E1EEE4;  --tint-green-fg:#2F5D42;
-  --tint-amber-bg:#EFE7DE;  --tint-amber-fg:#7A5F3E;
-  --tint-gold-bg:#EEE8DE;   --tint-gold-fg:#6E5C40;
-  --tint-purple-bg:#E9E8EC; --tint-purple-fg:#54505F;
-  --tint-orange-bg:#EFE4DB; --tint-orange-fg:#835540;
-  --tint-red-bg:#EFDFDB;    --tint-red-fg:#8A473A;
-  --tint-grey-bg:#E9E9E5;   --tint-grey-fg:#57574E;
-  --font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
-  --font-display:'Azeret Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --accent-dim:rgba(0,132,197,0.10);
+  --accent-2:#A9EA76;
+  --accent-2-dim:rgba(169,234,118,0.22);
+  --sand:#FFD05D;   --sand-soft:#FFF3D9;
+  --mint:#A9EA76;   --mint-soft:#E4F5D6;
+  --success:#2F7A50;
+  --warning:#8A6314;
+  --danger:#B23D1B;
+  --muted:#7A5A50;
+  --text-dim:#7C5C52;
+  --peach:#FF834C;
+  --blue:#0084C5;
+  --brown:#532822;
+  --yellow:#8A6314;
+  --purple:#B34850;
+  --text:#3A1E19;
+  /* Semantic tints on the brand palette: green = positive, blue = info,
+     gold = attention, red-orange = blocked. bg = pale fill, fg = label. */
+  --lime:#A9EA76;   --lime-soft:#E4F5D6;   --lime-ink:#2F7A50;
+  --sky:#88BFFF;    --sky-soft:#DCEEFA;    --sky-ink:#00669C;
+  --tint-blue-bg:#DCEEFA;   --tint-blue-fg:#00669C;
+  --tint-green-bg:#E4F5D6;  --tint-green-fg:#2F7A50;
+  --tint-amber-bg:#FFF3D9;  --tint-amber-fg:#8A6314;
+  --tint-gold-bg:#FFF3D9;   --tint-gold-fg:#8A6314;
+  --tint-purple-bg:#FFE7E9; --tint-purple-fg:#B34850;
+  --tint-orange-bg:#FFE6DA; --tint-orange-fg:#B2532A;
+  --tint-red-bg:#FBE1D8;    --tint-red-fg:#B23D1B;
+  --tint-grey-bg:#F3E4D8;   --tint-grey-fg:#7A5A50;
+  --font-family:'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  --font-display:'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
   --font-size-base:13.5px;
   --label-size:10.5px;
-  --label-tracking:0.02em;
+  --label-tracking:0.03em;
   --header-weight:700;
   --radius-card:16px;
   --radius-card-sm:12px;
   --radius-input:12px;
   --radius-badge:8px;
   --radius-pill:999px;
-  --shadow-sm:0 1px 2px rgba(31,36,33,.04);
-  --shadow-md:0 6px 20px rgba(31,36,33,.07);
-  --shadow-lg:0 12px 32px rgba(31,36,33,.12);
+  --shadow-sm:0 1px 2px rgba(83,40,34,.04);
+  --shadow-md:0 6px 20px rgba(83,40,34,.07);
+  --shadow-lg:0 12px 32px rgba(83,40,34,.12);
 }
 *{box-sizing:border-box;margin:0;padding:0;}
 body{
@@ -164,7 +164,7 @@ a{color:inherit;text-decoration:none;}
 .nav-item i{font-size:18px;color:var(--sidebar-muted);transition:color .12s ease;}
 .nav-item:hover{color:var(--text);background:var(--sidebar-hover-bg);}
 .nav-item:hover i{color:var(--text);}
-.nav-item.active{background:var(--sidebar-active-bg);color:var(--sidebar-active-text);font-weight:700;box-shadow:0 1px 8px rgba(31,36,33,.05);border:1px solid var(--border-light);}
+.nav-item.active{background:var(--sidebar-active-bg);color:var(--sidebar-active-text);font-weight:700;box-shadow:0 1px 8px rgba(83,40,34,.05);border:1px solid var(--border-light);}
 .nav-item.active i{color:var(--ink);}
 .nav-divider{font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--sidebar-muted);padding:18px 12px 6px;margin-top:6px;}
 .sidebar-collapse-btn{margin-top:auto;display:flex;align-items:center;gap:11px;width:100%;padding:10px 12px;border-radius:11px;border:none;background:none;color:var(--sidebar-muted);font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;transition:background .12s ease,color .12s ease;}
@@ -185,7 +185,7 @@ html.sidebar-collapsed .sidebar-logo{justify-content:center;padding-left:0;paddi
 /* Main */
 .main{flex:1;min-width:0;display:flex;flex-direction:column;}
 .topbar{
-  background:rgba(244,247,243,0.9);
+  background:rgba(255,242,233,0.92);
   -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
   border-bottom:1px solid var(--border-light);
   height:60px;padding:0 32px;
@@ -300,7 +300,7 @@ label{font-size:var(--label-size);font-weight:700;color:var(--muted);display:blo
 .uco-prog .v{font-size:12.5px;color:var(--ink);font-weight:600;line-height:1.35;}
 .uco-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px;padding-top:11px;border-top:1px solid var(--border-light);font-size:11.5px;color:var(--muted);}
 /* Accent-filled hero card (dashboard / stat highlights) */
-.card-hero{background:var(--ink);color:#fff;border:none;}
+.card-hero{background:var(--ink);color:#fff;border:none;box-shadow:0 1px 2px rgba(0,0,0,.18);}
 .card-hero .section-title,.card-hero .section-title i,.card-hero .muted,.card-hero .num,.card-hero .label{color:#fff;}
 .card-hero .muted{color:rgba(255,255,255,0.82);}
 /* Semantic pastel icon tiles - replaces scattered inline background/color hex pairs */
@@ -573,7 +573,7 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
    Grid page's own #gridNotification banner. Shown while a run-search job
    is in flight, hidden the moment it finishes - see
    renderGridSearchStatus/finishGridSearchUI. */
-.grid-search-status-bar{position:fixed;bottom:20px;right:20px;z-index:150;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card);box-shadow:0 4px 16px rgba(31,36,33,.10);padding:12px 16px;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:8px;max-width:320px;}
+.grid-search-status-bar{position:fixed;bottom:20px;right:20px;z-index:150;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card);box-shadow:0 4px 16px rgba(83,40,34,.10);padding:12px 16px;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:8px;max-width:320px;}
 
 /* Sequences */
 .seq-tabs{display:flex;gap:4px;margin-bottom:20px;border-bottom:1px solid var(--border);overflow-x:auto;}
@@ -1609,19 +1609,19 @@ function gridStatus(grid){
 function confirmDeleteGrid(gridId){
   const grid = state.grids.find(g => g.id === gridId);
   if(!grid) return;
-  const body = `<p style="font-size:13px;">Delete "${esc(grid.name)}"? This will remove the grid and all its data from the app. This cannot be undone.</p>`;
+  const body = `<p style="font-size:13px;">Remove "${esc(grid.name)}"? This will remove the grid and all its data from the app. This cannot be undone.</p>`;
   const footer = `
     <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-    <button class="btn btn-primary" id="confirmDeleteGridBtn" style="background:var(--danger);border-color:var(--danger);" onclick="deleteGridConfirmed('${gridId}')"><i class="ti ti-trash"></i> Delete</button>
+    <button class="btn btn-primary" id="confirmDeleteGridBtn" style="background:var(--danger);border-color:var(--danger);" onclick="deleteGridConfirmed('${gridId}')"><i class="ti ti-trash"></i> Remove</button>
   `;
-  openModal(`Delete "${esc(grid.name)}"`, body, footer);
+  openModal(`Remove "${esc(grid.name)}"`, body, footer);
 }
 
 async function deleteGridConfirmed(gridId){
   const grid = state.grids.find(g => g.id === gridId);
   if(!grid) return;
   const btn = document.getElementById('confirmDeleteGridBtn');
-  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Deleting...'; }
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Removing...'; }
   try {
     const contactNames = gridContacts(gridId).map(c => c.name);
     // Only delete Companies not shared with another grid - Airtable has no
@@ -1642,7 +1642,7 @@ async function deleteGridConfirmed(gridId){
       body: JSON.stringify({ contactNames, companyNames, sharedCompanyNames, gridName: grid.name })
     });
     const json = await res.json();
-    if(!res.ok || !json.success) throw new Error(json.error || 'Delete failed');
+    if(!res.ok || !json.success) throw new Error(json.error || 'Remove failed');
 
     fetch(`/api/airtable/grid/${encodeURIComponent(gridId)}`, { method: 'DELETE' })
       .catch(err => console.warn('Airtable grid delete failed:', err.message));
@@ -1654,7 +1654,7 @@ async function deleteGridConfirmed(gridId){
     renderPage();
   } catch(err){
     toast('Could not delete grid: ' + err.message, 'warn');
-    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-trash"></i> Delete'; }
+    if(btn){ btn.disabled = false; btn.innerHTML = ('<i class="ti ti-trash"></i> Remove'); }
   }
 }
 
@@ -3184,8 +3184,8 @@ const TARGET_BOARD_DEFAULT_COLUMNS = [
   { id:'hot', label:'Hot', color:'red' }
 ];
 const TARGET_COL_COLORS = {
-  slate:'#9A9A90', blue:'#8FA9B4', teal:'#8FB4A8', green:'#A9C7B0',
-  amber:'#D9C3A6', violet:'#B0AAC0', red:'#CDA9A2', pink:'#CBB0BE'
+  slate:'#9C8074', blue:'#0084C5', teal:'#44A574', green:'#7BAE4E',
+  amber:'#D9A02E', violet:'#B34850', red:'#B23D1B', pink:'#E0708A'
 };
 function targetColHex(name){ return TARGET_COL_COLORS[name] || TARGET_COL_COLORS.slate; }
 function targetBoardColumns(){
@@ -3514,7 +3514,7 @@ function renderGridsListView(){
               <td>${gridContacts(g.id).length}</td>
               <td>${fmtDate(g.updatedAt)}</td>
               <td><span class="tag ${gridStatus(g)==='Active'?'tag-connected':'tag-found'}">${gridStatus(g)}</span></td>
-              <td style="text-align:right;"><button class="btn btn-ghost btn-sm grid-delete-btn" onclick="event.stopPropagation();confirmDeleteGrid('${g.id}')" title="Delete grid"><i class="ti ti-trash"></i></button></td>
+              <td style="text-align:right;"><button class="btn btn-ghost btn-sm grid-delete-btn" onclick="event.stopPropagation();confirmDeleteGrid('${g.id}')" title="Remove grid"><i class="ti ti-trash"></i></button></td>
             </tr>
           `).join('')}
         </tbody>
@@ -6923,7 +6923,7 @@ function renderHowItWorks(){
     </div>
     <div class="faq-item">
       <h5>Connection timeout</h5>
-      <p>Controls the day count that triggers the "Delete?" flag on a campaign's Roadmap. Default is 10 days — tighten it if you want to churn dead connections faster.</p>
+      <p>Controls the day count that triggers the "Remove?" flag on a campaign's Roadmap. Default is 10 days — tighten it if you want to churn dead connections faster.</p>
     </div>
     <div class="faq-item">
       <h5>Bookable services</h5>
@@ -7118,7 +7118,7 @@ function gtmDeleteTemplate(id){
   const list = window.__gtmMotionTemplates || [];
   const t = list.find(x => x.id === id);
   if(!t) return;
-  if(!confirm('Delete the template "' + t.label + '"? This only removes the template, not the motion currently on screen.')) return;
+  if(!confirm('Remove the template "' + t.label + '"? This only removes the template, not the motion currently on screen.')) return;
   window.__gtmMotionTemplates = list.filter(x => x.id !== id);
   saveGtmMotionTemplatesList();
   renderPage();
@@ -7247,7 +7247,7 @@ function renderGtmMotionPage(){
   ${edit && (window.__gtmMotionTemplates||[]).length ? `
     <div class="muted" style="font-size:11px;margin:-2px 0 12px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
       <span>Your templates:</span>
-      ${window.__gtmMotionTemplates.map(t => `<span style="display:inline-flex;align-items:center;gap:4px;background:var(--surface-2);border:1px solid var(--border-light);border-radius:999px;padding:2px 4px 2px 10px;">${esc(t.label)}<button class="btn btn-ghost btn-sm" style="padding:2px 6px;" title="Delete this template" onclick="gtmDeleteTemplate('${esc(t.id)}')"><i class="ti ti-trash" style="font-size:12px;"></i></button></span>`).join('')}
+      ${window.__gtmMotionTemplates.map(t => `<span style="display:inline-flex;align-items:center;gap:4px;background:var(--surface-2);border:1px solid var(--border-light);border-radius:999px;padding:2px 4px 2px 10px;">${esc(t.label)}<button class="btn btn-ghost btn-sm" style="padding:2px 6px;" title="Remove this template" onclick="gtmDeleteTemplate('${esc(t.id)}')"><i class="ti ti-trash" style="font-size:12px;"></i></button></span>`).join('')}
     </div>` : ''}
 
   <div class="howto-hero">
@@ -7269,7 +7269,7 @@ function renderGtmMotionPage(){
           ${edit ? `<div style="display:flex;gap:1px;">
             <button class="btn btn-ghost btn-sm" title="Move up" onclick="gtmMoveStage('${s.id}',-1)" ${i===0 ? 'disabled' : ''}><i class="ti ti-chevron-up"></i></button>
             <button class="btn btn-ghost btn-sm" title="Move down" onclick="gtmMoveStage('${s.id}',1)" ${i===m.stages.length-1 ? 'disabled' : ''}><i class="ti ti-chevron-down"></i></button>
-            <button class="btn btn-ghost btn-sm" title="Delete stage" onclick="gtmDeleteStage('${s.id}')"><i class="ti ti-trash"></i></button>
+            <button class="btn btn-ghost btn-sm" title="Remove stage" onclick="gtmDeleteStage('${s.id}')"><i class="ti ti-trash"></i></button>
           </div>` : ''}
         </div>
         ${edit
@@ -9392,7 +9392,7 @@ function resetGrid(){
   const body = `<p style="font-size:13px;">This will permanently delete all contacts and companies in "${esc(grid.name)}" from the database. This cannot be undone.</p>`;
   const footer = `
     <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-    <button class="btn btn-primary" id="confirmResetGridBtn" style="background:var(--danger);border-color:var(--danger);" onclick="resetGridConfirmed('${grid.id}')"><i class="ti ti-trash"></i> Delete everything</button>
+    <button class="btn btn-primary" id="confirmResetGridBtn" style="background:var(--danger);border-color:var(--danger);" onclick="resetGridConfirmed('${grid.id}')"><i class="ti ti-trash"></i> Remove everything</button>
   `;
   openModal('Reset grid', body, footer);
 }
@@ -9428,7 +9428,7 @@ async function resetGridConfirmed(gridId){
     renderPage();
   } catch(err){
     toast('Could not reset grid: ' + err.message, 'warn');
-    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-trash"></i> Delete everything'; }
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-trash"></i> Remove everything'; }
   }
 }
 
@@ -10190,7 +10190,7 @@ function renderKCard(c, colKey){
         <button class="btn btn-ghost btn-sm" style="padding:2px 6px;" onclick="event.stopPropagation();handleSkipContact('${c.id}')" title="Skip - exclude from this campaign"><i class="ti ti-player-skip-forward"></i></button>
       </div>
     </div>
-    ${flagged ? `<div class="kcard-flag"><span><i class="ti ti-flag-3"></i> Delete? ${days} days pending</span><button class="btn btn-danger btn-sm" onclick="event.stopPropagation();removeDeadContact('${c.id}')">Remove</button></div>` : ''}
+    ${flagged ? `<div class="kcard-flag"><span><i class="ti ti-flag-3"></i> Remove? ${days} days pending</span><button class="btn btn-danger btn-sm" onclick="event.stopPropagation();removeDeadContact('${c.id}')">Remove</button></div>` : ''}
     <div id="thread-${c.id}" style="display:none;">${renderThread(c)}</div>
   </div>`;
 }
@@ -14101,7 +14101,7 @@ function renderCampaignDetail(){
     </div>
     <div style="display:flex;align-items:center;gap:10px;">
       <span class="campaign-status ${statusClass} clickable" onclick="toggleCampaignStatusMenu(event,'${campaign.id}')">${esc(campaign.status)} <i class="ti ti-chevron-down" style="font-size:10px;"></i></span>
-      <button class="btn btn-ghost btn-sm" onclick="confirmDeleteCampaign('${campaign.id}')" title="Delete campaign"><i class="ti ti-trash"></i></button>
+      <button class="btn btn-ghost btn-sm" onclick="confirmDeleteCampaign('${campaign.id}')" title="Remove campaign"><i class="ti ti-trash"></i></button>
     </div>
   </div>
   <div class="seq-tabs">
@@ -14405,7 +14405,7 @@ async function repairCampaignContacts(campaignId){
     const lines = [];
     if(p.primaryNameBackfill) lines.push(`<li>Set the campaign's name field (currently blank, shows as "Unnamed record")</li>`);
     if(p.linklessRelinked.length) lines.push(`<li><strong>${p.linklessRelinked.length}</strong> row(s) missing their contact link will be <strong>re-linked</strong> to the right contact: ${esc(p.linklessRelinked.slice(0,8).join(', '))}${p.linklessRelinked.length>8?'…':''}</li>`);
-    if(p.linklessDeleted.length) lines.push(`<li><strong>${p.linklessDeleted.length}</strong> row(s) that link to nobody and match no contact will be <strong>deleted</strong> (no progress is stored on these): ${esc(p.linklessDeleted.slice(0,8).map(d=>d.contactName).join(', '))}${p.linklessDeleted.length>8?'…':''}</li>`);
+    if(p.linklessDeleted.length) lines.push(`<li><strong>${p.linklessDeleted.length}</strong> row(s) that link to nobody and match no contact will be <strong>removed</strong> (no progress is stored on these): ${esc(p.linklessDeleted.slice(0,8).map(d=>d.contactName).join(', '))}${p.linklessDeleted.length>8?'…':''}</li>`);
     if(p.duplicateContacts.length){
       const dl = p.duplicateContacts.map(d=>`${esc(d.contact)} (keeps "${esc(d.keepStage)}"${d.fieldsMergedUp.length?`, merges up: ${esc(d.fieldsMergedUp.join(', '))}`:''})`).join('<br>');
       lines.push(`<li><strong>${p.duplicateContacts.length}</strong> contact(s) have more than one row. The furthest-along row is kept, its data topped up from the others, then the extras removed:<div style="margin-top:4px;font-size:11.5px;color:var(--muted);">${dl}</div></li>`);
@@ -14414,7 +14414,7 @@ async function repairCampaignContacts(campaignId){
     const body = `
       <p style="font-size:12.5px;margin-bottom:8px;">This will not delete any contact, and won't touch a contact that has a single clean row. Here's exactly what it will do for <strong>${esc(p.campaign)}</strong>:</p>
       <ul style="font-size:12.5px;line-height:1.5;padding-left:18px;margin:0;">${lines.join('')}</ul>
-      <p class="muted" style="font-size:11.5px;margin-top:10px;">${p.rowsToDelete} junction row(s) deleted, ${p.contactsAffected} contact(s) affected. ${p.totalRows} rows before.</p>`;
+      <p class="muted" style="font-size:11.5px;margin-top:10px;">${p.rowsToDelete} junction row(s) removed, ${p.contactsAffected} contact(s) affected. ${p.totalRows} rows before.</p>`;
     const footer = `
       <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
       <button class="btn btn-primary" id="repairGoBtn" onclick="runRepairCampaignContacts('${campaignId}')"><i class="ti ti-check"></i> Run repair</button>`;
@@ -16583,7 +16583,7 @@ function archDeleteCanvas(companyName){
   const c = archContainer(companyName);
   if(!c || c.canvases.length <= 1){ toast('A company needs at least one canvas', 'warn'); return; }
   const d = archDoc(companyName);
-  if(!confirm(`Delete canvas "${d.name}"? This cannot be undone.`)) return;
+  if(!confirm(`Remove canvas "${d.name}"? This cannot be undone.`)) return;
   c.canvases = c.canvases.filter(x => x.id !== d.id);
   c.activeCanvasId = c.canvases[0].id;
   window.__profileCanvasId = c.activeCanvasId;
@@ -17506,7 +17506,7 @@ function archInlineToolbarHtml(companyName){
       ${['#8a8a93','#2A6B7C','#d4472f','#bd7c0c','#6444bd'].map(col => `<button class="swatch" style="background:${col}" onclick="archSetEdge('${esc(companyName)}','${e.id}',{color:'${col}'})"></button>`).join('')}
       <span class="sep"></span>
       <button title="Label" onclick="archEditEdgeLabel('${esc(companyName)}','${e.id}')"><i class="ti ti-tag"></i></button>
-      <button title="Delete" onclick="archDeleteEdge('${esc(companyName)}','${e.id}')"><i class="ti ti-trash"></i></button>
+      <button title="Remove" onclick="archDeleteEdge('${esc(companyName)}','${e.id}')"><i class="ti ti-trash"></i></button>
     </div>`;
   }
   const el = archElById(companyName, sel.id);
@@ -17537,7 +17537,7 @@ function archInlineToolbarHtml(companyName){
     <button title="Send to back" onclick="archZOrder('${esc(companyName)}','${el.id}',false)"><i class="ti ti-arrow-down-to-arc"></i></button>
     <button title="Duplicate" onclick="archDuplicate('${esc(companyName)}','${el.id}')"><i class="ti ti-copy"></i></button>
     ${el.type === 'chart' && el.chart && el.chart.source !== 'manual' ? `<button title="Refresh data" onclick="archRefreshChart('${esc(companyName)}','${el.id}')"><i class="ti ti-refresh"></i></button>` : ''}
-    <button title="Delete" onclick="archDeleteEl('${esc(companyName)}','${el.id}')"><i class="ti ti-trash"></i></button>
+    <button title="Remove" onclick="archDeleteEl('${esc(companyName)}','${el.id}')"><i class="ti ti-trash"></i></button>
   </div>`;
 }
 
@@ -17588,7 +17588,7 @@ function renderChangeArchitectureCanvas(companyName){
         <div class="section-title" style="margin-bottom:0;"><i class="ti ti-affiliate"></i> ${esc(d.name)}</div>
         <button class="btn btn-ghost btn-sm" title="Rename" onclick="archRenameCanvas('${esc(companyName)}')"><i class="ti ti-pencil"></i></button>
         <button class="btn btn-ghost btn-sm" title="Duplicate" onclick="archDuplicateCanvas('${esc(companyName)}')"><i class="ti ti-copy"></i></button>
-        ${container && container.canvases.length > 1 ? `<button class="btn btn-ghost btn-sm" title="Delete canvas" onclick="archDeleteCanvas('${esc(companyName)}')"><i class="ti ti-trash"></i></button>` : ''}
+        ${container && container.canvases.length > 1 ? `<button class="btn btn-ghost btn-sm" title="Remove canvas" onclick="archDeleteCanvas('${esc(companyName)}')"><i class="ti ti-trash"></i></button>` : ''}
       </div>
       <div style="display:flex;gap:6px;align-items:center;">
         <span id="archSaveStatus" class="muted" style="font-size:11px;"></span>
@@ -19357,7 +19357,7 @@ async function addRep(){
 async function deleteRep(repId){
   try {
     const res = await fetch(`/api/reps/${repId}`, { method:'DELETE' });
-    if(!res.ok) throw new Error('Delete failed');
+    if(!res.ok) throw new Error('Remove failed');
     if(window.__salesData && window.__salesData.reps) window.__salesData.reps = window.__salesData.reps.filter(r=>r.id!==repId);
     if(window.__repsCache) window.__repsCache = window.__repsCache.filter(r=>r.id!==repId);
     toast('Rep removed', 'success');
@@ -19550,12 +19550,12 @@ function setCampaignStatus(campaignId, status){
 function confirmDeleteCampaign(campaignId){
   const campaign = state.campaigns.find(c => c.id === campaignId);
   if(!campaign) return;
-  const body = `<p style="font-size:13px;">Delete this campaign? This cannot be undone.</p>`;
+  const body = `<p style="font-size:13px;">Remove this campaign? This cannot be undone.</p>`;
   const footer = `
     <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-    <button class="btn btn-primary" id="confirmDeleteCampaignBtn" style="background:var(--danger);border-color:var(--danger);" onclick="deleteCampaignConfirmed('${campaignId}')"><i class="ti ti-trash"></i> Delete</button>
+    <button class="btn btn-primary" id="confirmDeleteCampaignBtn" style="background:var(--danger);border-color:var(--danger);" onclick="deleteCampaignConfirmed('${campaignId}')"><i class="ti ti-trash"></i> Remove</button>
   `;
-  openModal(`Delete "${esc(campaign.name)}"`, body, footer);
+  openModal(`Remove "${esc(campaign.name)}"`, body, footer);
 }
 
 async function deleteCampaignConfirmed(campaignId){
@@ -19566,14 +19566,14 @@ async function deleteCampaignConfirmed(campaignId){
   try {
     const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}`, { method: 'DELETE' });
     const json = await res.json();
-    if(!res.ok || !json.success) throw new Error(json.error || 'Delete failed');
+    if(!res.ok || !json.success) throw new Error(json.error || 'Remove failed');
     state.campaigns = state.campaigns.filter(c => c.id !== campaignId);
     closeModal();
     toast(`Campaign "${campaign.name}" deleted`, 'success');
     backToCampaignList();
   } catch(err){
     toast('Could not delete campaign: ' + err.message, 'warn');
-    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-trash"></i> Delete'; }
+    if(btn){ btn.disabled = false; btn.innerHTML = ('<i class="ti ti-trash"></i> Remove'); }
   }
 }
 
@@ -22166,7 +22166,7 @@ function renderSeoCampaignCard(c){
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0;" onclick="event.stopPropagation();">
           <button class="btn btn-ghost btn-sm" title="Edit" onclick="openEditSeoCampaignModal('${c.id}')"><i class="ti ti-edit"></i></button>
-          <button class="btn btn-ghost btn-sm" title="Delete" onclick="deleteSeoCampaign('${c.id}')"><i class="ti ti-trash"></i></button>
+          <button class="btn btn-ghost btn-sm" title="Remove" onclick="deleteSeoCampaign('${c.id}')"><i class="ti ti-trash"></i></button>
         </div>
       </div>
       ${goalSummary ? `<div style="font-size:12.5px;margin-top:8px;line-height:1.5;">${esc(goalSummary)}</div>` : ''}
@@ -22417,11 +22417,11 @@ async function submitEditSeoCampaign(id, btn){
 }
 
 async function deleteSeoCampaign(id){
-  if(!confirm('Delete this campaign? Published posts and keyword data are not affected.')) return;
+  if(!confirm('Remove this campaign? Published posts and keyword data are not affected.')) return;
   try {
     const res = await fetch('/api/seo/campaigns/' + encodeURIComponent(id), { method:'DELETE' });
     const data = await res.json();
-    if(!res.ok || !data.success) throw new Error(data.error || 'Delete failed');
+    if(!res.ok || !data.success) throw new Error(data.error || 'Remove failed');
     toast('Campaign deleted', 'success');
     if(window.__seoCampaignExpanded === id) window.__seoCampaignExpanded = null;
     if(window.__seoCampaignProgress) delete window.__seoCampaignProgress[id];
@@ -22593,7 +22593,7 @@ function renderServicePageQueueTable(){
           ${(q.status === 'Generated' || q.status === 'Published')
             ? `<button class="btn btn-ghost btn-sm" onclick="viewServicePageQueueItem('${q.id}')"><i class="ti ti-eye"></i> View</button>`
             : ''}
-          <button class="btn btn-ghost btn-sm" title="Delete from queue" onclick="deleteServicePageQueueItem('${q.id}','${esc(q.service).replace(/'/g,"\\'")}')"><i class="ti ti-trash"></i></button>
+          <button class="btn btn-ghost btn-sm" title="Remove from queue" onclick="deleteServicePageQueueItem('${q.id}','${esc(q.service).replace(/'/g,"\\'")}')"><i class="ti ti-trash"></i></button>
         </td>
       </tr>
     `).join('')}
@@ -22699,7 +22699,7 @@ async function deleteServicePageQueueItem(id, service){
   try {
     const res = await fetch('/api/seo/service-queue/' + encodeURIComponent(id), { method:'DELETE' });
     const data = await res.json();
-    if(!res.ok || !data.success) throw new Error(data.error || 'Delete failed');
+    if(!res.ok || !data.success) throw new Error(data.error || 'Remove failed');
     if(Array.isArray(window.__seoServiceQueue)) window.__seoServiceQueue = window.__seoServiceQueue.filter(x=>x.id!==id);
     toast(`Removed "${service}" from the queue`, 'success');
     renderPage();
@@ -22814,7 +22814,7 @@ function renderSeoKeywordTable(list){
             : `<button class="btn btn-primary btn-sm" ${k.status==='Generating'?'disabled':''} onclick="generateSeoPost('${k.id}')"><i class="ti ${k.status==='Generating'?'ti-loader-2':'ti-sparkles'}"></i> ${k.status==='Generating'?'Generating...':'Generate post'}</button>`
           }
           <button class="btn btn-ghost btn-sm" title="${k.referenceContent ? 'Edit reference content' : 'Add reference content'}" onclick="openSeoReferenceContentModal('${k.id}')"><i class="ti ${k.referenceContent ? 'ti-file-check' : 'ti-file-plus'}"></i> ${k.referenceContent ? 'Context' : 'Add context'}</button>
-          <button class="btn btn-ghost btn-sm" title="Delete keyword" onclick="deleteSeoKeyword('${k.id}','${esc(k.keyword).replace(/'/g,"\\'")}')"><i class="ti ti-trash"></i></button>
+          <button class="btn btn-ghost btn-sm" title="Remove keyword" onclick="deleteSeoKeyword('${k.id}','${esc(k.keyword).replace(/'/g,"\\'")}')"><i class="ti ti-trash"></i></button>
         </td>
       </tr>
     `).join('')}
@@ -22828,10 +22828,10 @@ async function deleteSeoKeyword(id, keyword){
   try {
     const res = await fetch(`/api/seo/keywords/${id}`, { method:'DELETE' });
     const data = await res.json();
-    if(!res.ok || !data.success) throw new Error(data.error || 'Delete failed');
+    if(!res.ok || !data.success) throw new Error(data.error || 'Remove failed');
     if(Array.isArray(window.__seoKeywords)) window.__seoKeywords = window.__seoKeywords.filter(k=>k.id!==id);
     if(window.__seoPreview && window.__seoPreview.keywordId === id) window.__seoPreview = null;
-    toast(`Deleted "${keyword}"`, 'success');
+    toast(`Removed "${keyword}"`, 'success');
     renderPage();
   } catch(err){
     toast('Could not delete keyword: ' + err.message, 'warn');
@@ -23131,7 +23131,7 @@ function renderSeoPreviewPanel(){
         <button class="btn btn-secondary btn-sm" onclick="saveSeoPreviewEdits()"><i class="ti ti-device-floppy"></i> Save edits</button>
         <button class="btn btn-secondary btn-sm" id="seoRegenBtn" onclick="regenerateSeoPreview()"><i class="ti ti-refresh"></i> Regenerate</button>
         <button class="btn btn-primary btn-sm" id="seoPublishBtn" ${p.status==='Published'?'disabled':''} onclick="publishSeoPreview()"><i class="ti ti-rocket"></i> ${p.status==='Published' ? 'Sent to Framer' : 'Send to Framer'}</button>
-        <button class="btn btn-danger btn-sm" id="seoDeleteBtn" onclick="deleteSeoPreviewPost()"><i class="ti ti-trash"></i> Delete post</button>
+        <button class="btn btn-danger btn-sm" id="seoDeleteBtn" onclick="deleteSeoPreviewPost()"><i class="ti ti-trash"></i> Remove post</button>
       </div>
       ${p.publishedUrl ? `<div class="muted" style="font-size:12px;margin-top:8px;">Added to Framer as a draft - review and hit Publish there to go live at <a href="${esc(p.publishedUrl)}" target="_blank" rel="noopener">${esc(p.publishedUrl)}</a>. Deleting here will not remove or change that Framer draft.</div>` : ''}
     </div>
@@ -23231,22 +23231,22 @@ async function publishSeoPreview(){
 async function deleteSeoPreviewPost(){
   const p = window.__seoPreview;
   const warning = p.publishedUrl
-    ? `Delete this draft and reset "${p.keyword}" back to Queued? This clears the generated title, content, and meta fields here so you can start fresh. The draft already sent to Framer is NOT touched - it stays exactly as it is there.`
-    : `Delete this draft and reset "${p.keyword}" back to Queued? This clears the generated title, content, and meta fields so you can start fresh.`;
+    ? `Remove this draft and reset "${p.keyword}" back to Queued? This clears the generated title, content, and meta fields here so you can start fresh. The draft already sent to Framer is NOT touched - it stays exactly as it is there.`
+    : `Remove this draft and reset "${p.keyword}" back to Queued? This clears the generated title, content, and meta fields so you can start fresh.`;
   if(!confirm(warning)) return;
   const btn = document.getElementById('seoDeleteBtn');
   if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Deleting...'; }
   try {
     const res = await fetch(`/api/seo/keywords/${p.keywordId}/post`, { method:'DELETE' });
     const data = await res.json();
-    if(!res.ok || !data.success) throw new Error(data.error || 'Delete failed');
+    if(!res.ok || !data.success) throw new Error(data.error || 'Remove failed');
     const k = (window.__seoKeywords||[]).find(x=>x.id===p.keywordId);
     if(k) Object.assign(k, { status:'Queued', postTitle:'', postHtml:'', metaTitle:'', metaDescription:'', publishedUrl:'' });
     toast('Post deleted - keyword is back to Queued', 'success');
     closeSeoPreview();
   } catch(err){
     toast('Could not delete post: ' + err.message, 'warn');
-    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-trash"></i> Delete post'; }
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-trash"></i> Remove post'; }
   }
 }
 
@@ -23386,7 +23386,7 @@ function renderAeoCampaignCard(c){
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0;" onclick="event.stopPropagation();">
           <button class="btn btn-ghost btn-sm" title="Edit" onclick="openEditAeoCampaignModal('${c.id}')"><i class="ti ti-edit"></i></button>
-          <button class="btn btn-ghost btn-sm" title="Delete" onclick="deleteAeoCampaign('${c.id}')"><i class="ti ti-trash"></i></button>
+          <button class="btn btn-ghost btn-sm" title="Remove" onclick="deleteAeoCampaign('${c.id}')"><i class="ti ti-trash"></i></button>
         </div>
       </div>
       ${goalShort ? `<div style="font-size:12.5px;margin-top:8px;line-height:1.5;">${esc(goalShort)}</div>` : ''}
@@ -23507,11 +23507,11 @@ async function submitEditAeoCampaign(id, btn){
 }
 
 async function deleteAeoCampaign(id){
-  if(!confirm('Delete this campaign? The prompts and any generated content are not affected.')) return;
+  if(!confirm('Remove this campaign? The prompts and any generated content are not affected.')) return;
   try {
     const res = await fetch('/api/aeo/campaigns/' + encodeURIComponent(id), { method:'DELETE' });
     const data = await res.json();
-    if(!res.ok || !data.success) throw new Error(data.error || 'Delete failed');
+    if(!res.ok || !data.success) throw new Error(data.error || 'Remove failed');
     toast('Campaign deleted', 'success');
     if(window.__aeoCampaignExpanded === id) window.__aeoCampaignExpanded = null;
     loadAeoCampaigns(true);
@@ -23613,7 +23613,7 @@ function renderAeoPromptTable(list){
         <td style="white-space:nowrap;text-align:right;">
           ${p.generatedContentType ? `<button class="btn btn-ghost btn-sm" title="View generated content" onclick="viewAeoPromptContent('${p.id}')"><i class="ti ti-file-text"></i> Content</button>` : ''}
           <button class="btn btn-primary btn-sm" onclick="openAeoGenerateModal('${p.id}')"><i class="ti ti-sparkles"></i> Generate Content</button>
-          <button class="btn btn-ghost btn-sm" title="Delete prompt" onclick="deleteAeoPrompt('${p.id}')"><i class="ti ti-trash"></i></button>
+          <button class="btn btn-ghost btn-sm" title="Remove prompt" onclick="deleteAeoPrompt('${p.id}')"><i class="ti ti-trash"></i></button>
         </td>
       </tr>
     `).join('')}
@@ -23640,11 +23640,11 @@ async function addAeoPrompt(){
 }
 
 async function deleteAeoPrompt(id){
-  if(!confirm('Delete this prompt from the library? Any content already generated is not affected.')) return;
+  if(!confirm('Remove this prompt from the library? Any content already generated is not affected.')) return;
   try {
     const res = await fetch('/api/aeo/prompts/' + encodeURIComponent(id), { method:'DELETE' });
     const data = await res.json();
-    if(!res.ok || !data.success) throw new Error(data.error || 'Delete failed');
+    if(!res.ok || !data.success) throw new Error(data.error || 'Remove failed');
     if(Array.isArray(window.__aeoPrompts)) window.__aeoPrompts = window.__aeoPrompts.filter(p => p.id !== id);
     toast('Prompt deleted', 'success');
     aeoRerender();
@@ -23769,7 +23769,7 @@ function renderAeoRecommendationsSection(){
           <div class="muted" style="font-size:11.5px;">${fmtDate(r.dateAdded)} ${r.source ? `&middot; <span class="tag tag-messaging">${esc(r.source)}</span>` : ''}</div>
           <div style="display:flex;gap:6px;flex-shrink:0;">
             <button class="btn btn-primary btn-sm" onclick="addRecToPromptLibrary('${r.id}')"><i class="ti ti-plus"></i> Add to Prompt Library</button>
-            <button class="btn btn-ghost btn-sm" title="Delete" onclick="deleteAeoRecommendation('${r.id}')"><i class="ti ti-trash"></i></button>
+            <button class="btn btn-ghost btn-sm" title="Remove" onclick="deleteAeoRecommendation('${r.id}')"><i class="ti ti-trash"></i></button>
           </div>
         </div>
         <div style="font-size:12.5px;line-height:1.55;">${esc(shown)}${long ? ` <a href="javascript:void(0)" onclick="toggleAeoRec('${r.id}')" style="font-size:11.5px;">${exp[r.id] ? 'Show less' : 'Expand'}</a>` : ''}</div>
@@ -23809,11 +23809,11 @@ async function saveAeoRecommendation(){
 }
 
 async function deleteAeoRecommendation(id){
-  if(!confirm('Delete this recommendation?')) return;
+  if(!confirm('Remove this recommendation?')) return;
   try {
     const res = await fetch('/api/aeo/recommendations/' + encodeURIComponent(id), { method:'DELETE' });
     const data = await res.json();
-    if(!res.ok || !data.success) throw new Error(data.error || 'Delete failed');
+    if(!res.ok || !data.success) throw new Error(data.error || 'Remove failed');
     if(Array.isArray(window.__aeoRecommendations)) window.__aeoRecommendations = window.__aeoRecommendations.filter(r => r.id !== id);
     toast('Recommendation deleted', 'success');
     aeoRerender();
@@ -26263,7 +26263,7 @@ function renderSettings(){
       <div class="field"><label>Days until flagged</label><input type="number" min="3" max="30" id="timeoutDays" value="${s.timeoutDays}"></div>
       <div class="field"><label>Action when deleted</label>
         <select id="timeoutAction">
-          ${['Move to archive','Delete permanently','Notify me'].map(o=>`<option ${s.timeoutAction===o?'selected':''}>${o}</option>`).join('')}
+          ${['Move to archive','Remove permanently','Notify me'].map(o=>`<option ${s.timeoutAction===o?'selected':''}>${o}</option>`).join('')}
         </select>
       </div>
     </div>
