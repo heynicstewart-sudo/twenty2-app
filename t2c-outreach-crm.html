@@ -2865,7 +2865,7 @@ function afterRender(page){
     loadAccountSynthesis(name);
     initAccountDashboardCharts(name);
   }
-  if(page === 'profile' && window.__profileSelectedCompany && window.__profileView === 'dashboard'){
+  if(page === 'profile' && window.__profileSelectedCompany && (window.__profileView||'dashboard') === 'dashboard'){
     const name = window.__profileSelectedCompany;
     loadCompanyMessages(name);
     loadAccountDashboardData(name);
@@ -3415,7 +3415,7 @@ function dashCardLoading(cls, title){
 // currently showing `name`, so it knows when a re-render is warranted.
 function isAccountDashboardOpen(name){
   if(state.currentPage === 'home' && window.__targetOpen === name) return true;
-  if(state.currentPage === 'profile' && window.__profileSelectedCompany === name && window.__profileView === 'dashboard') return true;
+  if(state.currentPage === 'profile' && window.__profileSelectedCompany === name && (window.__profileView||'dashboard') === 'dashboard') return true;
   return false;
 }
 
@@ -16422,23 +16422,22 @@ function renderProfilePage(){
   return `
   ${searchCard}
   ${selectedCompany ? renderProfileViewToggle() : ''}
-  ${selectedCompany ? ((window.__profileView||'canvas') === 'dashboard' ? renderProfileAccountDashboard(selectedCompany) : renderChangeArchitectureCanvas(selectedCompany)) : ''}
+  ${selectedCompany ? ((window.__profileView||'dashboard') === 'dashboard' ? renderProfileAccountDashboard(selectedCompany) : renderChangeArchitectureCanvas(selectedCompany)) : ''}
   `;
 }
 
-// Profile page has two views onto the selected company: the freeform
-// "Change architecture" canvas (default) and this Dashboard - the same
-// KPI-tile grid Targets shows for pinned accounts (renderAccountDashboard),
-// just without the Targets-only chrome (account switcher, unpin) since
-// Profile already has its own company picker above. Kept as a separate
-// top-level toggle rather than another canvas tab, since canvas tabs are
-// multiple named canvases within the canvas view, not alternate views.
+// Profile page has two views onto the selected company: this Dashboard
+// (default) - the same KPI-tile grid + page-head treatment Targets shows for
+// pinned accounts (renderAccountDashboard) - and the freeform "Change
+// architecture" canvas. Kept as a separate top-level toggle rather than
+// another canvas tab, since canvas tabs are multiple named canvases within
+// the canvas view, not alternate views.
 function renderProfileViewToggle(){
-  const view = window.__profileView || 'canvas';
+  const view = window.__profileView || 'dashboard';
   return `
   <div class="arch-canvas-tabs" style="margin-bottom:12px;">
-    <button class="arch-canvas-chip ${view==='canvas'?'active':''}" onclick="setProfileView('canvas')"><i class="ti ti-affiliate"></i> Canvas</button>
     <button class="arch-canvas-chip ${view==='dashboard'?'active':''}" onclick="setProfileView('dashboard')"><i class="ti ti-layout-dashboard"></i> Dashboard</button>
+    <button class="arch-canvas-chip ${view==='canvas'?'active':''}" onclick="setProfileView('canvas')"><i class="ti ti-affiliate"></i> Canvas</button>
   </div>`;
 }
 
@@ -16447,16 +16446,28 @@ function setProfileView(view){
   renderPage();
 }
 
+// Header matches renderAccountDashboard's page-head treatment exactly (h1 +
+// sector subtitle + inline Synced/refresh) so the two dashboards read as the
+// same surface. The Targets-only nav (account switcher, pin search, unpin,
+// "Open full profile") is dropped - Profile already has its own company
+// picker and pin control in the bar above.
 function renderProfileAccountDashboard(name){
   const nm = esc(name);
   const profile = window.__acctDash && window.__acctDash[name];
   const syncedAt = window.__acctDashLoadedAt && window.__acctDashLoadedAt[name];
+  const sector = profile && profile.company ? (profile.company.sector || profile.company.industry) : '';
 
-  const header = syncedAt ? `
-  <div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-bottom:8px;">
-    <span class="muted" style="font-size:11px;white-space:nowrap;">Synced ${relativeSyncLabel(syncedAt)}</span>
-    <button class="btn btn-ghost btn-sm" title="Refresh this account's data" onclick="retryAccountDashboardData('${nm}')"><i class="ti ti-refresh"></i></button>
-  </div>` : '';
+  const header = `
+  <div class="page-head" style="align-items:flex-start;margin-top:0;">
+    <div>
+      <h1 class="page-h1" style="margin-bottom:4px;">${nm}</h1>
+      <div class="page-sub">${esc(sector || 'Account dashboard')}</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      ${syncedAt ? `<span class="muted" style="font-size:11px;white-space:nowrap;">Synced ${relativeSyncLabel(syncedAt)}</span>
+      <button class="btn btn-ghost btn-sm" title="Refresh this account's data" onclick="retryAccountDashboardData('${nm}')"><i class="ti ti-refresh"></i></button>` : ''}
+    </div>
+  </div>`;
 
   if(profile && profile.error){
     return `${header}<div class="card"><div class="empty-state">This account didn't load. <button class="btn btn-ghost btn-sm" style="margin-left:6px;" onclick="retryAccountDashboardData('${nm}')"><i class="ti ti-refresh"></i> Try again</button></div></div>`;
