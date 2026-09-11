@@ -212,9 +212,12 @@ html.sidebar-collapsed .sidebar-logo{justify-content:center;padding-left:0;paddi
 .engine-trigger-btn .dot{width:6px;height:6px;border-radius:50%;background:var(--mint);flex:none;}
 
 .engine-backdrop{position:fixed;inset:0;background:rgba(58,40,34,.25);z-index:200;display:flex;justify-content:flex-end;animation:engineFadeIn .12s ease;}
+.engine-backdrop.expanded{background:var(--bg);}
 @keyframes engineFadeIn{from{opacity:0;}to{opacity:1;}}
 .engine-drawer{width:min(400px,92vw);height:100%;background:var(--surface);box-shadow:var(--shadow-lg);display:flex;flex-direction:column;border-left:1px solid var(--border);}
+.engine-drawer.expanded{width:100%;max-width:880px;margin:0 auto;border-left:1px solid var(--border);border-right:1px solid var(--border);}
 .engine-drawer-head{display:flex;justify-content:space-between;align-items:center;padding:16px 18px;border-bottom:1px solid var(--border-light);flex:none;}
+.engine-drawer-head .head-actions{display:flex;align-items:center;gap:4px;}
 .engine-drawer-head .name{font-weight:700;font-size:15px;color:var(--ink);display:flex;align-items:center;gap:8px;}
 .engine-drawer-head .name .dot{width:7px;height:7px;border-radius:50%;background:var(--mint);}
 .engine-drawer-scope{margin:12px 18px 0;padding:7px 11px;background:var(--surface-2);border-radius:var(--radius-badge);font-size:11px;color:var(--text-dim);flex:none;}
@@ -226,6 +229,8 @@ html.sidebar-collapsed .sidebar-logo{justify-content:center;padding-left:0;paddi
 .engine-msg.engine{align-self:flex-start;background:var(--surface-2);color:var(--ink);border-bottom-left-radius:4px;}
 .engine-msg.loading{align-self:flex-start;background:var(--surface-2);color:var(--text-dim);}
 .engine-shortcuts{padding:0 18px 12px;display:grid;grid-template-columns:1fr 1fr;gap:8px;flex:none;}
+.engine-drawer.expanded .engine-shortcuts{grid-template-columns:repeat(4,1fr);}
+.engine-drawer.expanded .engine-msg{max-width:70%;}
 .engine-shortcut{border:1px solid var(--border);background:var(--card-bg);border-radius:var(--radius-card-sm);padding:9px 10px;font-family:var(--font-family);font-size:11.5px;font-weight:600;color:var(--ink);text-align:left;cursor:pointer;transition:background .12s ease;}
 .engine-shortcut:hover:not(:disabled){background:var(--surface-2);}
 .engine-shortcut:disabled{opacity:.5;cursor:default;}
@@ -314,6 +319,8 @@ label{font-size:var(--label-size);font-weight:700;color:var(--muted);display:blo
 .metric-strip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-bottom:24px;}
 .metric-strip.four{grid-template-columns:repeat(4,minmax(0,1fr));}
 .metric-card{background:var(--surface);border:1px solid var(--border-light);border-radius:var(--radius-card);padding:16px 18px;display:flex;align-items:center;justify-content:space-between;gap:12px;box-shadow:var(--shadow-sm);}
+.metric-card.clickable{cursor:pointer;transition:box-shadow .15s ease,transform .15s ease;}
+.metric-card.clickable:hover{box-shadow:var(--shadow-md);transform:translateY(-1px);}
 .metric-card .m-label{display:flex;align-items:center;gap:7px;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:var(--text-dim);}
 .metric-card .m-label .dot{width:7px;height:7px;border-radius:50%;background:var(--accent);flex:none;}
 .metric-card .m-value{font-size:24px;font-weight:800;letter-spacing:-0.02em;color:var(--ink);margin-top:5px;display:flex;align-items:baseline;gap:5px;line-height:1.1;}
@@ -2644,7 +2651,7 @@ function navigate(page){
   // 'programstrategy' is a drill-down off Company Universe with no sidebar
   // entry of its own - keep that item highlighted and titled instead of
   // going blank.
-  const navEntry = NAV.find(n => n.id === (page === 'programstrategy' ? 'companyuniverse' : page));
+  const navEntry = NAV.find(n => n.id === (['programstrategy','reviewdetail'].includes(page) ? 'companyuniverse' : page));
   state.activeNavKey = navEntry ? navEntry.id : page;
   const grid = page === 'grid' ? currentGrid() : null;
   document.getElementById('topbarTitle').textContent = grid ? grid.name : (navEntry ? navEntry.label : '');
@@ -2667,7 +2674,7 @@ function renderPage(){
 
   // 'research' deleted outright (redesign plan §1) - renderResearch() is
   // left defined (harmless dead code) but no longer reachable via dispatch.
-  const renderers = { home: renderHome, companyuniverse: renderCompanyUniverse, programstrategy: renderProgramStrategyPage, profile: renderProfilePage, gtmmotion: renderGtmMotionPage, icpbuilder: renderIcpBuilderPage, competitormap: renderCompetitorMapPage, replies: renderReplies, logger: renderLoggerPage, howitworks: renderHowItWorks, grids: renderGridsListView, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, contentcalendar: renderContentCalendarPage, settings: renderSettings, agency: renderAgencyPage };
+  const renderers = { home: renderHome, companyuniverse: renderCompanyUniverse, programstrategy: renderProgramStrategyPage, reviewdetail: renderReviewDetailPage, profile: renderProfilePage, gtmmotion: renderGtmMotionPage, icpbuilder: renderIcpBuilderPage, competitormap: renderCompetitorMapPage, replies: renderReplies, logger: renderLoggerPage, howitworks: renderHowItWorks, grids: renderGridsListView, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, contentcalendar: renderContentCalendarPage, settings: renderSettings, agency: renderAgencyPage };
   el.innerHTML = renderers[state.currentPage]();
   afterRender(state.currentPage);
 
@@ -2692,6 +2699,10 @@ function toggleEngineDrawer(){
 }
 function closeEngineDrawer(){
   window.__engineOpen = false;
+  renderEngineDrawer();
+}
+function toggleEngineExpanded(){
+  window.__engineExpanded = !window.__engineExpanded;
   renderEngineDrawer();
 }
 
@@ -2720,12 +2731,16 @@ function renderEngineDrawer(){
   const sending = !!window.__engineSending;
   const scopeLabel = ctx.accountName || ctx.pageLabel;
 
+  const expanded = !!window.__engineExpanded;
   root.innerHTML = `
-  <div class="engine-backdrop" onmousedown="if(event.target===this) closeEngineDrawer()">
-    <div class="engine-drawer">
+  <div class="engine-backdrop${expanded?' expanded':''}" onmousedown="if(event.target===this) closeEngineDrawer()">
+    <div class="engine-drawer${expanded?' expanded':''}">
       <div class="engine-drawer-head">
         <div class="name"><span class="dot"></span> Engine</div>
-        <button class="btn btn-ghost btn-sm" onclick="closeEngineDrawer()"><i class="ti ti-x"></i></button>
+        <div class="head-actions">
+          <button class="btn btn-ghost btn-sm" title="${expanded ? 'Collapse to sidebar' : 'Expand to full page'}" onclick="toggleEngineExpanded()"><i class="ti ${expanded ? 'ti-arrows-minimize' : 'ti-arrows-maximize'}"></i></button>
+          <button class="btn btn-ghost btn-sm" onclick="closeEngineDrawer()"><i class="ti ti-x"></i></button>
+        </div>
       </div>
       <div class="engine-drawer-scope">Scoped to: <strong>${esc(scopeLabel)}</strong></div>
       <div class="engine-messages" id="engineMessages">
@@ -2850,7 +2865,6 @@ function afterRender(page){
   if(page === 'intelligence' && (window.__intelSubTab||'intelligence') === 'context') ensureContextDataLoaded();
   if(page === 'companyuniverse'){
     if(window.__accountSegmentation === undefined) loadAccountSegmentation();
-    if(window.__globalAngleLibrary === undefined) loadGlobalAngleLibrary();
     if(window.__gtmPerformance === undefined) loadGtmPerformance();
     if(window.__lostDeals === undefined) loadLostDeals();
     if(window.__stalledRelationships === undefined) loadStalledRelationships();
@@ -2858,8 +2872,10 @@ function afterRender(page){
     // ICP worklist + the program-discovery queue moved here from Targets.
     loadIcpWorklist();
     if(window.__programDiscovery === undefined) loadProgramDiscovery();
-    ensureContextDataLoaded();
   }
+  // Context capture lives on Profile now (was Company Universe > Review) -
+  // attached to a specific account instead of a global dumping ground.
+  if(page === 'profile') ensureContextDataLoaded();
   if(page === 'gtmmotion' && window.__gtmMotion === undefined && !window.__gtmMotionLoading) loadGtmMotion();
   if(page === 'gtmmotion' && window.__icpProfile === undefined && !window.__icpProfileLoading) loadIcpProfile();
   if(page === 'gtmmotion' && window.__gtmMotionTemplates === undefined && !window.__gtmMotionTemplatesLoading) loadGtmMotionTemplates();
@@ -2931,6 +2947,10 @@ function afterRender(page){
   }
   if(page === 'contentcalendar' && window.__contentCalendarItems === undefined) loadContentCalendarItems();
   if(page === 'settings' && window.__programDiscovery === undefined) loadProgramDiscovery();
+  // Angle Library moved here from Company Universe > Review - it's an editor
+  // (add/remove entries), not a read-only report, so it belongs with other
+  // campaign-wide settings.
+  if(page === 'settings' && window.__globalAngleLibrary === undefined) loadGlobalAngleLibrary();
   if((page === 'profile' || page === 'companyuniverse') && window.__targets === undefined && !window.__targetsLoading) loadTargets();
   if(page === 'research'){
     const tab = window.__researchSubTab || 'market';
@@ -15273,7 +15293,10 @@ async function loadGtmPerformance(){
   } catch(err){
     window.__gtmPerformance = { error: err.message };
   }
-  if(state.currentPage === 'companyuniverse'){
+  // 'companyuniverse' needs a full re-render (the Review tab's tiles read
+  // this too); 'reviewdetail' just patches its own section in place.
+  if(state.currentPage === 'companyuniverse') renderPage();
+  else if(state.currentPage === 'reviewdetail'){
     const el = document.getElementById('gtmPerformanceSection');
     if(el) el.innerHTML = renderGtmPerformanceSection(window.__gtmPerformance);
   }
@@ -15367,7 +15390,8 @@ async function loadLostDeals(){
   } catch(err){
     window.__lostDeals = { error: err.message };
   }
-  if(state.currentPage === 'companyuniverse'){
+  if(state.currentPage === 'companyuniverse') renderPage();
+  else if(state.currentPage === 'reviewdetail'){
     const el = document.getElementById('lostDealsSection');
     if(el) el.innerHTML = renderLostDealsSection(window.__lostDeals);
   }
@@ -15414,7 +15438,8 @@ async function loadStalledRelationships(){
   } catch(err){
     window.__stalledRelationships = { error: err.message };
   }
-  if(state.currentPage === 'companyuniverse'){
+  if(state.currentPage === 'companyuniverse') renderPage();
+  else if(state.currentPage === 'reviewdetail'){
     const el = document.getElementById('stalledRelationshipsSection');
     if(el) el.innerHTML = renderStalledRelationshipsSection(window.__stalledRelationships);
   }
@@ -15536,7 +15561,7 @@ async function loadGlobalAngleLibrary(){
   } catch(err){
     window.__globalAngleLibrary = [];
   }
-  if(state.currentPage === 'companyuniverse') renderPage();
+  if(state.currentPage === 'settings') renderPage();
 }
 
 function renderGlobalAngleLibrarySection(){
@@ -16520,6 +16545,98 @@ const UNIVERSE_TABS = [
 ];
 function setUniverseTab(t){ window.__universeTab = t; renderPage(); }
 
+// ---- Review tab: dashboard tiles + full-page drill-in ----
+// Was 4 stacked report cards (+ Angle Library + Context capture, both since
+// moved out - see Settings and Profile). Same underlying data and render
+// functions, just a scannable metric-tile row instead of a long scroll, with
+// the detail living on its own page (renderReviewDetailPage) - same
+// card-summary-then-full-page pattern as Program Strategy.
+const REVIEW_DETAIL_META = {
+  performance: { title: "What's actually converting", desc: 'Every outreach touch on file, rolled up by ICP segment — not one campaign in isolation.' },
+  autopsy: { title: 'Account-wide GTM review', desc: 'Diagnoses every stalled contact across every campaign and groups the real reasons, so a recurring objection shows up once, not thirty times.' },
+  lostdeals: { title: 'Why deals are lost', desc: "Every Lost deal on file, structured by reason — Twenty2's own pipeline as well as outreach-generated." },
+  stalled: { title: 'Stalled relationships', desc: 'Gone quiet, paused, or an early warning — worth knowing before it becomes a loss.' }
+};
+function openReviewDetail(key){
+  window.__reviewDetailKey = key;
+  navigate('reviewdetail');
+}
+function renderReviewTile(opts){
+  return `
+  <div class="metric-card clickable" onclick="openReviewDetail('${opts.key}')">
+    <div>
+      <div class="m-label"><span class="dot"${opts.dotColor ? ` style="background:${opts.dotColor};"` : ''}></span> ${esc(opts.label)}</div>
+      <div class="m-value">${opts.value}</div>
+      <span class="m-delta ${opts.deltaClass||''}">${esc(opts.delta)}</span>
+    </div>
+    <div class="m-icon"${opts.iconStyle ? ` style="${opts.iconStyle}"` : ''}><i class="ti ${opts.icon}"></i></div>
+  </div>`;
+}
+function renderReviewTiles(){
+  const perf = window.__gtmPerformance, lost = window.__lostDeals, stalled = window.__stalledRelationships, digest = window.__accountAutopsyDigest;
+
+  let perfTile;
+  if(!perf) perfTile = renderReviewTile({ key:'performance', label:"What's converting", value:'<i class="ti ti-loader-2"></i>', delta:'Loading…', icon:'ti-chart-histogram' });
+  else if(perf.error) perfTile = renderReviewTile({ key:'performance', label:"What's converting", value:'—', delta:'Could not load', icon:'ti-chart-histogram' });
+  else {
+    const rows = perf.bySector || [];
+    const totalContacted = rows.reduce((s,r) => s + (r.totalContacted||0), 0);
+    const totalWon = rows.reduce((s,r) => s + (r.won||0), 0);
+    perfTile = renderReviewTile({ key:'performance', label:"What's converting", value:`${totalWon}<small>won / ${totalContacted} contacted</small>`, delta: rows.length ? `${rows.length} sectors tracked` : 'no data yet', icon:'ti-chart-histogram' });
+  }
+
+  const autopsyTile = !digest
+    ? renderReviewTile({ key:'autopsy', label:'GTM review', value:'—', delta:'Tap to run', icon:'ti-stethoscope' })
+    : renderReviewTile({ key:'autopsy', label:'GTM review', value:(digest.results||[]).length, delta:(digest.results||[]).length ? `${digest.results.length} stalled flagged` : 'nothing stalled', icon:'ti-stethoscope' });
+
+  let lostTile;
+  if(!lost) lostTile = renderReviewTile({ key:'lostdeals', label:'Why deals are lost', value:'<i class="ti ti-loader-2"></i>', delta:'Loading…', icon:'ti-mood-sad' });
+  else if(lost.error) lostTile = renderReviewTile({ key:'lostdeals', label:'Why deals are lost', value:'—', delta:'Could not load', icon:'ti-mood-sad' });
+  else {
+    const n = (lost.lost||[]).length, topReason = (lost.byReason||[])[0];
+    lostTile = renderReviewTile({ key:'lostdeals', label:'Why deals are lost', value:n, delta: topReason ? `Top: ${topReason.reason}` : 'none logged', icon:'ti-mood-sad' });
+  }
+
+  let stalledTile;
+  if(!stalled) stalledTile = renderReviewTile({ key:'stalled', label:'Stalled relationships', value:'<i class="ti ti-loader-2"></i>', delta:'Loading…', icon:'ti-cloud-pause' });
+  else if(stalled.error) stalledTile = renderReviewTile({ key:'stalled', label:'Stalled relationships', value:'—', delta:'Could not load', icon:'ti-cloud-pause' });
+  else {
+    const n = (stalled.stalled||[]).length, topReason = (stalled.byReason||[])[0];
+    stalledTile = renderReviewTile({ key:'stalled', label:'Stalled relationships', value:n, delta: topReason ? `Top: ${topReason.reason}` : 'none logged', icon:'ti-cloud-pause' });
+  }
+
+  return `
+  <div class="muted" style="font-size:12.5px;margin:-2px 0 16px;max-width:70ch;">The learning loop — what the account base is telling you, so the next campaign is built on evidence instead of a guess. Tap a tile for the full breakdown.</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;">
+    ${perfTile}${autopsyTile}${lostTile}${stalledTile}
+  </div>`;
+}
+function renderReviewDetailPage(){
+  const key = window.__reviewDetailKey;
+  const meta = REVIEW_DETAIL_META[key];
+  if(!meta){
+    return `<div class="page-head"><h1 class="page-h1">Review</h1></div><div class="card"><div class="empty-state">Nothing selected. <a href="#" onclick="navigate('companyuniverse');return false;">Back to Company Universe</a></div></div>`;
+  }
+  let body, headerExtra = '';
+  if(key === 'performance') body = `<div class="card"><div id="gtmPerformanceSection">${renderGtmPerformanceSection(window.__gtmPerformance)}</div></div>`;
+  else if(key === 'lostdeals') body = `<div class="card"><div id="lostDealsSection">${renderLostDealsSection(window.__lostDeals)}</div></div>`;
+  else if(key === 'stalled') body = `<div class="card"><div id="stalledRelationshipsSection">${renderStalledRelationshipsSection(window.__stalledRelationships)}</div></div>`;
+  else if(key === 'autopsy'){
+    headerExtra = `<button class="btn btn-secondary btn-sm" ${window.__accountAutopsyLoading?'disabled':''} onclick="runAccountAutopsyDigest()"><i class="ti ${window.__accountAutopsyLoading?'ti-loader-2':'ti-refresh'}"></i> ${window.__accountAutopsyLoading?'Reviewing…':(window.__accountAutopsyDigest?'Run again':'Run review')}</button>`;
+    body = `<div class="card">${renderAccountAutopsySection(window.__accountAutopsyDigest)}</div>`;
+  }
+  return `
+  <div class="page-head" style="align-items:flex-start;">
+    <div>
+      <a href="#" onclick="navigate('companyuniverse');return false;" class="muted" style="font-size:12px;display:inline-flex;align-items:center;gap:4px;margin-bottom:8px;"><i class="ti ti-arrow-left"></i> Back to Company Universe</a>
+      <h1 class="page-h1">${esc(meta.title)}</h1>
+      <div class="page-sub">${esc(meta.desc)}</div>
+    </div>
+    ${headerExtra ? `<div>${headerExtra}</div>` : ''}
+  </div>
+  ${body}`;
+}
+
 function renderCompanyUniverse(){
   window.__ctxCampaignTag = null;
   const tab = window.__universeTab || 'accounts';
@@ -16531,37 +16648,7 @@ function renderCompanyUniverse(){
     ${renderProgramsCard()}
     ${renderProgramDiscoveryCard()}`;
 
-  const review = `
-    <div class="muted" style="font-size:12.5px;margin:-2px 0 16px;max-width:70ch;">The learning loop — what the account base is telling you, so the next campaign is built on evidence instead of a guess.</div>
-    <div class="card">
-      <div class="section-title"><i class="ti ti-chart-histogram"></i> What's actually converting</div>
-      <div class="muted" style="font-size:12.5px;margin:-6px 0 14px;">Every outreach touch on file, rolled up by ICP segment — not one campaign in isolation.</div>
-      <div id="gtmPerformanceSection">${renderGtmPerformanceSection(window.__gtmPerformance)}</div>
-    </div>
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
-        <div class="section-title" style="margin-bottom:0;"><i class="ti ti-stethoscope"></i> Account-wide GTM review</div>
-        <button class="btn btn-secondary btn-sm" ${window.__accountAutopsyLoading?'disabled':''} onclick="runAccountAutopsyDigest()"><i class="ti ${window.__accountAutopsyLoading?'ti-loader-2':'ti-refresh'}"></i> ${window.__accountAutopsyLoading?'Reviewing…':(window.__accountAutopsyDigest?'Run again':'Run review')}</button>
-      </div>
-      <div class="muted" style="font-size:12.5px;margin:-4px 0 14px;">Diagnoses every stalled contact across every campaign and groups the real reasons, so a recurring objection shows up once, not thirty times.</div>
-      ${renderAccountAutopsySection(window.__accountAutopsyDigest)}
-    </div>
-    <div class="card">
-      <div class="section-title"><i class="ti ti-mood-sad"></i> Why deals are lost</div>
-      <div class="muted" style="font-size:12.5px;margin:-6px 0 14px;">Every Lost deal on file, structured by reason — Twenty2's own pipeline as well as outreach-generated.</div>
-      <div id="lostDealsSection">${renderLostDealsSection(window.__lostDeals)}</div>
-    </div>
-    <div class="card">
-      <div class="section-title"><i class="ti ti-cloud-pause"></i> Stalled relationships</div>
-      <div class="muted" style="font-size:12.5px;margin:-6px 0 14px;">Gone quiet, paused, or an early warning — worth knowing before it becomes a loss.</div>
-      <div id="stalledRelationshipsSection">${renderStalledRelationshipsSection(window.__stalledRelationships)}</div>
-    </div>
-    ${renderGlobalAngleLibrarySection()}
-    <div class="card">
-      <div class="section-title"><i class="ti ti-notebook"></i> Context capture</div>
-      <div class="muted" style="font-size:12.5px;margin:-6px 0 14px;">Anything you learn about a contact or company that isn't tied to one campaign.</div>
-      ${renderContext()}
-    </div>`;
+  const review = renderReviewTiles();
 
   return `
   <div class="page-head" style="display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;">
@@ -16713,7 +16800,29 @@ function renderProfilePage(){
   ${searchCard}
   ${selectedCompany ? renderProfileViewToggle() : ''}
   ${selectedCompany ? ((window.__profileView||'dashboard') === 'dashboard' ? renderProfileAccountDashboard(selectedCompany) : renderChangeArchitectureCanvas(selectedCompany)) : ''}
+  ${selectedCompany ? renderProfileContextCapture(selectedCompany) : ''}
   `;
+}
+
+// Context capture moved here from Company Universe > Review - a global
+// dumping ground disconnected from any account. Same shared
+// renderContext()/loadContextData() the Intelligence tab and a campaign's
+// Intelligence tab already use; just pre-selects the company being viewed
+// (once, so it doesn't clobber a selection already in progress elsewhere).
+function renderProfileContextCapture(companyName){
+  if(window.__contextData && !window.__contextData.error && Array.isArray(window.__contextData.companies)){
+    if(!window.__ctxLogger) initContextLogger();
+    if(!window.__ctxLogger.companyId){
+      const match = window.__contextData.companies.find(c => (c.name||'').toLowerCase() === companyName.toLowerCase());
+      if(match) window.__ctxLogger.companyId = match.id;
+    }
+  }
+  return `
+  <div class="card" style="margin-top:16px;">
+    <div class="section-title"><i class="ti ti-notebook"></i> Context capture</div>
+    <div class="muted" style="font-size:12.5px;margin:-6px 0 14px;">Anything you learn about ${esc(companyName)} that isn't tied to one campaign.</div>
+    ${renderContext()}
+  </div>`;
 }
 
 // Profile page has two views onto the selected company: this Dashboard
@@ -27118,6 +27227,7 @@ function renderSettings(){
     ${renderMondayStallScanSection(window.__mondayStallScan)}
   </div>
   ${renderProgramDiscoverySettingsCard()}
+  ${renderGlobalAngleLibrarySection()}
   <div class="settings-section card">
     <div class="section-title"><i class="ti ti-brand-linkedin"></i> LinkedIn accounts</div>
     ${s.accounts.map((a,i) => `
