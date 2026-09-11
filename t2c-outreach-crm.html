@@ -13819,9 +13819,9 @@ function renderCampaignListView(){
           <th>Name</th><th>Status</th>
           <th title="Contacts in the campaign">Contacts</th>
           <th title="Share of contacts at companies tagged Twenty2's codified ICP">ICP</th>
-          <th title="Connection request accepted">Connected</th>
-          <th title="Reached Message 1 / 2 / 3">M1 / M2 / M3</th>
-          <th title="Distinct contacts who replied (of connected)">Reply rate</th>
+          <th title="Connection request accepted. Email campaigns skip this step.">Connected</th>
+          <th title="LinkedIn: reached Message 1 / 2 / 3. Email: contacts emailed so far.">M1 / M2 / M3</th>
+          <th title="Distinct contacts who replied (of connected, or of emailed for Email campaigns)">Reply rate</th>
           <th title="Meetings booked (from the Deals table)">Meetings</th>
           <th>Last modified</th>
         </tr></thead>
@@ -13837,17 +13837,23 @@ function renderCampaignListView(){
 function renderCampaignListRow(campaign){
   const m = campaignMetrics(campaign);
   const statusClass = CAMPAIGN_STATUS_CLASS[campaign.status] || 'campaign-status-draft';
-  const n = v => (v === null || v === undefined) ? '·' : v;
+  const isEmail = (campaign.type || 'linkedin') === 'email';
+  const n = v => (v === null || v === undefined) ? '—' : v;
   const cell = m.loading ? '<span class="muted">·</span>' : (m.error ? '<span class="muted" title="'+esc(m.error)+'">!</span>' : null);
+  // Email campaigns have no connect step and a fixed emailed/replied/booked
+  // funnel, not a per-message ladder - showing "· / · / ·" under a
+  // LinkedIn-shaped M1/M2/M3 header reads as a stalled sequence rather than
+  // "this concept doesn't apply", so those two cells get channel-appropriate
+  // content instead of forcing email data through the LinkedIn columns.
   return `
   <tr class="home-grid-row" onclick="openCampaignDetail('${campaign.id}')">
-    <td class="perf-name">${esc(campaign.name)}${m.excluded ? ` <span class="muted" style="font-weight:400;">· ${m.excluded} excluded</span>` : ''}</td>
+    <td class="perf-name"><i class="ti ${isEmail ? 'ti-mail' : 'ti-brand-linkedin'}" title="${isEmail ? 'Email campaign' : 'LinkedIn campaign'}" style="color:var(--muted);font-size:14px;margin-right:5px;"></i>${esc(campaign.name)}${m.excluded ? ` <span class="muted" style="font-weight:400;">· ${m.excluded} excluded</span>` : ''}</td>
     <td><span class="campaign-status ${statusClass}">${esc(campaign.status)}</span></td>
     <td>${m.contactCount}</td>
     <td>${campaignIcpCell(campaign)}</td>
-    <td>${cell ?? n(m.connected)}</td>
-    <td>${cell ?? `${n(m.m1)} / ${n(m.m2)} / ${n(m.m3)}`}</td>
-    <td>${cell ?? (m.replyRate === null ? '·' : m.replyRate + '%')}</td>
+    <td>${cell ?? (isEmail ? '<span class="muted">n/a</span>' : n(m.connected))}</td>
+    <td>${cell ?? (isEmail ? `${n(m.m1)} emailed` : `${n(m.m1)} / ${n(m.m2)} / ${n(m.m3)}`)}</td>
+    <td>${cell ?? (m.replyRate === null ? '—' : m.replyRate + '%')}</td>
     <td>${cell ?? n(m.meetings)}</td>
     <td>${fmtDate(campaign.updatedAt || campaign.createdAt)}</td>
   </tr>`;
