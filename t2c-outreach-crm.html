@@ -14303,7 +14303,7 @@ function editCampaign(campaignId){
 
 /* ---- Detail view ---- */
 
-const CAMPAIGN_DETAIL_TABS = [['actions','Actions'],['grid','Contacts'],['roadmap','Sequence'],['strategy','Setup'],['analytics','Results'],['intelligence','Campaign Notes']];
+const CAMPAIGN_DETAIL_TABS = [['actions','Actions'],['grid','Contacts'],['roadmap','Sequence'],['strategy','Setup'],['analytics','Results']];
 
 // tab param lets callers (e.g. the Grid page's back button) land on a
 // specific tab instead of always resetting to the first one.
@@ -14362,7 +14362,6 @@ function setCampaignDetailTab(tab){
   window.__campaignDetailTab = tab;
   window.__contentEditorId = null;
   renderPage();
-  if(tab === 'analytics' && !window.__campaignAnalytics) runCampaignAnalytics();
   if(tab === 'analytics' && !window.__campaignMessagePerf) runCampaignMessagePerformance();
   if(tab === 'analytics' && window.__campaignInsights === null && !window.__campaignInsightsError) runCampaignInsights();
   if(tab === 'analytics' && window.__campaignScorecard === undefined){ const c = state.campaigns.find(x=>x.id===window.__campaignDetailId); if(c) loadCampaignScorecard(c); }
@@ -14409,7 +14408,6 @@ function renderCampaignDetail(){
     ${CAMPAIGN_DETAIL_TABS.map(([key,label]) => `<div class="seq-tab ${tab===key?'active':''}" onclick="setCampaignDetailTab('${key}')">${label}</div>`).join('')}
   </div>
   ${tab==='actions' ? renderCampaignActionsTab(campaign) : ''}
-  ${tab==='intelligence' ? renderCampaignIntelligenceTab(campaign) : ''}
   ${tab==='grid' ? renderCampaignGridTab(campaign) : ''}
   ${tab==='roadmap' ? renderCampaignRoadmapTab(campaign) : ''}
   ${tab==='strategy' ? renderCampaignStrategyTab(campaign) : ''}
@@ -14429,19 +14427,7 @@ function renderCampaignActionsTab(campaign){
   }
   const loaded = window.__campaignSequenceStages && window.__campaignSequenceStages[campaign.id];
   if(!loaded) return '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading actions…</div>';
-  return renderTodaysActions(campaign);
-}
-
-/* ---- Intelligence tab ---- */
-// Identical widgets to the top-level Intelligence > Context sub-tab (touch
-// point logger, upload context, historical upload) - same renderContext(),
-// just with window.__ctxCampaignTag set so every save tags the record with
-// this campaign's id/name too (see saveContextTouchPoint/
-// submitContextLogContent/submitContextHistoricalUpload).
-
-function renderCampaignIntelligenceTab(campaign){
-  window.__ctxCampaignTag = { id: campaign.id, name: campaign.name };
-  return renderContext();
+  return renderTodaysActions(campaign) + renderAcceptedReviewCard(campaign) + renderSalesTranscriptCard(campaign);
 }
 
 /* ---- Grid tab ---- */
@@ -19218,7 +19204,6 @@ function renderAutopsyDigestCard(campaign){
 
 function renderCampaignAnalyticsTab(campaign){
   const period = window.__campaignAnalyticsPeriod || 'thisWeek';
-  const data = window.__campaignAnalytics;
   const insights = window.__campaignInsights;
   const insightsErr = window.__campaignInsightsError;
   const sc = window.__campaignScorecard;
@@ -19254,39 +19239,12 @@ function renderCampaignAnalyticsTab(campaign){
 
   ${renderConnectionAbCard(sc && !sc.error ? sc.connectionAb : null)}
 
-  ${renderAcceptedReviewCard(campaign)}
-
   ${(() => {
-    // Deals content merged in from the old standalone Deals tab (scorecards,
-    // conversion intelligence, deal log, weekly card, transcript analysis) -
-    // one dashboard instead of splitting "how's it performing" across two
-    // tabs with their own period selectors. Shares this tab's own period
-    // control above instead of a second one.
     const salesData = window.__salesData;
     if(salesData === undefined) return '<div class="card" style="margin-bottom:16px;"><div class="muted"><i class="ti ti-loader-2"></i> Loading deal data…</div></div>';
     if(salesData.error) return `<div class="card" style="margin-bottom:16px;"><div class="muted">Could not load deal data: ${esc(salesData.error)}</div></div>`;
-    return `
-      ${renderSalesScorecards(salesData, period)}
-      ${renderConversionIntelligence(window.__salesConversionIntel)}
-      ${renderSalesLog(campaign, salesData, period)}
-      ${renderWeeklySalesCard(salesData, period)}
-      ${renderSalesTranscriptCard(campaign)}
-    `;
+    return renderSalesLog(campaign, salesData, period);
   })()}
-
-  <div class="card" style="margin-bottom:16px;">
-    <div class="section-title" style="margin-bottom:10px;"><i class="ti ti-database"></i> Activity &amp; benchmarks</div>
-    ${!data ? '<div class="muted"><i class="ti ti-loader-2"></i> Loading...</div>' :
-      data.error ? `<div class="muted">Could not load: ${esc(data.error)}</div>` : `
-      <div class="mini-cards analytics-stat-grid" style="margin-bottom:0;">
-        <div class="mini-card"><div class="num">${data.touchPointsSentThisWeek}</div><div class="label">Touch points this week</div></div>
-        <div class="mini-card"><div class="num">${campaignFunnelReplyRate(campaign)}</div><div class="label">Reply rate</div></div>
-        <div class="mini-card"><div class="num">${campaignFunnelConversionRate(campaign)}</div><div class="label">Conversion rate</div></div>
-        <div class="mini-card"><div class="num">${data.avgTouchPointsToConvert ?? '—'}</div><div class="label">Avg touches to convert</div></div>
-      </div>
-      ${data.historicalComparison ? `<p style="font-size:12.5px;margin-top:14px;">Vs. T2C historical average: conversion rate ${campaignFunnelConversionRate(campaign)} vs ${data.historicalComparison.avgConversionRate ?? '—'}% average, ${data.avgTouchPointsToConvert ?? '—'} vs ${data.historicalComparison.avgTouchPointsToConvert ?? '—'} touch points to convert.</p>` : ''}
-    `}
-  </div>
 
   ${renderCampaignMessagePerformance()}
 
@@ -19298,6 +19256,8 @@ function renderCampaignAnalyticsTab(campaign){
       ${renderVariantPerformanceCard(campaign)}
 
       ${renderAutopsyDigestCard(campaign)}
+
+      ${renderConversionIntelligence(window.__salesConversionIntel)}
 
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
