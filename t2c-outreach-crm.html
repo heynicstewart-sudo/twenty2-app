@@ -68,6 +68,7 @@ if(window.Chart){
   --mint:#A9EA76;   --mint-soft:#E4F5D6;
   --success:#2F7A50;
   --warning:#8A6314;
+  --warning-bg:#FFF3D9;
   --danger:#B23D1B;
   --muted:#7A5A50;
   --text-dim:#7C5C52;
@@ -244,14 +245,14 @@ html.sidebar-collapsed .sidebar-logo{justify-content:center;padding-left:0;paddi
 .client-switcher{position:relative;}
 .client-switcher-btn{display:inline-flex;align-items:center;gap:8px;padding:7px 12px;border-radius:var(--radius-input);border:1px solid var(--border-light);background:var(--card-bg);font-family:inherit;font-weight:600;font-size:12.5px;color:var(--text);cursor:pointer;transition:background .12s ease,border-color .12s ease;}
 .client-switcher-btn:hover{background:var(--sidebar-hover-bg);}
-.client-switcher-btn .cs-badge{width:20px;height:20px;border-radius:6px;background:var(--accent,#2A6B7C);color:#fff;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;flex-shrink:0;}
+.client-switcher-btn .cs-badge{width:20px;height:20px;border-radius:6px;background:var(--accent,#0079B5);color:#fff;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;flex-shrink:0;}
 .client-switcher-btn .ti{font-size:15px;color:var(--sidebar-muted);}
 .client-switcher-menu{position:absolute;top:calc(100% + 6px);right:0;min-width:220px;background:var(--card-bg);border:1px solid var(--border-light);border-radius:var(--radius-card);box-shadow:var(--shadow-md,0 12px 32px rgba(17,17,20,.16));padding:6px;z-index:60;}
 .client-switcher-menu[hidden]{display:none;}
 .client-switcher-item{display:flex;align-items:center;gap:9px;width:100%;padding:9px 10px;border:none;background:none;border-radius:9px;font-family:inherit;font-size:12.5px;font-weight:600;color:var(--text);text-align:left;cursor:pointer;}
 .client-switcher-item:hover{background:var(--sidebar-hover-bg);}
 .client-switcher-item.active{background:var(--sidebar-active-bg);color:var(--sidebar-active-text);}
-.client-switcher-item .cs-badge{width:20px;height:20px;border-radius:6px;background:var(--accent,#2A6B7C);color:#fff;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;flex-shrink:0;}
+.client-switcher-item .cs-badge{width:20px;height:20px;border-radius:6px;background:var(--accent,#0079B5);color:#fff;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;flex-shrink:0;}
 .client-switcher-item.paused{opacity:.5;}
 .client-switcher-sep{height:1px;background:var(--border-light);margin:5px 2px;}
 .client-switcher-label{padding:7px 10px 4px;font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--sidebar-muted);}
@@ -462,7 +463,7 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .grid-col-remove{margin-left:6px;border:none;background:transparent;color:var(--muted);cursor:pointer;font-size:13px;line-height:1;padding:2px 4px;border-radius:4px;vertical-align:middle;}
 .grid-col-remove:hover{background:var(--danger,#c0392b);color:#fff;}
 .grid-col-search{margin-left:4px;border:none;background:transparent;color:var(--muted);cursor:pointer;font-size:13px;line-height:1;padding:2px 4px;border-radius:4px;vertical-align:middle;}
-.grid-col-search:hover{background:var(--accent,#2A6B7C);color:#fff;}
+.grid-col-search:hover{background:var(--accent,#0079B5);color:#fff;}
 .grid-col-search:disabled{opacity:.4;cursor:default;}
 .grid-col-search:disabled:hover{background:transparent;color:var(--muted);}
 .company-cell{font-weight:700;white-space:nowrap;}
@@ -780,10 +781,10 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .kpi-label{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;}
 .kpi-value{font-size:26px;font-weight:800;line-height:1.15;margin-top:6px;display:flex;align-items:baseline;gap:8px;}
 .kpi-delta{font-size:11px;font-weight:700;padding:1px 7px;border-radius:999px;}
-.kpi-delta.is-up{background:#dcfce7;color:#166534;}
-.kpi-delta.is-down{background:#fee2e2;color:#991b1b;}
+.kpi-delta.is-up{background:var(--tint-green-bg);color:var(--tint-green-fg);}
+.kpi-delta.is-down{background:var(--tint-red-bg);color:var(--tint-red-fg);}
 .kpi-sub{font-size:11px;color:var(--muted);margin-top:3px;}
-.scorecard-diag{margin-top:12px;font-size:12px;line-height:1.5;background:#fef3c7;border:1px solid #fde68a;color:#92400e;border-radius:8px;padding:9px 12px;}
+.scorecard-diag{margin-top:12px;font-size:12px;line-height:1.5;background:var(--warning-bg);border:1px solid var(--sand);color:var(--warning);border-radius:8px;padding:9px 12px;}
 .scorecard-warn{margin-top:8px;font-size:11.5px;line-height:1.5;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;border-radius:8px;padding:8px 11px;}
 @media(max-width:900px){.kpi-row{grid-template-columns:repeat(2,1fr);}}
 .heatmap-grid{display:grid;grid-template-columns:70px repeat(5,1fr);gap:3px;font-size:10.5px;}
@@ -799,9 +800,6 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .signal-card-alert{background:var(--tint-amber-bg);border-color:rgba(0,0,0,0.08);}
 .job-change-badge{display:flex;align-items:flex-start;gap:8px;background:var(--tint-amber-bg);border:1px solid rgba(0,0,0,0.08);border-radius:var(--radius-card);padding:10px 12px;margin-bottom:14px;}
 .format-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:middle;}
-.format-linkedin{background:#0084C5;}
-.format-blog{background:#44A574;}
-.format-newsletter{background:#8b5cf6;}
 .cta-row{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--border);}
 .cta-row:last-child{border-bottom:none;}
 .count-pill{background:var(--ink);color:#fff;border-radius:var(--radius-pill);min-width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;padding:0 7px;font-size:11px;font-weight:700;}
@@ -2186,7 +2184,7 @@ function _wrStep(label, count, max, note, strong){
   return `<div style="display:flex;align-items:center;gap:9px;margin:4px 0;font-size:10px;">
     <div style="width:120px;color:#444;flex-shrink:0;${strong?'font-weight:700;':''}">${_wrEsc(label)}</div>
     <div style="flex:1;background:#eef0f2;border-radius:3px;height:15px;">
-      <div style="width:${w}%;background:#2A6B7C;height:100%;border-radius:3px;min-width:${count?'2px':'0'};"></div>
+      <div style="width:${w}%;background:#0079B5;height:100%;border-radius:3px;min-width:${count?'2px':'0'};"></div>
     </div>
     <div style="width:30px;text-align:right;font-weight:800;color:#1a1a2e;flex-shrink:0;">${count}</div>
     <div style="width:110px;text-align:right;color:#8a8f96;flex-shrink:0;font-size:9px;">${_wrEsc(note||'')}</div>
@@ -2232,7 +2230,7 @@ function _wrMessageSteps(c){
       <div style="width:82px;font-weight:800;color:#1a1a2e;flex-shrink:0;">Message ${m.message}</div>
       <div style="flex:1;background:#e6eaec;border-radius:3px;height:18px;position:relative;">
         <div style="position:absolute;top:0;left:0;bottom:0;width:${w}%;background:#cfe0e4;border-radius:3px;"></div>
-        <div style="position:absolute;top:0;left:0;bottom:0;width:${rw}%;background:#2A6B7C;border-radius:3px;"></div>
+        <div style="position:absolute;top:0;left:0;bottom:0;width:${rw}%;background:#0079B5;border-radius:3px;"></div>
       </div>
       <div style="width:56px;text-align:right;flex-shrink:0;"><b style="color:#1a1a2e;font-size:11px;">${m.sent}</b> <span style="color:#999;font-size:9px;">sent</span></div>
       <div style="width:104px;text-align:right;flex-shrink:0;font-size:9.5px;color:#555;"><b style="color:#1a1a2e;">${m.replied}</b> replied (${m.replyRate}%)</div>
@@ -2250,7 +2248,7 @@ function _wrMessageSteps(c){
     return bar + drop;
   }).join('');
   return `<div class="wr-keep" style="margin-top:12px;border:1px solid #e3e6e9;border-radius:8px;overflow:hidden;">
-    <div style="background:#2A6B7C;color:#fff;font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;padding:6px 12px;">Message sequence &mdash; where people drop off</div>
+    <div style="background:#0079B5;color:#fff;font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;padding:6px 12px;">Message sequence &mdash; where people drop off</div>
     <div style="padding:9px 12px 10px;">
       ${parts}
       <div style="font-size:8px;color:#aaa;margin-top:5px;">Dark bar = replied, light bar = sent. A follow-up only goes out after the previous message gets a reply, so the drop-off is mostly people who never replied.</div>
@@ -2264,7 +2262,7 @@ function _wrMessageSteps(c){
 function _wrPicks(c){
   const row = (label, p) => {
     const val = p
-      ? `<b style="color:#1a1a2e;">${_wrEsc(p.label)}</b> <span style="color:#2A6B7C;font-weight:700;">${label.includes('connect') ? p.acceptRate : p.replyRate}%</span> <span style="color:#999;">(${label.includes('connect') ? p.accepted : p.replied} of ${p.approached})</span>`
+      ? `<b style="color:#1a1a2e;">${_wrEsc(p.label)}</b> <span style="color:#0079B5;font-weight:700;">${label.includes('connect') ? p.acceptRate : p.replyRate}%</span> <span style="color:#999;">(${label.includes('connect') ? p.accepted : p.replied} of ${p.approached})</span>`
       : `<span style="color:#999;">Not enough data yet</span>`;
     return `<div style="display:flex;gap:10px;font-size:9.5px;margin:2px 0;">
       <div style="width:150px;color:#777;flex-shrink:0;">${label}</div><div>${val}</div></div>`;
@@ -2347,7 +2345,7 @@ function buildWeeklyReportHTML(d){
 
   const statsBlock = sec.stats ? `
     <div class="wr-keep" style="margin-top:16px;">
-      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#2A6B7C;">New activity this week (${_wrEsc(d.weekOf||'')})</div>
+      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#0079B5;">New activity this week (${_wrEsc(d.weekOf||'')})</div>
       <div style="display:grid;grid-template-columns:repeat(${sec.content?3:2},1fr);gap:10px;margin-top:6px;">
         ${_wrTile(o.messagesSent||0, 'Messages sent')}
         ${_wrTile(o.repliesIn||0, 'Replies received')}
@@ -2359,7 +2357,7 @@ function buildWeeklyReportHTML(d){
 
   const contentBlock = (sec.content && content.length) ? `
     <div class="wr-keep" style="margin-top:16px;">
-      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#2A6B7C;">Content published</div>
+      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#0079B5;">Content published</div>
       <ul style="font-size:9.5px;color:#333;margin:5px 0 0;padding-left:15px;">
         ${content.slice(0,10).map(c => `<li style="margin:2px 0;">${_wrEsc(c.title)}${c.type?` <span style="color:#999;">(${_wrEsc(c.type)})</span>`:''}</li>`).join('')}
       </ul>
@@ -2368,7 +2366,7 @@ function buildWeeklyReportHTML(d){
   const g = tw.googleAds;
   const adsBlock = sec.ads ? `
     <div class="wr-keep" style="margin-top:16px;">
-      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#2A6B7C;">${_wrEsc(d.account||'Client')} - Google Ads</div>
+      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#0079B5;">${_wrEsc(d.account||'Client')} - Google Ads</div>
       ${(g && !g.error) ? `
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:6px;">
           ${_wrTile('$'+(g.spend!=null?g.spend.toLocaleString('en-AU'):'0'), 'Spend')}
@@ -2381,19 +2379,19 @@ function buildWeeklyReportHTML(d){
     </div>` : '';
 
   return `<div id="weeklyReportSheet" style="width:800px;background:#fff;color:#1a1a2e;font-family:'Plus Jakarta Sans',system-ui,sans-serif;padding:26px 30px;box-sizing:border-box;">
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #2A6B7C;padding-bottom:10px;">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #0079B5;padding-bottom:10px;">
       <div>
         <div style="font-size:17px;font-weight:800;letter-spacing:-.01em;">${_wrEsc(d.account||'Client')}</div>
         <div style="font-size:10.5px;color:#666;">LinkedIn outreach &mdash; weekly numbers</div>
       </div>
       <div style="text-align:right;">
-        <div style="font-size:12px;font-weight:700;color:#2A6B7C;">Week of ${_wrEsc(d.weekOf||'')}</div>
+        <div style="font-size:12px;font-weight:700;color:#0079B5;">Week of ${_wrEsc(d.weekOf||'')}</div>
         <div style="font-size:9.5px;color:#999;">Generated ${new Date(d.generatedAt||Date.now()).toLocaleDateString('en-AU')}</div>
       </div>
     </div>
 
     <div class="wr-keep" style="margin-top:20px;">
-      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#2A6B7C;">All campaigns &mdash; to date</div>
+      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#0079B5;">All campaigns &mdash; to date</div>
       <div style="display:grid;grid-template-columns:repeat(${allEmail?3:4},1fr);gap:10px;margin-top:8px;">
         ${allEmail ? `
           ${_wrTile(totals.sent, 'People emailed')}
@@ -2414,7 +2412,7 @@ function buildWeeklyReportHTML(d){
     ${adsBlock}
 
     <div style="margin-top:22px;">
-      <div class="wr-keep" style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#2A6B7C;">By campaign</div>
+      <div class="wr-keep" style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#0079B5;">By campaign</div>
       <div style="display:flex;flex-direction:column;gap:12px;margin-top:10px;">${campCards || '<div style="font-size:10px;color:#888;">No live campaigns.</div>'}</div>
     </div>
 
@@ -2966,10 +2964,10 @@ function afterRender(page){
 // the reply sent (POST .../mark-sent with stageKey:'reply' - no stage advance).
 
 const REPLY_SENTIMENT_STYLE = {
-  Positive: { bg:'#dcfce7', fg:'#166534', label:'Positive' },
-  Neutral:  { bg:'#f1f5f9', fg:'#475569', label:'Neutral' },
-  Cold:     { bg:'#e0f2fe', fg:'#075985', label:'Cold' },
-  Negative: { bg:'#fee2e2', fg:'#991b1b', label:'Negative' }
+  Positive: { bg:'var(--tint-green-bg)', fg:'var(--tint-green-fg)', label:'Positive' },
+  Neutral:  { bg:'var(--tint-grey-bg)', fg:'var(--tint-grey-fg)', label:'Neutral' },
+  Cold:     { bg:'var(--tint-blue-bg)', fg:'var(--tint-blue-fg)', label:'Cold' },
+  Negative: { bg:'var(--tint-red-bg)', fg:'var(--tint-red-fg)', label:'Negative' }
 };
 
 async function loadRepliesQueue(){
@@ -3034,7 +3032,7 @@ function renderReplyCard(r){
   const badge = s ? `<span style="font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:999px;background:${s.bg};color:${s.fg};">${s.label}</span>` : '';
   const waiting = r.daysWaiting === null ? '' : (r.daysWaiting === 0 ? 'replied today' : `replied ${r.daysWaiting}d ago`);
   const attn = r.needsAttention
-    ? `<div style="font-size:11.5px;color:#92400e;background:#fef3c7;border:1px solid #fde68a;border-radius:8px;padding:7px 10px;margin-bottom:8px;"><i class="ti ti-alert-triangle"></i> <strong>Needs your input</strong>${r.attentionNote ? ' — '+esc(r.attentionNote) : ''}</div>`
+    ? `<div style="font-size:11.5px;color:var(--warning);background:var(--warning-bg);border:1px solid var(--sand);border-radius:8px;padding:7px 10px;margin-bottom:8px;"><i class="ti ti-alert-triangle"></i> <strong>Needs your input</strong>${r.attentionNote ? ' — '+esc(r.attentionNote) : ''}</div>`
     : '';
   const nameHtml = r.linkedInUrl
     ? `<a href="${esc(r.linkedInUrl)}" target="_blank" rel="noopener" style="font-weight:700;">${esc(r.contactName)}</a>`
@@ -3051,7 +3049,7 @@ function renderReplyCard(r){
         <span style="margin-left:auto;font-size:11px;color:var(--muted);">${esc(r.campaignName)} · ${esc(r.sequenceStage)}${waiting ? ' · '+waiting : ''}</span>
       </div>
       ${attn}
-      <div style="font-size:12.5px;background:var(--sidebar-hover-bg,#f2f3f6);border-radius:8px;padding:8px 10px;margin:6px 0 10px;">
+      <div style="font-size:12.5px;background:var(--surface-2);border-radius:8px;padding:8px 10px;margin:6px 0 10px;">
         <span class="muted" style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;">Their reply</span><br>
         ${esc(r.lastInbound || '(no message text captured — open the thread on LinkedIn)')}
         ${r.thread ? `<div style="margin-top:6px;"><a href="#" onclick="toggleReplyThread('${id}');return false;" style="font-size:11px;">Show full thread</a><pre id="replyThread-${id}" hidden style="white-space:pre-wrap;font-family:inherit;font-size:11.5px;margin-top:6px;padding-top:6px;border-top:1px solid var(--border);">${esc(r.thread)}</pre></div>` : ''}
@@ -12189,7 +12187,7 @@ function renderAccountContactsSection(contacts, companyName){
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
           <strong>${esc(c.name)}</strong>
           <div style="display:flex;align-items:center;gap:6px;flex:none;">
-            ${c.isDecisionMaker===true ? '<span class="badge" style="background:var(--success-bg,#dcfce7);color:var(--success,#16a34a);font-size:10px;">DM</span>' : ''}
+            ${c.isDecisionMaker===true ? '<span class="badge" style="background:var(--tint-green-bg);color:var(--tint-green-fg);font-size:10px;">DM</span>' : ''}
             ${connStatusSelect(connStatusValueFromStage(c.journeyStage), `setAccountContactStatus('${c.id}', this.value)`)}
           </div>
         </div>
@@ -12383,8 +12381,8 @@ function renderCompanyDrawerContent(data){
       <div style="font-weight:800;font-size:16px;">${esc(c.name)}</div>
       <div class="muted" style="font-size:12.5px;">${esc(c.industry)}${c.sector?' · '+esc(c.sector):''}</div>
       ${(c.icpTag || c.accountPriority) ? `<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
-        ${c.icpTag==='Resources ICP' ? `<span class="badge" style="background:var(--success-bg,#dcfce7);color:var(--success,#16a34a);font-size:10.5px;font-weight:700;">Resources ICP</span>` : c.icpTag ? `<span class="badge muted" style="font-size:10.5px;">${esc(c.icpTag)}</span>` : ''}
-        ${c.accountPriority ? `<span class="badge" style="background:var(--accent-2-bg,#dbeafe);color:var(--accent-2,#2563eb);font-size:10.5px;font-weight:700;">${esc(c.accountPriority)}</span>` : ''}
+        ${c.icpTag==='Resources ICP' ? `<span class="badge" style="background:var(--tint-green-bg);color:var(--tint-green-fg);font-size:10.5px;font-weight:700;">Resources ICP</span>` : c.icpTag ? `<span class="badge muted" style="font-size:10.5px;">${esc(c.icpTag)}</span>` : ''}
+        ${c.accountPriority ? `<span class="badge" style="background:var(--tint-amber-bg);color:var(--tint-amber-fg);font-size:10.5px;font-weight:700;">${esc(c.accountPriority)}</span>` : ''}
         ${c.procurementThreshold ? `<span class="muted" style="font-size:10.5px;">No-tender up to $${Number(c.procurementThreshold).toLocaleString()}</span>` : ''}
       </div>` : ''}
       <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
@@ -15064,11 +15062,11 @@ async function loadAccountPipeline(campaign){
 }
 
 const ACCOUNT_STATUS_META = {
-  'Booked': ['ti-confetti', '#44A574'],
-  'Engaged': ['ti-messages', '#2A6B7C'],
-  'Right person reached': ['ti-user-check', '#3b82f6'],
-  'Wrong persona(s) only': ['ti-user-x', '#b45309'],
-  'Not yet mapped': ['ti-help-circle', '#94a3b8']
+  'Booked': ['ti-confetti', 'var(--success)'],
+  'Engaged': ['ti-messages', 'var(--accent)'],
+  'Right person reached': ['ti-user-check', 'var(--tint-amber-fg)'],
+  'Wrong persona(s) only': ['ti-user-x', 'var(--danger)'],
+  'Not yet mapped': ['ti-help-circle', 'var(--muted)']
 };
 const ACCOUNT_STATUS_DISPLAY_ORDER = ['Booked','Engaged','Right person reached','Wrong persona(s) only','Not yet mapped'];
 
@@ -16883,7 +16881,7 @@ function renderDashCoverage(name){
   if(board.error) return `<div class="card" style="margin-top:16px;"><div class="section-title" style="margin-bottom:6px;"><i class="ti ti-user-check"></i> Coverage</div><div class="muted" style="font-size:12.5px;">Could not load: ${esc(board.error)}</div></div>`;
   const contacts = board.contacts || [];
   const order = ['Booked','Engaged','Right person reached','Not yet mapped'];
-  const colors = { 'Booked':'var(--success)', 'Engaged':'var(--accent)', 'Right person reached':'#3b82f6', 'Not yet mapped':'var(--muted)' };
+  const colors = { 'Booked':'var(--success)', 'Engaged':'var(--accent)', 'Right person reached':'var(--tint-amber-fg)', 'Not yet mapped':'var(--muted)' };
   const counts = {}; contacts.forEach(c => { counts[c.status] = (counts[c.status]||0) + 1; });
   return `
   <div class="card" style="margin-top:16px;">
@@ -17040,7 +17038,7 @@ const ARCH_MIN_ZOOM = 0.25, ARCH_MAX_ZOOM = 2.5;
 const ARCH_PRESETS = [
   { key: 'current', label: 'Current state', fill: '#e8e9ec', stroke: '#71717a' },
   { key: 'pain',    label: 'Pain point',    fill: '#f6ded9', stroke: '#dc2626' },
-  { key: 'change',  label: 'Change initiative', fill: '#d3e8e4', stroke: '#2A6B7C' },
+  { key: 'change',  label: 'Change initiative', fill: '#d3e8e4', stroke: '#0079B5' },
   { key: 'future',  label: 'Future state',  fill: '#d9efe1', stroke: '#16a34a' },
   { key: 'risk',    label: 'Risk if no action', fill: '#f7eccf', stroke: '#d97706' }
 ];
@@ -17055,7 +17053,7 @@ const ARCH_SHAPES = [
 ];
 // Competitor-map preset shapes (the board also runs on this engine).
 const ARCH_COMPETITOR_PRESETS = [
-  { key: 'competitor', label: 'Competitor', fill: '#d3e8e4', stroke: '#2A6B7C' },
+  { key: 'competitor', label: 'Competitor', fill: '#d3e8e4', stroke: '#0079B5' },
   { key: 'offering',   label: 'What they do', fill: '#e8e9ec', stroke: '#71717a' },
   { key: 'strength',   label: 'Strength', fill: '#d9efe1', stroke: '#16a34a' },
   { key: 'weakness',   label: 'Weakness', fill: '#f6ded9', stroke: '#dc2626' },
@@ -17608,7 +17606,7 @@ function archConfirmEntity(companyName, kind, i){
   closeModal();
   archInsert(companyName, {
     type: kind, w: 200, h: 72, text: '',
-    fill: '#ffffff', stroke: kind === 'company' ? '#2A6B7C' : '#3f9c8f',
+    fill: '#ffffff', stroke: kind === 'company' ? '#0079B5' : '#3f9c8f',
     ref: { kind, id: o.id, name: o.name }
   });
 }
@@ -18016,7 +18014,7 @@ function archRenderCharts(companyName){
     if(!canvas) return;
     if(window.__archCharts[el.id]){ try { window.__archCharts[el.id].destroy(); } catch(e){} }
     const c = el.chart;
-    const palette = ['#2A6B7C','#3f9c8f','#bd7c0c','#d4472f','#6444bd','#1b6ba6','#177a49','#a65c22'];
+    const palette = ['#0079B5','#3f9c8f','#bd7c0c','#d4472f','#6444bd','#1b6ba6','#177a49','#a65c22'];
     const isXY = c.kind === 'line' || c.kind === 'bar';
     window.__archCharts[el.id] = new Chart(canvas, {
       type: c.kind,
@@ -18025,8 +18023,8 @@ function archRenderCharts(companyName){
         datasets: [{
           label: c.title || 'Value',
           data: c.data.values,
-          backgroundColor: isXY ? '#2A6B7C' : c.data.labels.map((_, i) => palette[i % palette.length]),
-          borderColor: c.kind === 'line' ? '#2A6B7C' : undefined,
+          backgroundColor: isXY ? '#0079B5' : c.data.labels.map((_, i) => palette[i % palette.length]),
+          borderColor: c.kind === 'line' ? '#0079B5' : undefined,
           fill: c.kind === 'line' ? false : undefined,
           tension: 0.3
         }]
@@ -18267,7 +18265,7 @@ function archInlineToolbarHtml(companyName){
       <button class="${e.arrow==='end'?'on':''}" title="Arrow" onclick="archSetEdge('${esc(companyName)}','${e.id}',{arrow:'end'})">→</button>
       <button class="${e.arrow==='both'?'on':''}" title="Both" onclick="archSetEdge('${esc(companyName)}','${e.id}',{arrow:'both'})">↔</button>
       <span class="sep"></span>
-      ${['#8a8a93','#2A6B7C','#d4472f','#bd7c0c','#6444bd'].map(col => `<button class="swatch" style="background:${col}" onclick="archSetEdge('${esc(companyName)}','${e.id}',{color:'${col}'})"></button>`).join('')}
+      ${['#8a8a93','#0079B5','#d4472f','#bd7c0c','#6444bd'].map(col => `<button class="swatch" style="background:${col}" onclick="archSetEdge('${esc(companyName)}','${e.id}',{color:'${col}'})"></button>`).join('')}
       <span class="sep"></span>
       <button title="Label" onclick="archEditEdgeLabel('${esc(companyName)}','${e.id}')"><i class="ti ti-tag"></i></button>
       <button title="Remove" onclick="archDeleteEdge('${esc(companyName)}','${e.id}')"><i class="ti ti-trash"></i></button>
@@ -18959,7 +18957,7 @@ function renderDraftTrustCard(campaign){
         <div class="mini-card"><div class="num">${data.counts['Discarded']}</div><div class="label">Discarded</div></div>
       </div>
       ${(data.stages||[]).filter(s=>s.trusted).map(s => `
-        <div class="scorecard-diag" style="background:#dcfce7;border-color:#bbf7d0;color:#166534;">
+        <div class="scorecard-diag" style="background:var(--tint-green-bg);border-color:var(--mint);color:var(--tint-green-fg);">
           <i class="ti ti-shield-check"></i> <strong>${esc(s.stage)}</strong> is trusted - ${s.verbatimRatePct}% sent verbatim over ${s.total} sends. Reviewing every draft here may be optional.
         </div>`).join('')}
       `}
@@ -19127,11 +19125,11 @@ function renderConnectionAbCard(ab){
 // other Engine surface here: nothing here sends anything, it only proposes a
 // diagnosis and, optionally, a Style Correction the operator explicitly saves.
 const AUTOPSY_MILESTONE_STYLE = {
-  'Not started': { bg:'#f1f5f9', fg:'#475569' },
-  'Decision-maker engaged': { bg:'#dbeafe', fg:'#1e40af' },
-  'Pricing discussed': { bg:'#ede9fe', fg:'#5b21b6' },
-  'Objection surfaced': { bg:'#fef3c7', fg:'#92400e' },
-  'Ready to close': { bg:'#dcfce7', fg:'#166534' }
+  'Not started': { bg:'var(--tint-grey-bg)', fg:'var(--tint-grey-fg)' },
+  'Decision-maker engaged': { bg:'var(--tint-blue-bg)', fg:'var(--tint-blue-fg)' },
+  'Pricing discussed': { bg:'var(--tint-purple-bg)', fg:'var(--tint-purple-fg)' },
+  'Objection surfaced': { bg:'var(--tint-amber-bg)', fg:'var(--tint-amber-fg)' },
+  'Ready to close': { bg:'var(--tint-green-bg)', fg:'var(--tint-green-fg)' }
 };
 
 async function runAutopsyDigest(campaignId){
@@ -19315,7 +19313,7 @@ function initCampaignAnalyticsCharts(campaign){
       labels: s.map(p => fmtDateShort(p.date)),
       datasets: [
         ds('Connections sent', 'connectionsSent', '#a78bda'),
-        ds('Connections accepted', 'connectionsAccepted', '#2A6B7C'),
+        ds('Connections accepted', 'connectionsAccepted', '#0079B5'),
         ds('Messages sent', 'messagesSent', '#bd7c0c'),
         ds('Replies', 'replies', '#1f9d57')
       ]
@@ -19808,7 +19806,7 @@ function initSalesConversionCharts(intel){
     window.__salesCharts.step = new Chart(stepEl, {
       type: 'bar',
       data: { labels: intel.messageStepToBooking.map(s=>s.step), datasets: [
-        { label:'Total reached', data: intel.messageStepToBooking.map(s=>s.total), backgroundColor:'#2A6B7C' },
+        { label:'Total reached', data: intel.messageStepToBooking.map(s=>s.total), backgroundColor:'#0079B5' },
         { label:'Booked', data: intel.messageStepToBooking.map(s=>s.booked), backgroundColor:'#1f9d57' }
       ]},
       options: { responsive:true, maintainAspectRatio:false, scales:{ y:{ beginAtZero:true, ticks:{ precision:0 } } }, plugins:{ legend:{ position:'bottom', labels:{ boxWidth:10, font:{ size:11 } } } } }
@@ -19837,7 +19835,7 @@ function initSalesConversionCharts(intel){
   if(genderEl){
     window.__salesCharts.gender = new Chart(genderEl, {
       type: 'bar',
-      data: { labels: intel.responseRateByGender.map(g=>g.gender), datasets: [{ label:'Response rate %', data: intel.responseRateByGender.map(g=>g.rate), backgroundColor:['#2A6B7C','#bd7c0c','#a1a1aa'] }] },
+      data: { labels: intel.responseRateByGender.map(g=>g.gender), datasets: [{ label:'Response rate %', data: intel.responseRateByGender.map(g=>g.rate), backgroundColor:['#0079B5','#bd7c0c','#a1a1aa'] }] },
       options: { responsive:true, maintainAspectRatio:false, scales:{ y:{ beginAtZero:true, max:100 } }, plugins:{ legend:{ display:false } } }
     });
   }
@@ -19845,7 +19843,7 @@ function initSalesConversionCharts(intel){
   if(sentimentEl){
     window.__salesCharts.sentiment = new Chart(sentimentEl, {
       type: 'pie',
-      data: { labels: intel.sentimentBreakdown.map(s=>s.sentiment), datasets: [{ data: intel.sentimentBreakdown.map(s=>s.count), backgroundColor:['#1f9d57','#a1a1aa','#2A6B7C','#d4472f'] }] },
+      data: { labels: intel.sentimentBreakdown.map(s=>s.sentiment), datasets: [{ data: intel.sentimentBreakdown.map(s=>s.count), backgroundColor:['#1f9d57','#a1a1aa','#0079B5','#d4472f'] }] },
       options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:'bottom', labels:{ boxWidth:10, font:{ size:11 } } } } }
     });
   }
