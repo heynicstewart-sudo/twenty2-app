@@ -11,3 +11,5 @@ gtm-demo-README.md
 .claude/skills/
 .claude/agents/
 .impeccable/
+# Playwright CLI output (may contain credentials)
+.playwright-cli/

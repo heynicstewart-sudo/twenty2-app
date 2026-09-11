@@ -462,6 +462,27 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .tgt-key-role{font-size:11px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .tgt-key-empty{font-size:11.5px;color:var(--text-dim);}
 
+/* Account dashboard (Targets, default view) - 3-column bento: pinned-account
+   switcher lives in the header, Top ICPs is a tall right-hand column
+   spanning both top rows, enrichment spans the full width at the bottom. */
+.dash-switcher{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text-dim);font-family:var(--font-display);}
+.dash-switcher select{border:1px solid var(--border);border-radius:var(--radius-input);padding:7px 10px;font-size:12.5px;color:var(--ink);background:var(--surface);font-family:var(--font-family);max-width:220px;}
+.acct-dash-grid{display:grid;grid-template-columns:1.05fr .95fr .95fr;gap:16px;align-items:stretch;}
+.adg-actions{grid-column:1;grid-row:1;}
+.adg-cal{grid-column:2;grid-row:1;}
+.adg-icps{grid-column:3;grid-row:1 / span 2;}
+.adg-revenue{grid-column:1;grid-row:2;}
+.adg-pipeline{grid-column:2;grid-row:2;}
+.adg-enrich{grid-column:1 / -1;grid-row:3;}
+@media(max-width:1100px){
+  .acct-dash-grid{grid-template-columns:1fr 1fr;}
+  .adg-icps{grid-column:1 / -1;grid-row:3;}
+  .adg-enrich{grid-row:4;}
+}
+.enrich-cols{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;}
+@media(max-width:900px){.enrich-cols{grid-template-columns:1fr 1fr;}}
+.enrich-h{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--text-dim);font-family:var(--font-display);margin-bottom:6px;}
+
 .tboard-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
   background:var(--surface);border:1px solid var(--border-light);border-radius:14px;padding:8px 10px;margin-bottom:16px;}
 .tboard-search{position:relative;width:min(320px,100%);flex:none;}
@@ -2540,9 +2561,11 @@ async function loadAgencyOverview(force){
 
 function navigate(page){
   // Leaving the Targets page (or re-clicking it in the sidebar) always lands
-  // on the pin board, never a stale open target detail.
-  if(page !== 'home') window.__targetOpen = null;
-  else if(state.currentPage === 'home') window.__targetOpen = null;
+  // back on the default account dashboard, never a stale board/account state.
+  if(page !== 'home' || state.currentPage === 'home'){
+    window.__targetOpen = null;
+    window.__targetsShowBoard = false;
+  }
   state.currentPage = page;
   const navEntry = NAV.find(n => n.id === page);
   state.activeNavKey = navEntry ? navEntry.id : page;
@@ -2661,14 +2684,16 @@ function afterRender(page){
   if(page === 'replies' && window.__repliesQueue === undefined && !window.__repliesLoading) loadRepliesQueue();
   if(page === 'home' && window.__targets === undefined && !window.__targetsLoading) loadTargets();
   if(page === 'home' && window.__targetBoard === undefined && !window.__targetBoardLoading) loadTargetBoard();
-  if(page === 'home' && !window.__targetOpen) initTargetsDashboardChart();
-  if(page === 'home' && window.__targetOpen){
-    const name = window.__targetOpen;
-    loadCompanyMessages(name);
-    window.__archKey = name;
-    window.__arch = window.__arch || {};
-    if(window.__arch[name] === undefined) loadChangeArchitecture(name);
-    else archAfterRender(name);
+  if(page === 'home'){
+    const targetRows = Array.isArray(window.__targets) ? window.__targets : [];
+    const showingBoard = window.__targetsShowBoard || !targetRows.length;
+    if(showingBoard) initTargetsDashboardChart();
+    else {
+      const name = activeTargetName(targetRows);
+      loadCompanyMessages(name);
+      loadAccountDashboardData(name);
+      initAccountDashboardCharts(name);
+    }
   }
   if(page === 'logger' && window.__repsCache === undefined) loadRepsCache();
   if(page === 'logger' && window.__loggerCampaigns === undefined) loadLoggerCampaigns();
@@ -3029,22 +3054,39 @@ async function replyApprove(id){
 // "Today's actions" -> per-campaign tab (renderCampaignActionsTab); the ICP
 // worklist + Programs-found discovery queue -> Company Universe; Contact
 // signals -> the Campaigns list page.
+// Targets now defaults to a per-account dashboard (one pinned account at a
+// time, switched via the dropdown in its header) rather than opening
+// straight onto the Kanban board - the board is still one click away via
+// "Targets board" and still owns pin/unpin + drag-to-stage. See
+// renderAccountDashboard() below.
 function renderHome(){
-  if(window.__targetOpen) return renderTargetDetail(window.__targetOpen);
-
   const rows = Array.isArray(window.__targets) ? window.__targets : [];
+  const loading = window.__targets === undefined || window.__targetsLoading;
   const meta = rows.length
     ? `<span class="page-meta"><strong>${rows.length}</strong> pinned</span>`
     : '';
+
+  if(!loading && rows.length && !window.__targetsShowBoard){
+    const name = activeTargetName(rows);
+    window.__targetOpen = name;
+    return renderAccountDashboard(name, rows);
+  }
+
   return `
   <div class="page-head">
     <h1 class="page-h1">Targets ${meta}</h1>
     <div class="page-sub">The accounts you're working. Drag a card between columns as an account warms up.</div>
   </div>
+  ${rows.length ? `<button class="btn btn-ghost btn-sm" style="margin-bottom:14px;" onclick="window.__targetsShowBoard=false;window.__targetOpen=null;renderPage();"><i class="ti ti-arrow-left"></i> Back to dashboard</button>` : ''}
 
   ${renderTargetsDashboard(rows)}
   ${renderTargetsBoard()}
   `;
+}
+
+function activeTargetName(rows){
+  if(window.__targetOpen && rows.some(r => r.name === window.__targetOpen)) return window.__targetOpen;
+  return rows.length ? rows[0].name : null;
 }
 
 // Mini dashboard at the top of Targets — how the targeting is tracking for
@@ -3080,7 +3122,7 @@ function renderTargetsDashboard(rows){
     people.sort((a,b) => rank(a.role) - rank(b.role));
     const p = people[0];
     return `
-      <div class="tgt-key" ${p ? `onclick="openContactDrawer('${esc(p.name)}', null)"` : `onclick="openTarget('${esc(r.name)}')"`}>
+      <div class="tgt-key" tabindex="0" role="button" onkeydown="onRowKeydown(event)" ${p ? `onclick="openContactDrawer('${esc(p.name)}', null)"` : `onclick="openTarget('${esc(r.name)}')"`}>
         <div class="tgt-key-pillar">${esc(r.name)}</div>
         ${p
           ? `<div class="tgt-key-person"><span class="tgt-key-ava">${esc((p.name||'?').trim()[0]||'?').toUpperCase()}</span><div style="min-width:0;"><div class="tgt-key-name">${esc(p.name)}</div><div class="tgt-key-role">${esc(p.role||'—')}</div></div></div>`
@@ -3410,30 +3452,314 @@ function renderTargetPinSuggestions(q){
     : `<div class="muted" style="font-size:12px;margin-bottom:12px;">No unpinned company matches “${esc(q)}”.</div>`;
 }
 
+// Clicking a Kanban card lands on the dashboard for that account (dashboard
+// is now the default Targets view - see renderHome()).
 function openTarget(name){
+  window.__targetOpen = name;
+  window.__targetsShowBoard = false;
+  renderPage();
+  window.scrollTo({ top: 0 });
+}
+function showTargetsBoard(){
+  window.__targetsShowBoard = true;
+  renderPage();
+  window.scrollTo({ top: 0 });
+}
+function switchTargetAccount(name){
+  if(!name) return;
   window.__targetOpen = name;
   renderPage();
   window.scrollTo({ top: 0 });
 }
-function closeTarget(){
-  window.__targetOpen = null;
-  renderPage();
-}
 
-function renderTargetDetail(name){
+/* ===================== ACCOUNT DASHBOARD (Targets) =====================
+   Per-pinned-account dashboard: switch accounts via the header dropdown.
+   Everything below is sourced from GET /api/companies/profile (company
+   firmographics/ICP/programs, deals, accountContacts) - the same endpoint
+   the company drawer already uses - plus the existing campaign-messages
+   endpoint for recent activity. No new server endpoint needed. */
+
+function renderAccountDashboard(name, rows){
   const nm = esc(name);
-  return `
-  <button class="btn btn-ghost btn-sm" style="margin-bottom:10px;" onclick="closeTarget()"><i class="ti ti-arrow-left"></i> Targets</button>
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
-    <div class="section-title" style="margin-bottom:0;"><i class="ti ti-building-skyscraper"></i> ${nm}</div>
-    <div style="display:flex;gap:6px;flex-wrap:wrap;">
-      <button class="btn btn-ghost btn-sm" onclick="unpinTarget('${nm}');closeTarget();"><i class="ti ti-pin-filled"></i> Unpin</button>
+  const row = rows.find(r => r.name === name) || {};
+  const profile = window.__acctDash && window.__acctDash[name];
+  const syncedAt = window.__acctDashLoadedAt && window.__acctDashLoadedAt[name];
+
+  const header = `
+  <div class="page-head" style="align-items:flex-start;">
+    <div>
+      <h1 class="page-h1" style="margin-bottom:4px;">${nm}</h1>
+      <div class="page-sub">${esc(row.sector || row.industry || 'Target account')}</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      ${syncedAt ? `<span class="muted" style="font-size:11px;white-space:nowrap;">Synced ${relativeSyncLabel(syncedAt)}</span>
+      <button class="btn btn-ghost btn-sm" title="Refresh this account's data" onclick="retryAccountDashboardData('${nm}')"><i class="ti ti-refresh"></i></button>` : ''}
+      <label class="dash-switcher">
+        <span>Account</span>
+        <select onchange="switchTargetAccount(this.value)">
+          ${rows.map(r => `<option value="${esc(r.name)}" ${r.name === name ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}
+        </select>
+      </label>
+      <button class="btn btn-ghost btn-sm" onclick="showTargetsBoard()"><i class="ti ti-layout-kanban"></i> Targets board</button>
+      <button class="btn btn-ghost btn-sm" onclick="unpinTarget('${nm}')"><i class="ti ti-pin-filled"></i> Unpin</button>
       <button class="btn btn-secondary btn-sm" onclick="navigate('profile');selectProfileCompany('${nm}')"><i class="ti ti-hierarchy-2"></i> Open full profile</button>
     </div>
-  </div>
-  ${renderCompanyMessagesPanel(name)}
-  ${renderChangeArchitectureCanvas(name)}
-  `;
+  </div>`;
+
+  if(profile && profile.error){
+    // Never show the raw error (it can leak implementation details, e.g. an
+    // env-var name) - a friendly message plus a real retry, since a failed
+    // fetch otherwise permanently occupies this account's cache slot for the
+    // rest of the session (see retryAccountDashboardData).
+    return `${header}<div class="card"><div class="empty-state">This account didn't load. <button class="btn btn-ghost btn-sm" style="margin-left:6px;" onclick="retryAccountDashboardData('${nm}')"><i class="ti ti-refresh"></i> Try again</button></div></div>`;
+  }
+
+  return `
+  ${header}
+  <div class="acct-dash-grid">
+    ${renderDashActions(profile)}
+    ${renderDashCalendar(profile)}
+    ${renderDashTopIcps(profile)}
+    ${renderDashRevenue(profile)}
+    ${renderDashPipeline(profile)}
+    ${renderDashEnrichment(name, profile)}
+  </div>`;
+}
+
+function dashCardLoading(cls, title){
+  return `<div class="card ${cls}"><div class="section-title" style="margin-bottom:8px;">${esc(title)}</div><div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading…</div></div>`;
+}
+
+async function loadAccountDashboardData(name){
+  window.__acctDash = window.__acctDash || {};
+  if(window.__acctDash[name] !== undefined) return;
+  window.__acctDash[name] = null;
+  try {
+    const res = await fetch('/api/companies/profile?name=' + encodeURIComponent(name));
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__acctDash[name] = data;
+    window.__acctDashLoadedAt = window.__acctDashLoadedAt || {};
+    window.__acctDashLoadedAt[name] = Date.now();
+  } catch(err){
+    window.__acctDash[name] = { error: err.message };
+  }
+  if(window.__targetOpen === name && state.currentPage === 'home' && !window.__targetsShowBoard) renderPage();
+}
+
+function relativeSyncLabel(ms){
+  const mins = Math.round((Date.now() - ms) / 60000);
+  if(mins < 1) return 'just now';
+  if(mins < 60) return mins + 'm ago';
+  const hrs = Math.round(mins / 60);
+  return hrs + 'h ago';
+}
+
+// A failed fetch would otherwise cache { error } forever (loadAccountDashboardData
+// only fetches when the slot is undefined) - clear the slot so the retry button
+// actually retries instead of re-showing the same cached failure.
+function retryAccountDashboardData(name){
+  if(window.__acctDash) delete window.__acctDash[name];
+  renderPage();
+  loadAccountDashboardData(name);
+}
+
+// Shared keyboard handler for onclick-only rows (.tgt-key, the enrichment
+// .tp-item list) so they're reachable and activatable without a mouse -
+// pair with tabindex="0" role="button" on the element.
+function onRowKeydown(e){
+  if(e.key === 'Enter' || e.key === ' '){
+    e.preventDefault();
+    e.currentTarget.click();
+  }
+}
+
+// Simplified 3-stage view of this account's contacts - not the full
+// per-campaign Today's-Actions engine (which needs campaign scope this
+// dashboard doesn't have), just what's due right now for THIS account.
+// Urgency rank + color per action kind - a reply waiting on a response reads
+// as genuinely urgent (gold, matching the app's existing --tint-gold attention
+// tokens), a routine next-step-due stays the neutral blue accent, and
+// not-yet-contacted is the quietest, lowest-urgency state.
+const DASH_ACTION_KIND = {
+  reply: { rank: 0, bg: 'var(--tint-gold-bg)', fg: 'var(--tint-gold-fg)' },
+  nextStep: { rank: 1, bg: 'var(--tint-blue-bg)', fg: 'var(--tint-blue-fg)' },
+  notContacted: { rank: 2, bg: 'var(--tint-grey-bg)', fg: 'var(--tint-grey-fg)' }
+};
+
+function renderDashActions(profile){
+  if(!profile) return dashCardLoading('adg-actions', 'Actions');
+  const contacts = profile.accountContacts || [];
+  const all = contacts.map(c => {
+    const latest = (c.campaignStatuses || [])[0];
+    let kind = null, label = null;
+    if(!c.everContacted){ kind = 'notContacted'; label = 'Not yet contacted'; }
+    else if(latest && latest.replyReceived){ kind = 'reply'; label = 'Reply to review'; }
+    else if(latest){ kind = 'nextStep'; label = (latest.stage ? esc(latest.stage) + ' — ' : '') + 'next step due'; }
+    if(!kind) return null;
+    return { name: c.name, jobTitle: c.jobTitle, campaignName: latest ? latest.campaignName : '', label, kind };
+  }).filter(Boolean).sort((a, b) => DASH_ACTION_KIND[a.kind].rank - DASH_ACTION_KIND[b.kind].rank);
+  const items = all.slice(0, 6);
+
+  return `
+  <div class="card adg-actions">
+    <div class="section-title" style="margin-bottom:6px;">Actions</div>
+    ${items.length ? items.map(a => `
+      <div style="padding:8px 0;border-bottom:1px solid var(--border-light);display:flex;justify-content:space-between;gap:8px;">
+        <div style="min-width:0;">
+          <div style="font-weight:600;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(a.name)}</div>
+          <div class="muted" style="font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(a.jobTitle || '')}${a.campaignName ? ' · ' + esc(a.campaignName) : ''}</div>
+        </div>
+        <span class="pill" style="background:${DASH_ACTION_KIND[a.kind].bg};color:${DASH_ACTION_KIND[a.kind].fg};white-space:nowrap;flex:none;height:fit-content;">${a.label}</span>
+      </div>`).join('') : '<div class="empty-state">Nothing outstanding for this account right now.</div>'}
+    ${all.length > items.length ? `<div class="muted" style="font-size:11px;padding-top:8px;">+${all.length - items.length} more</div>` : ''}
+  </div>`;
+}
+
+function renderDashCalendar(profile){
+  if(!profile) return dashCardLoading('adg-cal', 'Key programs & events');
+  const all = (profile.company.programs || []).slice().sort((a, b) => (b.detectedAt || '').localeCompare(a.detectedAt || ''));
+  const programs = all.slice(0, 6);
+  return `
+  <div class="card adg-cal">
+    <div class="section-title" style="margin-bottom:6px;">Key programs &amp; events</div>
+    ${programs.length ? programs.map(p => `
+      <div class="tp-item">
+        <div style="display:flex;justify-content:space-between;gap:8px;">
+          <strong style="font-size:12.5px;">${esc(p.name)}</strong>
+          <span class="muted" style="font-size:11px;white-space:nowrap;">${p.detectedAt ? fmtDate(p.detectedAt) : ''}</span>
+        </div>
+        <div class="muted" style="font-size:11px;">${esc(p.type)} · ${esc(p.phase)}</div>
+      </div>`).join('') : '<div class="empty-state">No programs detected for this account yet.</div>'}
+    ${all.length > programs.length ? `<div class="muted" style="font-size:11px;padding-top:6px;">+${all.length - programs.length} more</div>` : ''}
+  </div>`;
+}
+
+function renderDashTopIcps(profile){
+  if(!profile) return dashCardLoading('adg-icps', 'Top ICPs to nurture');
+  const all = profile.accountContacts || [];
+  const contacts = all.slice(0, 8);
+  return `
+  <div class="card adg-icps">
+    <div class="section-title" style="margin-bottom:6px;">Top ICPs to nurture</div>
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      ${contacts.length ? contacts.map(c => `
+        <div class="tgt-key" tabindex="0" role="button" onclick="openContactDrawer('${esc(c.name)}', null)" onkeydown="onRowKeydown(event)">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+            <div class="tgt-key-person">
+              <span class="tgt-key-ava">${esc((c.name || '?').trim()[0] || '?').toUpperCase()}</span>
+              <div style="min-width:0;">
+                <div class="tgt-key-name">${esc(c.name)}</div>
+                <div class="tgt-key-role">${esc(c.jobTitle || '—')}</div>
+              </div>
+            </div>
+            ${c.isDecisionMaker ? '<span class="pill" style="background:var(--tint-green-bg);color:var(--tint-green-fg);flex:none;">DM</span>' : ''}
+          </div>
+        </div>`).join('') : '<div class="tgt-key-empty">No contacts on file for this account yet.</div>'}
+      ${all.length > contacts.length ? `<div class="muted" style="font-size:11px;">+${all.length - contacts.length} more</div>` : ''}
+    </div>
+  </div>`;
+}
+
+function renderDashRevenue(profile){
+  if(!profile) return dashCardLoading('adg-revenue', 'Revenue so far');
+  const won = (profile.deals || []).filter(d => d.outcome === 'Won' && d.date);
+  const total = won.reduce((s, d) => s + (Number(d.dealValue) || 0), 0);
+  return `
+  <div class="card adg-revenue">
+    <div class="section-title" style="margin-bottom:2px;">Revenue so far</div>
+    <div style="font-size:20px;font-weight:700;font-variant-numeric:tabular-nums;margin-bottom:8px;">$${total.toLocaleString()}</div>
+    ${won.length ? `<div style="position:relative;height:150px;"><canvas id="acctRevenueChart" role="img" aria-label="Revenue so far, $${total.toLocaleString()} across ${won.length} won deal${won.length === 1 ? '' : 's'}"></canvas></div>` : '<div class="empty-state">No won deals logged for this account yet.</div>'}
+  </div>`;
+}
+
+// Simplified 3-stage pipeline (in sequence / engaged-replied / won) drawn as
+// a stacked-disc chart, same chart type as the reference the layout was
+// modelled on - band thickness is proportional to count.
+function pipelineBucketsFor(profile){
+  const contacts = profile.accountContacts || [];
+  let inSequence = 0, engaged = 0;
+  contacts.forEach(c => {
+    const anyReply = (c.campaignStatuses || []).some(s => s.replyReceived);
+    if(anyReply) engaged++;
+    else if(c.everContacted) inSequence++;
+  });
+  const won = (profile.deals || []).filter(d => d.outcome === 'Won').length;
+  return [
+    { label: 'In sequence', n: inSequence },
+    { label: 'Engaged / replied', n: engaged },
+    { label: 'Won', n: won }
+  ];
+}
+
+function pipelineCylinderSvg(buckets){
+  const colors = ['var(--accent)', 'var(--mint)', 'var(--sand)'];
+  const max = Math.max(1, ...buckets.map(b => b.n));
+  let y = 16;
+  const bands = [];
+  buckets.forEach((b, i) => {
+    const h = 12 + Math.round((b.n / max) * 26);
+    bands.push({ top: y, h, color: colors[i % colors.length] });
+    y += h;
+  });
+  const totalH = y + 16;
+  const parts = bands.map(b => `
+    <path d="M15,${b.top} v${b.h} a50,16 0 0 0 100,0 v-${b.h}" fill="${b.color}" opacity=".82" stroke="var(--card-bg)" stroke-width="1.5"/>
+    <ellipse cx="65" cy="${b.top}" rx="50" ry="16" fill="${b.color}" stroke="var(--card-bg)" stroke-width="1.5"/>`).join('');
+  const lastBand = bands[bands.length - 1];
+  const bottomEllipse = lastBand ? `<ellipse cx="65" cy="${lastBand.top + lastBand.h}" rx="50" ry="16" fill="${lastBand.color}" opacity=".82" stroke="var(--card-bg)" stroke-width="1.5"/>` : '';
+  const label = esc(buckets.map(b => `${b.label}: ${b.n}`).join(', '));
+  return `<svg viewBox="0 0 130 ${totalH}" width="130" height="${Math.min(totalH, 150)}" role="img" aria-label="Sales pipeline — ${label}">${parts}${bottomEllipse}</svg>`;
+}
+
+function renderDashPipeline(profile){
+  if(!profile) return dashCardLoading('adg-pipeline', 'Sales pipeline');
+  const buckets = pipelineBucketsFor(profile);
+  const colors = ['var(--accent)', 'var(--mint)', 'var(--sand)'];
+  return `
+  <div class="card adg-pipeline">
+    <div class="section-title" style="margin-bottom:6px;">Sales pipeline</div>
+    <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap;">
+      ${pipelineCylinderSvg(buckets)}
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        ${buckets.map((b, i) => `
+          <div style="display:flex;align-items:center;gap:7px;font-size:11.5px;">
+            <span style="width:9px;height:9px;border-radius:2px;background:${colors[i]};display:inline-block;flex:none;"></span>
+            ${esc(b.label)} <b style="margin-left:auto;font-variant-numeric:tabular-nums;">${b.n}</b>
+          </div>`).join('')}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderDashEnrichment(name, profile){
+  if(!profile) return dashCardLoading('adg-enrich', 'Company profiling & enrichment');
+  const c = profile.company;
+  return `
+  <div class="card adg-enrich">
+    <div class="section-title" style="margin-bottom:10px;">Company profiling &amp; enrichment</div>
+    <div class="enrich-cols">
+      <div>
+        <div class="enrich-h">Firmographics</div>
+        <div style="font-size:12.5px;">${esc(c.industry || '—')}${c.sector ? ' · ' + esc(c.sector) : ''}</div>
+        ${c.linkedinUrl ? `<a href="${esc(c.linkedinUrl)}" target="_blank" rel="noopener" class="muted" style="font-size:11px;">Company LinkedIn</a>` : ''}
+      </div>
+      <div>
+        <div class="enrich-h">ICP fit &amp; trigger</div>
+        <div style="font-size:12.5px;">${c.icpFitScore != null ? `${c.icpFitScore}/100 fit` : 'Not scored yet'}${c.icpTag ? ' · ' + esc(c.icpTag) : ''}</div>
+        ${c.icpTriggerDetected ? `<div class="muted" style="font-size:11px;margin-top:4px;">${esc(c.icpTriggerDetected)}</div>` : ''}
+        ${c.latestSignal ? `<div class="muted" style="font-size:11px;margin-top:4px;">${esc(c.latestSignal)}${c.signalDate ? ' (' + fmtDate(c.signalDate) + ')' : ''}</div>` : ''}
+      </div>
+      <div>
+        <div class="enrich-h">Summary</div>
+        <div style="font-size:12px;white-space:pre-wrap;max-height:220px;overflow:auto;">${esc((c.aiSummary || 'No enrichment on file yet.').slice(0, 500))}</div>
+      </div>
+      <div>
+        <div class="enrich-h">Recent activity</div>
+        <div style="max-height:220px;overflow:auto;">${renderCompanyMessagesBody(name)}</div>
+      </div>
+    </div>
+  </div>`;
 }
 
 /* ---- Recent campaign messages for one company ---- */
@@ -3452,27 +3778,53 @@ async function loadCompanyMessages(name){
   if(window.__targetOpen === name) renderPage();
 }
 
-function renderCompanyMessagesPanel(name){
+function renderCompanyMessagesBody(name){
   const m = window.__companyMessages && window.__companyMessages[name];
-  const body = () => {
-    if(m === undefined || m === null) return '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading…</div>';
-    if(m.error) return `<div class="muted" style="font-size:12.5px;">Could not load messages: ${esc(m.error)}</div>`;
-    if(!m.length) return '<div class="empty-state">No campaign messages logged for this company yet.</div>';
-    return m.map(r => `
-      <div class="tp-item" style="cursor:pointer;" onclick="openContactDrawer('${esc(r.contactName)}', ${r.campaignName ? `'${esc(r.campaignName)}'` : 'null'})">
-        <div style="display:flex;justify-content:space-between;gap:8px;">
-          <strong>${esc(r.contactName)}</strong>
-          <span class="muted" style="font-size:11px;">${r.connectionSentDate ? fmtDate(r.connectionSentDate) : ''}</span>
-        </div>
-        <div class="muted" style="font-size:11px;">${esc(r.campaignName || '—')}${r.sequenceStage ? ' · ' + esc(r.sequenceStage) : ''}</div>
-        ${(r.finalMessageSent || r.nextMessageDraft) ? `<div style="font-size:12px;margin-top:4px;white-space:pre-wrap;">${esc((r.finalMessageSent || r.nextMessageDraft).slice(0, 280))}${(r.finalMessageSent || r.nextMessageDraft).length > 280 ? '…' : ''}</div>` : ''}
-      </div>`).join('');
-  };
-  return `
-  <div class="card" style="margin-bottom:16px;">
-    <div class="section-title" style="margin-bottom:8px;"><i class="ti ti-messages"></i> Recent campaign messages</div>
-    ${body()}
-  </div>`;
+  if(m === undefined || m === null) return '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading…</div>';
+  if(m.error) return `<div class="muted" style="font-size:12.5px;">Couldn't load recent activity. <button class="btn btn-ghost btn-sm" onclick="delete window.__companyMessages['${esc(name)}'];renderPage();loadCompanyMessages('${esc(name)}');"><i class="ti ti-refresh"></i> Try again</button></div>`;
+  if(!m.length) return '<div class="empty-state">No campaign messages logged for this company yet.</div>';
+  return m.map(r => `
+    <div class="tp-item" style="cursor:pointer;" tabindex="0" role="button" onkeydown="onRowKeydown(event)" onclick="openContactDrawer('${esc(r.contactName)}', ${r.campaignName ? `'${esc(r.campaignName)}'` : 'null'})">
+      <div style="display:flex;justify-content:space-between;gap:8px;">
+        <strong>${esc(r.contactName)}</strong>
+        <span class="muted" style="font-size:11px;">${r.connectionSentDate ? fmtDate(r.connectionSentDate) : ''}</span>
+      </div>
+      <div class="muted" style="font-size:11px;">${esc(r.campaignName || '—')}${r.sequenceStage ? ' · ' + esc(r.sequenceStage) : ''}</div>
+      ${(r.finalMessageSent || r.nextMessageDraft) ? `<div style="font-size:12px;margin-top:4px;white-space:pre-wrap;">${esc((r.finalMessageSent || r.nextMessageDraft).slice(0, 280))}${(r.finalMessageSent || r.nextMessageDraft).length > 280 ? '…' : ''}</div>` : ''}
+    </div>`).join('');
+}
+
+function initAccountDashboardCharts(name){
+  if(typeof Chart === 'undefined') return;
+  const profile = window.__acctDash && window.__acctDash[name];
+  if(!profile || profile.error) return;
+  const el = document.getElementById('acctRevenueChart');
+  if(!el) return;
+  const won = (profile.deals || []).filter(d => d.outcome === 'Won' && d.date);
+  const byMonth = {};
+  won.forEach(d => { const m = d.date.slice(0, 7); byMonth[m] = (byMonth[m] || 0) + (Number(d.dealValue) || 0); });
+  const months = Object.keys(byMonth).sort();
+  if(!months.length) return;
+
+  const css = getComputedStyle(document.documentElement);
+  const accent = (css.getPropertyValue('--accent') || '#0084C5').trim();
+  const muted = (css.getPropertyValue('--muted') || '#888').trim();
+  const gridColor = (css.getPropertyValue('--border-light') || 'rgba(128,128,128,.15)').trim();
+  const monthLabel = m => { const [y, mo] = m.split('-'); return new Date(Number(y), Number(mo) - 1, 1).toLocaleDateString('en-US', { month: 'short' }); };
+
+  if(window.__acctRevenueChart){ window.__acctRevenueChart.destroy(); window.__acctRevenueChart = null; }
+  window.__acctRevenueChart = new Chart(el, {
+    type: 'bar',
+    data: { labels: months.map(monthLabel), datasets: [{ label: 'Won ($)', data: months.map(m => byMonth[m]), backgroundColor: accent, borderRadius: 4, maxBarThickness: 34 }] },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: {
+        x: { ticks: { font: { size: 10.5 }, color: muted }, grid: { display: false } },
+        y: { beginAtZero: true, ticks: { font: { size: 10 }, color: muted, callback: v => '$' + Number(v).toLocaleString() }, grid: { color: gridColor } }
+      },
+      plugins: { legend: { display: false } }
+    }
+  });
 }
 
 // Full "Your Grids" directory - moved off the landing page into a Campaigns
