@@ -2865,6 +2865,13 @@ function afterRender(page){
     loadAccountSynthesis(name);
     initAccountDashboardCharts(name);
   }
+  if(page === 'profile' && window.__profileSelectedCompany && window.__profileView === 'dashboard'){
+    const name = window.__profileSelectedCompany;
+    loadCompanyMessages(name);
+    loadAccountDashboardData(name);
+    loadAccountSynthesis(name);
+    initAccountDashboardCharts(name);
+  }
   if(page === 'logger' && window.__repsCache === undefined) loadRepsCache();
   if(page === 'logger' && window.__loggerCampaigns === undefined) loadLoggerCampaigns();
   if(page === 'calendar'){
@@ -3401,6 +3408,17 @@ function dashCardLoading(cls, title){
   return `<div class="card ${cls}"><div class="section-title" style="margin-bottom:8px;">${esc(title)}</div><div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading…</div></div>`;
 }
 
+// The account-dashboard cards (renderDashActions etc.) and their async
+// loaders below are shared by two places: the Targets dashboard (page
+// 'home') and the Profile page's Dashboard view (see renderProfileAccountDashboard).
+// This tells a loader's completion callback whether either of those is
+// currently showing `name`, so it knows when a re-render is warranted.
+function isAccountDashboardOpen(name){
+  if(state.currentPage === 'home' && window.__targetOpen === name) return true;
+  if(state.currentPage === 'profile' && window.__profileSelectedCompany === name && window.__profileView === 'dashboard') return true;
+  return false;
+}
+
 async function loadAccountDashboardData(name){
   window.__acctDash = window.__acctDash || {};
   if(window.__acctDash[name] !== undefined) return;
@@ -3415,7 +3433,7 @@ async function loadAccountDashboardData(name){
   } catch(err){
     window.__acctDash[name] = { error: err.message };
   }
-  if(window.__targetOpen === name && state.currentPage === 'home') renderPage();
+  if(isAccountDashboardOpen(name)) renderPage();
 }
 
 function relativeSyncLabel(ms){
@@ -3657,7 +3675,7 @@ async function loadAccountSynthesis(name, refresh){
   window.__acctSynthesis = window.__acctSynthesis || {};
   if(!refresh && window.__acctSynthesis[name] !== undefined) return;
   window.__acctSynthesis[name] = null;
-  if(window.__targetOpen === name && state.currentPage === 'home') renderPage();
+  if(isAccountDashboardOpen(name)) renderPage();
   try {
     const res = await fetch('/api/companies/' + encodeURIComponent(name) + '/synthesis' + (refresh ? '?refresh=1' : ''));
     const data = await res.json();
@@ -3666,7 +3684,7 @@ async function loadAccountSynthesis(name, refresh){
   } catch(err){
     window.__acctSynthesis[name] = { error: err.message };
   }
-  if(window.__targetOpen === name && state.currentPage === 'home') renderPage();
+  if(isAccountDashboardOpen(name)) renderPage();
 }
 
 /* ---- Recent campaign messages for one company ---- */
@@ -3682,7 +3700,7 @@ async function loadCompanyMessages(name){
   } catch(err){
     window.__companyMessages[name] = { error: err.message };
   }
-  if(window.__targetOpen === name) renderPage();
+  if(isAccountDashboardOpen(name)) renderPage();
 }
 
 function renderCompanyMessagesBody(name){
@@ -16403,8 +16421,57 @@ function renderProfilePage(){
 
   return `
   ${searchCard}
-  ${selectedCompany ? renderChangeArchitectureCanvas(selectedCompany) : ''}
+  ${selectedCompany ? renderProfileViewToggle() : ''}
+  ${selectedCompany ? ((window.__profileView||'canvas') === 'dashboard' ? renderProfileAccountDashboard(selectedCompany) : renderChangeArchitectureCanvas(selectedCompany)) : ''}
   `;
+}
+
+// Profile page has two views onto the selected company: the freeform
+// "Change architecture" canvas (default) and this Dashboard - the same
+// KPI-tile grid Targets shows for pinned accounts (renderAccountDashboard),
+// just without the Targets-only chrome (account switcher, unpin) since
+// Profile already has its own company picker above. Kept as a separate
+// top-level toggle rather than another canvas tab, since canvas tabs are
+// multiple named canvases within the canvas view, not alternate views.
+function renderProfileViewToggle(){
+  const view = window.__profileView || 'canvas';
+  return `
+  <div class="arch-canvas-tabs" style="margin-bottom:12px;">
+    <button class="arch-canvas-chip ${view==='canvas'?'active':''}" onclick="setProfileView('canvas')"><i class="ti ti-affiliate"></i> Canvas</button>
+    <button class="arch-canvas-chip ${view==='dashboard'?'active':''}" onclick="setProfileView('dashboard')"><i class="ti ti-layout-dashboard"></i> Dashboard</button>
+  </div>`;
+}
+
+function setProfileView(view){
+  window.__profileView = view;
+  renderPage();
+}
+
+function renderProfileAccountDashboard(name){
+  const nm = esc(name);
+  const profile = window.__acctDash && window.__acctDash[name];
+  const syncedAt = window.__acctDashLoadedAt && window.__acctDashLoadedAt[name];
+
+  const header = syncedAt ? `
+  <div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-bottom:8px;">
+    <span class="muted" style="font-size:11px;white-space:nowrap;">Synced ${relativeSyncLabel(syncedAt)}</span>
+    <button class="btn btn-ghost btn-sm" title="Refresh this account's data" onclick="retryAccountDashboardData('${nm}')"><i class="ti ti-refresh"></i></button>
+  </div>` : '';
+
+  if(profile && profile.error){
+    return `${header}<div class="card"><div class="empty-state">This account didn't load. <button class="btn btn-ghost btn-sm" style="margin-left:6px;" onclick="retryAccountDashboardData('${nm}')"><i class="ti ti-refresh"></i> Try again</button></div></div>`;
+  }
+
+  return `
+  ${header}
+  <div class="acct-dash-grid">
+    ${renderDashActions(profile)}
+    ${renderDashCalendar(profile)}
+    ${renderDashTopIcps(profile)}
+    ${renderDashRevenue(profile)}
+    ${renderDashPipeline(profile)}
+    ${renderDashEnrichment(name, profile)}
+  </div>`;
 }
 
 function setProfileQuery(value){
