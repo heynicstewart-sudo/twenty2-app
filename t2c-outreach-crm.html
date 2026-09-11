@@ -8197,9 +8197,11 @@ function renderGrid(){
     <button class="btn btn-secondary" onclick="openAddContactModal()"><i class="ti ti-user-plus"></i> Add contact</button>
     <button class="btn btn-secondary" onclick="openImportCompanyModal({ gridId: currentGrid().id })"><i class="ti ti-building-community"></i> Import from company</button>
     <button class="btn btn-secondary" onclick="openApolloSearchModal()"><i class="ti ti-building-skyscraper"></i> Search Apollo</button>
+    <div style="width:1px;align-self:stretch;background:var(--border-light);margin:0 2px;"></div>
     <button class="btn btn-ghost" onclick="resetGrid()"><i class="ti ti-refresh"></i> Reset</button>
     <button class="btn btn-secondary" onclick="exportContactsCsv()"><i class="ti ti-file-download"></i> Export contacts</button>
     <button class="btn btn-secondary" id="syncAirtableBtn" onclick="syncAllContactsToAirtable()"><i class="ti ti-cloud-upload"></i> Sync</button>
+    <div style="width:1px;align-self:stretch;background:var(--border-light);margin:0 2px;"></div>
     <button class="btn btn-secondary" id="findCompanyLinkedInBtn" onclick="findCompanyLinkedInPages()"><i class="ti ti-brand-linkedin"></i> Find LinkedIn pages</button>
     <button class="btn btn-secondary" id="orgIdBtn" onclick="fetchLinkedInOrgIds()"><i class="ti ti-id"></i> Get LinkedIn org IDs</button>
   </div>
