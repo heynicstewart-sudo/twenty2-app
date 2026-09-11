@@ -2561,10 +2561,9 @@ async function loadAgencyOverview(force){
 
 function navigate(page){
   // Leaving the Targets page (or re-clicking it in the sidebar) always lands
-  // back on the default account dashboard, never a stale board/account state.
+  // back on the default pinned account, never a stale selection.
   if(page !== 'home' || state.currentPage === 'home'){
     window.__targetOpen = null;
-    window.__targetsShowBoard = false;
   }
   state.currentPage = page;
   const navEntry = NAV.find(n => n.id === page);
@@ -2683,17 +2682,12 @@ function afterRender(page){
   }
   if(page === 'replies' && window.__repliesQueue === undefined && !window.__repliesLoading) loadRepliesQueue();
   if(page === 'home' && window.__targets === undefined && !window.__targetsLoading) loadTargets();
-  if(page === 'home' && window.__targetBoard === undefined && !window.__targetBoardLoading) loadTargetBoard();
-  if(page === 'home'){
-    const targetRows = Array.isArray(window.__targets) ? window.__targets : [];
-    const showingBoard = window.__targetsShowBoard || !targetRows.length;
-    if(showingBoard) initTargetsDashboardChart();
-    else {
-      const name = activeTargetName(targetRows);
-      loadCompanyMessages(name);
-      loadAccountDashboardData(name);
-      initAccountDashboardCharts(name);
-    }
+  if(page === 'home' && Array.isArray(window.__targets) && window.__targets.length){
+    const name = activeTargetName(window.__targets);
+    loadCompanyMessages(name);
+    loadAccountDashboardData(name);
+    loadAccountSynthesis(name);
+    initAccountDashboardCharts(name);
   }
   if(page === 'logger' && window.__repsCache === undefined) loadRepsCache();
   if(page === 'logger' && window.__loggerCampaigns === undefined) loadLoggerCampaigns();
@@ -3047,41 +3041,43 @@ async function replyApprove(id){
 /* ===================== HOME ===================== */
 
 // The "home" page id is kept internally (many state.currentPage === 'home'
-// checks) but the page is now "Targets" - a Kanban board of companies Marcus
-// wants to work, each card opening that account's canvas + campaign history.
-// The old landing-page contents all moved out: the quick-action cards were
-// dropped; "Your Grids" -> Campaigns sub-tab (renderGridsListView);
-// "Today's actions" -> per-campaign tab (renderCampaignActionsTab); the ICP
-// worklist + Programs-found discovery queue -> Company Universe; Contact
-// signals -> the Campaigns list page.
-// Targets now defaults to a per-account dashboard (one pinned account at a
-// time, switched via the dropdown in its header) rather than opening
-// straight onto the Kanban board - the board is still one click away via
-// "Targets board" and still owns pin/unpin + drag-to-stage. See
-// renderAccountDashboard() below.
+// checks) but the page is now "Targets" - a per-pinned-account dashboard
+// (see renderAccountDashboard() below), switched via the dropdown in its
+// header. The old landing-page contents all moved out: the quick-action
+// cards were dropped; "Your Grids" -> Campaigns sub-tab
+// (renderGridsListView); "Today's actions" -> per-campaign tab
+// (renderCampaignActionsTab); the ICP worklist + Programs-found discovery
+// queue -> Company Universe; Contact signals -> the Campaigns list page.
+// The Kanban pin board (drag a card between warmth columns) was retired in
+// favour of this dashboard - it added a stage concept nothing else in the
+// app read, and the dashboard covers the "how's this account tracking"
+// question per-account instead of as one board. Pinning a NEW company still
+// works from here (search below) as well as from Profile/the company drawer.
 function renderHome(){
   const rows = Array.isArray(window.__targets) ? window.__targets : [];
   const loading = window.__targets === undefined || window.__targetsLoading;
-  const meta = rows.length
-    ? `<span class="page-meta"><strong>${rows.length}</strong> pinned</span>`
-    : '';
 
-  if(!loading && rows.length && !window.__targetsShowBoard){
-    const name = activeTargetName(rows);
-    window.__targetOpen = name;
-    return renderAccountDashboard(name, rows);
+  if(loading){
+    return `<div class="page-head"><h1 class="page-h1">Targets</h1></div><div class="card"><div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading…</div></div>`;
+  }
+  if(window.__targets && window.__targets.error){
+    return `<div class="page-head"><h1 class="page-h1">Targets</h1></div><div class="card"><div class="muted" style="font-size:12.5px;">Could not load targets: ${esc(window.__targets.error)}</div></div>`;
+  }
+  if(!rows.length){
+    return `
+    <div class="page-head">
+      <h1 class="page-h1">Targets</h1>
+      <div class="page-sub">Pin a company to start tracking it here.</div>
+    </div>
+    <div class="card">
+      ${renderPinSearchWidget()}
+      <div class="empty-state">No targets pinned yet. Search a company above, or use "Pin as target" from a company's profile.</div>
+    </div>`;
   }
 
-  return `
-  <div class="page-head">
-    <h1 class="page-h1">Targets ${meta}</h1>
-    <div class="page-sub">The accounts you're working. Drag a card between columns as an account warms up.</div>
-  </div>
-  ${rows.length ? `<button class="btn btn-ghost btn-sm" style="margin-bottom:14px;" onclick="window.__targetsShowBoard=false;window.__targetOpen=null;renderPage();"><i class="ti ti-arrow-left"></i> Back to dashboard</button>` : ''}
-
-  ${renderTargetsDashboard(rows)}
-  ${renderTargetsBoard()}
-  `;
+  const name = activeTargetName(rows);
+  window.__targetOpen = name;
+  return renderAccountDashboard(name, rows);
 }
 
 function activeTargetName(rows){
@@ -3089,81 +3085,14 @@ function activeTargetName(rows){
   return rows.length ? rows[0].name : null;
 }
 
-// Mini dashboard at the top of Targets — how the targeting is tracking for
-// the pinned accounts, plus the key person at each one.
-function renderTargetsDashboard(rows){
-  if(!rows.length) return '';
-  const cols = targetBoardColumns();
-  const byStage = cols.map(c => ({
-    label: c.label,
-    hex: targetColHex(c.color),
-    n: rows.filter(r => (r.targetStage||'').trim().toLowerCase() === c.label.toLowerCase()).length
-  }));
-  const unplaced = rows.length - byStage.reduce((s,x)=>s+x.n,0);
-  if(unplaced > 0 && byStage[0]) byStage[0].n += unplaced;
-
-  const inCampaign = rows.filter(r => r.inCampaign).length;
-  const withProgram = rows.filter(r => (r.programs||[]).length).length;
-  const fits = rows.map(r => r.icpFitScore).filter(v => v != null);
-  const avgFit = fits.length ? Math.round(fits.reduce((a,b)=>a+b,0)/fits.length) : null;
-
-  const metrics = `
-    <div class="metric-strip four">
-      <div class="metric-card"><div><div class="m-label">Pinned</div><div class="m-value">${rows.length}</div></div></div>
-      <div class="metric-card"><div><div class="m-label">In a campaign</div><div class="m-value">${inCampaign}<small>/ ${rows.length}</small></div></div></div>
-      <div class="metric-card"><div><div class="m-label">Active program</div><div class="m-value">${withProgram}</div></div></div>
-      <div class="metric-card"><div><div class="m-label">Avg ICP fit</div><div class="m-value">${avgFit != null ? avgFit : '—'}${avgFit != null ? '<small>/100</small>' : ''}</div></div></div>
-    </div>`;
-
-  // Key contact per pinned company: prefer a decision-maker-ish role, else first.
-  const rank = t => /chief|head|director|vp|founder|owner|c[toe]o|transformation|change/i.test(t||'') ? 0 : 1;
-  const keyCards = rows.slice(0, 8).map(r => {
-    const people = (state.contacts || []).filter(c => (c.company||'').toLowerCase() === (r.name||'').toLowerCase());
-    people.sort((a,b) => rank(a.role) - rank(b.role));
-    const p = people[0];
-    return `
-      <div class="tgt-key" tabindex="0" role="button" onkeydown="onRowKeydown(event)" ${p ? `onclick="openContactDrawer('${esc(p.name)}', null)"` : `onclick="openTarget('${esc(r.name)}')"`}>
-        <div class="tgt-key-pillar">${esc(r.name)}</div>
-        ${p
-          ? `<div class="tgt-key-person"><span class="tgt-key-ava">${esc((p.name||'?').trim()[0]||'?').toUpperCase()}</span><div style="min-width:0;"><div class="tgt-key-name">${esc(p.name)}</div><div class="tgt-key-role">${esc(p.role||'—')}</div></div></div>`
-          : `<div class="tgt-key-empty">No contact yet — <span style="color:var(--ink);">add people</span></div>`}
-      </div>`;
-  }).join('');
-
+// Quick "pin a new company" search - was the Kanban board's toolbar, now
+// lives on the empty state and in the dashboard header so it's still
+// reachable directly from Targets, not only from Profile/the company drawer.
+function renderPinSearchWidget(){
   return `
-  <div class="tgt-dash">
-    ${metrics}
-    <div class="tgt-dash-row">
-      <div class="card">
-        <div class="section-title">By stage</div>
-        <div class="tgt-chart-wrap"><canvas id="targetsStageChart" height="150"></canvas></div>
-        <div class="tgt-legend">${byStage.map(s => `<span><span class="dot" style="background:${s.hex};"></span>${esc(s.label)} <b>${s.n}</b></span>`).join('')}</div>
-      </div>
-      <div class="card">
-        <div class="section-title">Key contacts</div>
-        <div class="desc">One person per pinned account — the company is the pillar. Click to open.</div>
-        <div class="tgt-key-grid">${keyCards}</div>
-      </div>
-    </div>
-  </div>`;
+  <span class="tboard-search"><i class="ti ti-search"></i><input id="targetPinSearch" type="text" placeholder="Pin a company…" oninput="renderTargetPinSuggestions(this.value)"></span>`;
 }
 
-function initTargetsDashboardChart(){
-  const el = document.getElementById('targetsStageChart');
-  if(!el || !window.Chart) return;
-  const rows = Array.isArray(window.__targets) ? window.__targets : [];
-  if(!rows.length) return;
-  const cols = targetBoardColumns();
-  const data = cols.map(c => rows.filter(r => (r.targetStage||'').trim().toLowerCase() === c.label.toLowerCase()).length);
-  const unplaced = rows.length - data.reduce((a,b)=>a+b,0);
-  if(unplaced > 0) data[0] += unplaced;
-  if(el.__chart) el.__chart.destroy();
-  el.__chart = new Chart(el, {
-    type: 'doughnut',
-    data: { labels: cols.map(c => c.label), datasets: [{ data, backgroundColor: cols.map(c => targetColHex(c.color)), borderWidth: 2, borderColor: '#fff' }] },
-    options: { cutout: '64%', plugins: { legend: { display: false } }, animation: { duration: 300 } }
-  });
-}
 
 /* ===================== TARGETS PIN BOARD ===================== */
 // Pinned companies come from Companies.'Pinned Target' (a checkbox on the
@@ -3214,228 +3143,6 @@ async function setTargetPinned(name, pinned){
   if(['profile','companyuniverse'].includes(state.currentPage)) renderPage();
 }
 
-/* ---- Kanban board ---- */
-// Columns come from Settings.'Target Board (JSON)' (GET/POST /api/target-board),
-// falling back to these four. Each column's `label` is also the value stored
-// in Companies.'Target Stage' - the server migrates that value when a column
-// is renamed (same id, new label).
-const TARGET_BOARD_DEFAULT_COLUMNS = [
-  { id:'new', label:'New', color:'slate' },
-  { id:'warm', label:'Warm', color:'amber' },
-  { id:'nurture', label:'Nurture', color:'violet' },
-  { id:'hot', label:'Hot', color:'red' }
-];
-const TARGET_COL_COLORS = {
-  slate:'#9C8074', blue:'#0084C5', teal:'#44A574', green:'#7BAE4E',
-  amber:'#D9A02E', violet:'#B34850', red:'#B23D1B', pink:'#E0708A'
-};
-function targetColHex(name){ return TARGET_COL_COLORS[name] || TARGET_COL_COLORS.slate; }
-function targetBoardColumns(){
-  const b = window.__targetBoard;
-  return (b && Array.isArray(b.columns) && b.columns.length) ? b.columns : TARGET_BOARD_DEFAULT_COLUMNS;
-}
-
-async function loadTargetBoard(){
-  if(window.__targetBoardLoading) return;
-  window.__targetBoardLoading = true;
-  try {
-    const res = await fetch('/api/target-board');
-    const data = await res.json();
-    if(res.ok && data && Array.isArray(data.columns)) window.__targetBoard = data;
-    else if(window.__targetBoard === undefined) window.__targetBoard = { columns: TARGET_BOARD_DEFAULT_COLUMNS };
-  } catch(err){
-    if(window.__targetBoard === undefined) window.__targetBoard = { columns: TARGET_BOARD_DEFAULT_COLUMNS };
-  }
-  window.__targetBoardLoading = false;
-  if(state.currentPage === 'home') renderPage();
-}
-
-function renderTargetsBoard(){
-  const t = window.__targets;
-  const loading = t === undefined || window.__targetsLoading;
-  const rows = Array.isArray(t) ? t : [];
-  const cols = targetBoardColumns();
-
-  // Group targets by column. Match Target Stage to a column label
-  // (case-insensitive); anything blank / unrecognised falls in the first column.
-  const byCol = {};
-  cols.forEach(c => { byCol[c.id] = []; });
-  rows.forEach(x => {
-    const hit = cols.find(c => c.label.toLowerCase() === (x.targetStage||'').trim().toLowerCase());
-    byCol[(hit || cols[0]).id].push(x);
-  });
-
-  const toolbar = `
-    <div class="tboard-toolbar">
-      <span class="tboard-search"><i class="ti ti-search"></i><input id="targetPinSearch" type="text" placeholder="Pin a company…" oninput="renderTargetPinSuggestions(this.value)"></span>
-      <button class="btn btn-ghost btn-sm" onclick="openTargetBoardEditor()"><i class="ti ti-adjustments"></i> Edit columns</button>
-    </div>
-    <div id="targetPinSuggestions"></div>`;
-
-  if(window.__targetBoardEditing) return `${toolbar}<div class="card">${renderTargetBoardEditor()}</div>`;
-  if(loading) return `${toolbar}<div class="card"><div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading…</div></div>`;
-  if(t && t.error) return `${toolbar}<div class="card"><div class="muted" style="font-size:12.5px;">Could not load targets: ${esc(t.error)}</div></div>`;
-
-  if(!rows.length){
-    return `${toolbar}<div class="card"><div class="empty-state">No targets pinned yet. Search a company above, or use “Pin as target” from a company’s profile.</div></div>`;
-  }
-
-  const board = `
-    <div class="tboard" style="grid-template-columns:repeat(${cols.length},minmax(260px,1fr));${cols.length > 4 ? 'overflow-x:auto;' : ''}">
-      ${cols.map(col => {
-        const hex = targetColHex(col.color);
-        const list = byCol[col.id] || [];
-        return `
-        <div class="tcol" data-colid="${esc(col.id)}" data-collabel="${esc(col.label)}"
-             ondragover="onTargetColDragOver(event)" ondragleave="onTargetColDragLeave(event)" ondrop="onTargetColDrop(event,'${esc(col.label)}')">
-          <div class="tcol-head">
-            <span class="tcol-dot" style="background:${hex};"></span>
-            <span class="tcol-name">${esc(col.label)}</span>
-            <span class="tcol-count">${list.length}</span>
-          </div>
-          <div class="tcol-body">
-            ${list.map(renderTargetKCard).join('') || '<div class="tcol-empty">Nothing here yet</div>'}
-          </div>
-        </div>`;
-      }).join('')}
-    </div>`;
-
-  return `${toolbar}${board}`;
-}
-
-function renderTargetKCard(x){
-  const nm = esc(x.name);
-  const prog = (x.programs || []).find(Boolean);
-  const icp = x.icpFitScore;
-  const icpChip = (/resources icp/i.test(x.icpTag||''))
-    ? `<span class="tcard-icp">ICP</span>`
-    : (icp != null ? `<span class="tcard-icp${icp < 70 ? ' low' : ''}">${icp} ICP</span>` : '');
-  const pills = [];
-  if(prog) pills.push(`<span class="tpill" style="background:var(--tint-gold-bg);color:var(--tint-gold-fg);"><i class="ti ti-progress-bolt" style="font-size:10px;"></i> ${esc(prog.name || 'Active program')}</span>`);
-  if(x.inCampaign) pills.push(`<span class="tpill" style="background:var(--tint-blue-bg);color:var(--tint-blue-fg);"><i class="ti ti-rocket" style="font-size:10px;"></i> ${x.campaigns && x.campaigns.length ? x.campaigns.length : 1} campaign${(x.campaigns && x.campaigns.length > 1) ? 's' : ''}</span>`);
-  const signal = x.latestSignal ? esc(x.latestSignal.length > 130 ? x.latestSignal.slice(0,130)+'…' : x.latestSignal) : '';
-  return `
-  <div class="tcard" draggable="true" data-name="${nm}" onclick="openTarget('${nm}')"
-       ondragstart="onTargetCardDragStart(event,'${nm}')" ondragend="onTargetCardDragEnd(event)">
-    <div class="tcard-chiprow">
-      <div class="tcard-chips">${icpChip}${pills.join('')}</div>
-      <button class="tcard-unpin" title="Unpin" onclick="event.stopPropagation();unpinTarget('${nm}')"><i class="ti ti-pinned-off"></i></button>
-    </div>
-    <div class="tcard-name">${nm}</div>
-    <div class="tcard-sub">${esc(x.sector || x.industry || '—')}</div>
-    ${signal ? `<div class="tcard-desc">${signal}</div>` : ''}
-    ${x.lastActivity ? `<div class="tcard-foot"><i class="ti ti-calendar" style="font-size:13px;"></i> ${fmtDate(x.lastActivity)}</div>` : ''}
-  </div>`;
-}
-
-/* ---- Kanban drag ---- */
-let __targetDragName = null;
-function onTargetCardDragStart(e, name){ __targetDragName = name; e.currentTarget.classList.add('dragging'); e.dataTransfer.effectAllowed='move'; }
-function onTargetCardDragEnd(e){ e.currentTarget.classList.remove('dragging'); }
-function onTargetColDragOver(e){ e.preventDefault(); e.currentTarget.classList.add('dragover'); }
-function onTargetColDragLeave(e){ e.currentTarget.classList.remove('dragover'); }
-async function onTargetColDrop(e, columnLabel){
-  e.preventDefault();
-  e.currentTarget.classList.remove('dragover');
-  const name = __targetDragName;
-  __targetDragName = null;
-  if(!name) return;
-  const row = (window.__targets || []).find(x => x.name === name);
-  if(!row || row.targetStage === columnLabel) return;
-  const prev = row.targetStage;
-  row.targetStage = columnLabel;               // optimistic
-  renderPage();
-  try {
-    const res = await fetch('/api/companies/'+encodeURIComponent(name)+'/target-stage', {
-      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ stage: columnLabel })
-    });
-    if(!res.ok){ const d = await res.json().catch(()=>({})); throw new Error(d.error || 'Request failed'); }
-  } catch(err){
-    row.targetStage = prev;                     // roll back
-    toast('Could not move card: '+err.message, 'error');
-    renderPage();
-  }
-}
-
-/* ---- Column editor ---- */
-function openTargetBoardEditor(){
-  // Deep copy so Cancel discards edits.
-  window.__targetBoardDraft = JSON.parse(JSON.stringify({ columns: targetBoardColumns() }));
-  window.__targetBoardEditing = true;
-  renderPage();
-}
-function closeTargetBoardEditor(){
-  window.__targetBoardEditing = false;
-  window.__targetBoardDraft = null;
-  renderPage();
-}
-function renderTargetBoardEditor(){
-  const cols = (window.__targetBoardDraft && window.__targetBoardDraft.columns) || [];
-  const swatches = Object.keys(TARGET_COL_COLORS);
-  return `
-  <div style="max-width:560px;">
-    <div class="muted" style="font-size:12px;margin-bottom:14px;">Rename, recolour and reorder the board columns. Renaming a column re-labels every target currently in it.</div>
-    <div style="display:flex;flex-direction:column;gap:8px;">
-    ${cols.map((c,i) => `
-      <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface-2);border-radius:10px;">
-        <span class="tcol-dot" style="background:${targetColHex(c.color)};width:11px;height:11px;"></span>
-        <input type="text" value="${esc(c.label)}" oninput="window.__targetBoardDraft.columns[${i}].label=this.value" style="flex:1;min-width:0;font-weight:700;">
-        <div style="display:flex;gap:5px;">
-          ${swatches.map(s => `<button title="${s}" onclick="setTargetColColor(${i},'${s}')" style="width:17px;height:17px;border-radius:50%;border:2px solid ${c.color===s?'var(--text)':'var(--surface)'};box-shadow:0 0 0 1px var(--border);background:${TARGET_COL_COLORS[s]};cursor:pointer;padding:0;"></button>`).join('')}
-        </div>
-        <div style="display:flex;gap:1px;">
-          <button class="btn btn-ghost btn-sm" style="padding:2px 5px;" ${i===0?'disabled':''} onclick="moveTargetCol(${i},-1)" title="Move up"><i class="ti ti-arrow-up"></i></button>
-          <button class="btn btn-ghost btn-sm" style="padding:2px 5px;" ${i===cols.length-1?'disabled':''} onclick="moveTargetCol(${i},1)" title="Move down"><i class="ti ti-arrow-down"></i></button>
-          ${cols.length>2 ? `<button class="btn btn-ghost btn-sm" style="padding:2px 5px;" title="Remove column" onclick="removeTargetCol(${i})"><i class="ti ti-trash"></i></button>` : ''}
-        </div>
-      </div>`).join('')}
-    </div>
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:16px;">
-      <button class="btn btn-ghost btn-sm" ${cols.length>=8?'disabled':''} onclick="addTargetCol()"><i class="ti ti-plus"></i> Add column</button>
-      <div style="display:flex;gap:8px;">
-        <button class="btn btn-secondary btn-sm" onclick="closeTargetBoardEditor()">Cancel</button>
-        <button class="btn btn-primary btn-sm" onclick="saveTargetBoard()"><i class="ti ti-device-floppy"></i> Save</button>
-      </div>
-    </div>
-  </div>`;
-}
-function moveTargetCol(i, dir){
-  const arr = window.__targetBoardDraft.columns;
-  const j = i + dir;
-  if(j < 0 || j >= arr.length) return;
-  [arr[i], arr[j]] = [arr[j], arr[i]];
-  renderPage();
-}
-function setTargetColColor(i, color){ window.__targetBoardDraft.columns[i].color = color; renderPage(); }
-function removeTargetCol(i){ window.__targetBoardDraft.columns.splice(i, 1); renderPage(); }
-function addTargetCol(){
-  window.__targetBoardDraft.columns.push({ id:'col'+Date.now().toString(36), label:'New column', color:'blue' });
-  renderPage();
-}
-async function saveTargetBoard(){
-  const columns = (window.__targetBoardDraft.columns || []).map(c => ({
-    id: c.id || ('col'+Math.random().toString(36).slice(2,8)),
-    label: (c.label||'Column').trim().slice(0,40) || 'Column',
-    color: c.color || 'slate'
-  }));
-  try {
-    const res = await fetch('/api/target-board', {
-      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ columns })
-    });
-    const data = await res.json();
-    if(!res.ok) throw new Error(data.error || 'Request failed');
-    window.__targetBoard = { columns: data.columns || columns };
-    toast('Board updated' + (data.migrated ? ` · ${data.migrated} target${data.migrated===1?'':'s'} re-labelled` : ''), 'success');
-  } catch(err){
-    toast('Could not save board: '+err.message, 'error');
-    return;
-  }
-  window.__targetBoardEditing = false;
-  window.__targetBoardDraft = null;
-  window.__targets = undefined;
-  loadTargets();
-}
-
 // Company name suggestions for the "Pin a company" box - same client-side
 // company list the Profile search uses (distinct Contacts.company values),
 // minus anything already pinned.
@@ -3452,19 +3159,6 @@ function renderTargetPinSuggestions(q){
     : `<div class="muted" style="font-size:12px;margin-bottom:12px;">No unpinned company matches “${esc(q)}”.</div>`;
 }
 
-// Clicking a Kanban card lands on the dashboard for that account (dashboard
-// is now the default Targets view - see renderHome()).
-function openTarget(name){
-  window.__targetOpen = name;
-  window.__targetsShowBoard = false;
-  renderPage();
-  window.scrollTo({ top: 0 });
-}
-function showTargetsBoard(){
-  window.__targetsShowBoard = true;
-  renderPage();
-  window.scrollTo({ top: 0 });
-}
 function switchTargetAccount(name){
   if(!name) return;
   window.__targetOpen = name;
@@ -3500,11 +3194,12 @@ function renderAccountDashboard(name, rows){
           ${rows.map(r => `<option value="${esc(r.name)}" ${r.name === name ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}
         </select>
       </label>
-      <button class="btn btn-ghost btn-sm" onclick="showTargetsBoard()"><i class="ti ti-layout-kanban"></i> Targets board</button>
+      ${renderPinSearchWidget()}
       <button class="btn btn-ghost btn-sm" onclick="unpinTarget('${nm}')"><i class="ti ti-pin-filled"></i> Unpin</button>
       <button class="btn btn-secondary btn-sm" onclick="navigate('profile');selectProfileCompany('${nm}')"><i class="ti ti-hierarchy-2"></i> Open full profile</button>
     </div>
-  </div>`;
+  </div>
+  <div id="targetPinSuggestions"></div>`;
 
   if(profile && profile.error){
     // Never show the raw error (it can leak implementation details, e.g. an
@@ -3544,7 +3239,7 @@ async function loadAccountDashboardData(name){
   } catch(err){
     window.__acctDash[name] = { error: err.message };
   }
-  if(window.__targetOpen === name && state.currentPage === 'home' && !window.__targetsShowBoard) renderPage();
+  if(window.__targetOpen === name && state.currentPage === 'home') renderPage();
 }
 
 function relativeSyncLabel(ms){
@@ -3751,8 +3446,8 @@ function renderDashEnrichment(name, profile){
         ${c.latestSignal ? `<div class="muted" style="font-size:11px;margin-top:4px;">${esc(c.latestSignal)}${c.signalDate ? ' (' + fmtDate(c.signalDate) + ')' : ''}</div>` : ''}
       </div>
       <div>
-        <div class="enrich-h">Summary</div>
-        <div style="font-size:12px;white-space:pre-wrap;max-height:220px;overflow:auto;">${esc((c.aiSummary || 'No enrichment on file yet.').slice(0, 500))}</div>
+        <div class="enrich-h">What this account needs</div>
+        <div style="max-height:220px;overflow:auto;">${renderDashSynthesis(name)}</div>
       </div>
       <div>
         <div class="enrich-h">Recent activity</div>
@@ -3760,6 +3455,42 @@ function renderDashEnrichment(name, profile){
       </div>
     </div>
   </div>`;
+}
+
+// Cross-references active programs + outreach activity + deals into one
+// Engine-written paragraph, rather than four separate raw feeds - cached
+// like every other ambient insight (see search-server.js's "Ambient
+// AI-insight cache"): opening the dashboard costs nothing, Generate/Refresh
+// is what calls the Engine.
+function renderDashSynthesis(name){
+  const s = window.__acctSynthesis && window.__acctSynthesis[name];
+  const genBtn = (label) => `<button class="btn btn-ghost btn-sm" style="margin-top:6px;" onclick="loadAccountSynthesis('${esc(name)}', true)"><i class="ti ti-sparkles"></i> ${label}</button>`;
+
+  if(s === undefined || s === null) return '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading…</div>';
+  if(s.error) return `<div class="muted" style="font-size:12px;">Couldn't generate a summary. ${genBtn('Try again')}</div>`;
+  if(s.notGenerated){
+    return `<div class="muted" style="font-size:12px;">${s.reason === 'not-enough-data' ? 'Not enough on file yet to summarise — check back once there are programs, activity, or deals logged.' : 'Not generated yet.'}</div>${genBtn('Generate summary')}`;
+  }
+  return `
+    <div style="font-size:12px;white-space:pre-wrap;">${esc(s.summary || '')}</div>
+    <div class="muted" style="font-size:10.5px;margin-top:6px;">${s.generatedAt ? 'Generated ' + relativeSyncLabel(new Date(s.generatedAt).getTime()) : ''}</div>
+    ${genBtn('Refresh')}`;
+}
+
+async function loadAccountSynthesis(name, refresh){
+  window.__acctSynthesis = window.__acctSynthesis || {};
+  if(!refresh && window.__acctSynthesis[name] !== undefined) return;
+  window.__acctSynthesis[name] = null;
+  if(window.__targetOpen === name && state.currentPage === 'home') renderPage();
+  try {
+    const res = await fetch('/api/companies/' + encodeURIComponent(name) + '/synthesis' + (refresh ? '?refresh=1' : ''));
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__acctSynthesis[name] = data;
+  } catch(err){
+    window.__acctSynthesis[name] = { error: err.message };
+  }
+  if(window.__targetOpen === name && state.currentPage === 'home') renderPage();
 }
 
 /* ---- Recent campaign messages for one company ---- */

@@ -9891,6 +9891,85 @@ app.get('/api/companies/profile', async (req, res) => {
   }
 });
 
+// Account synthesis (Targets dashboard enrichment panel) - a short,
+// Engine-written "what this account needs" read that combines detected
+// transformation programs, outreach/contact activity, and deal history into
+// one paragraph, instead of four separate raw feeds. Cached like every
+// other ambient insight (see "Ambient AI-insight cache" above) - opening
+// the dashboard costs nothing, only an explicit Refresh calls the Engine.
+app.get('/api/companies/:name/synthesis', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const name = decodeURIComponent(req.params.name);
+  const cacheKey = 'account-synthesis::' + name;
+
+  if (!wantsRefresh(req)) {
+    const cached = getAmbientInsight(cacheKey);
+    if (cached) return res.json({ ...cached.data, cached: true, storedAt: cached.storedAt });
+    return res.json({ summary: null, notGenerated: true });
+  }
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  try {
+    const companyRecord = await findRecordByFieldName('Companies', 'Company Name', name);
+    if (!companyRecord) return res.status(404).json({ error: 'Company not found' });
+    const cf = companyRecord.fields || {};
+
+    const [contactRecords, dealRecords, campaignContactRows, campaignRecords] = await Promise.all([
+      airtableFetchAllRecords('Contacts'),
+      airtableFetchAllRecords('Deals'),
+      fetchCampaignContactsRows(),
+      airtableFetchAllRecords('Campaigns')
+    ]);
+    const campaignsById = {}; campaignRecords.forEach(r => { campaignsById[r.id] = r; });
+    const myContacts = contactRecords.filter(r => (r.fields['Company'] || [])[0] === companyRecord.id);
+    const myContactIds = new Set(myContacts.map(r => r.id));
+
+    const programs = parseCompanyPrograms(cf);
+    const deals = dealRecords
+      .filter(r => (r.fields['Company'] || []).includes(companyRecord.id))
+      .map(r => ({ outcome: r.fields['Outcome'] || '', value: r.fields['Deal Value'] || 0, date: r.fields['Date'] || '' }));
+    const recentStatuses = campaignContactRows
+      .filter(row => myContactIds.has((row.fields['Contact'] || [])[0]))
+      .map(row => {
+        const contact = myContacts.find(c => c.id === (row.fields['Contact'] || [])[0]);
+        const campaign = campaignsById[(row.fields['Campaign'] || [])[0]];
+        return `${contact ? contact.fields['Full Name'] : '?'} (${contact ? contact.fields['Job Title'] || '' : ''}) - ${row.fields['Sequence Stage'] || ''}${campaign ? ' on ' + (campaign.fields['Name'] || campaign.fields['Campaign Name'] || '') : ''}`;
+      });
+
+    if (!programs.length && !deals.length && !recentStatuses.length && !cf['Latest Signal']) {
+      return res.json({ summary: null, notGenerated: true, reason: 'not-enough-data' });
+    }
+
+    const context = `Company: ${name}
+Industry: ${cf['Industry'] || 'unknown'} / ${cf['Sector'] || 'unknown'}
+ICP fit: ${cf['ICP Fit Score'] != null ? cf['ICP Fit Score'] + '/100' : 'not scored'}${cf['ICP Trigger Detected'] ? ' - trigger: ' + cf['ICP Trigger Detected'] : ''}
+Latest signal: ${cf['Latest Signal'] || 'none logged'}${cf['Signal Date'] ? ' (' + cf['Signal Date'] + ')' : ''}
+
+Active/recent transformation programs detected:
+${programs.length ? programs.map(p => `- ${p.name} (${p.type}, ${p.phase} phase)${p.evidence ? ': ' + p.evidence : ''}`).join('\n') : 'None detected yet.'}
+
+Contact/outreach activity:
+${recentStatuses.length ? recentStatuses.join('\n') : 'No outreach activity logged yet.'}
+
+Deals on file:
+${deals.length ? deals.map(d => `- ${d.outcome}${d.value ? ' $' + d.value : ''}${d.date ? ' (' + d.date + ')' : ''}`).join('\n') : 'None.'}`;
+
+    const prompt = `You are the account-intelligence layer for T2C Outreach, a B2B outreach CRM. Below is everything on file for one target account - detected transformation programs, outreach/contact activity, and deal history.
+
+${context}
+
+Write ONE short paragraph (3-4 sentences, no bullet points, no markdown, no preamble like "Based on...") synthesising what this specific evidence suggests the account needs right now and why it's worth pursuing (or not). Ground every claim in the data above - never invent a program, contact, or signal that isn't listed. If the evidence is thin, say so plainly rather than padding it out.`;
+
+    const summary = await callClaudeText(prompt, 400, AMBIENT_MODEL);
+    const payload = { summary, generatedAt: new Date().toISOString() };
+    setAmbientInsight(cacheKey, payload);
+    res.json(payload);
+  } catch (err) {
+    console.error('Account synthesis error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Real external research (LinkedIn + news via Serper, synthesized by
 // Claude) - as opposed to scoreIcpForCompany below, which only CLASSIFIES
 // whatever's already on file and silently defaults to "Small/Flat/Other"
