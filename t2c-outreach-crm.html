@@ -16004,43 +16004,96 @@ async function loadProgramDiscovery(){
   } catch(err){ window.__programDiscovery = { error: true }; }
   if(['home','settings','companyuniverse'].includes(state.currentPage)) renderPage();
 }
+// One card per pending finding - same uco-card look and dropdown-chip filter
+// bar as the Accounts/Programs tabs (renderUniverseCoCard / renderProgramsCard),
+// with Accept/Dismiss actions in the footer instead of "Open" since these
+// aren't filed against a company yet. Clicking the card body still opens that
+// company's profile, same as the other card grids.
+function renderProgramQueueCard(q){
+  const nm = esc(q.companyName || '—');
+  const initial = esc((q.companyName || '?').trim()[0] || '?').toUpperCase();
+  const newBadge = q.isNewCompany ? `<span class="badge" style="background:var(--tint-blue-bg);color:var(--tint-blue-fg);font-size:9px;">NEW</span>` : '';
+  return `
+  <div class="uco-card" onclick="${nm !== '—' ? `navigate('profile');selectProfileCompany('${nm}')` : ''}">
+    <div class="uco-top">${progHeatTag(q.heatBand)}${newBadge}</div>
+    <div class="uco-name"><span class="uco-ava">${initial}</span><b>${nm}</b></div>
+    <div class="uco-prog"><span class="k">${esc(progQueueTypeLabel(q))}</span><span class="v">${progQueueWhat(q)}</span></div>
+    ${q.whyItMatters ? `<div class="muted" style="font-size:11px;line-height:1.4;">${esc(q.whyItMatters)}</div>` : ''}
+    <div class="uco-foot" onclick="event.stopPropagation();">
+      <span>${esc(q.confidence||'')} confidence</span>
+      <span style="display:flex;gap:6px;">
+        <button class="btn btn-ghost btn-sm" title="Dismiss" onclick="resolveProgramQueueItemCard('${q.id}','reject','${nm}')"><i class="ti ti-x"></i></button>
+        <button class="btn btn-secondary btn-sm" title="Accept" onclick="resolveProgramQueueItemCard('${q.id}','accept','${nm}')"><i class="ti ti-check"></i> Accept</button>
+      </span>
+    </div>
+  </div>`;
+}
+async function resolveProgramQueueItemCard(id, action, companyName){
+  try {
+    const res = await fetch(`/api/programs/discovery/queue/${id}/${action}`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(action === 'accept' ? { companyName } : {})
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Failed');
+    if(window.__programDiscovery && Array.isArray(window.__programDiscovery.queue)){
+      window.__programDiscovery.queue = window.__programDiscovery.queue.filter(q => q.id !== id);
+      window.__programDiscovery.pendingCount = window.__programDiscovery.queue.length;
+    }
+    toast(action === 'accept' ? 'Filed against ' + companyName : 'Dismissed', 'success');
+    if(action === 'accept'){ window.__programs = undefined; loadPrograms(); window.__icpWorklist = undefined; loadIcpWorklist(); }
+    renderPage();
+  } catch(err){ toast('Could not ' + action + ': ' + err.message, 'warn'); }
+}
 function renderProgramDiscoveryCard(){
   const d = window.__programDiscovery;
   if(!d || d.error) return '';
   const running = !!window.__programDiscoveryRunning || !!d.running;
-  const n = d.pendingCount || 0;
   const last = (d.log && d.log[0]) || null;
   const mode = window.__programDiscoveryMode || 'both';
   const modeOpt = (v,label) => `<option value="${v}" ${mode===v?'selected':''}>${label}</option>`;
-  const sorted = progQueueSorted(d.queue || []);
-  // Sorted by opportunity heat. "Low priority" findings (cold - wrong phase,
-  // off-ICP, already in a campaign, or stale) are hidden by default so the
-  // panel only shows what's worth acting on.
-  const coldCount = sorted.filter(q => (q.heatBand || 'cold') === 'cold').length;
-  const visible = window.__progShowLow ? sorted : sorted.filter(q => (q.heatBand || 'cold') !== 'cold');
-  const shownCount = visible.length;
-  const preview = visible.slice(0, 5);
-  const lowToggle = coldCount ? `<button class="btn btn-ghost btn-sm" onclick="window.__progShowLow=!window.__progShowLow;renderPage();">${window.__progShowLow ? 'Hide' : 'Show'} ${coldCount} low-priority</button>` : '';
-  const previewHtml = preview.length ? `
-    <div style="margin-top:12px;display:flex;flex-direction:column;gap:1px;border:1px solid var(--border-light);border-radius:var(--radius-input);overflow:hidden;">
-      ${preview.map((q,i) => `
-        <div onclick="openProgramDiscoveryQueue()" title="Open the review list" style="cursor:pointer;padding:9px 12px;${i?'border-top:1px solid var(--border-light);':''}background:var(--surface);">
-          <div style="display:flex;align-items:baseline;gap:8px;">
-            ${progHeatTag(q.heatBand)}
-            <span style="font-weight:700;font-size:11.5px;flex:none;">${esc(q.companyName||'—')}</span>
-            <span class="muted" style="font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;">${progQueueWhat(q)}</span>
-          </div>
-          ${q.whyItMatters ? `<div class="muted" style="font-size:10.5px;line-height:1.4;margin-top:3px;">${esc(q.whyItMatters)}</div>` : ''}
-        </div>`).join('')}
-      ${shownCount > preview.length ? `<div onclick="openProgramDiscoveryQueue()" style="cursor:pointer;padding:8px 12px;font-size:11px;font-weight:700;color:var(--accent);border-top:1px solid var(--border-light);background:var(--surface);">Show all ${shownCount} →</div>` : ''}
-    </div>` : (n ? `<div class="muted" style="font-size:12px;margin-top:12px;">Nothing worth acting on right now.${coldCount ? ` ${coldCount} low-priority finding${coldCount===1?'':'s'} hidden.` : ''}</div>` : '');
+  const all = progQueueSorted(d.queue || []);
+
+  window.__progDiscoveryFilters = window.__progDiscoveryFilters || { heat: [], company: [] };
+  const f = window.__progDiscoveryFilters;
+  let rows = all.slice();
+  if(f.heat.length) rows = rows.filter(q => f.heat.includes(PROG_HEAT_STYLE[q.heatBand||'cold'].label));
+  else rows = rows.filter(q => (q.heatBand || 'cold') !== 'cold'); // low-priority hidden unless explicitly filtered in
+  if(f.company.length === 1) rows = rows.filter(q => !!q.isNewCompany === (f.company[0] === 'New company'));
+  const shownCount = rows.length;
+  const coldCount = all.filter(q => (q.heatBand || 'cold') === 'cold').length;
+
+  const ddGroup = (label, field, options) => {
+    if(!options.length) return '';
+    const sel = f[field] || [];
+    const open = window.__progDiscoveryOpenFilter === field;
+    return `
+    <div class="uf-dd">
+      <button class="uf-dd-btn ${sel.length ? 'on' : ''}" onclick="toggleProgDiscoveryFilterPanel('${field}')">${esc(label)}${sel.length ? ` (${sel.length})` : ''} <i class="ti ti-chevron-down"></i></button>
+      ${open ? `<div class="uf-dd-panel">
+        ${options.map(o => `<label class="uf-dd-opt"><input type="checkbox" ${sel.includes(o) ? 'checked' : ''} onchange="toggleProgDiscoveryFilter('${field}','${esc(o)}')"> ${esc(o)}</label>`).join('')}
+        <button class="btn btn-ghost btn-sm" style="width:100%;margin-top:6px;" onclick="toggleProgDiscoveryFilterPanel('${field}')">Done</button>
+      </div>` : ''}
+    </div>`;
+  };
+  const activeCount = f.heat.length + f.company.length;
+  const filterBar = all.length ? `
+    <div class="uf-bar" style="margin-top:10px;">
+      ${ddGroup('Heat', 'heat', ['Hot','Warm','Low priority'])}
+      ${ddGroup('Company', 'company', ['New company','Known account'])}
+      ${activeCount ? `<a href="#" class="uf-clear" onclick="window.__progDiscoveryFilters={heat:[],company:[]};renderPage();return false;">Clear all filters</a>` : ''}
+    </div>` : '';
+
+  const grid = !all.length
+    ? ''
+    : (rows.length ? `<div class="uco-grid" style="margin-top:12px;">${rows.map(renderProgramQueueCard).join('')}</div>`
+      : `<div class="muted" style="font-size:12px;margin-top:12px;">No findings match this filter.${(!f.heat.length && coldCount) ? ` ${coldCount} low-priority finding${coldCount===1?'':'s'} hidden by default — add Heat &gt; Low priority to see them.` : ''}</div>`);
+
   return `
   <div class="card" style="margin-bottom:22px;">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-robot"></i> Programs found ${shownCount ? `<span class="count-pill has" style="margin-left:6px;">${shownCount}</span>` : ''}</div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
-        ${lowToggle}
-        ${shownCount ? `<button class="btn btn-ghost btn-sm" onclick="openProgramDiscoveryQueue()"><i class="ti ti-list-check"></i> Review${shownCount>5?` all ${shownCount}`:''}</button>` : ''}
         <select onchange="window.__programDiscoveryMode=this.value" style="font-size:11.5px;" ${running?'disabled':''}>
           ${modeOpt('both','Known + new')}${modeOpt('monitor','Known accounts only')}${modeOpt('discover','New companies only')}
         </select>
@@ -16052,8 +16105,20 @@ function renderProgramDiscoveryCard(){
       ${d.settings.enabled ? ' Also runs automatically every Monday.' : ' Automatic weekly runs are <b>off</b> — turn them on in Settings once you’re happy with a manual run.'}
       ${last ? ` Last run ${progDiscoWhen(last.ranAt)} — scanned ${last.companiesScanned}, filed ${last.autoFiled}, ${last.queued} queued${last.newCompanies?`, ${last.newCompanies} new`:''}${(last.errors&&last.errors.length)?`, ${last.errors.length} error(s)`:''}.` : ''}
     </div>
-    ${previewHtml}
+    ${filterBar}
+    ${grid}
   </div>`;
+}
+function toggleProgDiscoveryFilter(field, value){
+  window.__progDiscoveryFilters = window.__progDiscoveryFilters || { heat: [], company: [] };
+  const arr = window.__progDiscoveryFilters[field] = window.__progDiscoveryFilters[field] || [];
+  const i = arr.indexOf(value);
+  if(i === -1) arr.push(value); else arr.splice(i, 1);
+  renderPage();
+}
+function toggleProgDiscoveryFilterPanel(field){
+  window.__progDiscoveryOpenFilter = (window.__progDiscoveryOpenFilter === field) ? null : field;
+  renderPage();
 }
 async function runProgramDiscoveryNow(mode){
   if(window.__programDiscoveryRunning) return;
