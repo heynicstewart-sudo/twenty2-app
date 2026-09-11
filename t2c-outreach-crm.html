@@ -14448,13 +14448,12 @@ function campaignsForGrid(gridId){
 
 function renderCampaignGridTab(campaign){
   const grids = (campaign.gridIds||[]).map(id => state.grids.find(g=>g.id===id)).filter(Boolean);
-  if(!(window.__campaignSegmentation && window.__campaignSegmentation[campaign.id])) loadCampaignSegmentation(campaign);
   return `
-  ${renderSegmentationGrid(campaign)}
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-grid-dots"></i> Contact grids</div>
       <div style="display:flex;gap:10px;">
+        <button class="btn btn-secondary btn-sm" onclick="openIcpSegmentationModal('${campaign.id}')"><i class="ti ti-sparkles"></i> Score ICP</button>
         <button class="btn btn-secondary btn-sm" onclick="openImportCompanyModal({ campaignId: '${campaign.id}' })"><i class="ti ti-building-community"></i> Import from company</button>
         <button class="btn btn-secondary btn-sm" onclick="openImportGridModal('${campaign.id}')"><i class="ti ti-link"></i> Import existing grid</button>
         <button class="btn btn-primary btn-sm" onclick="createGridForCampaign('${campaign.id}')"><i class="ti ti-plus"></i> New grid</button>
@@ -18537,44 +18536,52 @@ async function loadCampaignSegmentation(campaign){
   } catch(err){
     window.__campaignSegmentation[campaign.id] = { error: err.message };
   }
-  if(window.__campaignDetailId === campaign.id && window.__campaignDetailTab === 'grid') renderPage();
+  if(window.__icpSegmentationModalFor === campaign.id) renderIcpSegmentationModal(campaign.id);
 }
 
-async function scoreIcpBulk(campaignId){
+// ICP segmentation used to be its own always-visible card on the Contacts
+// tab; now it's a modal reached via the "Score ICP" button next to Import
+// from company, so the tab isn't permanently spending space on something
+// you check occasionally. Includes a one-line suggestion (the biggest
+// scored segment + a nudge to check the Angle Library) rather than just the
+// raw grid.
+function openIcpSegmentationModal(campaignId){
+  window.__icpSegmentationModalFor = campaignId;
   const campaign = state.campaigns.find(c => c.id === campaignId);
   if(!campaign) return;
-  const btn = document.getElementById('scoreIcpBtn-'+campaignId);
-  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Scoring…'; }
-  try {
-    const res = await fetch(`/api/campaign/${encodeURIComponent(campaignRouteKey(campaign))}/score-icp-bulk`, { method:'POST' });
-    const data = await res.json();
-    if(!res.ok) throw new Error(data.error || 'Request failed');
-    toast(`Scored ${data.scored} compan${data.scored===1?'y':'ies'} (${data.alreadyScored} already scored)`, 'success');
-    loadCampaignSegmentation(campaign);
-  } catch(err){
-    toast('Could not score companies: ' + err.message, 'warn');
-  }
-  if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-sparkles"></i> Score ICP'; }
+  if(!(window.__campaignSegmentation && window.__campaignSegmentation[campaignId])) loadCampaignSegmentation(campaign);
+  renderIcpSegmentationModal(campaignId);
+}
+function closeIcpSegmentationModal(){
+  window.__icpSegmentationModalFor = null;
+  closeModal();
 }
 
-// The actual X/Y read Jeanne DeWitt Grosser described - size on one axis,
-// momentum on the other, not a scrolling list. Same GET .../segmentation
-// data as before, just laid out as a grid instead of a table.
 const SEGMENTATION_SIZE_COLS = ['Micro', 'Small', 'Mid', 'Large'];
 const SEGMENTATION_MOMENTUM_ROWS = ['Hiring', 'Funded', 'Leadership Change', 'Flat'];
 
-function renderSegmentationGrid(campaign){
-  const data = window.__campaignSegmentation && window.__campaignSegmentation[campaign.id];
-  const body = () => {
-    if(!data) return '<div class="muted" style="font-size:12.5px;">Not loaded yet.</div>';
-    if(data.error) return `<div class="muted">Could not load: ${esc(data.error)}</div>`;
-    if(!data.companies.length) return '<div class="empty-state">No companies linked to this campaign yet.</div>';
+function renderIcpSegmentationModal(campaignId){
+  const data = window.__campaignSegmentation && window.__campaignSegmentation[campaignId];
+  const scoring = !!window.__icpScoringInFlight;
 
+  let body;
+  if(!data) body = '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading…</div>';
+  else if(data.error) body = `<div class="muted" style="font-size:12.5px;">Could not load: ${esc(data.error)}</div>`;
+  else if(!data.companies.length) body = '<div class="empty-state">No companies linked to this campaign yet.</div>';
+  else {
     const unscored = data.companies.filter(c => !c.scored);
     const cellFor = (size, momentum) => data.companies.filter(c => c.sizeBand === size && c.momentum === momentum);
-
-    return `
-      <div class="desc">${data.scoredCount} of ${data.totalCompanies} scored.</div>
+    let biggest = null;
+    SEGMENTATION_SIZE_COLS.forEach(s => SEGMENTATION_MOMENTUM_ROWS.forEach(m => {
+      const cos = cellFor(s, m);
+      if(cos.length && (!biggest || cos.length > biggest.count)) biggest = { size:s, momentum:m, count:cos.length };
+    }));
+    const suggestion = biggest
+      ? `Most companies here are <b>${esc(biggest.size)}</b> · <b>${esc(biggest.momentum)}</b> — ${biggest.count} of ${data.totalCompanies}. Check the Angle Library (Settings) has an entry matching that segment before this campaign goes out.`
+      : (unscored.length ? 'Nothing scored yet — run Score ICP below to see where your companies cluster.' : '');
+    body = `
+      <div class="desc" style="margin-bottom:10px;">${data.scoredCount} of ${data.totalCompanies} scored.</div>
+      ${suggestion ? `<div class="scorecard-warn" style="margin-bottom:12px;"><i class="ti ti-bulb"></i> ${suggestion}</div>` : ''}
       <div style="overflow-x:auto;">
         <div style="display:grid;grid-template-columns:90px repeat(${SEGMENTATION_SIZE_COLS.length},minmax(120px,1fr));gap:4px;min-width:560px;">
           <div></div>
@@ -18592,16 +18599,36 @@ function renderSegmentationGrid(campaign){
       </div>
       ${unscored.length ? `<div class="muted" style="font-size:11px;margin-top:10px;">${unscored.length} not yet scored: ${unscored.slice(0,8).map(c=>esc(c.companyName)).join(', ')}${unscored.length>8?'…':''}</div>` : ''}
     `;
-  };
-  return `
-  <div class="card" style="margin-bottom:16px;">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-grid-dots"></i> ICP segmentation</div>
-      <button class="btn btn-secondary btn-sm" id="scoreIcpBtn-${campaign.id}" onclick="scoreIcpBulk('${campaign.id}')"><i class="ti ti-sparkles"></i> Score ICP</button>
-    </div>
-    <div class="desc">Size x momentum - every company reachable from this campaign, scored on 3 attributes. Costs Engine tokens; already-scored companies are skipped automatically.</div>
-    ${body()}
-  </div>`;
+  }
+
+  openModal('ICP segmentation', `
+    <div class="muted" style="font-size:12px;margin-bottom:12px;">Size x momentum - every company reachable from this campaign, scored on 3 attributes. Costs Engine tokens; already-scored companies are skipped automatically.</div>
+    ${body}
+  `, `
+    <button class="btn btn-secondary" onclick="closeIcpSegmentationModal()">Close</button>
+    <button class="btn btn-primary" ${scoring?'disabled':''} onclick="scoreIcpBulk('${campaignId}')"><i class="ti ${scoring?'ti-loader-2':'ti-sparkles'}"></i> ${scoring?'Scoring…':'Score ICP'}</button>
+  `);
+  const box = document.querySelector('#modalOverlay .modal');
+  if(box) box.style.maxWidth = '640px';
+}
+
+async function scoreIcpBulk(campaignId){
+  const campaign = state.campaigns.find(c => c.id === campaignId);
+  if(!campaign) return;
+  window.__icpScoringInFlight = true;
+  renderIcpSegmentationModal(campaignId);
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaignRouteKey(campaign))}/score-icp-bulk`, { method:'POST' });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    toast(`Scored ${data.scored} compan${data.scored===1?'y':'ies'} (${data.alreadyScored} already scored)`, 'success');
+    window.__icpScoringInFlight = false;
+    await loadCampaignSegmentation(campaign);
+  } catch(err){
+    toast('Could not score companies: ' + err.message, 'warn');
+    window.__icpScoringInFlight = false;
+    renderIcpSegmentationModal(campaignId);
+  }
 }
 
 // ---- Signal re-engagement ----
