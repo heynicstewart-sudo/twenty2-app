@@ -4623,9 +4623,15 @@ function renderLoggerPage(){
   if(!window.__loggerAI) initLoggerAI();
   if(!window.__loggerConnections) initLoggerConnections();
   const mode = window.__loggerMode || 'manual';
+  // Reachable two ways: its own page (sidebar-hidden but routable directly)
+  // and embedded as Company Universe's Logger tab. The full page-head only
+  // makes sense standalone - Company Universe already shows its own h1 and
+  // this tab's own label right above, so repeating "Logger" as a second,
+  // equally-weighted page title there just doubles up (same reason the
+  // Accounts/Programs/Review tabs don't restate their tab name as a heading).
+  const standalone = state.currentPage === 'logger';
   return `
-  <div class="section-title" style="font-size:20px;margin-bottom:2px;">Logger</div>
-  <div class="muted" style="margin-bottom:16px;">Quickly capture any touch point - LinkedIn messages, calls, meetings, proposals, research and more - straight into your database.</div>
+  ${standalone ? `<div class="page-head"><h1 class="page-h1">Logger</h1><div class="page-sub">Quickly capture any touch point - LinkedIn messages, calls, meetings, proposals, research and more - straight into your database.</div></div>` : `<div class="muted" style="font-size:12.5px;margin:-4px 0 16px;max-width:70ch;">Quickly capture any touch point - LinkedIn messages, calls, meetings, proposals, research and more - straight into your database.</div>`}
   <div class="logger-type-grid" style="grid-template-columns:repeat(3,minmax(140px,180px));margin-bottom:16px;">
     <div class="logger-type-btn ${mode==='manual'?'active':''}" onclick="setLoggerMode('manual')"><i class="ti ti-edit"></i> Manual</div>
     <div class="logger-type-btn ${mode==='ai'?'active':''}" onclick="setLoggerMode('ai')"><i class="ti ti-sparkles"></i> Quick Capture</div>
