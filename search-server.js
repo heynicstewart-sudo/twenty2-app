@@ -6715,18 +6715,20 @@ ${ranked.length ? `Here are T2C's best-performing past offers for a similar ICP,
 ${ranked.map(o => `- "${o.campaignName}" (ICP: ${o.icpType || 'not recorded'}, engagement score ${o.engagementScore}, goal completion ${o.goalCompletionRate}%): Dream outcome: ${o.dreamOutcome || 'n/a'}. Time to value: ${o.timeToValue || 'n/a'}. Effort: ${o.effortAndSacrifice || 'n/a'}. Guarantee: ${o.guarantee || 'n/a'}.`).join('\n')}` : `No past offers with a similar ICP exist yet - base this on T2C's general positioning as an Agile/change consultancy.`}
 
 Generate a new Grand Slam Offer for this campaign. Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
-{ "dreamOutcome": string, "timeToValue": string, "effortAndSacrifice": string, "guarantee": string, "summary": string, "rationale": string }
+{ "dreamOutcome": string, "timeToValue": string, "effortAndSacrifice": string, "guarantee": string, "variations": [string, string, string, string], "rationale": string }
 
-"summary" is a single persuasive paragraph combining all four components, written so it can be dropped directly into a LinkedIn outreach message. "rationale" is one or two sentences naming which past campaign(s) informed this offer and why, or noting this is a first-of-its-kind offer if no past campaign applied.`;
+"variations" is 3-4 different one-paragraph phrasings of ONE single holistic offer that weaves the dream outcome, speed, effort and guarantee together into one persuasive pitch - not four separate sentences about four separate things. Each variation says the SAME offer a different way (a different opening line, a different emphasis, a different tone - e.g. one punchier, one warmer, one more direct) so Marcus can pick whichever lands, not choose between four different offers. Each must be short enough to drop directly into a LinkedIn outreach message. "rationale" is one or two sentences naming which past campaign(s) informed this offer and why, or noting this is a first-of-its-kind offer if no past campaign applied.`;
 
     const parsed = await callClaudeJson(prompt, 1200);
+    const variations = Array.isArray(parsed.variations) ? parsed.variations.filter(v => typeof v === 'string' && v.trim()).slice(0, 4) : [];
     res.json({
       offer: {
         dreamOutcome: parsed.dreamOutcome || '',
         timeToValue: parsed.timeToValue || '',
         effortAndSacrifice: parsed.effortAndSacrifice || '',
         guarantee: parsed.guarantee || '',
-        summary: parsed.summary || ''
+        summary: variations[0] || '',
+        variations
       },
       rationale: parsed.rationale || '',
       informedBy: ranked.map(o => o.campaignName).filter(Boolean)

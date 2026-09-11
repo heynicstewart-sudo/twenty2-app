@@ -19441,12 +19441,6 @@ function renderCampaignOfferSection(campaign){
         <button class="btn btn-secondary btn-sm" onclick="generateNewOfferForCampaign()"><i class="ti ti-refresh"></i> Generate new offer</button>
       </div>
     </div>
-    <div class="mini-cards" style="grid-template-columns:repeat(2,1fr);margin-bottom:12px;">
-      <div class="mini-card" style="text-align:left;padding:12px 14px;"><div class="label" style="margin-top:0;">Dream outcome</div><div style="font-size:12.5px;margin-top:4px;">${esc(offer.dreamOutcome||'—')}</div></div>
-      <div class="mini-card" style="text-align:left;padding:12px 14px;"><div class="label" style="margin-top:0;">Speed</div><div style="font-size:12.5px;margin-top:4px;">${esc(offer.timeToValue||'—')}</div></div>
-      <div class="mini-card" style="text-align:left;padding:12px 14px;"><div class="label" style="margin-top:0;">Effort &amp; sacrifice</div><div style="font-size:12.5px;margin-top:4px;">${esc(offer.effortAndSacrifice||'—')}</div></div>
-      <div class="mini-card" style="text-align:left;padding:12px 14px;"><div class="label" style="margin-top:0;">Guarantee</div><div style="font-size:12.5px;margin-top:4px;">${esc(offer.guarantee||'—')}</div></div>
-    </div>
     <div style="font-size:12.5px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card);padding:12px 14px;margin-bottom:12px;">${esc(offer.summary||'No summary yet.')}</div>
     <div class="mini-cards" style="grid-template-columns:repeat(4,1fr);margin-bottom:0;">
       <div class="mini-card"><div class="num">${offer.meetingsBooked||0}</div><div class="label">Meetings booked</div></div>
@@ -19512,19 +19506,23 @@ async function saveCampaignOfferEdit(){
 }
 
 function renderCampaignOfferPendingCard(pending){
+  // One holistic offer (dream outcome + speed + effort + guarantee woven
+  // together), shown as a few alternate phrasings to pick from - not the
+  // four raw ingredients as separate blurbs.
+  const variations = (pending.variations && pending.variations.length) ? pending.variations : [pending.summary].filter(Boolean);
   return `
   <div class="card" style="margin-bottom:16px;">
     <div class="section-title"><i class="ti ti-diamond"></i> New offer (not saved yet)</div>
     ${pending.rationale ? `<p class="desc"><i class="ti ti-info-circle"></i> ${esc(pending.rationale)}</p>` : ''}
-    <div class="mini-cards" style="grid-template-columns:repeat(2,1fr);margin-bottom:12px;">
-      <div class="mini-card" style="text-align:left;padding:12px 14px;"><div class="label" style="margin-top:0;">Dream outcome</div><div style="font-size:12.5px;margin-top:4px;">${esc(pending.dreamOutcome||'—')}</div></div>
-      <div class="mini-card" style="text-align:left;padding:12px 14px;"><div class="label" style="margin-top:0;">Speed</div><div style="font-size:12.5px;margin-top:4px;">${esc(pending.timeToValue||'—')}</div></div>
-      <div class="mini-card" style="text-align:left;padding:12px 14px;"><div class="label" style="margin-top:0;">Effort &amp; sacrifice</div><div style="font-size:12.5px;margin-top:4px;">${esc(pending.effortAndSacrifice||'—')}</div></div>
-      <div class="mini-card" style="text-align:left;padding:12px 14px;"><div class="label" style="margin-top:0;">Guarantee</div><div style="font-size:12.5px;margin-top:4px;">${esc(pending.guarantee||'—')}</div></div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">One offer, ${variations.length} way${variations.length===1?'':'s'} to say it - pick whichever lands.</div>
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      ${variations.map((v,i) => `
+        <div style="font-size:12.5px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card);padding:12px 14px;display:flex;justify-content:space-between;gap:12px;align-items:flex-start;">
+          <div style="flex:1;">${esc(v)}</div>
+          <button class="btn btn-primary btn-sm" style="flex:none;" onclick="acceptGeneratedOffer(${i})"><i class="ti ti-check"></i> Use this</button>
+        </div>`).join('')}
     </div>
-    <div style="font-size:12.5px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card);padding:12px 14px;margin-bottom:12px;">${esc(pending.summary||'')}</div>
-    <div style="display:flex;gap:10px;">
-      <button class="btn btn-primary" onclick="acceptGeneratedOffer()"><i class="ti ti-check"></i> Use this offer</button>
+    <div style="margin-top:12px;">
       <button class="btn btn-secondary" onclick="discardGeneratedOffer()">Discard</button>
     </div>
   </div>`;
@@ -19557,11 +19555,12 @@ function discardGeneratedOffer(){
   renderPage();
 }
 
-async function acceptGeneratedOffer(){
+async function acceptGeneratedOffer(variationIndex){
   const campaign = state.campaigns.find(c => c.id === window.__campaignDetailId);
   const pending = window.__campaignOfferPending;
   if(!campaign || !pending) return;
   if(!campaign.recordId){ toast('Cannot save offer - campaign has not been saved yet', 'warn'); return; }
+  const chosenSummary = (Array.isArray(pending.variations) && pending.variations[variationIndex]) || pending.summary || '';
   try {
     const res = await fetch('/api/offers/save', {
       method: 'POST',
@@ -19575,7 +19574,7 @@ async function acceptGeneratedOffer(){
         timeToValue: pending.timeToValue || '',
         effortAndSacrifice: pending.effortAndSacrifice || '',
         guarantee: pending.guarantee || '',
-        summary: pending.summary || '',
+        summary: chosenSummary,
         rationale: pending.rationale || ''
       })
     });
