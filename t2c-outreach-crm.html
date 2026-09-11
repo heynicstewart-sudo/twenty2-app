@@ -2641,7 +2641,10 @@ function navigate(page){
     window.__targetOpen = null;
   }
   state.currentPage = page;
-  const navEntry = NAV.find(n => n.id === page);
+  // 'programstrategy' is a drill-down off Company Universe with no sidebar
+  // entry of its own - keep that item highlighted and titled instead of
+  // going blank.
+  const navEntry = NAV.find(n => n.id === (page === 'programstrategy' ? 'companyuniverse' : page));
   state.activeNavKey = navEntry ? navEntry.id : page;
   const grid = page === 'grid' ? currentGrid() : null;
   document.getElementById('topbarTitle').textContent = grid ? grid.name : (navEntry ? navEntry.label : '');
@@ -2664,7 +2667,7 @@ function renderPage(){
 
   // 'research' deleted outright (redesign plan §1) - renderResearch() is
   // left defined (harmless dead code) but no longer reachable via dispatch.
-  const renderers = { home: renderHome, companyuniverse: renderCompanyUniverse, profile: renderProfilePage, gtmmotion: renderGtmMotionPage, icpbuilder: renderIcpBuilderPage, competitormap: renderCompetitorMapPage, replies: renderReplies, logger: renderLoggerPage, howitworks: renderHowItWorks, grids: renderGridsListView, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, contentcalendar: renderContentCalendarPage, settings: renderSettings, agency: renderAgencyPage };
+  const renderers = { home: renderHome, companyuniverse: renderCompanyUniverse, programstrategy: renderProgramStrategyPage, profile: renderProfilePage, gtmmotion: renderGtmMotionPage, icpbuilder: renderIcpBuilderPage, competitormap: renderCompetitorMapPage, replies: renderReplies, logger: renderLoggerPage, howitworks: renderHowItWorks, grids: renderGridsListView, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, contentcalendar: renderContentCalendarPage, settings: renderSettings, agency: renderAgencyPage };
   el.innerHTML = renderers[state.currentPage]();
   afterRender(state.currentPage);
 
@@ -15614,9 +15617,9 @@ function renderProgramCoCard(r){
     : (/resources icp/i.test(r.icpTag||'') ? `<span class="uco-icp">ICP</span>` : '');
   // Each program is its own clickable row (a company can be mid-flight on
   // more than one) - it opens that program's Engine-written strategy brief
-  // (openProgramStrategyModal), not the card's own click-through to profile.
-  // Shows the stored 1-2 sentence summary once generated; a plain prompt
-  // beforehand.
+  // as a full page (openProgramStrategyModal - name kept for the queue-card
+  // caller too), not the card's own click-through to profile. Shows the
+  // stored 1-2 sentence summary once generated; a plain prompt beforehand.
   const progRows = r.programs.map(pr => `
     <div class="uco-prog-row" onclick="event.stopPropagation();openProgramStrategyModal('${nm}','${esc(pr.name).replace(/'/g,"\\'")}')">
       <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline;">
@@ -15630,14 +15633,17 @@ function renderProgramCoCard(r){
     <div class="uco-top">${icpChip}${prio ? `<span class="tpill" style="background:var(--surface-2);color:var(--muted);">${prio}</span>` : ''}</div>
     <div class="uco-name"><span class="uco-ava">${r.logoUrl ? `<img src="${esc(r.logoUrl)}" alt="">` : initial}</span><b>${nm}</b></div>
     ${progRows}
-    <div class="uco-foot"><span>${r.inCampaign ? 'In a campaign' : 'Not in a campaign'}</span><span style="color:var(--accent);font-weight:700;">Open <i class="ti ti-arrow-right" style="font-size:12px;vertical-align:-1px;"></i></span></div>
+    <div class="uco-foot"><span>${r.inCampaign ? 'In a campaign' : 'Not in a campaign'}</span><span style="color:var(--accent);font-weight:700;">View company profile <i class="ti ti-arrow-right" style="font-size:12px;vertical-align:-1px;"></i></span></div>
   </div>`;
 }
 
-// ---- Program strategy modal (pain points, job titles, GTM-tied approach) ----
+// ---- Program strategy page (pain points, job titles, GTM-tied approach) ----
+// A full page (not a modal) - registered as 'programstrategy' in renderPage's
+// renderers map, reached only by drilling into a program card (no sidebar
+// entry). "Back to Company Universe" is the only way in or out.
 function openProgramStrategyModal(companyName, programName){
   window.__progStrategyFor = { companyName, programName };
-  renderProgramStrategyModal();
+  navigate('programstrategy');
   const key = companyName + '::' + programName;
   if(!(window.__progStrategy && window.__progStrategy[key] !== undefined)) loadProgramStrategy(companyName, programName);
 }
@@ -15645,7 +15651,7 @@ async function loadProgramStrategy(companyName, programName, refresh){
   window.__progStrategy = window.__progStrategy || {};
   const key = companyName + '::' + programName;
   window.__progStrategy[key] = null;
-  renderProgramStrategyModal();
+  renderPage();
   try {
     const res = await fetch(`/api/companies/${encodeURIComponent(companyName)}/programs/${encodeURIComponent(programName)}/strategy${refresh ? '?refresh=1' : ''}`);
     const data = await res.json();
@@ -15660,38 +15666,54 @@ async function loadProgramStrategy(companyName, programName, refresh){
   } catch(err){
     window.__progStrategy[key] = { error: err.message };
   }
-  renderProgramStrategyModal();
+  renderPage();
 }
-function renderProgramStrategyModal(){
+function renderProgramStrategyPage(){
   const ctx = window.__progStrategyFor;
-  if(!ctx) return;
+  if(!ctx){
+    return `<div class="page-head"><h1 class="page-h1">Program strategy</h1></div><div class="card"><div class="empty-state">Nothing selected. <a href="#" onclick="navigate('companyuniverse');return false;">Back to Company Universe</a></div></div>`;
+  }
   const key = ctx.companyName + '::' + ctx.programName;
   const s = window.__progStrategy && window.__progStrategy[key];
   const refreshBtn = `<button class="btn btn-ghost btn-sm" onclick="loadProgramStrategy('${esc(ctx.companyName)}','${esc(ctx.programName)}',true)"><i class="ti ti-refresh"></i> ${s && !s.error ? 'Regenerate' : 'Try again'}</button>`;
 
   let body;
   if(s === undefined || s === null){
-    body = '<div class="muted" style="font-size:12.5px;padding:6px 0;"><i class="ti ti-loader-2"></i> Generating strategy…</div>';
+    body = '<div class="card"><div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Generating strategy…</div></div>';
   } else if(s.error){
-    body = `<div class="muted" style="font-size:12.5px;">Couldn't generate a strategy. ${refreshBtn}</div>`;
+    body = `<div class="card"><div class="muted" style="font-size:12.5px;">Couldn't generate a strategy. ${refreshBtn}</div></div>`;
   } else {
     body = `
-      <div class="section-title" style="margin-bottom:6px;font-size:13px;">What's likely happening</div>
-      <div style="font-size:12.5px;line-height:1.6;margin-bottom:16px;">${esc(s.whatsHappening || '')}</div>
-      <div class="section-title" style="margin-bottom:6px;font-size:13px;">Who to target</div>
-      <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;">
-        ${(s.jobTitles||[]).length ? s.jobTitles.map(j => `<div class="tp-item"><b>${esc(j.title)}</b><div class="muted" style="font-size:11px;">${esc(j.reason||'')}</div></div>`).join('') : '<div class="muted" style="font-size:12px;">No roles suggested yet.</div>'}
+    <div class="card" style="margin-bottom:16px;">
+      <div class="section-title" style="margin-bottom:8px;">What's likely happening</div>
+      <div style="font-size:13px;line-height:1.65;max-width:75ch;">${esc(s.whatsHappening || '')}</div>
+    </div>
+    <div class="card" style="margin-bottom:16px;">
+      <div class="section-title" style="margin-bottom:10px;">Who to target</div>
+      <div style="display:flex;flex-direction:column;gap:10px;max-width:75ch;">
+        ${(s.jobTitles||[]).length ? s.jobTitles.map(j => `<div class="tp-item"><b>${esc(j.title)}</b><div class="muted" style="font-size:12px;">${esc(j.reason||'')}</div></div>`).join('') : '<div class="muted" style="font-size:12.5px;">No roles suggested yet.</div>'}
       </div>
-      <div class="section-title" style="margin-bottom:6px;font-size:13px;">Recommended strategy</div>
-      <div style="font-size:12.5px;line-height:1.6;">${esc(s.strategy || '')}</div>
-      <div class="muted" style="font-size:10.5px;margin-top:12px;">${s.generatedAt ? 'Generated ' + relativeSyncLabel(new Date(s.generatedAt).getTime()) : ''} ${refreshBtn}</div>`;
+    </div>
+    <div class="card" style="margin-bottom:16px;">
+      <div class="section-title" style="margin-bottom:8px;">Recommended strategy</div>
+      <div style="font-size:13px;line-height:1.65;max-width:75ch;">${esc(s.strategy || '')}</div>
+    </div>
+    <div class="muted" style="font-size:11px;">${s.generatedAt ? 'Generated ' + relativeSyncLabel(new Date(s.generatedAt).getTime()) : ''} ${refreshBtn}</div>`;
   }
 
-  openModal(esc(ctx.companyName) + ' — ' + esc(ctx.programName), body, `
-    <button class="btn btn-secondary" onclick="closeModal()">Close</button>
-    <button class="btn btn-primary" ${(!s || s.error) ? 'disabled' : ''} onclick="createCampaignFromProgramStrategy('${esc(ctx.companyName)}','${esc(ctx.programName)}')"><i class="ti ti-rocket"></i> Turn this into a campaign</button>`);
-  const box = document.querySelector('#modalOverlay .modal');
-  if(box) box.style.maxWidth = '560px';
+  return `
+  <div class="page-head" style="align-items:flex-start;">
+    <div>
+      <a href="#" onclick="navigate('companyuniverse');return false;" class="muted" style="font-size:12px;display:inline-flex;align-items:center;gap:4px;margin-bottom:8px;"><i class="ti ti-arrow-left"></i> Back to Company Universe</a>
+      <h1 class="page-h1">${esc(ctx.companyName)} — ${esc(ctx.programName)}</h1>
+      <div class="page-sub">Strategy brief for this program</div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button class="btn btn-secondary btn-sm" onclick="navigate('profile');selectProfileCompany('${esc(ctx.companyName)}')"><i class="ti ti-hierarchy-2"></i> View company profile</button>
+      <button class="btn btn-primary btn-sm" ${(!s || s.error) ? 'disabled' : ''} onclick="createCampaignFromProgramStrategy('${esc(ctx.companyName)}','${esc(ctx.programName)}')"><i class="ti ti-rocket"></i> Turn this into a campaign</button>
+    </div>
+  </div>
+  ${body}`;
 }
 
 // Builds a Draft campaign the same way the campaign-chat builder does
@@ -15730,7 +15752,6 @@ function createCampaignFromProgramStrategy(companyName, programName){
   });
   syncCampaignToAirtable(campaign);
   toast(`Campaign "${campaign.name}" created as a draft`, 'success');
-  closeModal();
   navigate('campaigns');
   openCampaignDetail(campaign.id);
 }
@@ -16159,7 +16180,7 @@ function openQueueProgramStrategy(qid){
   const q = window.__programDiscovery && (window.__programDiscovery.queue || []).find(x => x.id === qid);
   if(!q || q.destination !== 'program' || !q.program || !q.program.name) return;
   window.__progStrategyFor = { companyName: q.companyName, programName: q.program.name };
-  renderProgramStrategyModal();
+  navigate('programstrategy');
   loadQueueProgramStrategy(q);
 }
 async function loadQueueProgramStrategy(q){
@@ -16167,7 +16188,7 @@ async function loadQueueProgramStrategy(q){
   const key = companyName + '::' + programName;
   window.__progStrategy = window.__progStrategy || {};
   window.__progStrategy[key] = null;
-  renderProgramStrategyModal();
+  renderPage();
   try {
     const acceptRes = await fetch(`/api/programs/discovery/queue/${q.id}/accept`, {
       method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ companyName })
@@ -16189,7 +16210,7 @@ async function loadQueueProgramStrategy(q){
   } catch(err){
     window.__progStrategy[key] = { error: err.message };
   }
-  renderProgramStrategyModal();
+  renderPage();
 }
 async function resolveProgramQueueItemCard(id, action, companyName){
   try {
@@ -26334,7 +26355,7 @@ function renderUniverseCoCard(c){
     ${sub ? `<div class="muted" style="font-size:11px;margin:-4px 0 0 38px;">${esc(sub)}</div>` : ''}
     ${stats}
     ${box}
-    <div class="uco-foot"><span>${footLeft}</span><span style="color:var(--accent);font-weight:700;">Open <i class="ti ti-arrow-right" style="font-size:12px;vertical-align:-1px;"></i></span></div>
+    <div class="uco-foot"><span>${footLeft}</span><span style="color:var(--accent);font-weight:700;">View company profile <i class="ti ti-arrow-right" style="font-size:12px;vertical-align:-1px;"></i></span></div>
   </div>`;
 }
 
