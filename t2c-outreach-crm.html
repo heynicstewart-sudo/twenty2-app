@@ -2835,12 +2835,13 @@ function afterRender(page){
     }
     if(tab === 'roadmap') initRoadmapDrag();
     if(tab === 'intelligence') ensureContextDataLoaded();
-    if(tab === 'analytics' && campaign) initCampaignAnalyticsCharts(campaign);
-    if(tab === 'sales' && campaign){
+    if(tab === 'strategy' && campaign && window.__campaignOffer === undefined) loadCampaignOffer(campaign);
+    if(tab === 'analytics' && campaign){
+      initCampaignAnalyticsCharts(campaign);
+      // Deals content merged into Results (see renderCampaignAnalyticsTab).
       if(window.__salesData === undefined) loadSalesOverview(campaign);
       if(window.__salesConversionIntel === undefined) loadConversionIntelligence(campaign);
       if(window.__salesData && window.__salesConversionIntel) initSalesConversionCharts(window.__salesConversionIntel);
-      if(window.__campaignOffer === undefined) loadCampaignOffer(campaign);
     }
   }
   if(page === 'intelligence' && (window.__intelSubTab||'intelligence') === 'context') ensureContextDataLoaded();
@@ -14294,7 +14295,7 @@ function editCampaign(campaignId){
 
 /* ---- Detail view ---- */
 
-const CAMPAIGN_DETAIL_TABS = [['actions','Actions'],['grid','Contacts'],['roadmap','Sequence'],['strategy','Setup'],['analytics','Results'],['sales','Deals'],['intelligence','Campaign Notes']];
+const CAMPAIGN_DETAIL_TABS = [['actions','Actions'],['grid','Contacts'],['roadmap','Sequence'],['strategy','Setup'],['analytics','Results'],['intelligence','Campaign Notes']];
 
 // tab param lets callers (e.g. the Grid page's back button) land on a
 // specific tab instead of always resetting to the first one.
@@ -14405,7 +14406,6 @@ function renderCampaignDetail(){
   ${tab==='roadmap' ? renderCampaignRoadmapTab(campaign) : ''}
   ${tab==='strategy' ? renderCampaignStrategyTab(campaign) : ''}
   ${tab==='analytics' ? renderCampaignAnalyticsTab(campaign) : ''}
-  ${tab==='sales' ? renderCampaignSalesTab(campaign) : ''}
   `;
 }
 
@@ -15117,6 +15117,7 @@ function renderCampaignPipelineTab(campaign){
 
 function renderCampaignStrategyTab(campaign){
   return `
+  ${renderCampaignOfferSection(campaign)}
   <div class="card" style="margin-bottom:16px;">
     <div class="section-title"><i class="ti ti-target"></i> Campaign brief</div>
     <div class="field">
@@ -19247,6 +19248,24 @@ function renderCampaignAnalyticsTab(campaign){
 
   ${renderAcceptedReviewCard(campaign)}
 
+  ${(() => {
+    // Deals content merged in from the old standalone Deals tab (scorecards,
+    // conversion intelligence, deal log, weekly card, transcript analysis) -
+    // one dashboard instead of splitting "how's it performing" across two
+    // tabs with their own period selectors. Shares this tab's own period
+    // control above instead of a second one.
+    const salesData = window.__salesData;
+    if(salesData === undefined) return '<div class="card" style="margin-bottom:16px;"><div class="muted"><i class="ti ti-loader-2"></i> Loading deal data…</div></div>';
+    if(salesData.error) return `<div class="card" style="margin-bottom:16px;"><div class="muted">Could not load deal data: ${esc(salesData.error)}</div></div>`;
+    return `
+      ${renderSalesScorecards(salesData, period)}
+      ${renderConversionIntelligence(window.__salesConversionIntel)}
+      ${renderSalesLog(campaign, salesData, period)}
+      ${renderWeeklySalesCard(salesData, period)}
+      ${renderSalesTranscriptCard(campaign)}
+    `;
+  })()}
+
   <div class="card" style="margin-bottom:16px;">
     <div class="section-title" style="margin-bottom:10px;"><i class="ti ti-database"></i> Activity &amp; benchmarks</div>
     ${!data ? '<div class="muted"><i class="ti ti-loader-2"></i> Loading...</div>' :
@@ -19354,7 +19373,7 @@ async function loadSalesOverview(campaign){
   } catch(err){
     window.__salesData = { error: err.message };
   }
-  if(window.__campaignDetailTab === 'sales') renderPage();
+  if(window.__campaignDetailTab === 'analytics') renderPage();
 }
 
 async function loadConversionIntelligence(campaign){
@@ -19366,7 +19385,7 @@ async function loadConversionIntelligence(campaign){
   } catch(err){
     window.__salesConversionIntel = { error: err.message };
   }
-  if(window.__campaignDetailTab === 'sales') renderPage();
+  if(window.__campaignDetailTab === 'analytics') renderPage();
 }
 
 /* -- Offer section (Hormozi Grand Slam Offer), top of the Sales tab -- */
@@ -19380,7 +19399,7 @@ async function loadCampaignOffer(campaign){
   } catch(err){
     window.__campaignOffer = { error: err.message };
   }
-  if(window.__campaignDetailTab === 'sales') renderPage();
+  if(window.__campaignDetailTab === 'strategy') renderPage();
 }
 
 function renderCampaignOfferSection(campaign){
@@ -19563,6 +19582,10 @@ async function acceptGeneratedOffer(){
   }
 }
 
+// Deals tab retired - its content (scorecards, conversion intelligence,
+// deal log, weekly card, transcript analysis) merged into the Results tab
+// (renderCampaignAnalyticsTab), and the offer section moved to Setup. Kept
+// here, unreachable via nav, as the source of that markup.
 function renderCampaignSalesTab(campaign){
   const period = window.__salesPeriod || 'thisWeek';
   const data = window.__salesData;
