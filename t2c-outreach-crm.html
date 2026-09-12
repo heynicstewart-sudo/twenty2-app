@@ -1917,8 +1917,28 @@ const NAV = [
 // programstrategy/reviewdetail's own companyuniverse mapping below.
 const SIDEBAR_PARENT_PAGE = { grids:'campaigns', grid:'campaigns', calendar:'campaigns', programstrategy:'companyuniverse', reviewdetail:'companyuniverse' };
 
+// The main sidebar is per-client CRM navigation, which doesn't make sense
+// while on the Agency Dashboard (a cross-client view). While there, the
+// sidebar swaps to the dashboard's own three sub-tabs instead, replacing the
+// old in-page tab strip.
+const AGENCY_DASH_NAV_ITEMS = [
+  ['dashboard','Dashboard','ti-building-community'],
+  ['tasks','Tasks','ti-checklist'],
+  ['calendar','Calendar','ti-calendar'],
+];
+function exitAgencyDash(){ navigate('home'); }
 function renderSidebar(){
   const nav = document.getElementById('sidebarNav');
+  if(state.currentPage === 'agencydash'){
+    const activeTab = window.__agencyDashTab || 'dashboard';
+    nav.innerHTML =
+      '<button class="nav-item" onclick="exitAgencyDash()"><i class="ti ti-arrow-left"></i><span>Back to clients</span></button>'+
+      '<div style="height:1px;background:var(--border-light);margin:8px 14px;"></div>'+
+      AGENCY_DASH_NAV_ITEMS.map(([id,label,icon]) =>
+        '<button class="nav-item '+(activeTab===id?'active':'')+'" onclick="setAgencyDashTab(\''+id+'\')"><i class="ti '+icon+'"></i><span>'+label+'</span></button>'
+      ).join('');
+    return;
+  }
   const active = state.activeNavKey || state.currentPage;
   nav.innerHTML = NAV.filter(n => !n.hidden).map(n =>
     '<button class="nav-item '+(active===n.id?'active':'')+'" onclick="navigate(\''+n.id+'\')"><i class="ti '+n.icon+'"></i><span>'+n.label+'</span></button>'
@@ -2095,21 +2115,25 @@ function renderAgencyPage(){
      one view covers both the "block out timer" and "personal calendar" asks
      rather than building two separate calendars that would drift apart. */
 
-function renderAgencyDashSubNav(active){
-  const items = [['dashboard','Dashboard'],['tasks','Tasks'],['calendar','Calendar']];
-  return `<div class="seq-tabs" style="margin-bottom:16px;">
-    ${items.map(([id,label]) => `<div class="seq-tab ${active===id?'active':''}" onclick="setAgencyDashTab('${id}')">${label}</div>`).join('')}
-  </div>`;
-}
 function setAgencyDashTab(tab){
   window.__agencyDashTab = tab;
+  renderSidebar();
   renderPage();
 }
+// The three sub-tabs now live in the sidebar itself (renderSidebar swaps to
+// AGENCY_DASH_NAV_ITEMS on this page) rather than an in-page tab strip, so
+// there's no second nav competing with it here - just a page-head naming
+// whichever tab is active.
+const AGENCY_DASH_TAB_HEAD = {
+  dashboard: ['Agency dashboard', 'Every client at a glance, plus revenue and what is due.'],
+  tasks: ['Tasks', 'Your own tasks and meetings, spanning every client.'],
+  calendar: ['Calendar', 'Your day planner - block out tasks and meetings against the clock.'],
+};
 function renderAgencyDashPage(){
   const tab = window.__agencyDashTab || 'dashboard';
+  const [title, sub] = AGENCY_DASH_TAB_HEAD[tab] || AGENCY_DASH_TAB_HEAD.dashboard;
   return `
-  <div class="page-head"><h1 class="page-h1">Agency</h1><div class="page-sub">Every client at a glance, plus your own tasks and day planner.</div></div>
-  ${renderAgencyDashSubNav(tab)}
+  <div class="page-head"><h1 class="page-h1">${esc(title)}</h1><div class="page-sub">${esc(sub)}</div></div>
   ${tab==='dashboard' ? renderAgencyDashboardTab() : ''}
   ${tab==='tasks' ? renderAgencyTasksTab() : ''}
   ${tab==='calendar' ? renderAgencyCalendarTab() : ''}
@@ -2117,6 +2141,34 @@ function renderAgencyDashPage(){
 }
 
 /* ---- Dashboard tab ---- */
+function fmtMoney(n){
+  return '$' + Math.round(n||0).toLocaleString('en-AU');
+}
+function renderAgencyRevenueTile(){
+  const clients = ((window.__agencyOverview && window.__agencyOverview.clients) || []).filter(c => !c.paused && c.retainerAmount);
+  const monthly = clients.reduce((sum,c) => sum + (c.retainerAmount||0), 0);
+  const today = isoDate(TODAY);
+  const upcoming = clients.filter(c => c.retainerDueDate).sort((a,b) => a.retainerDueDate.localeCompare(b.retainerDueDate));
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;">
+      <div>
+        <div class="section-title" style="margin-bottom:0;"><i class="ti ti-cash"></i> Monthly revenue</div>
+        <div class="muted" style="font-size:12px;margin-top:2px;">Sum of active client retainers, plus when each payment is next due.</div>
+      </div>
+      <div style="font-size:26px;font-weight:800;flex-shrink:0;">${fmtMoney(monthly)}<span class="muted" style="font-size:12px;font-weight:600;"> / mo</span></div>
+    </div>
+    ${upcoming.length ? `<div style="margin-top:12px;display:flex;flex-direction:column;gap:0;">
+      ${upcoming.map(c => {
+        const overdue = c.retainerDueDate < today;
+        return `<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--border-light);font-size:12.5px;">
+          <div><strong>${esc(c.name||c.slug)}</strong> <span class="muted">${fmtMoney(c.retainerAmount)}/mo</span></div>
+          <div class="${overdue?'':'muted'}" style="${overdue?'color:var(--danger);font-weight:700;':''}font-size:11.5px;">${overdue?'Overdue - ':'Due '}${fmtDate(c.retainerDueDate)}</div>
+        </div>`;
+      }).join('')}
+    </div>` : `<div class="muted" style="font-size:12px;margin-top:10px;">No retainer amounts set yet - add one from a client's edit form (the gear icon on its card below).</div>`}
+  </div>`;
+}
 function renderAgencyDashboardTab(){
   const tasks = Array.isArray(window.__agencyTasks) ? window.__agencyTasks : [];
   const today = isoDate(TODAY);
@@ -2130,6 +2182,7 @@ function renderAgencyDashboardTab(){
     ${tile(dueToday, 'Due today', 'var(--warning)')}
     ${tile(overdue, 'Overdue', 'var(--danger)')}
   </div>
+  ${renderAgencyRevenueTile()}
   <div class="card" style="margin-bottom:16px;">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-building-community"></i> Client status</div>
@@ -2203,7 +2256,7 @@ function openAgencyTaskForm(id){
       <div class="field"><label>Status</label><select id="atfStatus">${AGENCY_TASK_STATUSES.map(s=>`<option ${t&&t.status===s?'selected':''}>${esc(s)}</option>`).join('')}</select></div>
     </div>
     <div class="two-col" style="gap:10px;">
-      <div class="field"><label>Client (optional)</label><input id="atfClient" list="atfClientList" value="${esc(t?t.clientSlug:'')}" placeholder="e.g. twenty2"><datalist id="atfClientList">${clientSlugs.map(s=>`<option value="${esc(s)}">`).join('')}</datalist></div>
+      <div class="field"><label>Client (optional)</label><select id="atfClient"><option value="">None</option>${clientSlugs.map(s=>`<option value="${esc(s)}" ${t&&t.clientSlug===s?'selected':''}>${esc(s)}</option>`).join('')}</select></div>
       <div class="field"><label>Account (optional)</label><input id="atfAccount" value="${esc(t?t.accountName:'')}" placeholder="Company name"></div>
     </div>
     <div class="field"><label>Due date (optional)</label><input type="date" id="atfDue" value="${t&&t.dueDate?t.dueDate:''}"></div>
@@ -2292,10 +2345,87 @@ function agencyCalNav(days){
   renderPage();
 }
 function agencyCalToday(){ window.__agencyCalDate = isoDate(TODAY); renderPage(); }
+
+// Month view is the default landing view - drilling into a day switches to
+// the hourly planner (renderAgencyCalDayView, the original single-day
+// implementation) and "Back to month" switches back. Both views share the
+// same task data + agencyCalDate().
+function agencyCalOpenDay(dateStr){
+  window.__agencyCalDate = dateStr;
+  window.__agencyCalView = 'day';
+  renderPage();
+}
+function agencyCalBackToMonth(){
+  window.__agencyCalView = 'month';
+  renderPage();
+}
+function agencyCalMonthAnchor(){
+  if(!window.__agencyCalMonthAnchor) window.__agencyCalMonthAnchor = agencyCalDate();
+  return window.__agencyCalMonthAnchor;
+}
+function agencyCalMonthNav(dir){
+  const d = new Date(agencyCalMonthAnchor()+'T00:00:00');
+  d.setMonth(d.getMonth()+dir, 1);
+  window.__agencyCalMonthAnchor = isoDate(d);
+  renderPage();
+}
+function agencyCalMonthToday(){
+  window.__agencyCalMonthAnchor = isoDate(TODAY);
+  renderPage();
+}
 function renderAgencyCalendarTab(){
   const t = window.__agencyTasks;
   if(t === undefined || t === null) return '<div class="card"><div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading...</div></div>';
   if(t.error) return `<div class="card"><div class="empty-state">Couldn't load: ${esc(friendlyErr(t.error))} <button class="btn btn-ghost btn-sm" onclick="loadAgencyTasks(true)"><i class="ti ti-refresh"></i> Try again</button></div></div>`;
+  return (window.__agencyCalView === 'day') ? renderAgencyCalDayView(t) : renderAgencyCalMonthView(t);
+}
+
+function renderAgencyCalMonthView(t){
+  const anchor = new Date(agencyCalMonthAnchor()+'T00:00:00');
+  const y = anchor.getFullYear(), m = anchor.getMonth();
+  const first = new Date(y, m, 1);
+  const startDow = first.getDay();
+  const daysInMonth = new Date(y, m+1, 0).getDate();
+  const monthLabel = first.toLocaleDateString('en-AU',{month:'long', year:'numeric'});
+  const cells = [];
+  for(let i=0;i<startDow;i++) cells.push(null);
+  for(let d=1; d<=daysInMonth; d++) cells.push(d);
+  const today = isoDate(TODAY);
+
+  return `
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-calendar"></i> ${esc(monthLabel)}</div>
+      <div style="display:flex;gap:6px;">
+        <button class="btn btn-primary btn-sm" onclick="openAgencyTaskForm()"><i class="ti ti-plus"></i> New</button>
+        <button class="btn btn-secondary btn-sm" onclick="agencyCalMonthNav(-1)"><i class="ti ti-chevron-left"></i></button>
+        <button class="btn btn-secondary btn-sm" onclick="agencyCalMonthToday()">Today</button>
+        <button class="btn btn-secondary btn-sm" onclick="agencyCalMonthNav(1)"><i class="ti ti-chevron-right"></i></button>
+      </div>
+    </div>
+    <div class="cal-grid">
+      ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d=>`<div class="cal-dow">${d}</div>`).join('')}
+      ${cells.map(d => {
+        if(d===null) return '<div class="cal-cell empty"></div>';
+        const dateStr = `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+        const isToday = dateStr === today;
+        const dayScheduled = t.filter(x => x.scheduledDate === dateStr).sort((a,b)=>(a.scheduledStart||'').localeCompare(b.scheduledStart||''));
+        const dayDueOnly = t.filter(x => x.status !== 'Done' && x.dueDate === dateStr && x.scheduledDate !== dateStr);
+        const shownScheduled = dayScheduled.slice(0,3);
+        const shownDueOnly = shownScheduled.length ? [] : dayDueOnly.slice(0,2);
+        const extra = (dayScheduled.length - shownScheduled.length) + (dayDueOnly.length - shownDueOnly.length);
+        return `<div class="cal-cell ${isToday?'today':''}" tabindex="0" role="button" style="cursor:pointer;" onclick="agencyCalOpenDay('${dateStr}')" onkeydown="onRowKeydown(event)">
+          <div class="cal-date">${d}</div>
+          ${shownScheduled.map(x => `<div class="event-chip ${x.type==='Meeting'?'blue':'yellow'}" title="${esc(x.title)}">${x.scheduledStart?esc(x.scheduledStart)+' &middot; ':''}${esc(x.title)}</div>`).join('')}
+          ${shownDueOnly.map(x => `<div class="event-chip" title="Due: ${esc(x.title)}"><i class="ti ti-flag" style="font-size:9px;"></i> ${esc(x.title)}</div>`).join('')}
+          ${extra > 0 ? `<div class="muted" style="font-size:10px;padding:2px 4px;">+${extra} more</div>` : ''}
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+
+function renderAgencyCalDayView(t){
   const date = agencyCalDate();
   const dateLabel = new Date(date+'T00:00:00').toLocaleDateString('en-AU',{weekday:'long', day:'numeric', month:'long'});
   const scheduled = t.filter(x => x.scheduledDate === date && x.scheduledStart).sort((a,b)=>a.scheduledStart.localeCompare(b.scheduledStart));
@@ -2334,7 +2464,10 @@ function renderAgencyCalendarTab(){
     </div>
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
-        <div class="section-title" style="margin-bottom:0;">${esc(dateLabel)}</div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <button class="btn btn-ghost btn-sm" onclick="agencyCalBackToMonth()" title="Back to month"><i class="ti ti-arrow-left"></i></button>
+          <div class="section-title" style="margin-bottom:0;">${esc(dateLabel)}</div>
+        </div>
         <div style="display:flex;gap:6px;">
           <button class="btn btn-secondary btn-sm" onclick="agencyCalNav(-1)"><i class="ti ti-chevron-left"></i></button>
           <button class="btn btn-secondary btn-sm" onclick="agencyCalToday()">Today</button>
@@ -2791,6 +2924,9 @@ const CLIENT_FORM_SPEC = [
   { k:'status', label:'Status', type:'select', options:['Active','Paused'] },
   { section: 'Airtable' },
   { k:'baseId', label:'CRM base ID', required:true, hint:'In Airtable: duplicate the Twenty2 base (structure only), then paste its base id (app...) here.', ph:'appXXXXXXXXXXXXXX', validate:true },
+  { section: 'Billing' },
+  { k:'retainerAmount', label:'Monthly retainer ($)', type:'number', ph:'2000' },
+  { k:'retainerDueDate', label:'Next payment due', type:'date' },
   { section: 'Branding' },
   { k:'logoMark', label:'Logo badge', hint:'1-2 characters shown in the sidebar + switcher.', ph:'SG' },
   { k:'shortName', label:'Short name', ph:'Shed Guru' },
@@ -2882,6 +3018,7 @@ async function openClientForm(slug){
         : clientFormFieldHtml(f, data[f.k])).join('')}
   `;
   const footer = `
+    ${slug ? `<button class="btn btn-ghost" style="color:var(--danger);margin-right:auto;" onclick="deleteClient('${esc(slug)}')"><i class="ti ti-trash"></i> Delete client</button>` : ''}
     <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
     <button class="btn btn-primary" id="clientFormSave" onclick="submitClientForm(${slug ? `'${esc(slug)}'` : 'null'})">
       <i class="ti ti-device-floppy"></i> ${slug ? 'Save changes' : 'Create client'}
@@ -2936,6 +3073,32 @@ async function submitClientForm(slug){
     if(errEl){ errEl.textContent = friendlyErr(err.message); errEl.style.display = 'block'; }
     else toast(friendlyErr(err.message), 'warn');
     if(saveBtn) saveBtn.disabled = false;
+  }
+}
+
+function deleteClient(slug){
+  const c = ((window.__agencyOverview && window.__agencyOverview.clients) || []).find(x => x.slug === slug);
+  const name = (c && c.name) || slug;
+  const body = `<p style="font-size:13px;">Remove "${esc(name)}" from the agency controller? This only stops the app from listing and switching into this client - their CRM data and Airtable base are untouched. This cannot be undone here.</p>`;
+  const footer = `
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" id="confirmDeleteClientBtn" style="background:var(--danger);border-color:var(--danger);" onclick="deleteClientConfirmed('${esc(slug)}')"><i class="ti ti-trash"></i> Remove</button>
+  `;
+  openModal(`Remove "${esc(name)}"`, body, footer);
+}
+async function deleteClientConfirmed(slug){
+  const btn = document.getElementById('confirmDeleteClientBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Removing...'; }
+  try {
+    const res = await fetch('/api/agency/clients/' + encodeURIComponent(slug), { method:'DELETE' });
+    const data = await res.json().catch(()=>({}));
+    if(!res.ok || !data.ok) throw new Error(data.error || 'Request failed');
+    toast('Client removed', 'success');
+    closeModal();
+    loadAgencyOverview(true);
+  } catch(err){
+    toast('Could not remove: ' + friendlyErr(err.message), 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-trash"></i> Remove'; }
   }
 }
 

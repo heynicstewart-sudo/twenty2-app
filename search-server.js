@@ -322,6 +322,10 @@ function tenantFromClientRecord(f) {
     thresholds: {
       staleContactDays: Number(f['Stale Contact Days']) || 14,
     },
+    billing: {
+      retainerAmount: f['Monthly Retainer'] != null ? Number(f['Monthly Retainer']) : null,
+      retainerDueDate: f['Retainer Due Date'] || null,
+    },
   };
 }
 
@@ -393,6 +397,8 @@ function publicClient(t) {
     region: p.region || '',
     tagline: p.tagline || '',
     status: t.status || 'Active',
+    retainerAmount: (t.billing && t.billing.retainerAmount) || null,
+    retainerDueDate: (t.billing && t.billing.retainerDueDate) || null,
   };
 }
 
@@ -21867,12 +21873,20 @@ function taskFromRecord(r) {
     createdAt: f['Created At'] || null,
   };
 }
+// Airtable's date columns reject an empty string ("Cannot parse date value
+// """) - a blank date has to be sent as null (which clears the cell) or left
+// out entirely, never ''. dueDate/scheduledDate are the two date-typed
+// fields here, so they skip the generic '' coercion the plain text fields
+// below use.
+const TASK_DATE_FIELDS = new Set(['dueDate', 'scheduledDate']);
 function taskFieldsFromBody(body) {
   const fields = {};
   for (const [k, airtableName] of Object.entries(TASK_FIELD_MAP)) {
     if (body[k] === undefined) continue;
     if (k === 'durationMinutes') {
       fields[airtableName] = body[k] === null || body[k] === '' ? null : Number(body[k]);
+    } else if (TASK_DATE_FIELDS.has(k)) {
+      fields[airtableName] = body[k] === '' ? null : body[k];
     } else {
       fields[airtableName] = body[k] === null ? '' : body[k];
     }
@@ -21981,6 +21995,11 @@ const CLIENT_FORM_FIELDS = {
   notes: 'Notes',
 };
 
+// Handled outside CLIENT_FORM_FIELDS' generic string coercion: retainer is a
+// number and due date is a date column, and (per TASK_DATE_FIELDS above)
+// Airtable's date columns reject '' - it needs a real ISO date or omission.
+const CLIENT_RETAINER_FIELDS = { retainerAmount: 'Monthly Retainer', retainerDueDate: 'Retainer Due Date' };
+
 function slugify(s) {
   return (s || '').toString().toLowerCase().trim()
     .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
@@ -21996,6 +22015,13 @@ function clientFieldsFromForm(body) {
   if (body.staleContactDays !== undefined && body.staleContactDays !== '') {
     const n = Number(body.staleContactDays);
     if (!isNaN(n)) fields['Stale Contact Days'] = n;
+  }
+  if (body.retainerAmount !== undefined && body.retainerAmount !== '') {
+    const n = Number(body.retainerAmount);
+    if (!isNaN(n)) fields[CLIENT_RETAINER_FIELDS.retainerAmount] = n;
+  }
+  if (body.retainerDueDate !== undefined && body.retainerDueDate !== '') {
+    fields[CLIENT_RETAINER_FIELDS.retainerDueDate] = body.retainerDueDate;
   }
   return fields;
 }
@@ -22047,6 +22073,8 @@ app.get('/api/agency/clients/:slug', async (req, res) => {
       gscProperty: (t.gsc && t.gsc.property) || '', gscSitemapUrl: (t.gsc && t.gsc.sitemapUrl) || '',
       omnisendApiKey: t.omnisendApiKey || '', googleAdsSheetId: t.googleAdsSheetId || '',
       staleContactDays: (t.thresholds && t.thresholds.staleContactDays) || 14,
+      retainerAmount: (t.billing && t.billing.retainerAmount) || '',
+      retainerDueDate: (t.billing && t.billing.retainerDueDate) || '',
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -22112,6 +22140,25 @@ app.patch('/api/agency/clients/:slug', async (req, res) => {
     res.json({ ok: true, slug: req.params.slug });
   } catch (err) {
     console.error('Update client error:', err.message);
+    res.status(err.status === 403 ? 403 : 500).json({ error: err.message });
+  }
+});
+
+// Removes a client from the controller (deletes its Clients row in the
+// control base). The client's own CRM base is untouched - this only stops
+// the agency app from listing/switching into it.
+app.delete('/api/agency/clients/:slug', async (req, res) => {
+  try {
+    if (req.params.slug === DEFAULT_CLIENT_SLUG) return res.status(400).json({ error: 'The default client cannot be deleted.' });
+    const recId = await findClientRecordId(req.params.slug);
+    if (!recId) return res.status(404).json({ error: 'not_found' });
+    await controlBaseRequest('DELETE', `?records[]=${encodeURIComponent(recId)}`);
+    clientsCacheAt = 0;
+    agencyOverviewAt = 0;
+    await getClients();
+    res.json({ ok: true, slug: req.params.slug });
+  } catch (err) {
+    console.error('Delete client error:', err.message);
     res.status(err.status === 403 ? 403 : 500).json({ error: err.message });
   }
 });
