@@ -1897,10 +1897,19 @@ const NAV = [
   { id:'grid', label:'Grid', icon:'ti-grid-dots', hidden:true }
 ];
 
+// Which sidebar item stays lit up while on a page that has none of its own.
+// Grids/Grid/Calendar hang off Campaigns via renderCampaignsAreaSubNav (the
+// "Campaigns / Contact grids / Calendar" tabs) - clicking one of those tabs
+// should not make the whole sidebar go dark just because that destination
+// page id isn't itself in the visible NAV list. Keep this in sync with
+// programstrategy/reviewdetail's own companyuniverse mapping below.
+const SIDEBAR_PARENT_PAGE = { grids:'campaigns', grid:'campaigns', calendar:'campaigns', programstrategy:'companyuniverse', reviewdetail:'companyuniverse' };
+
 function renderSidebar(){
   const nav = document.getElementById('sidebarNav');
+  const active = state.activeNavKey || state.currentPage;
   nav.innerHTML = NAV.filter(n => !n.hidden).map(n =>
-    '<button class="nav-item '+(state.currentPage===n.id?'active':'')+'" onclick="navigate(\''+n.id+'\')"><i class="ti '+n.icon+'"></i><span>'+n.label+'</span></button>'
+    '<button class="nav-item '+(active===n.id?'active':'')+'" onclick="navigate(\''+n.id+'\')"><i class="ti '+n.icon+'"></i><span>'+n.label+'</span></button>'
   ).join('');
 }
 
@@ -2660,7 +2669,14 @@ function navigate(page){
   // entry of its own - keep that item highlighted and titled instead of
   // going blank.
   const navEntry = NAV.find(n => n.id === (['programstrategy','reviewdetail'].includes(page) ? 'companyuniverse' : page));
-  state.activeNavKey = navEntry ? navEntry.id : page;
+  // Sidebar highlighting is a separate concern from the topbar title above -
+  // Grids/Grid/Calendar/Logger also have no sidebar entry of their own (they
+  // hang off Campaigns/Company Universe now - see renderCampaignsAreaSubNav),
+  // but unlike programstrategy/reviewdetail they keep their OWN topbar title.
+  // Without this mapping renderSidebar's `state.activeNavKey===n.id` check
+  // matches nothing and the whole sidebar goes dark on these pages.
+  const activeNavEntry = NAV.find(n => n.id === (SIDEBAR_PARENT_PAGE[page] || page));
+  state.activeNavKey = activeNavEntry ? activeNavEntry.id : page;
   const grid = page === 'grid' ? currentGrid() : null;
   document.getElementById('topbarTitle').textContent = grid ? grid.name : (navEntry ? navEntry.label : '');
   renderSidebar();
@@ -27510,11 +27526,19 @@ state = makeReactive(rawState, persistState);
 // noticed while verifying the nav restructure below; same sync navigate()
 // does, just without calling it (no reason to re-run its side effects here).
 (function syncTopbarToRestoredPage(){
-  const navEntry = NAV.find(n => n.id === rawState.currentPage);
-  rawState.activeNavKey = navEntry ? navEntry.id : rawState.currentPage;
+  // Mirror navigate()'s two lookups exactly, so a hard reload lands in the
+  // same state a normal in-app navigation to this page would have produced -
+  // programstrategy/reviewdetail have no NAV entry of their own at all (a
+  // direct id lookup finds nothing), and grids/grid/calendar have one but
+  // it's hidden from the sidebar, so activeNavKey needs the parent mapping
+  // even though the topbar title still shows the page's own label.
+  const page = rawState.currentPage;
+  const navEntry = NAV.find(n => n.id === (['programstrategy','reviewdetail'].includes(page) ? 'companyuniverse' : page));
+  const activeNavEntry = NAV.find(n => n.id === (SIDEBAR_PARENT_PAGE[page] || page));
+  rawState.activeNavKey = activeNavEntry ? activeNavEntry.id : page;
   const titleEl = document.getElementById('topbarTitle');
   if(!titleEl) return;
-  const grid = rawState.currentPage === 'grid' ? currentGrid() : null;
+  const grid = page === 'grid' ? currentGrid() : null;
   titleEl.textContent = grid ? grid.name : (navEntry ? navEntry.label : '');
 })();
 renderSidebar();
