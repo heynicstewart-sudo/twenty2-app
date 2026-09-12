@@ -321,7 +321,8 @@ label{font-size:var(--label-size);font-weight:700;color:var(--muted);display:blo
 .metric-strip.four{grid-template-columns:repeat(4,minmax(0,1fr));}
 .metric-card{background:var(--surface);border:1px solid var(--border-light);border-radius:var(--radius-card);padding:16px 18px;display:flex;align-items:center;justify-content:space-between;gap:12px;box-shadow:var(--shadow-sm);}
 .metric-card.clickable{cursor:pointer;transition:box-shadow .15s ease,transform .15s ease;}
-.metric-card.clickable:hover{box-shadow:var(--shadow-md);transform:translateY(-1px);}
+.metric-card.clickable:hover,.metric-card.clickable:focus-visible{box-shadow:var(--shadow-md);transform:translateY(-1px);}
+.metric-card.clickable:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
 .metric-card .m-label{display:flex;align-items:center;gap:7px;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:var(--text-dim);}
 .metric-card .m-label .dot{width:7px;height:7px;border-radius:50%;background:var(--accent);flex:none;}
 .metric-card .m-value{font-size:24px;font-weight:800;letter-spacing:-0.02em;color:var(--ink);margin-top:5px;display:flex;align-items:baseline;gap:5px;line-height:1.1;}
@@ -329,6 +330,7 @@ label{font-size:var(--label-size);font-weight:700;color:var(--muted);display:blo
 .metric-card .m-delta{display:inline-flex;align-items:center;gap:3px;margin-top:8px;padding:2px 8px;border-radius:var(--radius-pill);font-size:10.5px;font-weight:700;background:var(--lime-soft);color:var(--lime-ink);}
 .metric-card .m-delta.flat{background:var(--surface-2);color:var(--muted);}
 .metric-card .m-delta.down{background:var(--tint-amber-bg);color:var(--tint-amber-fg);}
+.metric-card .m-delta.error{background:var(--tint-red-bg);color:var(--tint-red-fg);}
 .metric-card .m-icon{width:42px;height:42px;min-width:42px;border-radius:12px;background:var(--surface-2);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:20px;}
 
 /* Universe company cards — Stitch's directory-card treatment applied to the
@@ -1769,7 +1771,7 @@ async function deleteGridConfirmed(gridId){
     toast(`Grid "${grid.name}" deleted`, 'success');
     renderPage();
   } catch(err){
-    toast('Could not delete grid: ' + err.message, 'warn');
+    toast('Could not delete grid: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = ('<i class="ti ti-trash"></i> Remove'); }
   }
 }
@@ -1828,7 +1830,7 @@ async function backfillContactGridTagsConfirmed(){
     closeModal();
     toast(`${contactsData.tagged} contact${contactsData.tagged===1?'':'s'}, ${companiesData.tagged} compan${companiesData.tagged===1?'y':'ies'} tagged`, 'success');
   } catch(err){
-    toast('Could not backfill grid tags: ' + err.message, 'warn');
+    toast('Could not backfill grid tags: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-tag"></i> Tag contacts &amp; companies'; }
   }
 }
@@ -1993,7 +1995,7 @@ async function switchClient(slug){
     toast('Switching workspace...', 'success');
     setTimeout(() => location.reload(), 250);
   } catch(err){
-    toast('Could not switch client: ' + err.message, 'warn');
+    toast('Could not switch client: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -2558,7 +2560,7 @@ async function openClientForm(slug){
       const res = await fetch('/api/agency/clients/' + encodeURIComponent(slug));
       data = await res.json();
       if(!res.ok) throw new Error(data.error || 'Load failed');
-    } catch(err){ toast('Could not load client: ' + err.message, 'warn'); return; }
+    } catch(err){ toast('Could not load client: ' + friendlyErr(err.message), 'warn'); return; }
   }
   const body = `
     <div id="clientFormError" class="muted" style="color:var(--danger);font-size:12px;margin-bottom:10px;display:none;"></div>
@@ -2621,7 +2623,7 @@ async function submitClientForm(slug){
     setTimeout(() => location.reload(), 400);
   } catch(err){
     if(errEl){ errEl.textContent = err.message; errEl.style.display = 'block'; }
-    else toast(err.message, 'warn');
+    else toast(friendlyErr(err.message), 'warn');
     if(saveBtn) saveBtn.disabled = false;
   }
 }
@@ -3216,7 +3218,7 @@ async function replyRegenerate(id){
     area.innerHTML = renderReplyDraftArea(r);
   } catch(err){
     console.warn('Could not regenerate reply:', err.message);
-    toast('Could not regenerate: ' + err.message, 'warn');
+    toast('Could not regenerate: ' + friendlyErr(err.message), 'warn');
     area.innerHTML = renderReplyDraftArea(r);
   }
 }
@@ -3252,7 +3254,7 @@ async function replyApprove(id){
     if(!window.__repliesQueue.length && state.currentPage === 'replies') renderPage();
   } catch(err){
     console.warn('Could not log reply:', err.message);
-    toast('Could not log the reply: ' + err.message, 'warn');
+    toast('Could not log the reply: ' + friendlyErr(err.message), 'warn');
     if(area) area.innerHTML = renderReplyDraftArea(r);
   }
 }
@@ -3354,7 +3356,7 @@ async function setTargetPinned(name, pinned){
     if(!res.ok){ const d = await res.json().catch(()=>({})); throw new Error(d.error || 'Request failed'); }
     toast(pinned ? 'Pinned to Targets' : 'Removed from Targets', 'success');
   } catch(err){
-    toast('Could not update pin: '+err.message, 'error');
+    toast('Could not update pin: '+friendlyErr(err.message), 'error');
     return;
   }
   window.__targets = undefined;
@@ -4056,7 +4058,7 @@ async function getContextDebriefQuestions(){
     l.debriefQuestions = data.questions || [];
     l.mode = l.debriefQuestions.length ? 'debrief' : 'notes';
   } catch(err){
-    toast('Could not get Engine questions: ' + err.message, 'warn');
+    toast('Could not get Engine questions: ' + friendlyErr(err.message), 'warn');
     l.mode = 'notes';
   }
   renderPage();
@@ -4121,7 +4123,7 @@ async function saveContextTouchPoint(){
     renderPage();
   } catch(err){
     l.saving = false;
-    toast('Could not save touch point: ' + err.message, 'warn');
+    toast('Could not save touch point: ' + friendlyErr(err.message), 'warn');
     renderPage();
   }
 }
@@ -4220,7 +4222,7 @@ function handleContextConnectionsScreenshot(file){
       runContextConnectionsImport(rows);
     } catch(err){
       console.warn('Connections screenshot parse failed:', err.message);
-      toast('Could not read that screenshot: ' + err.message, 'warn');
+      toast('Could not read that screenshot: ' + friendlyErr(err.message), 'warn');
       if(resultEl) resultEl.innerHTML = '';
     }
   };
@@ -4376,7 +4378,7 @@ async function runContextParseScreenshot(){
     loadContextData(true);
   } catch(err){
     if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;">Could not parse: ${esc(friendlyErr(err.message))}</p>`;
-    toast('Could not parse screenshot: ' + err.message, 'warn');
+    toast('Could not parse screenshot: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -4433,7 +4435,7 @@ async function submitContextLogContent(){
     loadContextData(true);
   } catch(err){
     if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;">Could not log content: ${esc(friendlyErr(err.message))}</p>`;
-    toast('Could not log content: ' + err.message, 'warn');
+    toast('Could not log content: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -4557,7 +4559,7 @@ async function submitContextHistoricalUpload(){
     loadContextData(true);
   } catch(err){
     if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;">Could not extract: ${esc(friendlyErr(err.message))}</p>`;
-    toast('Could not save historical context: ' + err.message, 'warn');
+    toast('Could not save historical context: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -4875,7 +4877,7 @@ async function loggerCreateInlineContact(){
     window.__logger.campaignStepStage = 'Found';
     renderPage();
   } catch(err){
-    toast('Could not add contact: ' + err.message, 'warn');
+    toast('Could not add contact: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -4929,7 +4931,7 @@ async function confirmLoggerAddToCampaign(){
     initLogger();
     renderPage();
   } catch(err){
-    toast('Could not add to campaign: ' + err.message, 'warn');
+    toast('Could not add to campaign: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-rocket"></i> Add to campaign'; }
   }
 }
@@ -5062,7 +5064,7 @@ async function runLoggerParseConversation(){
     l.convoImage = null;
     renderPage();
   } catch(err){
-    toast('Could not parse: ' + err.message, 'warn');
+    toast('Could not parse: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-sparkles"></i> Parse with the Engine'; }
   }
 }
@@ -5239,7 +5241,7 @@ async function submitLoggerEntry(){
     initLogger();
     renderPage();
   } catch(err){
-    toast('Could not save touch point: ' + err.message, 'warn');
+    toast('Could not save touch point: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-device-floppy"></i> Save touch point'; }
   }
 }
@@ -5724,7 +5726,7 @@ async function runLoggerAIExtract(){
     ai.dumpImage = null;
     renderPage();
   } catch(err){
-    toast('Could not extract touch points: ' + err.message, 'warn');
+    toast('Could not extract touch points: ' + friendlyErr(err.message), 'warn');
   } finally {
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-sparkles"></i> Extract touch points'; }
   }
@@ -5887,7 +5889,7 @@ async function loggerAICreateContact(localId){
     toast(name + ' added', 'success');
     renderPage();
   } catch(err){
-    toast('Could not add contact: ' + err.message, 'warn');
+    toast('Could not add contact: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -5952,7 +5954,7 @@ async function confirmLoggerAICard(localId){
     toast('Touch point logged for ' + contactName, 'success');
     renderPage();
   } catch(err){
-    toast('Could not save: ' + err.message, 'warn');
+    toast('Could not save: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-check"></i> Confirm'; }
   }
 }
@@ -6597,7 +6599,7 @@ async function handleMarkActionDone(cid){
     if(!res.ok) throw new Error(data.error || 'Request failed');
   } catch(err){
     console.warn('Could not mark action done:', err.message);
-    toast('Marked done locally, but could not sync to the database: ' + err.message, 'warn');
+    toast('Marked done locally, but could not sync to the database: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -6637,7 +6639,7 @@ async function handleDismissReminder(reminderId, cid){
     if(!res.ok) throw new Error(data.error || 'Request failed');
   } catch(err){
     console.warn('Could not dismiss reminder:', err.message);
-    toast('Marked done locally, but could not delete the reminder in the database: ' + err.message, 'warn');
+    toast('Marked done locally, but could not delete the reminder in the database: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -6726,7 +6728,7 @@ async function handleContactLinkedInOpened(cid, e){
     renderPage();
   } catch(err){
     console.warn('Could not update stage to Connection Pending:', err.message);
-    toast('LinkedIn opened, but could not update stage: ' + err.message, 'warn');
+    toast('LinkedIn opened, but could not update stage: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -6867,7 +6869,7 @@ async function confirmSkipContact(cid){
     toast(`${c.name} skipped and excluded from ${campaign.name}`, 'success');
   } catch(err){
     console.warn('Could not process skip:', err.message);
-    toast(`${c.name} skipped locally, but could not update the database: ` + err.message, 'warn');
+    toast(`${c.name} skipped locally, but could not update the database: ` + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -6937,7 +6939,7 @@ async function handleGenerateFastMessage(cid){
     `;
   } catch(err){
     console.warn('Could not generate message:', err.message);
-    toast('Could not generate message: ' + err.message, 'warn');
+    toast('Could not generate message: ' + friendlyErr(err.message), 'warn');
     area.innerHTML = `<button class="btn btn-primary btn-sm" onclick="handleGenerateFastMessage('${cid}')"><i class="ti ti-sparkles"></i> Generate message</button>`;
   }
 }
@@ -6980,7 +6982,7 @@ async function handleEnrichFastAction(cid){
     await handleGenerateFastMessage(cid);
   } catch(err){
     console.warn('Could not enrich contact:', err.message);
-    toast('Could not enrich ' + c.name + ': ' + err.message, 'warn');
+    toast('Could not enrich ' + c.name + ': ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = original; }
   }
 }
@@ -7061,7 +7063,7 @@ async function handleCopyAndMarkSent(cid){
     renderPage();
   } catch(err){
     console.warn('Could not mark message sent:', err.message);
-    toast('Message copied, but could not log it: ' + err.message, 'warn');
+    toast('Message copied, but could not log it: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -7317,7 +7319,7 @@ async function saveGtmMotionTemplatesList(){
       body: JSON.stringify({ templates: window.__gtmMotionTemplates || [] })
     });
   } catch(err){
-    toast('Could not save templates: ' + err.message, 'warn');
+    toast('Could not save templates: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -9059,7 +9061,7 @@ async function searchContactDetailsConfirmed(){
     toast(name+' added and enriched', 'success');
   } catch(err){
     console.warn('Enrichment failed:', err.message);
-    toast(name+' added, but enrichment failed: ' + err.message, 'warn');
+    toast(name+' added, but enrichment failed: ' + friendlyErr(err.message), 'warn');
   }
 
   closeModal();
@@ -9129,7 +9131,7 @@ async function runApolloSearch(){
     renderApolloResults();
   } catch(err){
     if(resultsEl) resultsEl.innerHTML = `<p class="muted" style="font-size:12.5px;">Could not search Apollo: ${esc(friendlyErr(err.message))}</p>`;
-    toast('Apollo search failed: ' + err.message, 'warn');
+    toast('Apollo search failed: ' + friendlyErr(err.message), 'warn');
   } finally {
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-search"></i> Search Apollo'; }
   }
@@ -9403,7 +9405,7 @@ function finishGridSearchUI(gridId, job){
   if(bar){ bar.style.display = 'none'; bar.innerHTML = ''; }
 
   if(job.status === 'error'){
-    toast('Daily search failed: '+(job.error||'unknown error'), 'warn');
+    toast('Daily search failed: '+friendlyErr(job.error||'unknown error'), 'warn');
   } else if(job.status === 'cancelled'){
     toast(job.error === 'Grid no longer exists' ? 'Search stopped - grid no longer exists' : 'Search cancelled', 'warn');
   } else {
@@ -9675,7 +9677,7 @@ async function resetGridConfirmed(gridId){
     toast(`Grid "${grid.name}" reset`, 'success');
     renderPage();
   } catch(err){
-    toast('Could not reset grid: ' + err.message, 'warn');
+    toast('Could not reset grid: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-trash"></i> Remove everything'; }
   }
 }
@@ -10490,7 +10492,7 @@ async function enrichContact(cid){
   } catch(err){
     console.warn('Enrichment failed:', err.message);
     panel.innerHTML = `<div class="muted" style="font-size:12.5px;">Could not enrich this contact: ${esc(friendlyErr(err.message))}</div>`;
-    toast('Could not enrich contact: ' + err.message, 'warn');
+    toast('Could not enrich contact: ' + friendlyErr(err.message), 'warn');
   } finally {
     if(btn){ btn.disabled = false; btn.innerHTML = original; }
   }
@@ -10595,7 +10597,7 @@ async function saveBusinessLocation(cid){
     const data = await res.json();
     if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
     c.businessLocation = location; c.businessWebsite = website;
-  } catch(err){ toast('Could not save: ' + err.message, 'warn'); }
+  } catch(err){ toast('Could not save: ' + friendlyErr(err.message), 'warn'); }
 }
 
 async function researchBusiness(cid){
@@ -10626,7 +10628,7 @@ async function researchBusiness(cid){
     regenerateOpenMessageModalIfNeeded(cid);
   } catch(err){
     if(panel) panel.innerHTML = `<div class="muted" style="font-size:12.5px;">Could not research this business: ${esc(friendlyErr(err.message))}</div>`;
-    toast('Could not research: ' + err.message, 'warn');
+    toast('Could not research: ' + friendlyErr(err.message), 'warn');
   } finally {
     if(btn){ btn.disabled = false; btn.innerHTML = original; }
   }
@@ -11072,7 +11074,7 @@ async function markSent(cid, key){
     c.state = prevState;
     const ai = state.activity.indexOf(activityEntry);
     if(ai !== -1) state.activity.splice(ai, 1);
-    toast('Could not log the send to the database: ' + err.message, 'error');
+    toast('Could not log the send to the database: ' + friendlyErr(err.message), 'error');
     renderPage();
   }
 }
@@ -11104,7 +11106,7 @@ async function setReply(cid, key, val){
     if(window.__roadmapCampaignId === campaign.id) await loadCampaignSequenceStages(campaign);
   } catch(err){
     console.warn('Could not sync reply status to Airtable:', err.message);
-    toast('Marked locally, but could not sync reply to the database: ' + err.message, 'warn');
+    toast('Marked locally, but could not sync reply to the database: ' + friendlyErr(err.message), 'warn');
   }
 }
 // Renamed from writing straight to c.thread.cta - that field is now the
@@ -11206,7 +11208,7 @@ async function syncJourneyStageForColumn(contactId, colKey){
     if(!res.ok){ const data = await res.json().catch(()=>({})); throw new Error(data.error || 'Request failed'); }
   } catch(err){
     console.warn('Could not sync Journey Stage to Airtable:', err.message);
-    toast('Moved locally, but could not sync stage to the database: ' + err.message, 'warn');
+    toast('Moved locally, but could not sync stage to the database: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -11570,7 +11572,7 @@ async function updateContactDrawerStage(newStage){
 
     toast('Stage updated', 'success');
   } catch(err){
-    toast('Could not update stage: ' + err.message, 'warn');
+    toast('Could not update stage: ' + friendlyErr(err.message), 'warn');
     // Re-render from the unchanged profile so the select reverts to the
     // actual stored stage instead of sitting on the failed selection.
     if(document.getElementById('profileDrawer')) drawerBody(renderContactDrawerContent(profile, campaignName));
@@ -11633,7 +11635,7 @@ async function saveContactJobTitle(){
     }
   } catch(err){
     input.value = profile.contact.jobTitle;
-    toast('Could not update job title: ' + err.message, 'warn');
+    toast('Could not update job title: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -11683,7 +11685,7 @@ async function saveContactCompany(){
     }
   } catch(err){
     input.value = profile.contact.companyName;
-    toast('Could not update company: ' + err.message, 'warn');
+    toast('Could not update company: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -11706,7 +11708,7 @@ async function saveContactEmail(){
     toast('Email saved', 'success');
   } catch(err){
     input.value = profile.contact.email || '';
-    toast('Could not save email: ' + err.message, 'warn');
+    toast('Could not save email: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -11770,7 +11772,7 @@ async function updateContactCampaignMembership(newCampaignName){
     // context would.
     await openContactDrawer(profile.contact.fullName, newCampaignName || null);
   } catch(err){
-    toast('Could not update campaign: ' + err.message, 'warn');
+    toast('Could not update campaign: ' + friendlyErr(err.message), 'warn');
     if(select) select.disabled = false;
   }
 }
@@ -11916,7 +11918,7 @@ async function setContactFollowUpReminder(days){
     // offered above, but this keeps the two in sync regardless).
     window.__dueReminders = undefined;
   } catch(err){
-    toast('Could not set reminder: ' + err.message, 'warn');
+    toast('Could not set reminder: ' + friendlyErr(err.message), 'warn');
   } finally {
     if(wrap) wrap.querySelectorAll('button').forEach(b => b.disabled = false);
   }
@@ -11954,7 +11956,7 @@ async function saveContactConversationHistory(){
     fetch('/api/contacts/update-summary', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name, noteText: threadText }) })
       .catch(err => console.warn('Background summary update failed:', err.message));
   } catch(err){
-    toast('Could not save conversation history: ' + err.message, 'warn');
+    toast('Could not save conversation history: ' + friendlyErr(err.message), 'warn');
   } finally {
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-device-floppy"></i> Save history'; }
   }
@@ -11984,7 +11986,7 @@ async function enrichContactDrawer(){
     toast('Contact enriched', 'success');
     if(profile) regenerateOpenMessageModalIfNeeded(profile.contact.id);
   } catch(err){
-    toast('Could not enrich: ' + err.message, 'warn');
+    toast('Could not enrich: ' + friendlyErr(err.message), 'warn');
   } finally {
     if(btn){ btn.disabled = false; btn.innerHTML = original; }
   }
@@ -12023,7 +12025,7 @@ async function saveContactDrawerNote(){
       })
       .catch(err => console.warn('Extract actions failed:', err.message));
   } catch(err){
-    toast('Could not save note: ' + err.message, 'warn');
+    toast('Could not save note: ' + friendlyErr(err.message), 'warn');
   } finally {
     if(btn) btn.disabled = false;
   }
@@ -12051,7 +12053,7 @@ async function cleanUpContactNotes(){
     if(el){ el.textContent = data.summary; el.style.color = ''; }
     toast('Notes cleaned up', 'success');
   } catch(err){
-    toast('Could not clean up notes: ' + err.message, 'warn');
+    toast('Could not clean up notes: ' + friendlyErr(err.message), 'warn');
   } finally {
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-wand"></i> Clean up notes'; }
   }
@@ -12153,7 +12155,7 @@ async function setAccountContactStatus(contactId, status){
     // refresh the drawer so campaign statuses + dates update
     const cn = window.__drawerCompanyProfile && window.__drawerCompanyProfile.company && window.__drawerCompanyProfile.company.name;
     if(cn) afterCompanyPeopleChange(cn);
-  } catch(err){ toast('Could not update: ' + err.message, 'warn'); }
+  } catch(err){ toast('Could not update: ' + friendlyErr(err.message), 'warn'); }
 }
 
 // Refresh whatever surface the "add people" / status change happened on.
@@ -12249,7 +12251,7 @@ async function parseCompanyPeople(){
     s.step = 'review';
     renderCompanyPeopleModal();
   } catch(err){
-    toast('Could not read that: ' + err.message, 'warn');
+    toast('Could not read that: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = 'Read them'; }
   }
 }
@@ -12272,7 +12274,7 @@ async function importCompanyPeople(){
     toast(`${data.created} added, ${data.updated} updated${data.failed?`, ${data.failed} failed`:''}`, data.failed ? 'warn' : 'success');
     afterCompanyPeopleChange(s.company);
   } catch(err){
-    toast('Import failed: ' + err.message, 'warn');
+    toast('Import failed: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = 'Import'; }
   }
 }
@@ -12422,7 +12424,7 @@ async function enrichCompanyDrawer(){
     if(section && profile) section.innerHTML = renderCompanyEnrichmentSection(profile.company, data);
     toast('Company enriched', 'success');
   } catch(err){
-    toast('Could not enrich: ' + err.message, 'warn');
+    toast('Could not enrich: ' + friendlyErr(err.message), 'warn');
   } finally {
     if(btn){ btn.disabled = false; btn.innerHTML = original; }
   }
@@ -12446,7 +12448,7 @@ async function runDeepResearch(){
     if(window.__drawerCompanyProfile) window.__drawerCompanyProfile.company.deepResearch = data;
     toast('Deep research complete', 'success');
   } catch(err){
-    toast('Could not run deep research: ' + err.message, 'warn');
+    toast('Could not run deep research: ' + friendlyErr(err.message), 'warn');
   } finally {
     if(btn){ btn.disabled = false; btn.innerHTML = original; }
   }
@@ -12501,7 +12503,7 @@ async function saveCompanyDrawerNote(){
       })
       .catch(err => console.warn('Extract actions failed:', err.message));
   } catch(err){
-    toast('Could not save note: ' + err.message, 'warn');
+    toast('Could not save note: ' + friendlyErr(err.message), 'warn');
   } finally {
     if(btn) btn.disabled = false;
   }
@@ -12529,7 +12531,7 @@ async function logAccountDeal(name){
     window.__stalledRelationships = undefined;
     openCompanyDrawer(name);
   } catch(err){
-    toast('Could not log deal: ' + err.message, 'warn');
+    toast('Could not log deal: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -12546,7 +12548,7 @@ async function runMondayLossScan(){
     toast(`${window.__mondayLossScan.length} item(s) with loss context found`, 'success');
   } catch(err){
     window.__mondayLossScan = { error: err.message };
-    toast('Could not scan Monday: ' + err.message, 'warn');
+    toast('Could not scan Monday: ' + friendlyErr(err.message), 'warn');
   }
   window.__mondayLossScanLoading = false;
   renderPage();
@@ -12595,7 +12597,7 @@ async function logMondayScanFinding(i){
     window.__mondayLossScan.splice(i, 1);
     renderPage();
   } catch(err){
-    toast('Could not log deal: ' + err.message, 'warn');
+    toast('Could not log deal: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -12612,7 +12614,7 @@ async function runMondayStallScan(){
     toast(`${window.__mondayStallScan.length} thread(s) with stall context found`, 'success');
   } catch(err){
     window.__mondayStallScan = { error: err.message };
-    toast('Could not scan Monday: ' + err.message, 'warn');
+    toast('Could not scan Monday: ' + friendlyErr(err.message), 'warn');
   }
   window.__mondayStallScanLoading = false;
   renderPage();
@@ -12661,7 +12663,7 @@ async function logMondayStallFinding(i){
     window.__mondayStallScan.splice(i, 1);
     renderPage();
   } catch(err){
-    toast('Could not log: ' + err.message, 'warn');
+    toast('Could not log: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -12758,7 +12760,7 @@ async function confirmBooking(cid){
     if(!tpRes.ok || !tpData.success) throw new Error(tpData.error || 'Touch point save failed');
   } catch(err){
     console.warn('Could not sync booking to Airtable:', err.message);
-    toast('Booked locally, but could not sync to the database: ' + err.message, 'warn');
+    toast('Booked locally, but could not sync to the database: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -13102,7 +13104,7 @@ async function deleteStyleRule(campaignId, bucket, index, idPrefix){
     renderSteerRules(idPrefix, campaign, bucket);
     toast('Standing rule removed', 'success');
   } catch(err){
-    toast('Could not remove rule: ' + err.message, 'warn');
+    toast('Could not remove rule: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -13288,7 +13290,7 @@ async function saveGenEmailAddress(cid){
     if(window.__drawerContactProfile && window.__drawerContactProfile.contact.id === cid) window.__drawerContactProfile.contact.email = data.email;
     toast(v ? 'Email saved to contact' : 'Email cleared', 'success');
   } catch(err){
-    toast('Could not save email: ' + err.message, 'warn');
+    toast('Could not save email: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -13328,7 +13330,7 @@ async function saveGenModalNotes(cid){
         .catch(err => console.warn('Background summary update failed:', err.message));
     }
   } catch(err){
-    toast('Could not save notes: ' + err.message, 'warn');
+    toast('Could not save notes: ' + friendlyErr(err.message), 'warn');
   } finally {
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-device-floppy"></i> Save notes'; }
   }
@@ -13590,7 +13592,7 @@ async function saveGeneratedMessage(cid, stageKey){
       if(window.__roadmapCampaignId === campaign.id) await loadCampaignSequenceStages(campaign);
     } catch(err){
       console.warn('Could not log sent message to Airtable:', err.message);
-      toast('Saved locally, but could not log the send to the database: ' + err.message, 'warn');
+      toast('Saved locally, but could not log the send to the database: ' + friendlyErr(err.message), 'warn');
     }
     return;
   }
@@ -13605,7 +13607,7 @@ async function saveGeneratedMessage(cid, stageKey){
     if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
   } catch(err){
     console.warn('Could not sync draft to Airtable:', err.message);
-    toast('Saved locally, but could not sync draft to the database: ' + err.message, 'warn');
+    toast('Saved locally, but could not sync draft to the database: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -13911,7 +13913,7 @@ async function sendCampaignChatMessage(){
     chat.messages.push({ role:'assistant', content: "Sorry, I couldn't process that - " + err.message });
     renderPage();
     scrollCampaignChatToBottom();
-    toast('Campaign chat error: ' + err.message, 'warn');
+    toast('Campaign chat error: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -13937,7 +13939,7 @@ async function buildCampaignFromChat(){
     chat.offerStep = 'choose';
     chat.offer = null;
   } catch(err){
-    toast('Could not build campaign preview: ' + err.message, 'warn');
+    toast('Could not build campaign preview: ' + friendlyErr(err.message), 'warn');
   } finally {
     chat.building = false;
     renderPage();
@@ -14081,7 +14083,7 @@ async function chooseOfferPath(path){
       chat.offer = Object.assign({}, data.offer, { rationale: data.rationale || '' });
       chat.offerStep = 'review';
     } catch(err){
-      toast('Could not generate offer: ' + err.message, 'warn');
+      toast('Could not generate offer: ' + friendlyErr(err.message), 'warn');
       chat.offerStep = 'choose';
     }
     renderPage();
@@ -14124,7 +14126,7 @@ async function submitOfferAnswer(){
     if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
     chat.offer = Object.assign({}, chat.offerAnswers, { summary: data.summary });
   } catch(err){
-    toast('Could not compose offer summary: ' + err.message, 'warn');
+    toast('Could not compose offer summary: ' + friendlyErr(err.message), 'warn');
     chat.offer = Object.assign({}, chat.offerAnswers, { summary: '' });
   }
   chat.offerStep = 'review';
@@ -14480,7 +14482,7 @@ async function importCompanyLoadContacts(){
     s.step = 'choose';
     renderImportCompanyModal();
   } catch(err){
-    toast('Could not load: ' + err.message, 'warn');
+    toast('Could not load: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = 'Next'; }
   }
 }
@@ -14648,7 +14650,7 @@ async function repairCampaignContacts(campaignId){
       <button class="btn btn-primary" id="repairGoBtn" onclick="runRepairCampaignContacts('${campaignId}')"><i class="ti ti-check"></i> Run repair</button>`;
     openModal('Repair sync — ' + p.campaign, body, footer);
   } catch(err){
-    toast('Could not check: ' + err.message, 'warn');
+    toast('Could not check: ' + friendlyErr(err.message), 'warn');
   } finally {
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-tool"></i> Repair sync'; }
   }
@@ -14672,7 +14674,7 @@ async function runRepairCampaignContacts(campaignId){
     if(window.__campaignSequenceStages) delete window.__campaignSequenceStages[campaignId];
     renderPage();
   } catch(err){
-    toast('Repair failed: ' + err.message, 'warn');
+    toast('Repair failed: ' + friendlyErr(err.message), 'warn');
     if(go){ go.disabled = false; go.innerHTML = '<i class="ti ti-check"></i> Run repair'; }
   }
 }
@@ -15408,7 +15410,7 @@ async function runAccountAutopsyDigest(){
     window.__accountAutopsyDigest = data;
     if(!data.results || !data.results.length) toast('No stalled contacts to review right now', 'success');
   } catch(err){
-    toast('Could not run the account-wide review: ' + err.message, 'warn');
+    toast('Could not run the account-wide review: ' + friendlyErr(err.message), 'warn');
     window.__accountAutopsyDigest = window.__accountAutopsyDigest || { results: [], byMilestone: {} };
   }
   window.__accountAutopsyLoading = false;
@@ -15545,9 +15547,9 @@ async function loadPrograms(){
   try {
     const res = await fetch('/api/programs');
     const json = await res.json();
-    window.__programs = res.ok ? json : { error: true };
+    window.__programs = res.ok ? json : { error: json.error || 'Request failed' };
   } catch(err){
-    window.__programs = { error: true };
+    window.__programs = { error: err.message };
   }
   if(state.currentPage === 'companyuniverse') renderPage();
 }
@@ -15735,7 +15737,7 @@ function renderProgramsCard(){
 
   const body = () => {
     if(p === undefined || p === null) return '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading…</div>';
-    if(p.error) return '<div class="muted" style="font-size:12.5px;">Could not load.</div>';
+    if(p.error) return `<div class="empty-state">Couldn't load active programs: ${esc(friendlyErr(p.error))} <button class="btn btn-ghost btn-sm" onclick="window.__programs=undefined;loadPrograms();"><i class="ti ti-refresh"></i> Try again</button></div>`;
     if(!all.length) return `<div class="empty-state" style="padding:24px;">No programs logged yet. Press <b>Log a finding</b> and paste anything you've found — a news line, a LinkedIn post, a note from a call — and the Engine files it against the right company.</div>`;
     if(!rows.length) return '<div class="muted" style="font-size:12px;">No companies match this filter.</div>';
     return `<div class="uco-grid">${rows.map(r => renderProgramCoCard(r)).join('')}</div>`;
@@ -15861,7 +15863,7 @@ async function progCaptureParse(){
     window.__progCapture.step = 'proposal';
     renderProgramCaptureModal();
   } catch(err){
-    toast('Could not parse: ' + err.message, 'warn');
+    toast('Could not parse: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = 'Parse it'; }
   }
 }
@@ -15905,7 +15907,7 @@ async function progCaptureSave(){
     window.__programs = undefined; loadPrograms();
     window.__icpWorklist = undefined; loadIcpWorklist();
   } catch(err){
-    toast('Could not save: ' + err.message, 'warn');
+    toast('Could not save: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = 'Save'; }
   }
 }
@@ -15956,7 +15958,7 @@ async function progBulkParse(){
     window.__progCapture.step = 'batchreview';
     renderProgramCaptureModal();
   } catch(err){
-    toast('Could not parse: ' + err.message, 'warn');
+    toast('Could not parse: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = 'Parse batch'; }
   }
 }
@@ -16008,7 +16010,7 @@ async function progBulkAccept(i){
     await progFileOne({ ...r, companyName });
     r._status = 'accepted';
     renderProgramBatchReview();
-  } catch(err){ toast('Row ' + (i+1) + ': ' + err.message, 'warn'); }
+  } catch(err){ toast('Row ' + (i+1) + ': ' + friendlyErr(err.message), 'warn'); }
 }
 function progBulkSkip(i){
   const r = window.__progCapture.proposals[i];
@@ -16171,7 +16173,7 @@ async function resolveProgramQueueItemCard(id, action, companyName){
     toast(action === 'accept' ? 'Filed against ' + companyName : 'Dismissed', 'success');
     if(action === 'accept'){ window.__programs = undefined; loadPrograms(); window.__icpWorklist = undefined; loadIcpWorklist(); }
     renderPage();
-  } catch(err){ toast('Could not ' + action + ': ' + err.message, 'warn'); }
+  } catch(err){ toast('Could not ' + action + ': ' + friendlyErr(err.message), 'warn'); }
 }
 function renderProgramDiscoveryCard(){
   const d = window.__programDiscovery;
@@ -16259,7 +16261,7 @@ async function runProgramDiscoveryNow(mode){
     toast('Discovery run started — this can take a few minutes. You can keep working.');
     await pollProgramDiscovery();
   } catch(err){
-    toast('Discovery run failed: ' + err.message, 'warn');
+    toast('Discovery run failed: ' + friendlyErr(err.message), 'warn');
     window.__programDiscoveryRunning = false; renderPage();
   }
 }
@@ -16358,7 +16360,7 @@ async function resolveProgramQueueItem(id, action){
     }
     toast(action === 'accept' ? 'Filed against ' + co : 'Dismissed', 'success');
     if(action === 'accept'){ window.__programs = undefined; loadPrograms(); window.__icpWorklist = undefined; loadIcpWorklist(); }
-  } catch(err){ toast('Could not ' + action + ': ' + err.message, 'warn'); }
+  } catch(err){ toast('Could not ' + action + ': ' + friendlyErr(err.message), 'warn'); }
 }
 function renderProgramDiscoverySettingsCard(){
   const d = window.__programDiscovery;
@@ -16399,7 +16401,7 @@ async function saveProgramDiscoverySettings(patch){
     if(window.__programDiscovery) window.__programDiscovery.settings = data.settings;
     toast('Saved', 'success');
     renderPage();
-  } catch(err){ toast('Could not save: ' + err.message, 'warn'); }
+  } catch(err){ toast('Could not save: ' + friendlyErr(err.message), 'warn'); }
 }
 
 // ---- programs section in the company deep record ----
@@ -16439,7 +16441,7 @@ async function saveCompanyPrograms(companyName, programs){
     if(sec && window.__drawerCompanyProfile) sec.outerHTML = renderCompanyProgramsSection(window.__drawerCompanyProfile.company);
     window.__programs = undefined; loadPrograms();
     return true;
-  } catch(err){ toast('Could not save: ' + err.message, 'warn'); return false; }
+  } catch(err){ toast('Could not save: ' + friendlyErr(err.message), 'warn'); return false; }
 }
 function cycleCompanyProgramPhase(companyName, idx){
   const c = window.__drawerCompanyProfile && window.__drawerCompanyProfile.company;
@@ -16483,7 +16485,7 @@ function openReviewDetail(key){
 }
 function renderReviewTile(opts){
   return `
-  <div class="metric-card clickable" onclick="openReviewDetail('${opts.key}')">
+  <div class="metric-card clickable" tabindex="0" role="button" onclick="openReviewDetail('${opts.key}')" onkeydown="onRowKeydown(event)">
     <div>
       <div class="m-label"><span class="dot"${opts.dotColor ? ` style="background:${opts.dotColor};"` : ''}></span> ${esc(opts.label)}</div>
       <div class="m-value">${opts.value}</div>
@@ -16496,8 +16498,8 @@ function renderReviewTiles(){
   const perf = window.__gtmPerformance, lost = window.__lostDeals, stalled = window.__stalledRelationships, digest = window.__accountAutopsyDigest;
 
   let perfTile;
-  if(!perf) perfTile = renderReviewTile({ key:'performance', label:"What's converting", value:'<i class="ti ti-loader-2"></i>', delta:'Loading…', icon:'ti-chart-histogram' });
-  else if(perf.error) perfTile = renderReviewTile({ key:'performance', label:"What's converting", value:'—', delta:'Could not load', icon:'ti-chart-histogram' });
+  if(!perf) perfTile = renderReviewTile({ key:'performance', label:"What's converting", value:'<i class="ti ti-loader-2"></i>', delta:'Loading…', deltaClass:'flat', icon:'ti-chart-histogram' });
+  else if(perf.error) perfTile = renderReviewTile({ key:'performance', label:"What's converting", value:'—', delta:'Could not load', deltaClass:'error', icon:'ti-chart-histogram' });
   else {
     const rows = perf.bySector || [];
     const totalContacted = rows.reduce((s,r) => s + (r.totalContacted||0), 0);
@@ -16506,20 +16508,20 @@ function renderReviewTiles(){
   }
 
   const autopsyTile = !digest
-    ? renderReviewTile({ key:'autopsy', label:'GTM review', value:'—', delta:'Tap to run', icon:'ti-stethoscope' })
+    ? renderReviewTile({ key:'autopsy', label:'GTM review', value:'—', delta:'Tap to run', deltaClass:'flat', icon:'ti-stethoscope' })
     : renderReviewTile({ key:'autopsy', label:'GTM review', value:(digest.results||[]).length, delta:(digest.results||[]).length ? `${digest.results.length} stalled flagged` : 'nothing stalled', icon:'ti-stethoscope' });
 
   let lostTile;
-  if(!lost) lostTile = renderReviewTile({ key:'lostdeals', label:'Why deals are lost', value:'<i class="ti ti-loader-2"></i>', delta:'Loading…', icon:'ti-mood-sad' });
-  else if(lost.error) lostTile = renderReviewTile({ key:'lostdeals', label:'Why deals are lost', value:'—', delta:'Could not load', icon:'ti-mood-sad' });
+  if(!lost) lostTile = renderReviewTile({ key:'lostdeals', label:'Why deals are lost', value:'<i class="ti ti-loader-2"></i>', delta:'Loading…', deltaClass:'flat', icon:'ti-mood-sad' });
+  else if(lost.error) lostTile = renderReviewTile({ key:'lostdeals', label:'Why deals are lost', value:'—', delta:'Could not load', deltaClass:'error', icon:'ti-mood-sad' });
   else {
     const n = (lost.lost||[]).length, topReason = (lost.byReason||[])[0];
     lostTile = renderReviewTile({ key:'lostdeals', label:'Why deals are lost', value:n, delta: topReason ? `Top: ${topReason.reason}` : 'none logged', icon:'ti-mood-sad' });
   }
 
   let stalledTile;
-  if(!stalled) stalledTile = renderReviewTile({ key:'stalled', label:'Stalled relationships', value:'<i class="ti ti-loader-2"></i>', delta:'Loading…', icon:'ti-cloud-pause' });
-  else if(stalled.error) stalledTile = renderReviewTile({ key:'stalled', label:'Stalled relationships', value:'—', delta:'Could not load', icon:'ti-cloud-pause' });
+  if(!stalled) stalledTile = renderReviewTile({ key:'stalled', label:'Stalled relationships', value:'<i class="ti ti-loader-2"></i>', delta:'Loading…', deltaClass:'flat', icon:'ti-cloud-pause' });
+  else if(stalled.error) stalledTile = renderReviewTile({ key:'stalled', label:'Stalled relationships', value:'—', delta:'Could not load', deltaClass:'error', icon:'ti-cloud-pause' });
   else {
     const n = (stalled.stalled||[]).length, topReason = (stalled.byReason||[])[0];
     stalledTile = renderReviewTile({ key:'stalled', label:'Stalled relationships', value:n, delta: topReason ? `Top: ${topReason.reason}` : 'none logged', icon:'ti-cloud-pause' });
@@ -16650,7 +16652,7 @@ async function createProfileCompany(name){
     window.__profileQuery = '';
     selectProfileCompany(name);
   } catch(err){
-    toast('Could not create company: ' + err.message, 'warn');
+    toast('Could not create company: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -17212,7 +17214,7 @@ async function archSyncFromMonday(key){
       toast('Monday sync skipped: ' + (data.reason || data.status || 'unknown'), 'warn');
     }
   } catch(err){
-    toast('Monday sync failed: ' + err.message, 'warn');
+    toast('Monday sync failed: ' + friendlyErr(err.message), 'warn');
   } finally {
     const b = document.getElementById('archMondayBtn');
     if(b){ b.disabled = false; b.innerHTML = '<i class="ti ti-refresh"></i> Sync from Monday'; }
@@ -17472,7 +17474,7 @@ async function archUploadAndInsert(companyName, file){
     // pull the failed placeholder back out
     const d = archDoc(companyName);
     if(d){ d.elements = d.elements.filter(x => x.id !== placeholder.id); saveArch(companyName); rerenderArch(companyName); }
-    toast('Could not add that file: ' + err.message, 'warn');
+    toast('Could not add that file: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -18572,7 +18574,7 @@ async function scoreIcpBulk(campaignId){
     window.__icpScoringInFlight = false;
     await loadCampaignSegmentation(campaign);
   } catch(err){
-    toast('Could not score companies: ' + err.message, 'warn');
+    toast('Could not score companies: ' + friendlyErr(err.message), 'warn');
     window.__icpScoringInFlight = false;
     renderIcpSegmentationModal(campaignId);
   }
@@ -18610,7 +18612,7 @@ async function reengageContact(campaignId, contactId){
     if(window.__campaignSequenceStages) delete window.__campaignSequenceStages[campaignId];
     renderPage();
   } catch(err){
-    toast('Could not re-engage: ' + err.message, 'warn');
+    toast('Could not re-engage: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -18671,7 +18673,7 @@ async function loadStaleConnections(campaignId){
     window.__staleConnections = window.__staleConnections || {};
     window.__staleConnections[campaignId] = data.rows || [];
   } catch(err){
-    toast('Could not load stale requests: ' + err.message, 'warn');
+    toast('Could not load stale requests: ' + friendlyErr(err.message), 'warn');
     window.__staleConnections = window.__staleConnections || {};
     window.__staleConnections[campaignId] = [];
   }
@@ -18709,7 +18711,7 @@ async function withdrawStaleConnections(campaignId){
     delete (window.__campaignFunnels||{})[campaignId];
     renderPage();
   } catch(err){
-    toast('Could not withdraw: ' + err.message, 'warn');
+    toast('Could not withdraw: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -18743,7 +18745,7 @@ async function checkCampaignTimeouts(campaignId){
     if(window.__roadmapCampaignId === campaignId) loadCampaignSequenceStages(campaign);
   } catch(err){
     if(resultEl) resultEl.innerHTML = `<span class="muted" style="font-size:12.5px;">Could not check timeouts: ${esc(friendlyErr(err.message))}</span>`;
-    toast('Could not check timeouts: ' + err.message, 'warn');
+    toast('Could not check timeouts: ' + friendlyErr(err.message), 'warn');
   } finally {
     if(btn){ btn.disabled = false; btn.innerHTML = original; }
   }
@@ -19093,7 +19095,7 @@ async function runAutopsyDigest(campaignId){
     window.__autopsyDigest[campaignId] = data.results || [];
     if(!data.results || !data.results.length) toast('No stalled contacts to review right now', 'success');
   } catch(err){
-    toast('Could not run the GTM review: ' + err.message, 'warn');
+    toast('Could not run the GTM review: ' + friendlyErr(err.message), 'warn');
     window.__autopsyDigest[campaignId] = window.__autopsyDigest[campaignId] || [];
   }
   window.__autopsyDigestLoading[campaignId] = false;
@@ -19116,7 +19118,7 @@ async function turnAutopsyIntoStyleCorrection(campaignId, idx){
     toast(data.saved ? 'Saved as a standing style correction' : 'Applied to this draft only (could not save)', 'success');
     renderPage();
   } catch(err){
-    toast('Could not save: ' + err.message, 'warn');
+    toast('Could not save: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -19417,7 +19419,7 @@ async function saveCampaignOfferEdit(){
     toast('Offer updated', 'success');
     renderPage();
   } catch(err){
-    toast('Could not save offer: ' + err.message, 'warn');
+    toast('Could not save offer: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -19459,7 +19461,7 @@ async function generateNewOfferForCampaign(){
     if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
     window.__campaignOfferPending = Object.assign({}, data.offer, { rationale: data.rationale || '' });
   } catch(err){
-    toast('Could not generate offer: ' + err.message, 'warn');
+    toast('Could not generate offer: ' + friendlyErr(err.message), 'warn');
     window.__campaignOfferPending = null;
   }
   window.__campaignOfferGenerating = false;
@@ -19501,7 +19503,7 @@ async function acceptGeneratedOffer(variationIndex){
     window.__campaignOffer = undefined;
     loadCampaignOffer(campaign);
   } catch(err){
-    toast('Could not save offer: ' + err.message, 'warn');
+    toast('Could not save offer: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -19936,7 +19938,7 @@ async function submitDealNote(dealId, phase){
     if(container && deal) container.innerHTML = renderDealNotesThread(deal);
     toast('Note added \u2014 also feeding the contact/company Engine Summary in the background', 'success');
   } catch(err){
-    toast('Could not save note: ' + err.message, 'warn');
+    toast('Could not save note: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -19956,7 +19958,7 @@ async function updateDealField(dealId, field, value){
     if(deal) Object.assign(deal, body.outcome!==undefined?{outcome:body.outcome}:body.dealValue!==undefined?{dealValue:body.dealValue}:{assigneeId:body.assigneeId});
     toast('Deal updated', 'success');
   } catch(err){
-    toast('Could not update deal: ' + err.message, 'warn');
+    toast('Could not update deal: ' + friendlyErr(err.message), 'warn');
     loadSalesOverview(campaign);
   }
 }
@@ -20043,7 +20045,7 @@ async function confirmAddDeal(){
     toast('Deal logged', 'success');
     await loadSalesOverview(campaign);
   } catch(err){
-    toast('Could not save deal: ' + err.message, 'warn');
+    toast('Could not save deal: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-check"></i> Save deal'; }
   }
 }
@@ -20085,7 +20087,7 @@ async function addRep(){
     toast('Rep added', 'success');
     renderManageRepsModalBody();
   } catch(err){
-    toast('Could not add rep: ' + err.message, 'warn');
+    toast('Could not add rep: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -20098,7 +20100,7 @@ async function deleteRep(repId){
     toast('Rep removed', 'success');
     renderManageRepsModalBody();
   } catch(err){
-    toast('Could not remove rep: ' + err.message, 'warn');
+    toast('Could not remove rep: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -20239,7 +20241,7 @@ async function analyzeSalesTranscript(campaignId){
   } catch(err){
     const resultEl = document.getElementById('salesTranscriptResult');
     if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;">Could not analyse: ${esc(friendlyErr(err.message))}</p>`;
-    toast('Could not analyse transcript: ' + err.message, 'warn');
+    toast('Could not analyse transcript: ' + friendlyErr(err.message), 'warn');
     btn.disabled = false;
     btn.innerHTML = original;
   }
@@ -20307,7 +20309,7 @@ async function deleteCampaignConfirmed(campaignId){
     toast(`Campaign "${campaign.name}" deleted`, 'success');
     backToCampaignList();
   } catch(err){
-    toast('Could not delete campaign: ' + err.message, 'warn');
+    toast('Could not delete campaign: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = ('<i class="ti ti-trash"></i> Remove'); }
   }
 }
@@ -20571,7 +20573,7 @@ function deleteReminder(reminderId){
     }
     toast('Reminder removed', 'success');
     renderPage();
-  }).catch(err=>toast('Could not remove reminder: '+err.message,'warn'));
+  }).catch(err=>toast('Could not remove reminder: '+friendlyErr(err.message),'warn'));
 }
 
 /* ===================== ANALYTICS PAGE ===================== */
@@ -20717,7 +20719,7 @@ async function runAnalysis(){
   } catch(err){
     console.warn('Could not load live data for strategy analysis:', err.message);
     resultEl.innerHTML = `<div class="empty-state">Could not run analysis: ${esc(friendlyErr(err.message))}</div>`;
-    toast('Could not run analysis: ' + err.message, 'warn');
+    toast('Could not run analysis: ' + friendlyErr(err.message), 'warn');
     return;
   }
 
@@ -20930,7 +20932,7 @@ async function runIntelligence(){
   } catch(err){
     console.warn('Intelligence request failed:', err.message);
     document.getElementById('intelMeta').textContent = 'Could not run engine: ' + err.message;
-    toast('Could not run engine: ' + err.message, 'warn');
+    toast('Could not run engine: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -20988,7 +20990,7 @@ async function runTrackInsights(){
   } catch(err){
     console.warn('Track insights request failed:', err.message);
     document.getElementById('insightsMeta').textContent = 'Could not run insights: ' + err.message;
-    toast('Could not run insights: ' + err.message, 'warn');
+    toast('Could not run insights: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -21015,7 +21017,7 @@ async function runEngineHealth(){
   } catch(err){
     console.warn('Engine health request failed:', err.message);
     document.getElementById('healthMeta').textContent = 'Could not refresh health: ' + err.message;
-    toast('Could not refresh health: ' + err.message, 'warn');
+    toast('Could not refresh health: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -21135,7 +21137,7 @@ async function runLearningAnalysis(kind, records){
     toast(`${cfg.label} analysis complete`, 'success');
   } catch(err){
     resultEl.innerHTML = `<p class="muted" style="font-size:12px;color:var(--danger);">Could not analyse that file: ${esc(friendlyErr(err.message))}</p>`;
-    toast('Learning upload failed: ' + err.message, 'warn');
+    toast('Learning upload failed: ' + friendlyErr(err.message), 'warn');
   } finally {
     btn.disabled = false;
     btn.innerHTML = original;
@@ -21360,7 +21362,7 @@ async function runDetectContentSignals(){
     window.__contentSignals = undefined;
     loadContentSignals();
   } catch(err){
-    toast('Could not scan for signals: ' + err.message, 'warn');
+    toast('Could not scan for signals: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-refresh"></i> Scan now'; }
   }
 }
@@ -21374,7 +21376,7 @@ function dismissContentSignal(signalId){
       if(Array.isArray(list)){ const i = list.findIndex(s=>s.id===signalId); if(i>-1) list.splice(i,1); }
     });
     renderPage();
-  }).catch(err=>toast('Could not dismiss signal: '+err.message,'warn'));
+  }).catch(err=>toast('Could not dismiss signal: '+friendlyErr(err.message),'warn'));
 }
 
 function draftFromSignal(signalId, campaignName){
@@ -21598,7 +21600,7 @@ async function createContentDraft(signalId){
     await loadContentDrafts();
     openContentEditor(data.contentId);
   } catch(err){
-    toast('Could not create draft: ' + err.message, 'warn');
+    toast('Could not create draft: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-sparkles"></i> Draft it'; }
   }
 }
@@ -21733,7 +21735,7 @@ async function saveContentEditorFields(contentId){
     toast('Saved', 'success');
     renderPage();
   } catch(err){
-    toast('Could not save: ' + err.message, 'warn');
+    toast('Could not save: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -21751,7 +21753,7 @@ async function regenerateContentDraft(contentId){
     toast('Regenerated', 'success');
     renderPage();
   } catch(err){
-    toast('Could not regenerate: ' + err.message, 'warn');
+    toast('Could not regenerate: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-refresh"></i> Regenerate'; }
   }
 }
@@ -21779,7 +21781,7 @@ async function refineContentDraft(contentId){
     toast('Refined', 'success');
     renderPage();
   } catch(err){
-    toast('Could not refine: ' + err.message, 'warn');
+    toast('Could not refine: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-wand"></i> Refine'; }
   }
 }
@@ -21798,7 +21800,7 @@ async function markContentReady(contentId){
     toast('Marked as Ready', 'success');
     renderPage();
   } catch(err){
-    toast('Could not mark Ready: ' + err.message, 'warn');
+    toast('Could not mark Ready: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-check"></i> Mark as Ready'; }
   }
 }
@@ -21874,7 +21876,7 @@ async function refreshContentCadence(){
     toast('Cadence updated', 'success');
     renderPage();
   } catch(err){
-    toast('Could not refresh cadence: ' + err.message, 'warn');
+    toast('Could not refresh cadence: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-refresh"></i> Refresh recommendation'; }
   }
 }
@@ -22032,7 +22034,7 @@ async function saveNewContentItem(){
     window.__contentAll = undefined;
     loadContentCalendarItems();
   } catch(err){
-    toast('Could not add content: ' + err.message, 'warn');
+    toast('Could not add content: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-check"></i> Save'; }
   }
 }
@@ -22201,7 +22203,7 @@ async function runMarcusContentAnalysis(forceRefresh){
     toast(data.message || 'Analysis started', 'success');
     startMarcusJobPoll();
   } catch(err){
-    toast('Could not start analysis: ' + err.message, 'warn');
+    toast('Could not start analysis: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -22229,7 +22231,7 @@ function startMarcusJobPoll(){
         clearInterval(window.__marcusJobPollTimer);
         window.__marcusJobPollTimer = null;
         if(data.status === 'complete') toast(`Analysis complete - ${data.savedCount||0} post${data.savedCount===1?'':'s'} saved`, 'success');
-        if(data.status === 'error') toast('Analysis failed: ' + (data.error||'unknown error'), 'warn');
+        if(data.status === 'error') toast('Analysis failed: ' + friendlyErr(data.error||'unknown error'), 'warn');
         window.__contentPerformance = undefined;
         loadContentPerformance();
       }
@@ -22566,7 +22568,7 @@ async function resubmitSeoUrlToGsc(url, btn){
     toast(data.submitted ? 'Resubmitted to Google Search Console' : 'Submit attempted - check server logs for detail', data.submitted ? 'success' : 'warn');
     if(btn){ btn.innerHTML = '<i class="ti ti-check"></i> Resubmitted'; }
   } catch(err){
-    toast('Could not resubmit: ' + err.message, 'warn');
+    toast('Could not resubmit: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-refresh"></i> Resubmit to GSC'; }
   }
 }
@@ -22972,7 +22974,7 @@ async function submitNewSeoCampaign(btn){
     closeModal();
     loadSeoCampaigns(true);
   } catch(err){
-    toast('Could not create campaign: ' + err.message, 'warn');
+    toast('Could not create campaign: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.textContent = 'Create campaign'; }
   }
 }
@@ -22993,7 +22995,7 @@ async function submitEditSeoCampaign(id, btn){
     if(window.__seoCampaignProgress) delete window.__seoCampaignProgress[id];
     loadSeoCampaigns(true);
   } catch(err){
-    toast('Could not update campaign: ' + err.message, 'warn');
+    toast('Could not update campaign: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.textContent = 'Save changes'; }
   }
 }
@@ -23009,7 +23011,7 @@ async function deleteSeoCampaign(id){
     if(window.__seoCampaignProgress) delete window.__seoCampaignProgress[id];
     loadSeoCampaigns(true);
   } catch(err){
-    toast('Could not delete campaign: ' + err.message, 'warn');
+    toast('Could not delete campaign: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -23119,7 +23121,7 @@ async function sendSeoLinkedInToDraftCentre(sitemapId, btn){
     toast('LinkedIn draft sent to the Draft Centre', 'success');
     if(btn){ btn.innerHTML = '<i class="ti ti-check"></i> Sent to Draft Centre'; }
   } catch(err){
-    toast('Could not send to Draft Centre: ' + err.message, 'warn');
+    toast('Could not send to Draft Centre: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-send"></i> Send to Draft Centre'; }
   }
 }
@@ -23131,7 +23133,7 @@ function fallbackCopy(text, done){
   ta.style.opacity = '0';
   document.body.appendChild(ta);
   ta.select();
-  try { document.execCommand('copy'); done(); } catch(err){ toast('Could not copy: ' + err.message, 'warn'); }
+  try { document.execCommand('copy'); done(); } catch(err){ toast('Could not copy: ' + friendlyErr(err.message), 'warn'); }
   document.body.removeChild(ta);
 }
 
@@ -23206,7 +23208,7 @@ async function addServicePageToQueue(){
     window.__seoServiceQueue = undefined;
     loadServicePageQueue(true);
   } catch(err){
-    toast('Could not add to queue: ' + err.message, 'warn');
+    toast('Could not add to queue: ' + friendlyErr(err.message), 'warn');
   }
   if(btn){ btn.disabled = false; }
 }
@@ -23257,7 +23259,7 @@ async function generateServicePageQueueItem(id){
     renderPage();
   } catch(err){
     q.status = prevStatus;
-    toast('Could not generate service page: ' + err.message, 'warn');
+    toast('Could not generate service page: ' + friendlyErr(err.message), 'warn');
     renderPage();
   }
 }
@@ -23286,7 +23288,7 @@ async function deleteServicePageQueueItem(id, service){
     toast(`Removed "${service}" from the queue`, 'success');
     renderPage();
   } catch(err){
-    toast('Could not delete: ' + err.message, 'warn');
+    toast('Could not delete: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -23416,7 +23418,7 @@ async function deleteSeoKeyword(id, keyword){
     toast(`Removed "${keyword}"`, 'success');
     renderPage();
   } catch(err){
-    toast('Could not delete keyword: ' + err.message, 'warn');
+    toast('Could not delete keyword: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -23448,7 +23450,7 @@ async function saveSeoReferenceContent(id){
     toast(referenceContent.trim() ? 'Reference content saved' : 'Reference content cleared', 'success');
     renderPage();
   } catch(err){
-    toast('Could not save reference content: ' + err.message, 'warn');
+    toast('Could not save reference content: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -23497,7 +23499,7 @@ async function addSeoKeywordSingle(){
     window.__seoKeywords = undefined;
     loadSeoKeywords();
   } catch(err){
-    toast('Could not add keyword: ' + err.message, 'warn');
+    toast('Could not add keyword: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -23514,7 +23516,7 @@ async function importSeoKeywords(rows){
     window.__seoKeywords = undefined;
     loadSeoKeywords();
   } catch(err){
-    toast('Could not import CSV: ' + err.message, 'warn');
+    toast('Could not import CSV: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -23555,7 +23557,7 @@ async function addSeoSuggestionToQueue(i){
     loadSeoKeywords();
     renderPage();
   } catch(err){
-    toast('Could not add to queue: ' + err.message, 'warn');
+    toast('Could not add to queue: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -23589,7 +23591,7 @@ async function refreshCompanyProfile(btn){
     toast(errs.length ? `Company profile refreshed (${data.pagesScraped}/4 pages; ${errs.length} failed)` : 'Company profile refreshed from twenty2collective.com', errs.length ? 'warn' : 'success');
     if(status) status.textContent = errs.length ? `${data.pagesScraped}/4 pages scraped - ${errs.join('; ')}` : `All 4 pages scraped just now`;
   } catch(err){
-    toast('Could not refresh company profile: ' + err.message, 'warn');
+    toast('Could not refresh company profile: ' + friendlyErr(err.message), 'warn');
     if(status) status.textContent = 'Failed: ' + err.message;
   } finally {
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-refresh"></i> Refresh Company Profile'; }
@@ -23609,7 +23611,7 @@ async function saveSeoVoiceProfile(){
     toast('Voice profile saved', 'success');
     renderPage();
   } catch(err){
-    toast('Could not save voice profile: ' + err.message, 'warn');
+    toast('Could not save voice profile: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -23630,7 +23632,7 @@ async function generateSeoPost(id){
     pollSeoPostStatus(id, k ? k.keyword : '');
   } catch(err){
     if(k) k.status = 'Queued';
-    toast('Could not generate post: ' + err.message, 'warn');
+    toast('Could not generate post: ' + friendlyErr(err.message), 'warn');
     renderPage();
   }
 }
@@ -23756,7 +23758,7 @@ async function saveSeoPreviewEdits(){
   try {
     await saveSeoPreviewFields(false);
   } catch(err){
-    toast('Could not save: ' + err.message, 'warn');
+    toast('Could not save: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -23779,7 +23781,7 @@ async function regenerateSeoPreview(){
     renderPage();
     pollSeoPostStatus(p.keywordId, p.keyword);
   } catch(err){
-    toast('Could not regenerate: ' + err.message, 'warn');
+    toast('Could not regenerate: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-refresh"></i> Regenerate'; }
   }
 }
@@ -23805,7 +23807,7 @@ async function publishSeoPreview(){
     if(data.linkWarning) toast(data.linkWarning, 'warn');
     renderPage();
   } catch(err){
-    toast('Could not send to Framer: ' + err.message, 'warn');
+    toast('Could not send to Framer: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-rocket"></i> Send to Framer'; }
   }
 }
@@ -23827,7 +23829,7 @@ async function deleteSeoPreviewPost(){
     toast('Post deleted - keyword is back to Queued', 'success');
     closeSeoPreview();
   } catch(err){
-    toast('Could not delete post: ' + err.message, 'warn');
+    toast('Could not delete post: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-trash"></i> Remove post'; }
   }
 }
@@ -24066,7 +24068,7 @@ async function submitNewAeoCampaign(btn){
     closeModal();
     loadAeoCampaigns(true);
   } catch(err){
-    toast('Could not create campaign: ' + err.message, 'warn');
+    toast('Could not create campaign: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.textContent = 'Create campaign'; }
   }
 }
@@ -24083,7 +24085,7 @@ async function submitEditAeoCampaign(id, btn){
     closeModal();
     loadAeoCampaigns(true);
   } catch(err){
-    toast('Could not update campaign: ' + err.message, 'warn');
+    toast('Could not update campaign: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.textContent = 'Save changes'; }
   }
 }
@@ -24098,7 +24100,7 @@ async function deleteAeoCampaign(id){
     if(window.__aeoCampaignExpanded === id) window.__aeoCampaignExpanded = null;
     loadAeoCampaigns(true);
   } catch(err){
-    toast('Could not delete campaign: ' + err.message, 'warn');
+    toast('Could not delete campaign: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -24217,7 +24219,7 @@ async function addAeoPrompt(){
     toast('Prompt added', 'success');
     aeoRerender();
   } catch(err){
-    toast('Could not add prompt: ' + err.message, 'warn');
+    toast('Could not add prompt: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -24231,7 +24233,7 @@ async function deleteAeoPrompt(id){
     toast('Prompt deleted', 'success');
     aeoRerender();
   } catch(err){
-    toast('Could not delete prompt: ' + err.message, 'warn');
+    toast('Could not delete prompt: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -24244,7 +24246,7 @@ async function setAeoPromptStatus(id, status){
     if(p) p.contentStatus = status;
     toast('Status updated', 'success');
   } catch(err){
-    toast('Could not update status: ' + err.message, 'warn');
+    toast('Could not update status: ' + friendlyErr(err.message), 'warn');
     aeoRerender();
   }
 }
@@ -24316,7 +24318,7 @@ async function submitAeoGenerate(promptId, btn){
     viewAeoPromptContent(promptId);
   } catch(err){
     if(p) p.contentStatus = 'Not Started';
-    toast('Could not generate content: ' + err.message, 'warn');
+    toast('Could not generate content: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-sparkles"></i> Generate'; }
     aeoRerender();
   }
@@ -24386,7 +24388,7 @@ async function saveAeoRecommendation(){
     toast('Recommendation saved', 'success');
     aeoRerender();
   } catch(err){
-    toast('Could not save recommendation: ' + err.message, 'warn');
+    toast('Could not save recommendation: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -24400,7 +24402,7 @@ async function deleteAeoRecommendation(id){
     toast('Recommendation deleted', 'success');
     aeoRerender();
   } catch(err){
-    toast('Could not delete recommendation: ' + err.message, 'warn');
+    toast('Could not delete recommendation: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -24416,7 +24418,7 @@ async function addRecToPromptLibrary(id){
     toast('Added to the Prompt Library', 'success');
     aeoRerender();
   } catch(err){
-    toast('Could not add to library: ' + err.message, 'warn');
+    toast('Could not add to library: ' + friendlyErr(err.message), 'warn');
   }
 }
 
@@ -24485,7 +24487,7 @@ function saveContentSettings(){
       toast('Voice profile saved', 'success');
       renderPage();
     })
-    .catch(err=>toast('Could not save voice profile: '+err.message,'warn'));
+    .catch(err=>toast('Could not save voice profile: '+friendlyErr(err.message),'warn'));
 }
 
 /* ---- Google Ads sub-tab ---- */
@@ -25228,7 +25230,7 @@ function saveEmailVoiceProfile(){
       window.__emailSettings = Object.assign({}, window.__emailSettings, { voiceProfile });
       toast('Email voice profile saved', 'success');
     })
-    .catch(err => toast('Could not save voice profile: ' + err.message, 'warn'));
+    .catch(err => toast('Could not save voice profile: ' + friendlyErr(err.message), 'warn'));
 }
 
 function triggerPastCampaignUpload(){
@@ -25260,7 +25262,7 @@ function handlePastCampaignFile(event){
         window.__emailTemplates = undefined;
         loadEmailTemplates();
       })
-      .catch(err => toast('Could not save template: ' + err.message, 'warn'))
+      .catch(err => toast('Could not save template: ' + friendlyErr(err.message), 'warn'))
       .finally(() => { if(btn){ btn.disabled = false; btn.innerHTML = original; } });
   };
   reader.readAsText(file);
@@ -25771,7 +25773,7 @@ async function approveAndSaveEmailCopy(){
     if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
     toast('Feedback saved', 'success');
   } catch(err){
-    toast('Could not save feedback: ' + err.message, 'warn');
+    toast('Could not save feedback: ' + friendlyErr(err.message), 'warn');
   }
   window.__emailApproving = false;
   emailRerender('copy');
@@ -26048,7 +26050,7 @@ async function addOmnisendContactToCampaign(i, btn){
     contactId = data.recordId;
     toast(data.skipped ? 'Contact already in Contacts — Lead Source unchanged' : 'Added to Contacts with Lead Source = Omnisend', 'success');
   } catch(err){
-    toast('Could not add contact: ' + err.message, 'warn');
+    toast('Could not add contact: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-user-plus"></i> Add to Campaign'; }
     return;
   }
@@ -26089,7 +26091,7 @@ async function confirmEmailAddToCampaign(contactId){
     if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
     toast(data.skipped ? 'Already in ' + (campaign ? campaign.name : 'that campaign') : 'Added to ' + (campaign ? campaign.name : 'campaign'), 'success');
   } catch(err){
-    toast('Could not add to campaign: ' + err.message, 'warn');
+    toast('Could not add to campaign: ' + friendlyErr(err.message), 'warn');
   }
   closeModal();
 }
@@ -26357,7 +26359,7 @@ async function uploadCompanyLogo(name, file){
       toast('Logo updated', 'success');
       renderPage();
     } catch(err){
-      toast('Could not upload logo: ' + err.message, 'error');
+      toast('Could not upload logo: ' + friendlyErr(err.message), 'error');
     }
   };
   reader.readAsDataURL(file);
@@ -26605,7 +26607,7 @@ async function scanContactSignals(){
     window.__homeContactSignals = undefined;
     loadHomeContactSignals();
   } catch(err){
-    toast('Could not scan for signals: ' + err.message, 'warn');
+    toast('Could not scan for signals: ' + friendlyErr(err.message), 'warn');
   } finally {
     window.__contactSignalsScanning = false;
     renderPage();
@@ -26655,7 +26657,7 @@ async function dismissContactSignals(contactIds){
     if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
     toast(`${data.dismissed} signal${data.dismissed===1?'':'s'} marked done`, 'success');
   } catch(err){
-    toast('Could not mark done: ' + err.message, 'warn');
+    toast('Could not mark done: ' + friendlyErr(err.message), 'warn');
   }
   window.__homeContactSignals = undefined;
   loadHomeContactSignals();
@@ -26890,7 +26892,7 @@ async function submitResearchTranscript(){
     loadMarketPulse();
   } catch(err){
     if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;color:var(--danger);">Could not save: ${esc(friendlyErr(err.message))}</p>`;
-    toast('Could not save transcript: ' + err.message, 'warn');
+    toast('Could not save transcript: ' + friendlyErr(err.message), 'warn');
   } finally {
     btn.disabled = false;
     btn.innerHTML = original;
@@ -27230,7 +27232,7 @@ async function resetAllDataConfirmed(){
     const json = await res.json();
     if(!res.ok || !json.success) throw new Error(json.error || 'Wipe failed');
   } catch(err){
-    toast('Could not wipe the database: ' + err.message, 'warn');
+    toast('Could not wipe the database: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-trash"></i> Wipe all data'; }
     return;
   }
