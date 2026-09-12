@@ -726,6 +726,8 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .cal-cell.today{border-color:var(--primary);border-width:2px;}
 .cal-date{font-size:12px;font-weight:700;color:var(--muted);margin-bottom:6px;}
 .event-chip{background:var(--tint-green-bg);color:var(--tint-green-fg);border-radius:4px;padding:3px 7px;font-size:10.5px;font-weight:700;margin-bottom:4px;cursor:default;position:relative;}
+.event-chip[onclick]{cursor:pointer;}
+.event-chip[tabindex]:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
 .event-chip.blue{background:var(--tint-blue-bg);color:var(--tint-blue-fg);}
 .event-chip.peach{background:var(--tint-orange-bg);color:var(--tint-orange-fg);}
 .event-chip.grey{background:var(--tint-grey-bg);color:var(--tint-grey-fg);}
@@ -752,7 +754,7 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .worklist-group{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;margin:16px 0 8px;display:flex;align-items:center;gap:6px;}
 .worklist-group:first-child{margin-top:2px;}
 .worklist-group i{font-size:13px;}
-.event-chip:hover .event-tooltip{display:block;}
+.event-chip:hover .event-tooltip,.event-chip:focus-visible .event-tooltip{display:block;}
 .event-tooltip{display:none;position:absolute;bottom:120%;left:0;background:var(--primary);color:#fff;padding:8px 10px;border-radius:8px;font-size:11px;white-space:nowrap;z-index:30;font-weight:600;}
 
 /* Analytics */
@@ -20562,9 +20564,9 @@ function renderCalendar(){
       const dayEvents = events.filter(ev => ev.date === dateStr);
       return `<div class="cal-cell ${isToday?'today':''}">
         <div class="cal-date">${d}</div>
-        ${dayEvents.map(ev => ev.type === 'reminder' ? `<div class="event-chip reminder-chip" onclick="openReminderConfirm('${ev.reminderId}')"><i class="ti ti-bell" style="font-size:10px;"></i> ${esc((ev.description||'').slice(0,28))}
+        ${dayEvents.map(ev => ev.type === 'reminder' ? `<div class="event-chip reminder-chip" tabindex="0" role="button" onclick="openReminderConfirm('${ev.reminderId}')" onkeydown="onRowKeydown(event)"><i class="ti ti-bell" style="font-size:10px;"></i> ${esc((ev.description||'').slice(0,28))}
           <div class="event-tooltip">${esc(ev.description)}<br>${ev.contactName?esc(ev.contactName):(ev.companyName?esc(ev.companyName):'')}${ev.campaignName?' · '+esc(ev.campaignName):''}, ${fmtDate(ev.date)}</div>
-        </div>` : `<div class="event-chip ${eventColorByAssignee(ev.assigneeId)}" onclick="openDealNotesModal('${ev.dealId}')">${esc(firstName(ev.contactName))} · ${esc(ev.stage)}
+        </div>` : `<div class="event-chip ${eventColorByAssignee(ev.assigneeId)}" tabindex="0" role="button" onclick="openDealNotesModal('${ev.dealId}')" onkeydown="onRowKeydown(event)">${esc(firstName(ev.contactName))} · ${esc(ev.stage)}
           <div class="event-tooltip">${esc(ev.contactName)} — ${esc(ev.companyName)}<br>${esc(ev.campaignName)} · ${esc(ev.stage)}<br>${ev.assigneeName?esc(ev.assigneeName):'Unassigned'}, ${fmtDate(ev.date)}</div>
         </div>`).join('')}
       </div>`;
