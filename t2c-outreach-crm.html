@@ -3102,14 +3102,36 @@ function renderReplyDraftArea(r){
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
       <button class="btn btn-primary btn-sm" onclick="replyApprove('${id}')"><i class="ti ti-check"></i> Approve &amp; copy</button>
       <button class="btn btn-secondary btn-sm" onclick="replySkip('${id}')">Skip for now</button>
-      <button class="btn btn-ghost btn-sm" onclick="generateReplyArtifact('${id}')" title="Generate a short, genuinely useful observation to share instead of another ask"><i class="ti ti-gift"></i> Send an artifact instead</button>
-      <button class="btn btn-ghost btn-sm" onclick="generateMappingInvite('${id}')" title="Propose mapping their current setup together, instead of pitching an outcome"><i class="ti ti-chalkboard"></i> Propose a mapping session</button>
-      <button class="btn btn-ghost btn-sm" onclick="generateCallPrep('${id}')" title="Open discovery questions for a booked call - listen more, talk less"><i class="ti ti-phone-outgoing"></i> Prep for the call</button>
+      <button class="btn btn-ghost btn-sm" onclick="toggleReplyMoreMenu(event,'${id}')"><i class="ti ti-dots"></i> More</button>
     </div>
     <div id="replyArtifact-${id}" style="margin-top:8px;"></div>
     <div id="replyMapping-${id}" style="margin-top:8px;"></div>
     <div id="replyCallPrep-${id}" style="margin-top:8px;"></div>`;
 }
+
+// The three alternative-response generators (artifact / mapping session /
+// call prep) used to sit as three more same-weight ghost buttons next to
+// Approve & Skip - five simultaneous choices on a screen meant for fast,
+// repetitive daily triage. Folded into one "More" menu (reusing the ctx-menu
+// pattern from the campaign status dropdown) so the two common actions read
+// clearly and the situational ones are still one click away, not gone.
+function toggleReplyMoreMenu(e, id){
+  e.stopPropagation();
+  closeReplyMoreMenu();
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  menu.id = 'replyMoreMenu';
+  const rect = e.target.closest('button').getBoundingClientRect();
+  menu.style.left = rect.left + 'px';
+  menu.style.top = (rect.bottom + 4) + 'px';
+  menu.innerHTML = `
+    <div class="ctx-item" onclick="closeReplyMoreMenu();generateReplyArtifact('${id}')" title="Generate a short, genuinely useful observation to share instead of another ask"><i class="ti ti-gift"></i> Send an artifact instead</div>
+    <div class="ctx-item" onclick="closeReplyMoreMenu();generateMappingInvite('${id}')" title="Propose mapping their current setup together, instead of pitching an outcome"><i class="ti ti-chalkboard"></i> Propose a mapping session</div>
+    <div class="ctx-item" onclick="closeReplyMoreMenu();generateCallPrep('${id}')" title="Open discovery questions for a booked call - listen more, talk less"><i class="ti ti-phone-outgoing"></i> Prep for the call</div>`;
+  document.body.appendChild(menu);
+  setTimeout(() => document.addEventListener('click', closeReplyMoreMenu, { once:true }), 0);
+}
+function closeReplyMoreMenu(){ const m = document.getElementById('replyMoreMenu'); if(m) m.remove(); }
 
 async function generateMappingInvite(id){
   const r = (window.__repliesById || {})[id];
