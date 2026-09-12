@@ -13462,16 +13462,27 @@ function handleScreenshotUpload(event, kind){
   if(files.length) processShotFiles(files, kind);
   event.target.value = '';
 }
+// Screenshot upload is used from three different modals now (message
+// generation's profile/convo shots, and program-capture findings below) -
+// each keeps its own image list on its own state object rather than one
+// shared bucket, so this just needs to know which object and which key.
+const SHOT_KIND_CONFIG = {
+  profile: { store: () => window.__genCtx, key: 'profileImages' },
+  convo:   { store: () => window.__genCtx, key: 'convoImages' },
+  finding: { store: () => window.__progCapture, key: 'images' }
+};
 function processShotFiles(files, kind){
-  if(!window.__genCtx) return;
-  const arrKey = kind === 'profile' ? 'profileImages' : 'convoImages';
+  const cfg = SHOT_KIND_CONFIG[kind];
+  const store = cfg && cfg.store();
+  if(!store) return;
+  store[cfg.key] = store[cfg.key] || [];
   let pending = files.length;
   files.forEach(file => {
     const reader = new FileReader();
     reader.onload = () => {
       const match = String(reader.result).match(/^data:([^;]+);base64,(.*)$/);
       if(match){
-        window.__genCtx[arrKey].push({ name: file.name, mediaType: match[1], base64: match[2] });
+        store[cfg.key].push({ name: file.name, mediaType: match[1], base64: match[2] });
       }
       pending--;
       if(pending === 0){
@@ -13483,15 +13494,18 @@ function processShotFiles(files, kind){
   });
 }
 function renderShotFiles(kind){
-  const arrKey = kind === 'profile' ? 'profileImages' : 'convoImages';
-  const list = (window.__genCtx && window.__genCtx[arrKey]) || [];
+  const cfg = SHOT_KIND_CONFIG[kind];
+  const store = cfg && cfg.store();
+  const list = (store && store[cfg.key]) || [];
   const el = document.getElementById('shotfiles-'+kind);
   if(!el) return;
   el.innerHTML = list.map((f,i) => `<span class="shot-file-chip">${esc(f.name)}<button onclick="removeScreenshot('${kind}',${i})">&times;</button></span>`).join('');
 }
 function removeScreenshot(kind, idx){
-  const arrKey = kind === 'profile' ? 'profileImages' : 'convoImages';
-  window.__genCtx[arrKey].splice(idx,1);
+  const cfg = SHOT_KIND_CONFIG[kind];
+  const store = cfg && cfg.store();
+  if(!store || !store[cfg.key]) return;
+  store[cfg.key].splice(idx,1);
   renderShotFiles(kind);
 }
 
@@ -15865,7 +15879,7 @@ function toggleProgramsFilterPanel(field){
 
 // ---- capture chat ----
 function openProgramCapture(prefillCompany){
-  window.__progCapture = { step: 'input', prefillCompany: prefillCompany || '', proposal: null };
+  window.__progCapture = { step: 'input', prefillCompany: prefillCompany || '', proposal: null, images: [] };
   renderProgramCaptureModal();
 }
 function renderProgramCaptureModal(){
@@ -15883,14 +15897,15 @@ function renderProgramCaptureModal(){
         <div class="muted" style="font-size:12px;margin-bottom:8px;">One finding per line: a research dump, a list of companies + what you found. The Engine classifies each and files it against the right company. Up to 25 at a time.</div>
         <textarea id="progBulkText" rows="9" placeholder="Rio Tinto: new SAP S/4HANA rollout announced Aug 2026, go-live 2028&#10;Water Corp: appointed a Chief Transformation Officer&#10;South32: operating model review underway per H1 results call" style="width:100%;">${esc(s.bulkText || '')}</textarea>
       ` : `
-        <div class="muted" style="font-size:12px;margin-bottom:8px;">Paste whatever you found: a news headline, a LinkedIn post, a line from a call. The Engine works out which company it's about and whether it's a program, a signal, or just a note.</div>
-        <textarea id="progCaptureText" rows="6" placeholder="e.g. 'Water Corporation has kicked off a multi-year SAP S/4HANA replacement, go-live slipped to 2027…'" style="width:100%;">${esc(s.text || '')}</textarea>
+        <div class="muted" style="font-size:12px;margin-bottom:8px;">Paste whatever you found: a news headline, a LinkedIn post, a line from a call. Or drop/upload a screenshot, e.g. of a LinkedIn post. The Engine works out which company it's about and whether it's a program, a signal, or just a note.</div>
+        <textarea id="progCaptureText" rows="6" placeholder="e.g. 'Water Corporation has kicked off a multi-year SAP S/4HANA replacement, go-live slipped to 2027…'" style="width:100%;margin-bottom:10px;">${esc(s.text || '')}</textarea>
+        ${screenshotBoxHtml('finding', 'Drop or upload a screenshot of the finding (e.g. a LinkedIn post)')}
         ${s.prefillCompany ? `<div class="muted" style="font-size:11px;margin-top:6px;">Will attach to <b>${esc(s.prefillCompany)}</b> unless the text points elsewhere.</div>` : ''}
       `}
     `, batch
       ? `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="progBulkParseBtn" onclick="progBulkParse()">Parse batch</button>`
       : `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="progCaptureParseBtn" onclick="progCaptureParse()">Parse it</button>`);
-    setTimeout(() => { const t = document.getElementById(batch ? 'progBulkText' : 'progCaptureText'); if(t) t.focus(); }, 20);
+    setTimeout(() => { const t = document.getElementById(batch ? 'progBulkText' : 'progCaptureText'); if(t) t.focus(); if(!batch) renderShotFiles('finding'); }, 20);
     return;
   }
   if(s.step === 'batchreview'){ renderProgramBatchReview(); return; }
@@ -15941,12 +15956,13 @@ function progPropSetDest(dest){
 }
 async function progCaptureParse(){
   const text = (document.getElementById('progCaptureText').value || '').trim();
-  if(!text){ toast('Paste something first', 'warn'); return; }
+  const images = (window.__progCapture.images || []).map(f => ({ mediaType: f.mediaType, base64: f.base64 }));
+  if(!text && !images.length){ toast('Paste something or attach a screenshot first', 'warn'); return; }
   window.__progCapture.text = text;
   const btn = document.getElementById('progCaptureParseBtn');
   if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Parsing…'; }
   try {
-    const res = await fetch('/api/programs/capture', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ text }) });
+    const res = await fetch('/api/programs/capture', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ text, images }) });
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
     if(!data.companyMatched && window.__progCapture.prefillCompany){ data.companyName = window.__progCapture.prefillCompany; data.companyMatched = true; }

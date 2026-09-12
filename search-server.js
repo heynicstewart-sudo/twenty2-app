@@ -11586,13 +11586,15 @@ app.post('/api/companies/:name/people/import', async (req, res) => {
 // note) into a program / signal / note PROPOSAL. Never writes. Shared by the
 // single capture chat, the bulk paste, and available to the discovery agent.
 // `model` defaults to the interactive model; the bulk path passes AMBIENT_MODEL.
-async function captureFindingToProposal(text, companyNames, model) {
-  const prompt = `You are the intake assistant for T2C Outreach, Twenty2 Collective's CRM. Twenty2 is a Perth Agile/change consultancy whose GTM first step is spotting companies running a transformation program (the buying trigger). Marcus has pasted something he found - a news line, a LinkedIn post, or a note from a call. Work out what it is and where in the CRM it should go.
-
-Pasted finding:
+async function captureFindingToProposal(text, companyNames, model, images) {
+  const hasImages = Array.isArray(images) && images.length;
+  const prompt = `You are the intake assistant for T2C Outreach, Twenty2 Collective's CRM. Twenty2 is a Perth Agile/change consultancy whose GTM first step is spotting companies running a transformation program (the buying trigger). Marcus has pasted or screenshotted something he found - a news line, a LinkedIn post, or a note from a call. Work out what it is and where in the CRM it should go.
+${hasImages ? `\nRead the attached screenshot(s) for the finding${text && text.trim() ? ', together with this note he added:' : '.'}` : ''}
+${(!hasImages || (text && text.trim())) ? `Pasted finding:
 """
 ${(text || '').slice(0, 4000)}
 """
+` : ''}
 
 Known companies on file (match against these, case-insensitive, tolerate abbreviations like "Dept" / "WA"):
 ${companyNames.join(', ')}
@@ -11614,7 +11616,11 @@ Return ONLY valid JSON, no markdown, in exactly this shape:
 }
 Only the object matching "destination" needs real content; leave the others as empty strings. "phase": use "Slipping" only if the text actually says it's behind / troubled; "In delivery" if clearly underway; "Announced" if just announced; else "Unknown".`;
 
-  const parsed = await callClaudeJson(clientize(prompt), 700, model);
+  const promptText = clientize(prompt);
+  const content = hasImages
+    ? [...images.map(img => ({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.base64 } })), { type: 'text', text: promptText }]
+    : promptText;
+  const parsed = await callClaudeJson(content, 700, model);
   const dest = ['program', 'signal', 'note'].includes(parsed.destination) ? parsed.destination : 'note';
   const guessName = (parsed.companyName || '').toString();
   const exact = companyNames.find(n => n.toLowerCase() === guessName.toLowerCase());
@@ -11622,7 +11628,7 @@ Only the object matching "destination" needs real content; leave the others as e
     ? parsed.candidateCompanies.filter(n => companyNames.some(cn => cn.toLowerCase() === String(n).toLowerCase())).slice(0, 5)
     : [];
   return {
-    sourceText: (text || '').trim().slice(0, 500),
+    sourceText: (text || '').trim().slice(0, 500) || (hasImages ? '(from screenshot)' : ''),
     destination: dest,
     companyName: exact || guessName,
     companyMatched: !!exact,
@@ -11643,12 +11649,13 @@ Only the object matching "destination" needs real content; leave the others as e
 app.post('/api/programs/capture', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
-  const { text } = req.body || {};
-  if (!text || !text.trim()) return res.status(400).json({ error: 'text is required' });
+  const { text, images } = req.body || {};
+  const hasImages = Array.isArray(images) && images.length;
+  if (!hasImages && (!text || !text.trim())) return res.status(400).json({ error: 'text or images is required' });
   try {
     const companyRecords = await airtableFetchAllRecords('Companies');
     const companyNames = companyRecords.map(c => c.fields['Company Name'] || '').filter(Boolean);
-    res.json(await captureFindingToProposal(text, companyNames));
+    res.json(await captureFindingToProposal(text, companyNames, undefined, images));
   } catch (err) {
     console.error('Programs capture error:', err.message);
     res.status(500).json({ error: err.message });
