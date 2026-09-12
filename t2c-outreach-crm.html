@@ -3846,7 +3846,7 @@ function renderGridsListView(){
             if(!noCampCount) return '';
             const noCampCompanies = new Set(noCampaignContacts().map(c => (c.company||'').trim()).filter(Boolean)).size;
             return `
-            <tr class="home-grid-row" onclick="openGrid('${NO_CAMPAIGN_GRID_ID}')">
+            <tr class="home-grid-row" tabindex="0" onclick="openGrid('${NO_CAMPAIGN_GRID_ID}')" onkeydown="if(event.key==='Enter'){openGrid('${NO_CAMPAIGN_GRID_ID}');}">
               <td class="perf-name">No campaign <span class="pill" style="background:var(--surface-2);color:var(--muted);margin-left:4px;">Virtual</span></td>
               <td>${noCampCompanies}</td>
               <td>${noCampCount}</td>
@@ -3856,7 +3856,7 @@ function renderGridsListView(){
             </tr>`;
           })()}
           ${state.grids.map(g => `
-            <tr class="home-grid-row" onclick="openGrid('${g.id}')">
+            <tr class="home-grid-row" tabindex="0" onclick="openGrid('${g.id}')" onkeydown="if(event.key==='Enter'){openGrid('${g.id}');}">
               <td class="perf-name">${esc(g.name)} ${campaignsForGrid(g.id).map(c=>`<span class="pill pill-sky" style="margin-left:4px;">${esc(c.name)}</span>`).join('')}</td>
               <td>${g.companies.length}</td>
               <td>${gridContacts(g.id).length}</td>
@@ -14452,7 +14452,7 @@ function renderCampaignGridTab(campaign){
         <thead><tr><th>Name</th><th>Companies</th><th>Contacts</th><th>Last updated</th><th></th></tr></thead>
         <tbody>
           ${grids.map(g => `
-            <tr class="home-grid-row" onclick="openGridFromCampaign('${g.id}','${campaign.id}')">
+            <tr class="home-grid-row" tabindex="0" onclick="openGridFromCampaign('${g.id}','${campaign.id}')" onkeydown="if(event.key==='Enter'){openGridFromCampaign('${g.id}','${campaign.id}');}">
               <td class="perf-name">${esc(g.name)}</td>
               <td>${g.companies.length}</td>
               <td>${gridContacts(g.id).length}</td>
