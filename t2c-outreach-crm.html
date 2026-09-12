@@ -3313,7 +3313,7 @@ function activeTargetName(rows){
 // reachable directly from Targets, not only from Profile/the company drawer.
 function renderPinSearchWidget(){
   return `
-  <span class="tboard-search"><i class="ti ti-search"></i><input id="targetPinSearch" type="text" placeholder="Pin a company…" oninput="renderTargetPinSuggestions(this.value)"></span>`;
+  <span class="tboard-search"><i class="ti ti-search"></i><input id="targetPinSearch" type="text" placeholder="Pin a company… (press /)" oninput="renderTargetPinSuggestions(this.value)"></span>`;
 }
 
 
@@ -3590,7 +3590,7 @@ function renderDashTopIcps(profile){
                 <div class="tgt-key-role">${esc(c.jobTitle || '—')}</div>
               </div>
             </div>
-            ${c.isDecisionMaker ? '<span class="pill" style="background:var(--tint-green-bg);color:var(--tint-green-fg);flex:none;">DM</span>' : ''}
+            ${c.isDecisionMaker ? '<span class="pill" title="Decision maker" style="background:var(--tint-green-bg);color:var(--tint-green-fg);flex:none;">DM</span>' : ''}
           </div>
         </div>`).join('') : '<div class="tgt-key-empty">No contacts on file for this account yet.</div>'}
       ${all.length > contacts.length ? `<div class="muted" style="font-size:11px;">+${all.length - contacts.length} more</div>` : ''}
@@ -12135,7 +12135,7 @@ function renderAccountContactsSection(contacts, companyName){
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
           <strong>${esc(c.name)}</strong>
           <div style="display:flex;align-items:center;gap:6px;flex:none;">
-            ${c.isDecisionMaker===true ? '<span class="badge" style="background:var(--tint-green-bg);color:var(--tint-green-fg);font-size:10px;">DM</span>' : ''}
+            ${c.isDecisionMaker===true ? '<span class="badge" title="Decision maker" style="background:var(--tint-green-bg);color:var(--tint-green-fg);font-size:10px;">DM</span>' : ''}
             ${connStatusSelect(connStatusValueFromStage(c.journeyStage), `setAccountContactStatus('${c.id}', this.value)`)}
           </div>
         </div>
@@ -13754,7 +13754,7 @@ function renderCampaignListView(){
       <h1 class="page-h1">Campaigns</h1>
       <div class="page-sub">Multi-channel, trigger-based outreach sequences and their message roadmaps.</div>
     </div>
-    <button class="btn btn-primary" onclick="openNewCampaignChat()"><i class="ti ti-plus"></i> New Campaign</button>
+    <button class="btn btn-primary" onclick="openNewCampaignChat()" title="New Campaign (N)"><i class="ti ti-plus"></i> New Campaign</button>
   </div>
   ${renderCampaignsAreaSubNav('campaigns')}
   <div class="card">
@@ -16696,7 +16696,7 @@ function renderProfilePage(){
     </div>
     <div class="muted" style="font-size:12.5px;margin:-4px 0 12px;">A company opens its account canvas. Type a new name and hit <strong>Create</strong> to research a company before it's in a campaign.</div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-      <input id="profileSearchInput" type="text" placeholder="Search or create a company…" value="${esc(window.__profileQuery||'')}" oninput="setProfileQuery(this.value)" onkeydown="if(event.key==='Enter'&&this.value.trim().length>=2)createProfileCompany(this.value.trim())" style="flex:1;min-width:240px;max-width:420px;">
+      <input id="profileSearchInput" type="text" placeholder="Search or create a company… (press /)" value="${esc(window.__profileQuery||'')}" oninput="setProfileQuery(this.value)" onkeydown="if(event.key==='Enter'&&this.value.trim().length>=2)createProfileCompany(this.value.trim())" style="flex:1;min-width:240px;max-width:420px;">
       ${rawQuery.length >= 2 && !exactCompanyMatch ? `<button class="btn btn-primary btn-sm" onclick="createProfileCompany('${esc(rawQuery.replace(/'/g,"\\'"))}')"><i class="ti ti-plus"></i> Create "${esc(rawQuery)}"</button>` : ''}
     </div>
     ${quickPicks}
@@ -26472,6 +26472,10 @@ function toggleUniverseFilterPanel(field){
   window.__universeOpenFilter = (window.__universeOpenFilter === field) ? null : field;
   renderPage();
 }
+function toggleUniverseMoreFilters(){
+  window.__universeMoreFilters = !window.__universeMoreFilters;
+  renderPage();
+}
 function setUniversePreset(preset){
   window.__universeFilters = window.__universeFilters || {};
   window.__universeFilters.preset = (window.__universeFilters.preset === preset) ? null : preset;
@@ -26522,7 +26526,7 @@ function renderUniverseAccountsList(){
       </div>` : ''}
     </div>`;
   };
-  const presetChip = (label, key) => `<button class="uf-preset ${f.preset===key?'on':''}" onclick="setUniversePreset('${key}')">${label}</button>`;
+  const presetChip = (label, key, title) => `<button class="uf-preset ${f.preset===key?'on':''}" ${title ? `title="${esc(title)}"` : ''} onclick="setUniversePreset('${key}')">${label}</button>`;
   const activeCount = ['size','momentum','industry','sector','priority','relationship','programStatus','campaignStatus'].reduce((n,k) => n + (f[k]||[]).length, 0) + (f.preset ? 1 : 0) + (f.search ? 1 : 0);
 
   return `
@@ -26533,22 +26537,26 @@ function renderUniverseAccountsList(){
     </div>
     <div class="muted" style="font-size:12.5px;margin:-4px 0 0;">Every company on file, filterable by size, industry, relationship, program and campaign status — filter down instead of hunting through fixed sections.</div>
     <div class="uf-bar">
-      <div class="uf-group"><input type="text" class="uf-search" id="universeSearchInput" placeholder="Search company name…" value="${esc(f.search||'')}" oninput="setUniverseSearchLive(this.value)"></div>
+      <div class="uf-group"><input type="text" class="uf-search" id="universeSearchInput" placeholder="Search company name… (press /)" value="${esc(f.search||'')}" oninput="setUniverseSearchLive(this.value)"></div>
       ${ddGroup('Size', 'size', universeDistinct(all,'sizeBand'))}
+      ${ddGroup('Industry', 'industry', universeDistinct(all,'industry'))}
+      ${ddGroup('Relationship', 'relationship', universeDistinct(all,'relationshipStatus'))}
+      <button class="uf-dd-btn ${['momentum','priority','sector','programStatus','campaignStatus'].some(k=>(f[k]||[]).length) ? 'on' : ''}" onclick="toggleUniverseMoreFilters()">${window.__universeMoreFilters?'Fewer filters':'More filters'}${!window.__universeMoreFilters && ['momentum','priority','sector','programStatus','campaignStatus'].reduce((n,k)=>n+(f[k]||[]).length,0) ? ` (${['momentum','priority','sector','programStatus','campaignStatus'].reduce((n,k)=>n+(f[k]||[]).length,0)})` : ''} <i class="ti ti-chevron-${window.__universeMoreFilters?'up':'down'}"></i></button>
+    </div>
+    ${window.__universeMoreFilters ? `
+    <div class="uf-bar" style="margin-top:8px;">
       ${ddGroup('Momentum', 'momentum', universeDistinct(all,'momentum'))}
       ${ddGroup('ICP priority', 'priority', universeDistinct(all,'priority'))}
-      ${ddGroup('Industry', 'industry', universeDistinct(all,'industry'))}
       ${ddGroup('Sector', 'sector', universeDistinct(all,'sector'))}
-      ${ddGroup('Relationship', 'relationship', universeDistinct(all,'relationshipStatus'))}
       ${ddGroup('Program', 'programStatus', ['Has program','No program'])}
       ${ddGroup('Campaign', 'campaignStatus', ['In campaign','Not in campaign'])}
-    </div>
+    </div>` : ''}
     <div class="uf-bar" style="margin-top:8px;">
       <div class="uf-group"><span class="uf-label">Quick filters</span>
-        ${presetChip('⚡ Buying trigger detected','trigger')}
-        ${presetChip('Active program · no campaign','program-no-campaign')}
-        ${presetChip('Unscored','unscored')}
-        ${presetChip('Not in a campaign','no-campaign')}
+        ${presetChip('⚡ Buying trigger detected','trigger','Companies with a live transformation program that just changed phase or momentum - the freshest buying signal.')}
+        ${presetChip('Active program · no campaign','program-no-campaign','Running a transformation program right now but not yet in an outreach campaign - your next target.')}
+        ${presetChip('Unscored','unscored','Companies that haven\'t been run against the ICP yet.')}
+        ${presetChip('Not in a campaign','no-campaign','Companies with no contacts currently in any campaign.')}
       </div>
     </div>
     <div class="uf-meta"><span id="universeResultsMeta">${meta}</span>${activeCount ? `<a href="#" class="uf-clear" onclick="clearUniverseFilters();return false;">Clear all filters</a>` : ''}</div>
@@ -27450,6 +27458,47 @@ document.addEventListener('keydown', (e) => {
     else archDeleteEl(cn, window.__archSel.id);
     e.preventDefault();
   }
+});
+
+// "/" jumps straight to this page's primary search box - same convention as
+// Gmail/GitHub/Slack, so the Alex persona (power user) never has to reach
+// for the mouse to start a search. Skipped while already typing anywhere
+// (input/textarea/contenteditable) so a literal "/" still types normally.
+// Each page's search input hints "(press /)" in its placeholder so the
+// shortcut is discoverable, not hidden - a hidden accelerator only helps
+// heuristic 7 (flexibility) at the cost of heuristic 6 (recognition).
+const PAGE_SEARCH_INPUT_ID = { home: 'targetPinSearch', companyuniverse: 'universeSearchInput', profile: 'profileSearchInput' };
+document.addEventListener('keydown', (e) => {
+  if(e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+  const t = e.target.tagName;
+  if(t === 'INPUT' || t === 'TEXTAREA' || e.target.isContentEditable) return;
+  const id = PAGE_SEARCH_INPUT_ID[state.currentPage];
+  let input = id && document.getElementById(id);
+  // Profile's search bar collapses to a slim strip once a company is
+  // selected (see renderProfilePage) - re-expand it first so "/" still
+  // reaches a search box instead of silently doing nothing.
+  if(!input && state.currentPage === 'profile' && window.__profileSelectedCompany){
+    expandProfileSearch();
+    input = document.getElementById(id);
+  }
+  if(!input) return;
+  e.preventDefault();
+  input.focus();
+  input.select();
+});
+
+// "N" starts a new campaign from the Campaigns list - same discoverable-
+// shortcut convention as "/" above (hinted via the button's title, not
+// hidden), and only wired on the one view where "new campaign" is
+// unambiguous, so it can't misfire from inside a campaign's own detail tabs.
+document.addEventListener('keydown', (e) => {
+  if(e.key !== 'n' && e.key !== 'N') return;
+  if(e.metaKey || e.ctrlKey || e.altKey) return;
+  const t = e.target.tagName;
+  if(t === 'INPUT' || t === 'TEXTAREA' || e.target.isContentEditable) return;
+  if(state.currentPage !== 'campaigns' || (window.__campaignView||'list') !== 'list') return;
+  e.preventDefault();
+  openNewCampaignChat();
 });
 
 // Agency controller session: branding + client switcher + Agency nav.
