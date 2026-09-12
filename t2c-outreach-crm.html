@@ -418,7 +418,8 @@ label{font-size:var(--label-size);font-weight:700;color:var(--muted);display:blo
 .home-action-title{font-weight:800;font-size:14px;margin-bottom:4px;}
 .home-action-desc{font-size:12px;color:var(--muted);}
 .home-grid-row{cursor:pointer;}
-.home-grid-row:hover{background:var(--surface-2);}
+.home-grid-row:hover,.home-grid-row:focus-visible{background:var(--surface-2);}
+.home-grid-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;}
 .home-grid-row .grid-delete-btn{opacity:0;transition:opacity .15s;}
 .home-grid-row:hover .grid-delete-btn{opacity:1;}
 .quick-actions{display:flex;gap:12px;flex-wrap:wrap;}
@@ -1349,6 +1350,19 @@ function relTime(dateStr){
 function firstName(name){ return name.split(' ')[0]; }
 function uid(prefix){ return prefix + '_' + Math.random().toString(36).slice(2,9); }
 function esc(str){ return (str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+// Server error strings can name the underlying database vendor or its env
+// vars (e.g. "AIRTABLE_API_KEY not configured") - fine in Railway logs, but
+// this app is white-label and the UI must never surface "Airtable" (see
+// PRODUCT.md's terminology rule). Every place that shows a raw error to the
+// user should route it through here first instead of displaying err.message
+// directly.
+function friendlyErr(msg){
+  let s = (msg === null || msg === undefined) ? '' : String(msg);
+  if(/AIRTABLE_API_KEY not configured/i.test(s)) return "The database isn't connected yet.";
+  s = s.replace(/\bAirtable\b/gi, 'the database');
+  s = s.replace(/^the database/, 'The database');
+  return s;
+}
 
 // Renders the "Twenty2 already knows this company" warning banner from a
 // generate-message response's relationshipFlag (see twenty2RelationshipFlag
@@ -2426,7 +2440,7 @@ function buildWeeklyReportHTML(d){
 
 function renderAgencyOverviewGrid(data){
   if(data === undefined) return '<div class="muted"><i class="ti ti-loader-2"></i> Loading clients...</div>';
-  if(data && data.error) return `<div class="muted">Could not load overview: ${esc(data.error)}</div>`;
+  if(data && data.error) return `<div class="muted">Could not load overview: ${esc(friendlyErr(data.error))}</div>`;
   const rows = (data && data.clients) || [];
   if(!rows.length) return '<div class="empty-state">No clients configured yet.</div>';
   return '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;">' +
@@ -2435,7 +2449,7 @@ function renderAgencyOverviewGrid(data){
       const body = c.paused
         ? '<div class="muted" style="font-size:12px;padding:8px 0;">Paused</div>'
         : c.error
-          ? `<div class="muted" style="font-size:11.5px;padding:8px 0;">${esc(c.error)}</div>`
+          ? `<div class="muted" style="font-size:11.5px;padding:8px 0;">${esc(friendlyErr(c.error))}</div>`
           : `<div style="display:flex;justify-content:space-around;padding:10px 0 4px;">
               ${stat('Contacts', c.totalContacts ?? '—')}
               ${stat('Campaigns', c.activeCampaigns ?? '—')}
@@ -3009,7 +3023,7 @@ function renderReplies(){
   if(loading){
     body = '<p class="muted"><i class="ti ti-loader-2"></i> Loading replies…</p>';
   } else if(window.__repliesError && (!rows || !rows.length)){
-    body = '<p class="muted">Could not load the reply queue: '+esc(window.__repliesError)+'</p>';
+    body = '<p class="muted">Could not load the reply queue: '+esc(friendlyErr(window.__repliesError))+'</p>';
   } else if(!rows || !rows.length){
     body = '<div style="text-align:center;padding:48px 16px;color:var(--muted);"><i class="ti ti-inbox-off" style="font-size:32px;"></i><p style="margin-top:8px;">No replies waiting. When a contact replies, their draft response lands here ready to approve.</p></div>';
   } else {
@@ -3110,7 +3124,7 @@ async function generateMappingInvite(id){
         <ul style="padding-left:18px;font-size:12px;line-height:1.6;margin:0 0 6px;">${data.mappingQuestions.map(q=>`<li>${esc(q)}</li>`).join('')}</ul>` : ''}
       <button class="btn btn-secondary btn-sm" onclick="copyMappingInvite('${id}')"><i class="ti ti-copy"></i> Copy invite</button>`;
   } catch(err){
-    el.innerHTML = `<span class="muted" style="font-size:11.5px;">Could not generate: ${esc(err.message)}</span>`;
+    el.innerHTML = `<span class="muted" style="font-size:11.5px;">Could not generate: ${esc(friendlyErr(err.message))}</span>`;
   }
 }
 
@@ -3136,7 +3150,7 @@ async function generateCallPrep(id){
       <ul style="padding-left:18px;font-size:12px;line-height:1.6;margin:0 0 6px;">${data.questions.map(q=>`<li>${esc(q)}</li>`).join('')}</ul>
       ${data.watchFor ? `<div class="muted" style="font-size:11px;"><i class="ti ti-ear"></i> ${esc(data.watchFor)}</div>` : ''}`;
   } catch(err){
-    el.innerHTML = `<span class="muted" style="font-size:11.5px;">Could not generate: ${esc(err.message)}</span>`;
+    el.innerHTML = `<span class="muted" style="font-size:11.5px;">Could not generate: ${esc(friendlyErr(err.message))}</span>`;
   }
 }
 
@@ -3154,7 +3168,7 @@ async function generateReplyArtifact(id){
       <textarea id="replyArtifactText-${id}" rows="4" style="width:100%;">${esc(data.artifact)}</textarea>
       <button class="btn btn-secondary btn-sm" style="margin-top:6px;" onclick="copyReplyArtifact('${id}')"><i class="ti ti-copy"></i> Copy</button>`;
   } catch(err){
-    el.innerHTML = `<span class="muted" style="font-size:11.5px;">Could not generate: ${esc(err.message)}</span>`;
+    el.innerHTML = `<span class="muted" style="font-size:11.5px;">Could not generate: ${esc(friendlyErr(err.message))}</span>`;
   }
 }
 
@@ -3266,7 +3280,7 @@ function renderHome(){
     return `<div class="page-head"><h1 class="page-h1">Targets</h1></div><div class="card"><div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading…</div></div>`;
   }
   if(window.__targets && window.__targets.error){
-    return `<div class="page-head"><h1 class="page-h1">Targets</h1></div><div class="card"><div class="muted" style="font-size:12.5px;">Could not load targets: ${esc(window.__targets.error)}</div></div>`;
+    return `<div class="page-head"><h1 class="page-h1">Targets</h1></div><div class="card"><div class="muted" style="font-size:12.5px;">Could not load targets: ${esc(friendlyErr(window.__targets.error))}</div></div>`;
   }
   if(!rows.length){
     return `
@@ -3894,7 +3908,7 @@ function renderContext(){
     return '<div class="card"><div class="muted"><i class="ti ti-loader-2"></i> Loading context data...</div></div>';
   }
   if(window.__contextDataError){
-    return `<div class="card"><div class="muted">Could not load context data: ${esc(window.__contextDataError)}</div><button class="btn btn-secondary btn-sm" style="margin-top:10px;" onclick="loadContextData()"><i class="ti ti-refresh"></i> Retry</button></div>`;
+    return `<div class="card"><div class="muted">Could not load context data: ${esc(friendlyErr(window.__contextDataError))}</div><button class="btn btn-secondary btn-sm" style="margin-top:10px;" onclick="loadContextData()"><i class="ti ti-refresh"></i> Retry</button></div>`;
   }
   if(!window.__contextData){
     return '<div class="card"><div class="empty-state">Loading...</div></div>';
@@ -4361,7 +4375,7 @@ async function runContextParseScreenshot(){
     clearContextScreenshot();
     loadContextData(true);
   } catch(err){
-    if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;">Could not parse: ${esc(err.message)}</p>`;
+    if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;">Could not parse: ${esc(friendlyErr(err.message))}</p>`;
     toast('Could not parse screenshot: ' + err.message, 'warn');
   }
 }
@@ -4418,7 +4432,7 @@ async function submitContextLogContent(){
     if(bodyEl) bodyEl.value = '';
     loadContextData(true);
   } catch(err){
-    if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;">Could not log content: ${esc(err.message)}</p>`;
+    if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;">Could not log content: ${esc(friendlyErr(err.message))}</p>`;
     toast('Could not log content: ' + err.message, 'warn');
   }
 }
@@ -4542,7 +4556,7 @@ async function submitContextHistoricalUpload(){
     clearContextHistFile();
     loadContextData(true);
   } catch(err){
-    if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;">Could not extract: ${esc(err.message)}</p>`;
+    if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;">Could not extract: ${esc(friendlyErr(err.message))}</p>`;
     toast('Could not save historical context: ' + err.message, 'warn');
   }
 }
@@ -5393,7 +5407,7 @@ function renderLoggerConnResult(){
 
 function renderLoggerConnFinalCard(){
   const result = window.__loggerConnections.result;
-  if(result.error) return `<div class="card" style="background:var(--tint-red-bg);border-color:rgba(0,0,0,0.06);margin-top:10px;"><i class="ti ti-alert-circle" style="color:var(--danger);"></i> ${esc(result.error)}</div>`;
+  if(result.error) return `<div class="card" style="background:var(--tint-red-bg);border-color:rgba(0,0,0,0.06);margin-top:10px;"><i class="ti ti-alert-circle" style="color:var(--danger);"></i> ${esc(friendlyErr(result.error))}</div>`;
   const lines = [];
   if(result.matched && result.matched.length) lines.push(`${result.matched.length} contact${result.matched.length===1?'':'s'} marked as connected: ${result.matched.map(n=>esc(n)).join(', ')}`);
   if(result.imported && result.imported.length) lines.push(`${result.imported.length} new contact${result.imported.length===1?'':'s'} imported: ${result.imported.map(n=>esc(n)).join(', ')}`);
@@ -9114,7 +9128,7 @@ async function runApolloSearch(){
     window.__apolloSearchedJobTitle = jobTitle;
     renderApolloResults();
   } catch(err){
-    if(resultsEl) resultsEl.innerHTML = `<p class="muted" style="font-size:12.5px;">Could not search Apollo: ${esc(err.message)}</p>`;
+    if(resultsEl) resultsEl.innerHTML = `<p class="muted" style="font-size:12.5px;">Could not search Apollo: ${esc(friendlyErr(err.message))}</p>`;
     toast('Apollo search failed: ' + err.message, 'warn');
   } finally {
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-search"></i> Search Apollo'; }
@@ -10475,7 +10489,7 @@ async function enrichContact(cid){
     regenerateOpenMessageModalIfNeeded(cid);
   } catch(err){
     console.warn('Enrichment failed:', err.message);
-    panel.innerHTML = `<div class="muted" style="font-size:12.5px;">Could not enrich this contact: ${esc(err.message)}</div>`;
+    panel.innerHTML = `<div class="muted" style="font-size:12.5px;">Could not enrich this contact: ${esc(friendlyErr(err.message))}</div>`;
     toast('Could not enrich contact: ' + err.message, 'warn');
   } finally {
     if(btn){ btn.disabled = false; btn.innerHTML = original; }
@@ -10611,7 +10625,7 @@ async function researchBusiness(cid){
     toast(data.emailSaved ? `Researched — found email ${data.emailSaved}` : 'Business researched — brief saved to notes', 'success');
     regenerateOpenMessageModalIfNeeded(cid);
   } catch(err){
-    if(panel) panel.innerHTML = `<div class="muted" style="font-size:12.5px;">Could not research this business: ${esc(err.message)}</div>`;
+    if(panel) panel.innerHTML = `<div class="muted" style="font-size:12.5px;">Could not research this business: ${esc(friendlyErr(err.message))}</div>`;
     toast('Could not research: ' + err.message, 'warn');
   } finally {
     if(btn){ btn.disabled = false; btn.innerHTML = original; }
@@ -10673,7 +10687,7 @@ function renderPostCard(p){
 // everywhere Recent Posts renders (grid enrichment panel, contact drawer).
 function renderRecentPostsCards(posts){
   if(!posts) return '<span class="muted" style="font-size:11.5px;"><i class="ti ti-loader-2"></i> Loading...</span>';
-  if(posts.error) return `<span class="muted" style="font-size:11.5px;">Could not load recent posts: ${esc(posts.error)}</span>`;
+  if(posts.error) return `<span class="muted" style="font-size:11.5px;">Could not load recent posts: ${esc(friendlyErr(posts.error))}</span>`;
   if(!posts.length) return '<span class="muted" style="font-size:11.5px;">No recent posts found</span>';
 
   const recent = posts.filter(p => isWithinLastDays(p.date, 30));
@@ -12540,7 +12554,7 @@ async function runMondayLossScan(){
 
 function renderMondayLossScanSection(data){
   if(!data) return '';
-  if(data.error) return `<div class="muted" style="font-size:12px;margin-top:10px;">Could not scan: ${esc(data.error)}</div>`;
+  if(data.error) return `<div class="muted" style="font-size:12px;margin-top:10px;">Could not scan: ${esc(friendlyErr(data.error))}</div>`;
   if(!data.length) return '<div class="muted" style="font-size:12px;margin-top:10px;">Scanned - nothing with loss-context language found this pass.</div>';
   return `
   <div style="margin-top:12px;display:flex;flex-direction:column;gap:10px;">
@@ -12606,7 +12620,7 @@ async function runMondayStallScan(){
 
 function renderMondayStallScanSection(data){
   if(!data) return '';
-  if(data.error) return `<div class="muted" style="font-size:12px;margin-top:10px;">Could not scan: ${esc(data.error)}</div>`;
+  if(data.error) return `<div class="muted" style="font-size:12px;margin-top:10px;">Could not scan: ${esc(friendlyErr(data.error))}</div>`;
   if(!data.length) return '<div class="muted" style="font-size:12px;margin-top:10px;">Scanned - nothing with stall-context language found this pass.</div>';
   return `
   <div style="margin-top:12px;display:flex;flex-direction:column;gap:10px;">
@@ -13767,14 +13781,14 @@ function renderCampaignListRow(campaign){
   const statusClass = CAMPAIGN_STATUS_CLASS[campaign.status] || 'campaign-status-draft';
   const isEmail = (campaign.type || 'linkedin') === 'email';
   const n = v => (v === null || v === undefined) ? '—' : v;
-  const cell = m.loading ? '<span class="muted">·</span>' : (m.error ? '<span class="muted" title="'+esc(m.error)+'">!</span>' : null);
+  const cell = m.loading ? '<span class="muted">·</span>' : (m.error ? '<span class="muted" title="'+esc(friendlyErr(m.error))+'">!</span>' : null);
   // Email campaigns have no connect step and a fixed emailed/replied/booked
   // funnel, not a per-message ladder - showing "· / · / ·" under a
   // LinkedIn-shaped M1/M2/M3 header reads as a stalled sequence rather than
   // "this concept doesn't apply", so those two cells get channel-appropriate
   // content instead of forcing email data through the LinkedIn columns.
   return `
-  <tr class="home-grid-row" onclick="openCampaignDetail('${campaign.id}')">
+  <tr class="home-grid-row" tabindex="0" onclick="openCampaignDetail('${campaign.id}')" onkeydown="if(event.key==='Enter'){openCampaignDetail('${campaign.id}');}">
     <td class="perf-name"><i class="ti ${isEmail ? 'ti-mail' : 'ti-brand-linkedin'}" title="${isEmail ? 'Email campaign' : 'LinkedIn campaign'}" style="color:var(--muted);font-size:14px;margin-right:5px;"></i>${esc(campaign.name)}${m.excluded ? ` <span class="muted" style="font-weight:400;">· ${m.excluded} excluded</span>` : ''}</td>
     <td><span class="campaign-status ${statusClass}">${esc(campaign.status)}</span></td>
     <td>${m.contactCount}</td>
@@ -14672,7 +14686,7 @@ function renderCampaignFunnelStrip(campaign){
     return `<div class="card" style="margin-bottom:14px;"><div class="muted" style="font-size:12px;"><i class="ti ti-loader-2"></i> Loading funnel...</div></div>`;
   }
   if(f.error){
-    return `<div class="card" style="margin-bottom:14px;"><div class="muted" style="font-size:12px;">Could not load funnel: ${esc(f.error)}</div></div>`;
+    return `<div class="card" style="margin-bottom:14px;"><div class="muted" style="font-size:12px;">Could not load funnel: ${esc(friendlyErr(f.error))}</div></div>`;
   }
   const steps = Array.isArray(f.steps) ? f.steps : [];
   const top = steps[0] ? steps[0].count : 0;
@@ -15005,7 +15019,7 @@ function renderCampaignPipelineTab(campaign){
   if(window.__accountPipelineScope !== campaignRouteKey(campaign) || !data){
     return '<div class="muted"><i class="ti ti-loader-2"></i> Loading account pipeline...</div>';
   }
-  if(data.error) return `<div class="card"><div class="muted">Could not load: ${esc(data.error)}</div></div>`;
+  if(data.error) return `<div class="card"><div class="muted">Could not load: ${esc(friendlyErr(data.error))}</div></div>`;
   if(!data.hasCriteria){
     return `<div class="card empty-state">
       <i class="ti ti-target-arrow" style="font-size:28px;"></i>
@@ -15240,7 +15254,7 @@ function renderGtmSectorTable(bySector){
 
 function renderGtmPerformanceSection(data){
   if(!data) return '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading...</div>';
-  if(data.error) return `<div class="muted">Could not load: ${esc(data.error)}</div>`;
+  if(data.error) return `<div class="muted">Could not load: ${esc(friendlyErr(data.error))}</div>`;
   const sectorTable = renderGtmSectorTable(data.bySector);
   if(!data.bySegment || !data.bySegment.length) return sectorTable || '<div class="empty-state">No scored companies with campaign activity yet - score ICP above, then run some outreach.</div>';
   return `
@@ -15301,7 +15315,7 @@ async function loadLostDeals(){
 
 function renderLostDealsSection(data){
   if(!data) return '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading...</div>';
-  if(data.error) return `<div class="muted">Could not load: ${esc(data.error)}</div>`;
+  if(data.error) return `<div class="muted">Could not load: ${esc(friendlyErr(data.error))}</div>`;
   if(!data.lost || !data.lost.length) return '<div class="empty-state">No lost deals logged yet - use "Log account deal" in a company\'s drawer to start building this out.</div>';
   return `
     <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
@@ -15349,7 +15363,7 @@ async function loadStalledRelationships(){
 
 function renderStalledRelationshipsSection(data){
   if(!data) return '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading...</div>';
-  if(data.error) return `<div class="muted">Could not load: ${esc(data.error)}</div>`;
+  if(data.error) return `<div class="muted">Could not load: ${esc(friendlyErr(data.error))}</div>`;
   if(!data.stalled || !data.stalled.length) return '<div class="empty-state">No stalled relationships logged yet - use "Log account deal" in a company\'s drawer, or Settings > Scan Monday, to start building this out.</div>';
   return `
     <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
@@ -15426,7 +15440,7 @@ function renderAccountAutopsySection(digest){
 function renderAccountSegmentationGrid(){
   const data = window.__accountSegmentation;
   if(!data) return '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading...</div>';
-  if(data.error) return `<div class="muted">Could not load: ${esc(data.error)}</div>`;
+  if(data.error) return `<div class="muted">Could not load: ${esc(friendlyErr(data.error))}</div>`;
   if(!data.companies.length) return '<div class="empty-state">No companies on file yet.</div>';
 
   const unscored = data.companies.filter(c => !c.scored);
@@ -16808,7 +16822,7 @@ function renderProfileAccountDashboard(name){
 function renderDashCoverage(name){
   const board = window.__profileBoardData && window.__profileBoardData[name];
   if(board === undefined) return `<div class="card" style="margin-top:16px;"><div class="section-title" style="margin-bottom:6px;"><i class="ti ti-user-check"></i> Coverage</div><div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading…</div></div>`;
-  if(board.error) return `<div class="card" style="margin-top:16px;"><div class="section-title" style="margin-bottom:6px;"><i class="ti ti-user-check"></i> Coverage</div><div class="muted" style="font-size:12.5px;">Could not load: ${esc(board.error)}</div></div>`;
+  if(board.error) return `<div class="card" style="margin-top:16px;"><div class="section-title" style="margin-bottom:6px;"><i class="ti ti-user-check"></i> Coverage</div><div class="muted" style="font-size:12.5px;">Could not load: ${esc(friendlyErr(board.error))}</div></div>`;
   const contacts = board.contacts || [];
   const order = ['Booked','Engaged','Right person reached','Not yet mapped'];
   const colors = { 'Booked':'var(--success)', 'Engaged':'var(--accent)', 'Right person reached':'var(--tint-amber-fg)', 'Not yet mapped':'var(--muted)' };
@@ -18496,7 +18510,7 @@ function renderIcpSegmentationModal(campaignId){
 
   let body;
   if(!data) body = '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading…</div>';
-  else if(data.error) body = `<div class="muted" style="font-size:12.5px;">Could not load: ${esc(data.error)}</div>`;
+  else if(data.error) body = `<div class="muted" style="font-size:12.5px;">Could not load: ${esc(friendlyErr(data.error))}</div>`;
   else if(!data.companies.length) body = '<div class="empty-state">No companies linked to this campaign yet.</div>';
   else {
     const unscored = data.companies.filter(c => !c.scored);
@@ -18607,7 +18621,7 @@ function renderReengagementSection(campaign){
     <div class="section-title" style="font-size:13px;"><i class="ti ti-refresh-alert"></i> Worth re-engaging</div>
     <div class="muted" style="font-size:12px;margin-bottom:8px;">Contacts who went cold in this campaign but have a signal on file since - a job change, a new role. Re-engaging just puts them back at "Found" so they get a fresh connection request; nothing sends automatically.</div>
     ${!data ? '<span class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Checking…</span>' :
-      data.error ? `<span class="muted" style="font-size:12.5px;">Could not load: ${esc(data.error)}</span>` :
+      data.error ? `<span class="muted" style="font-size:12.5px;">Could not load: ${esc(friendlyErr(data.error))}</span>` :
       list.map(c => `
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--border-light);">
           <div style="font-size:12.5px;">
@@ -18725,7 +18739,7 @@ async function checkCampaignTimeouts(campaignId){
     toast(data.flaggedCount ? `${data.flaggedCount} contact${data.flaggedCount===1?'':'s'} flagged as timed out` : 'No new timeouts found', data.flaggedCount ? 'warn' : 'success');
     if(window.__roadmapCampaignId === campaignId) loadCampaignSequenceStages(campaign);
   } catch(err){
-    if(resultEl) resultEl.innerHTML = `<span class="muted" style="font-size:12.5px;">Could not check timeouts: ${esc(err.message)}</span>`;
+    if(resultEl) resultEl.innerHTML = `<span class="muted" style="font-size:12.5px;">Could not check timeouts: ${esc(friendlyErr(err.message))}</span>`;
     toast('Could not check timeouts: ' + err.message, 'warn');
   } finally {
     if(btn){ btn.disabled = false; btn.innerHTML = original; }
@@ -18879,7 +18893,7 @@ function renderDraftTrustCard(campaign){
     <div class="section-title" style="margin-bottom:4px;"><i class="ti ti-shield-check"></i> Draft trust</div>
     <div class="desc">Share of AI drafts sent exactly as written - the signal for when a stage needs less review, not more.</div>
     ${!data ? '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading…</div>' :
-      data.error ? `<div class="muted">Could not load: ${esc(data.error)}</div>` :
+      data.error ? `<div class="muted">Could not load: ${esc(friendlyErr(data.error))}</div>` :
       !data.total ? '<div class="empty-state">No sent drafts logged yet.</div>' : `
       <div class="mini-cards" style="grid-template-columns:repeat(3,1fr);margin-bottom:${(data.stages&&data.stages.length)?'10px':'0'};">
         <div class="mini-card"><div class="num">${data.verbatimRatePct}%</div><div class="label">Sent verbatim</div></div>
@@ -18936,7 +18950,7 @@ function renderCampaignMessagePerformance(){
     <div class="section-title" style="margin-bottom:10px;"><i class="ti ti-arrow-back-up"></i> Message-level reply rate &amp; response time</div>
     <div class="desc">How each message in the sequence performs on its own, ground-truthed off logged replies (not just "moved to the next stage" - sends can go out on schedule with no reply confirmed) - this is where a real drop-off shows.</div>
     ${!data ? '<div class="muted"><i class="ti ti-loader-2"></i> Loading...</div>' :
-      data.error ? `<div class="muted">Could not load: ${esc(data.error)}</div>` :
+      data.error ? `<div class="muted">Could not load: ${esc(friendlyErr(data.error))}</div>` :
       !data.messages.some(m=>m.sent) ? '<div class="empty-state">No messages sent in this campaign yet.</div>' : `
       <div class="mini-cards" style="grid-template-columns:repeat(3,1fr);margin-bottom:0;">
         ${data.messages.map(m => `
@@ -19156,7 +19170,7 @@ function renderCampaignAnalyticsTab(campaign){
       </div>
     </div>
     ${!sc ? '<div class="muted"><i class="ti ti-loader-2"></i> Loading scorecard…</div>' :
-      sc.error ? `<div class="muted">Could not load scorecard: ${esc(sc.error)}</div>` : `
+      sc.error ? `<div class="muted">Could not load scorecard: ${esc(friendlyErr(sc.error))}</div>` : `
       <div class="kpi-row">${(sc.tiles||[]).map(renderScorecardTile).join('')}</div>
       ${(sc.icpHealth && sc.icpHealth.total) ? (() => {
         const h = sc.icpHealth, pct = h.onIcpPct;
@@ -19179,7 +19193,7 @@ function renderCampaignAnalyticsTab(campaign){
   ${(() => {
     const salesData = window.__salesData;
     if(salesData === undefined) return '<div class="card" style="margin-bottom:16px;"><div class="muted"><i class="ti ti-loader-2"></i> Loading deal data…</div></div>';
-    if(salesData.error) return `<div class="card" style="margin-bottom:16px;"><div class="muted">Could not load deal data: ${esc(salesData.error)}</div></div>`;
+    if(salesData.error) return `<div class="card" style="margin-bottom:16px;"><div class="muted">Could not load deal data: ${esc(friendlyErr(salesData.error))}</div></div>`;
     return renderSalesLog(campaign, salesData, period);
   })()}
 
@@ -19205,7 +19219,7 @@ function renderCampaignAnalyticsTab(campaign){
         </div>
         ${insights === null && !insightsErr ? '<div class="muted"><i class="ti ti-loader-2"></i> Loading insights...</div>' :
           insightsErr ? `<div class="muted">Could not load insights: ${esc(insightsErr)}</div>` :
-          insights.length ? `<ul style="padding-left:18px;font-size:12.5px;line-height:1.7;">${insights.map(i=>`<li>${esc(i)}</li>`).join('')}</ul>` :
+          (insights||[]).length ? `<ul style="padding-left:18px;font-size:12.5px;line-height:1.7;">${insights.map(i=>`<li>${esc(i)}</li>`).join('')}</ul>` :
           window.__campaignInsightsNotGenerated ? '<div class="muted" style="font-size:12.5px;">No insights generated yet. Press Refresh insights when you want the Engine to analyse this campaign.</div>' :
           '<div class="empty-state">No insights yet for this campaign.</div>'}
       </div>
@@ -19319,7 +19333,7 @@ function renderCampaignOfferSection(campaign){
 
   const offer = window.__campaignOffer;
   if(offer === undefined) return '<div class="card" style="margin-bottom:16px;"><div class="muted"><i class="ti ti-loader-2"></i> Loading offer...</div></div>';
-  if(offer && offer.error) return `<div class="card" style="margin-bottom:16px;"><div class="muted">Could not load offer: ${esc(offer.error)}</div></div>`;
+  if(offer && offer.error) return `<div class="card" style="margin-bottom:16px;"><div class="muted">Could not load offer: ${esc(friendlyErr(offer.error))}</div></div>`;
   if(window.__campaignOfferEditing) return renderCampaignOfferEditForm(offer);
 
   if(!offer){
@@ -19496,7 +19510,7 @@ function renderCampaignSalesTab(campaign){
   const period = window.__salesPeriod || 'thisWeek';
   const data = window.__salesData;
   if(data === undefined) return '<div class="card"><div class="muted"><i class="ti ti-loader-2"></i> Loading sales data...</div></div>';
-  if(data.error) return `<div class="card"><div class="muted">Could not load sales data: ${esc(data.error)}</div></div>`;
+  if(data.error) return `<div class="card"><div class="muted">Could not load sales data: ${esc(friendlyErr(data.error))}</div></div>`;
   return `
     ${renderCampaignOfferSection(campaign)}
     ${renderSalesPeriodSelector(period)}
@@ -20221,7 +20235,7 @@ async function analyzeSalesTranscript(campaignId){
     renderPage();
   } catch(err){
     const resultEl = document.getElementById('salesTranscriptResult');
-    if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;">Could not analyse: ${esc(err.message)}</p>`;
+    if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;">Could not analyse: ${esc(friendlyErr(err.message))}</p>`;
     toast('Could not analyse transcript: ' + err.message, 'warn');
     btn.disabled = false;
     btn.innerHTML = original;
@@ -20489,7 +20503,7 @@ function renderCalendar(){
     </select>
   </div>
   ${loading ? '<div class="muted"><i class="ti ti-loader-2"></i> Loading meetings...</div>' : ''}
-  ${errored ? `<div class="muted">Could not load meetings: ${esc(eventsRaw.error)}</div>` : ''}
+  ${errored ? `<div class="muted">Could not load meetings: ${esc(friendlyErr(eventsRaw.error))}</div>` : ''}
   <div class="cal-grid">
     ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d=>`<div class="cal-dow">${d}</div>`).join('')}
     ${cells.map(d => {
@@ -20699,7 +20713,7 @@ async function runAnalysis(){
     if(!insightsRes.ok) throw new Error(insights.error || 'Could not load insights');
   } catch(err){
     console.warn('Could not load live data for strategy analysis:', err.message);
-    resultEl.innerHTML = `<div class="empty-state">Could not run analysis: ${esc(err.message)}</div>`;
+    resultEl.innerHTML = `<div class="empty-state">Could not run analysis: ${esc(friendlyErr(err.message))}</div>`;
     toast('Could not run analysis: ' + err.message, 'warn');
     return;
   }
@@ -21117,7 +21131,7 @@ async function runLearningAnalysis(kind, records){
     renderLearningResult(kind, data, records.length);
     toast(`${cfg.label} analysis complete`, 'success');
   } catch(err){
-    resultEl.innerHTML = `<p class="muted" style="font-size:12px;color:var(--danger);">Could not analyse that file: ${esc(err.message)}</p>`;
+    resultEl.innerHTML = `<p class="muted" style="font-size:12px;color:var(--danger);">Could not analyse that file: ${esc(friendlyErr(err.message))}</p>`;
     toast('Learning upload failed: ' + err.message, 'warn');
   } finally {
     btn.disabled = false;
@@ -21294,7 +21308,7 @@ async function loadCampaignContentDrafts(campaign){
 function renderContentSignalsList(signals, opts){
   opts = opts || {};
   if(!signals) return '<div class="muted"><i class="ti ti-loader-2"></i> Loading signals...</div>';
-  if(signals.error) return `<div class="muted">Could not load signals: ${esc(signals.error)}</div>`;
+  if(signals.error) return `<div class="muted">Could not load signals: ${esc(friendlyErr(signals.error))}</div>`;
   if(!signals.length) return '<div class="empty-state">No new content signals. Keep logging touch points and the system will surface ideas automatically.</div>';
   return signals.map(s => `
     <div class="signal-card">
@@ -21384,7 +21398,7 @@ function contentStatusTag(status){
 function renderContentDraftsList(drafts, opts){
   opts = opts || {};
   if(!drafts) return '<div class="muted"><i class="ti ti-loader-2"></i> Loading drafts...</div>';
-  if(drafts.error) return `<div class="muted">Could not load drafts: ${esc(drafts.error)}</div>`;
+  if(drafts.error) return `<div class="muted">Could not load drafts: ${esc(friendlyErr(drafts.error))}</div>`;
   if(!drafts.length) return '<div class="empty-state">No content drafted yet.</div>';
   return `<div class="mini-cards" style="grid-template-columns:repeat(auto-fill,minmax(260px,1fr));">
     ${drafts.map(d => `
@@ -21472,7 +21486,7 @@ function renderContentAllTypesPanel(filterStatus){
   if(all === undefined){
     body = '<div class="muted"><i class="ti ti-loader-2"></i> Loading content...</div>';
   } else if(all && all.error){
-    body = `<div class="muted">Could not load content: ${esc(all.error)}</div>`;
+    body = `<div class="muted">Could not load content: ${esc(friendlyErr(all.error))}</div>`;
   } else {
     const draftIds = new Set((Array.isArray(window.__contentDrafts) ? window.__contentDrafts : []).map(d => d.id));
     let items = (all || []).slice();
@@ -21909,7 +21923,7 @@ function renderContentCalendarPage(){
   if(data === undefined){
     gridBody = '<div class="muted"><i class="ti ti-loader-2"></i> Loading calendar...</div>';
   } else if(data && data.error){
-    gridBody = `<div class="muted">Could not load the calendar: ${esc(data.error)}</div>`;
+    gridBody = `<div class="muted">Could not load the calendar: ${esc(friendlyErr(data.error))}</div>`;
   } else {
     const items = Array.isArray(data) ? data : [];
     window.__contentCalendarById = {};
@@ -22096,7 +22110,7 @@ function renderContentPerformanceSummary(posts){
 
 function renderContentPerformanceTable(posts){
   if(!posts) return '<div class="muted"><i class="ti ti-loader-2"></i> Loading...</div>';
-  if(posts.error) return `<div class="muted">Could not load performance data: ${esc(posts.error)}</div>`;
+  if(posts.error) return `<div class="muted">Could not load performance data: ${esc(friendlyErr(posts.error))}</div>`;
   if(!posts.length) return '<div class="empty-state">No analysed posts yet. Click "Load my posts" to pull and score the last month.</div>';
 
   const sort = window.__contentPerfSort || CONTENT_PERF_SORT_DEFAULT;
@@ -22390,7 +22404,7 @@ function renderSeoGscDashboard(){
   if(window.__seoGscDashboardLoading || d === undefined){
     bodyHtml = '<div class="muted"><i class="ti ti-loader-2"></i> Loading Search Console data...</div>';
   } else if(d && d.error){
-    bodyHtml = `<div class="muted">Could not load GSC data: ${esc(d.error)}</div>`;
+    bodyHtml = `<div class="muted">Could not load GSC data: ${esc(friendlyErr(d.error))}</div>`;
   } else {
     const totals = d.totals || {};
     const queries = (d.queries || []).slice().sort((a,b) => (a.position || 9999) - (b.position || 9999));
@@ -22473,7 +22487,7 @@ function renderSeoGscInsights(){
       <div class="section-title" style="font-size:13px;margin-bottom:10px;"><i class="ti ti-bulb-filled"></i> Engine Insights</div>
       ${inner}
     </div>`;
-  if(list && list.error) return wrap(`<div class="muted">Could not load insights: ${esc(list.error)}</div>`);
+  if(list && list.error) return wrap(`<div class="muted">Could not load insights: ${esc(friendlyErr(list.error))}</div>`);
   if(!list.length) return wrap('<div class="empty-state">No insights surfaced from the current data.</div>');
   const sorted = list.slice().sort((a,b) => (SEO_INSIGHT_PRIORITY_RANK[a.priority] ?? 3) - (SEO_INSIGHT_PRIORITY_RANK[b.priority] ?? 3));
   return wrap(`<div style="display:flex;flex-direction:column;gap:10px;">${sorted.map(renderSeoGscInsightCard).join('')}</div>`);
@@ -22676,7 +22690,7 @@ function renderSeoCampaignsSection(){
   if(list === undefined){
     body = '<div class="muted"><i class="ti ti-loader-2"></i> Loading campaigns...</div>';
   } else if(list && list.error){
-    body = `<div class="muted">Could not load campaigns: ${esc(list.error)}</div>`;
+    body = `<div class="muted">Could not load campaigns: ${esc(friendlyErr(list.error))}</div>`;
   } else if(!list.length){
     body = '<div class="empty-state">No SEO campaigns yet. Create one to track keyword movement and published posts against a goal.</div>';
   } else {
@@ -22765,7 +22779,7 @@ function seoMovementCell(m){
 function renderSeoCampaignProgressDetail(id){
   const prog = (window.__seoCampaignProgress || {})[id];
   if(!prog || prog.loading) return '<div class="muted"><i class="ti ti-loader-2"></i> Loading live progress...</div>';
-  if(prog.error) return `<div class="muted">Could not load progress: ${esc(prog.error)}</div>`;
+  if(prog.error) return `<div class="muted">Could not load progress: ${esc(friendlyErr(prog.error))}</div>`;
 
   const gsc = prog.gsc;
   const hasDaily = gsc && !gsc.error && Array.isArray(gsc.daily) && gsc.daily.length > 0;
@@ -22773,7 +22787,7 @@ function renderSeoCampaignProgressDetail(id){
 
   let gscHtml;
   if(gsc && gsc.error){
-    gscHtml = `<div class="muted" style="font-size:12px;">GSC data unavailable: ${esc(gsc.error)}</div>`;
+    gscHtml = `<div class="muted" style="font-size:12px;">GSC data unavailable: ${esc(friendlyErr(gsc.error))}</div>`;
   } else if(!gsc){
     gscHtml = `<div class="muted" style="font-size:12px;">Search Console isn't connected, so traffic and position data can't be shown.</div>`;
   } else {
@@ -23069,7 +23083,7 @@ function renderContentSeoTab(){
 function renderSeoSitemapTable(){
   const list = window.__seoSitemap;
   if(list === undefined) return '<div class="muted"><i class="ti ti-loader-2"></i> Loading published content...</div>';
-  if(list && list.error) return `<div class="muted">Could not load published content: ${esc(list.error)}</div>`;
+  if(list && list.error) return `<div class="muted">Could not load published content: ${esc(friendlyErr(list.error))}</div>`;
   if(!list.length) return '<div class="empty-state">Nothing published yet. Blog posts and service pages sent to Framer show up here.</div>';
   return `
   <div class="perf-table-wrap">
@@ -23141,7 +23155,7 @@ async function loadServicePageQueue(force){
 function renderServicePageQueueTable(){
   const list = window.__seoServiceQueue;
   if(list === undefined) return '<div class="muted"><i class="ti ti-loader-2"></i> Loading queue...</div>';
-  if(list && list.error) return `<div class="muted">Could not load the service page queue: ${esc(list.error)}</div>`;
+  if(list && list.error) return `<div class="muted">Could not load the service page queue: ${esc(friendlyErr(list.error))}</div>`;
   if(!list.length) return '<div class="empty-state">Queue is empty. Add a service and location above to get started.</div>';
   return `
   <div class="perf-table-wrap">
@@ -23359,7 +23373,7 @@ function renderSeoKeywordFilterBar(){
 
 function renderSeoKeywordTable(list){
   if(!list) return '<div class="muted"><i class="ti ti-loader-2"></i> Loading keywords...</div>';
-  if(list.error) return `<div class="muted">Could not load keywords: ${esc(list.error)}</div>`;
+  if(list.error) return `<div class="muted">Could not load keywords: ${esc(friendlyErr(list.error))}</div>`;
   if(!list.length) return '<div class="empty-state">No keywords yet. Upload a Ubersuggest CSV export to get started.</div>';
   return `
   <div class="perf-table-wrap">
@@ -23505,7 +23519,7 @@ function renderSeoSuggestions(){
   const list = window.__seoSuggestions;
   if(window.__seoSuggestionsLoading) return '<div class="muted"><i class="ti ti-loader-2"></i> Analysing recent activity...</div>';
   if(!list) return '<div class="muted"><i class="ti ti-loader-2"></i> Loading suggestions...</div>';
-  if(list.error) return `<div class="muted">Could not load suggestions: ${esc(list.error)}</div>`;
+  if(list.error) return `<div class="muted">Could not load suggestions: ${esc(friendlyErr(list.error))}</div>`;
   if(!list.length && window.__seoSuggestionsNotGenerated) return '<div class="muted" style="font-size:12.5px;">No suggestions generated yet. Press Refresh suggestions when you want the Engine to mine recent activity for keyword ideas.</div>';
   if(!list.length) return '<div class="empty-state">No suggestions yet - keep logging touch points and research events.</div>';
   return list.map((s,i) => `
@@ -23545,7 +23559,7 @@ async function addSeoSuggestionToQueue(i){
 function renderSeoVoiceProfileEditor(){
   const v = window.__seoVoiceProfile;
   if(!v) return '<div class="muted"><i class="ti ti-loader-2"></i> Loading voice profile...</div>';
-  if(v.error) return `<div class="muted">Could not load voice profile: ${esc(v.error)}</div>`;
+  if(v.error) return `<div class="muted">Could not load voice profile: ${esc(friendlyErr(v.error))}</div>`;
   return `
     <div class="field">
       <textarea id="seoVoiceProfileInput" rows="6" placeholder="Describe T2C's tone, writing style, opinions, stats, and stories...">${esc(v.voiceProfile)}</textarea>
@@ -23911,7 +23925,7 @@ function renderAeoCampaignsSection(){
   if(list === undefined){
     body = '<div class="muted"><i class="ti ti-loader-2"></i> Loading campaigns...</div>';
   } else if(list && list.error){
-    body = `<div class="muted">Could not load campaigns: ${esc(list.error)}</div>`;
+    body = `<div class="muted">Could not load campaigns: ${esc(friendlyErr(list.error))}</div>`;
   } else if(!list.length){
     body = '<div class="empty-state">No AEO campaigns yet. Create one to track a product or service and the prompts you want T2C to be the answer to.</div>';
   } else {
@@ -24095,7 +24109,7 @@ function renderAeoSuggestionsSection(){
   } else if(list === undefined){
     body = '<div class="empty-state">Ask the Engine which products and services have the highest AEO opportunity right now.</div>';
   } else if(list && list.error){
-    body = `<div class="muted">Could not load suggestions: ${esc(list.error)}</div>`;
+    body = `<div class="muted">Could not load suggestions: ${esc(friendlyErr(list.error))}</div>`;
   } else if(!list.length){
     body = '<div class="empty-state">No suggestions came back. Add services in Settings and keep logging touch points.</div>';
   } else {
@@ -24159,7 +24173,7 @@ function renderAeoPromptLibrary(){
 
 function renderAeoPromptTable(list){
   if(list === undefined) return '<div class="muted"><i class="ti ti-loader-2"></i> Loading prompts...</div>';
-  if(list && list.error) return `<div class="muted">Could not load prompts: ${esc(list.error)}</div>`;
+  if(list && list.error) return `<div class="muted">Could not load prompts: ${esc(friendlyErr(list.error))}</div>`;
   if(!list.length) return '<div class="empty-state">No prompts yet. Paste one above, or promote a recommendation below.</div>';
   return `
   <div class="perf-table-wrap">
@@ -24319,7 +24333,7 @@ function renderAeoRecommendationsSection(){
   if(list === undefined){
     body = '<div class="muted"><i class="ti ti-loader-2"></i> Loading recommendations...</div>';
   } else if(list && list.error){
-    body = `<div class="muted">Could not load recommendations: ${esc(list.error)}</div>`;
+    body = `<div class="muted">Could not load recommendations: ${esc(friendlyErr(list.error))}</div>`;
   } else if(!list.length){
     body = '<div class="empty-state">No recommendations yet. Paste one in from HubSpot or add your own above.</div>';
   } else {
@@ -24406,7 +24420,7 @@ async function addRecToPromptLibrary(id){
 function renderContentSettingsTab(){
   const s = window.__contentSettings;
   if(!s) return '<div class="card"><div class="muted"><i class="ti ti-loader-2"></i> Loading...</div></div>';
-  if(s.error) return `<div class="card"><div class="muted">Could not load settings: ${esc(s.error)}</div></div>`;
+  if(s.error) return `<div class="card"><div class="muted">Could not load settings: ${esc(friendlyErr(s.error))}</div></div>`;
   return `
   <div class="card">
     <div class="section-title"><i class="ti ti-microphone-2"></i> Voice profile</div>
@@ -24617,7 +24631,7 @@ function renderGoogleAdsDashboard(){
   if(window.__googleAdsDataLoading || d === undefined){
     body = '<div class="muted"><i class="ti ti-loader-2"></i> Loading Google Ads data...</div>';
   } else if(d && d.error){
-    body = `<div class="muted">Could not load Google Ads data: ${esc(d.error)}</div>`;
+    body = `<div class="muted">Could not load Google Ads data: ${esc(friendlyErr(d.error))}</div>`;
   } else {
     const campaigns = gaRecords('Campaigns').filter(gaIsActive);
     let spend = 0, clicks = 0, impressions = 0;
@@ -24860,7 +24874,7 @@ function renderGoogleAdsInsightsSection(){
   if(window.__googleAdsInsightsLoading){
     body = '<div class="muted"><i class="ti ti-loader-2"></i> Analysing campaigns...</div>';
   } else if(list && list.error){
-    body = `<div class="muted">Could not load insights: ${esc(list.error)}</div>`;
+    body = `<div class="muted">Could not load insights: ${esc(friendlyErr(list.error))}</div>`;
   } else if(Array.isArray(list) && !list.length){
     body = '<div class="empty-state">No insights surfaced from the current data.</div>';
   } else if(Array.isArray(list)){
@@ -24938,7 +24952,7 @@ function renderGoogleAdsDraftSection(){
   if(window.__googleAdsDraftLoading){
     preview = '<div class="muted" style="margin-top:14px;"><i class="ti ti-loader-2"></i> Drafting campaign...</div>';
   } else if(draft && draft.error){
-    preview = `<div class="muted" style="margin-top:14px;">Could not draft the campaign: ${esc(draft.error)}</div>`;
+    preview = `<div class="muted" style="margin-top:14px;">Could not draft the campaign: ${esc(friendlyErr(draft.error))}</div>`;
   } else if(draft){
     preview = renderGoogleAdsDraftPreview(draft);
   }
@@ -25069,7 +25083,7 @@ function renderEmailTemplatesTab(){
   if(t === undefined){
     body = '<div class="muted" style="font-size:12px;"><i class="ti ti-loader-2"></i> Loading templates...</div>';
   } else if(t && t.error){
-    body = `<div class="muted" style="font-size:12px;">Could not load templates: ${esc(t.error)}</div>`;
+    body = `<div class="muted" style="font-size:12px;">Could not load templates: ${esc(friendlyErr(t.error))}</div>`;
   } else if(!t.length){
     body = '<div class="muted" style="font-size:12px;">No templates on file yet. Upload a past campaign from the Copy Generator tab to add one.</div>';
   } else {
@@ -25186,7 +25200,7 @@ async function loadEmailTemplates(){
 function renderEmailTemplatesList(){
   const t = window.__emailTemplates;
   if(t === undefined) return '<div class="muted" style="font-size:11.5px;margin-top:8px;"><i class="ti ti-loader-2"></i> Loading templates...</div>';
-  if(t && t.error) return `<div class="muted" style="font-size:11.5px;margin-top:8px;">Could not load templates: ${esc(t.error)}</div>`;
+  if(t && t.error) return `<div class="muted" style="font-size:11.5px;margin-top:8px;">Could not load templates: ${esc(friendlyErr(t.error))}</div>`;
   if(!t.length) return '';
   return `
     <div style="margin-top:10px;">
@@ -25255,7 +25269,7 @@ function renderEmailCopyTab(){
   if(!s){
     voiceCard = '<div class="muted"><i class="ti ti-loader-2"></i> Loading...</div>';
   } else if(s.error){
-    voiceCard = `<div class="muted">Could not load voice profile: ${esc(s.error)}</div>`;
+    voiceCard = `<div class="muted">Could not load voice profile: ${esc(friendlyErr(s.error))}</div>`;
   } else {
     voiceCard = `
       <div class="field"><label>Email voice profile</label>
@@ -25558,7 +25572,7 @@ function renderEmailHeroPicker(c){
   if(window.__emailHeroLoading){
     picker = '<div class="muted" style="font-size:12px;margin-top:8px;"><i class="ti ti-loader-2"></i> Finding images...</div>';
   } else if(opts && opts.error){
-    picker = `<div class="muted" style="font-size:12px;margin-top:8px;">Could not fetch images: ${esc(opts.error)}</div>`;
+    picker = `<div class="muted" style="font-size:12px;margin-top:8px;">Could not fetch images: ${esc(friendlyErr(opts.error))}</div>`;
   } else if(Array.isArray(opts) && !opts.length){
     picker = '<div class="muted" style="font-size:12px;margin-top:8px;">No images found for that term.</div>';
   } else if(Array.isArray(opts)){
@@ -25590,7 +25604,7 @@ function renderEmailCopyPreview(){
   }
   if(!c) return '';
   if(c.error){
-    return `<div class="card" style="margin-bottom:18px;"><div class="muted">Could not generate copy: ${esc(c.error)}</div></div>`;
+    return `<div class="card" style="margin-bottom:18px;"><div class="muted">Could not generate copy: ${esc(friendlyErr(c.error))}</div></div>`;
   }
   const fieldBlock = (label, id, value, key, rows) => `
     <div style="border:1px solid var(--border);border-radius:var(--radius-card);padding:12px;margin-bottom:12px;">
@@ -25701,7 +25715,7 @@ function renderEmailFeedbackPanel(){
   if(window.__emailCampaignCreating){
     resultBlock = '<div class="muted" style="margin-top:10px;"><i class="ti ti-loader-2"></i> Creating campaign in Omnisend...</div>';
   } else if(result && result.error){
-    resultBlock = `<div class="muted" style="margin-top:10px;">Could not create the campaign: ${esc(result.error)}</div>`;
+    resultBlock = `<div class="muted" style="margin-top:10px;">Could not create the campaign: ${esc(friendlyErr(result.error))}</div>`;
   } else if(result){
     resultBlock = `<div class="tag tag-won" style="margin-top:12px;"><i class="ti ti-circle-check"></i>&nbsp; Campaign ${result.scheduledFor ? 'scheduled' : 'created'} in Omnisend</div>
       ${result.note ? `<div class="muted" style="font-size:11.5px;margin-top:8px;"><i class="ti ti-alert-triangle"></i> ${esc(result.note)}</div>` : ''}
@@ -25860,13 +25874,13 @@ function renderEmailCampaignsTab(){
     return '<div class="card"><div class="muted"><i class="ti ti-loader-2"></i> Loading campaigns...</div></div>';
   }
   if(list.error){
-    return `<div class="card"><div class="muted">Could not load campaigns: ${esc(list.error)}</div></div>`;
+    return `<div class="card"><div class="muted">Could not load campaigns: ${esc(friendlyErr(list.error))}</div></div>`;
   }
   if(!list.length){
     return '<div class="card"><div class="empty-state">No Omnisend campaigns yet.</div></div>';
   }
   const statsErr = window.__omnisendStatsError
-    ? `<div class="desc"><i class="ti ti-alert-triangle"></i> Rates unavailable: ${esc(window.__omnisendStatsError)}</div>`
+    ? `<div class="desc"><i class="ti ti-alert-triangle"></i> Rates unavailable: ${esc(friendlyErr(window.__omnisendStatsError))}</div>`
     : '';
   return `
   <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
@@ -25936,7 +25950,7 @@ function renderEmailContactsTab(){
     return '<div class="card"><div class="muted"><i class="ti ti-loader-2"></i> Loading contacts...</div></div>';
   }
   if(list.error){
-    return `<div class="card"><div class="muted">Could not load contacts: ${esc(list.error)}</div></div>`;
+    return `<div class="card"><div class="muted">Could not load contacts: ${esc(friendlyErr(list.error))}</div></div>`;
   }
   if(!list.length){
     return '<div class="card"><div class="empty-state">No Omnisend contacts found.</div></div>';
@@ -25953,7 +25967,7 @@ function renderEmailContactsTab(){
     } else if(res && res.none){
       lkCell = '<span class="muted" style="font-size:11.5px;">No confident match</span>';
     } else if(res && res.error){
-      lkCell = `<span class="muted" style="font-size:11.5px;">Lookup failed: ${esc(res.error)}</span>`;
+      lkCell = `<span class="muted" style="font-size:11.5px;">Lookup failed: ${esc(friendlyErr(res.error))}</span>`;
     }
     return `<tr>
       <td>${esc(email)}</td>
@@ -26102,7 +26116,7 @@ function renderEmailListHealthTab(){
     return '<div class="card"><div class="muted"><i class="ti ti-loader-2"></i> Checking list health...</div></div>';
   }
   if(d.error){
-    return `<div class="card"><div class="muted">Could not load list health: ${esc(d.error)}</div></div>`;
+    return `<div class="card"><div class="muted">Could not load list health: ${esc(friendlyErr(d.error))}</div></div>`;
   }
   const contacts = d.contacts || [];
   const preview = contacts.slice(0, 25);
@@ -26598,7 +26612,7 @@ async function scanContactSignals(){
 
 function renderContactSignalCards(signals){
   if(!signals) return '<div class="muted"><i class="ti ti-loader-2"></i> Loading signals...</div>';
-  if(signals.error) return `<div class="muted">Could not load signals: ${esc(signals.error)}</div>`;
+  if(signals.error) return `<div class="muted">Could not load signals: ${esc(friendlyErr(signals.error))}</div>`;
   if(!signals.length) return '<div class="empty-state">No job change signals right now. Keep syncing LinkedIn posts and new activity will surface here automatically.</div>';
   return signals.map(s => `
     <div class="signal-card signal-card-alert">
@@ -26872,7 +26886,7 @@ async function submitResearchTranscript(){
     loadResearchEvents();
     loadMarketPulse();
   } catch(err){
-    if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;color:var(--danger);">Could not save: ${esc(err.message)}</p>`;
+    if(resultEl) resultEl.innerHTML = `<p class="muted" style="font-size:12.5px;color:var(--danger);">Could not save: ${esc(friendlyErr(err.message))}</p>`;
     toast('Could not save transcript: ' + err.message, 'warn');
   } finally {
     btn.disabled = false;
@@ -26894,7 +26908,7 @@ function renderMarketPulseCard(){
 
 function renderMarketPulseBody(pulse){
   if(pulse === undefined || pulse === 'loading') return '<div class="muted"><i class="ti ti-loader-2"></i> Analysing across all research events...</div>';
-  if(pulse.error) return `<div class="muted">Could not load Market Pulse: ${esc(pulse.error)}</div>`;
+  if(pulse.error) return `<div class="muted">Could not load Market Pulse: ${esc(friendlyErr(pulse.error))}</div>`;
   if(!pulse.eventCount && !pulse.notGenerated) return '<div class="empty-state">Upload a research event transcript above to start building Market Pulse.</div>';
   if(pulse.notGenerated) return '<div class="muted" style="font-size:12.5px;">No Market Pulse generated yet. Press Refresh when you want the Engine to analyse across all research events.</div>';
   return `
@@ -26934,7 +26948,7 @@ function renderResearchEventsSection(){
   const events = window.__researchEvents;
   let body;
   if(events === undefined) body = '<div class="muted"><i class="ti ti-loader-2"></i> Loading research events...</div>';
-  else if(events.error) body = `<div class="muted">Could not load research events: ${esc(events.error)}</div>`;
+  else if(events.error) body = `<div class="muted">Could not load research events: ${esc(friendlyErr(events.error))}</div>`;
   else if(!events.length) body = '<div class="empty-state">No research events logged yet. Upload a transcript above to get started.</div>';
   else body = `<div class="mini-cards" style="grid-template-columns:repeat(auto-fill,minmax(260px,1fr));">${events.map(renderResearchEventCard).join('')}</div>`;
 
@@ -26975,7 +26989,7 @@ function renderResearchProfilesTab(){
   const leads = window.__websiteLeads;
   let body;
   if(leads === undefined) body = '<div class="muted"><i class="ti ti-loader-2"></i> Loading website leads...</div>';
-  else if(leads.error) body = `<div class="muted">Could not load website leads: ${esc(leads.error)}</div>`;
+  else if(leads.error) body = `<div class="muted">Could not load website leads: ${esc(friendlyErr(leads.error))}</div>`;
   else if(!leads.length) body = '<div class="empty-state">No Website Lead contacts yet.</div>';
   else body = `<div class="mini-cards" style="grid-template-columns:repeat(auto-fill,minmax(240px,1fr));">${leads.map(renderWebsiteLeadCard).join('')}</div>`;
 
