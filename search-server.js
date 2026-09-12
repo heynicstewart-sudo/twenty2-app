@@ -10034,13 +10034,29 @@ Deals on file: ${deals.length ? deals.join('; ') : 'none'}`;
       }
     }
 
-    const pageBlock = context.pageLabel ? `The user is currently on the "${context.pageLabel}" page of the CRM.` : '';
+    // context.page/pageLabel describe WHERE the Engine is scoped (the page
+    // on screen by default, or a page/all/none the user pinned via the
+    // scope picker - see setEngineScopeMode client-side). context.dataSummary
+    // is a best-effort plain-text snapshot the client already had cached in
+    // memory for that scope (buildEngineContextSnapshot/buildEngineAllScopeSnapshot) -
+    // this lets the Engine ground answers on pages with no per-account
+    // record to query here (Campaigns, Replies, Grids, ...) without a
+    // bespoke Airtable query per page.
+    let pageBlock;
+    if(context.page === 'all') pageBlock = `The user has scoped you to the whole app, not one page - answer across everything below rather than assuming Targets/Home.`;
+    else if(context.page === null) pageBlock = `The user has not scoped you to any particular page - answer from the conversation and whatever data is given below, and ask a clarifying question if you'd need to know what they're looking at to answer well.`;
+    else if(context.pageLabel) pageBlock = `The user is currently on the "${context.pageLabel}" page of the CRM.`;
+    else pageBlock = '';
+    const dataSummaryBlock = (context.dataSummary && context.dataSummary.trim())
+      ? `\nData currently loaded for this scope:\n${context.dataSummary.trim()}`
+      : '';
     const transcript = history.map(h => `${h.role === 'user' ? 'User' : 'Engine'}: ${h.content}`).join('\n');
 
     const systemPrompt = `You are the Engine, an assistant embedded directly inside T2C Outreach, a B2B outreach CRM. You help the operator work faster on whatever they're looking at right now.
 
 ${pageBlock}
 ${accountBlock}
+${dataSummaryBlock}
 
 Rules:
 - Answer conversationally, in plain text, 1-3 short paragraphs unless asked for a longer draft.
