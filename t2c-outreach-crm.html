@@ -2097,7 +2097,7 @@ function setAgencyDashTab(tab){
 function renderAgencyDashPage(){
   const tab = window.__agencyDashTab || 'dashboard';
   return `
-  <div class="page-head"><h1 class="page-h1">Agency</h1><div class="page-sub">Every client at a glance, your own tasks, and a day planner - one portal instead of switching into each client to check on it.</div></div>
+  <div class="page-head"><h1 class="page-h1">Agency</h1><div class="page-sub">Every client at a glance, plus your own tasks and day planner.</div></div>
   ${renderAgencyDashSubNav(tab)}
   ${tab==='dashboard' ? renderAgencyDashboardTab() : ''}
   ${tab==='tasks' ? renderAgencyTasksTab() : ''}
@@ -3435,7 +3435,7 @@ function renderReplies(){
       <div class="page-head" style="display:flex;align-items:flex-end;justify-content:space-between;gap:16px;">
         <div>
           <h1 class="page-h1">Replies ${rows && rows.length ? `<span class="page-meta"><span class="tcol-dot" style="background:var(--accent);"></span> ${rows.length} waiting</span>` : ''}</h1>
-          <div class="page-sub">Every contact who has replied and is waiting on us, most useful first. The draft is already written. Review it, steer it, approve.</div>
+          <div class="page-sub">Everyone who's replied and is waiting on you, most useful first - draft already written.</div>
         </div>
         <button class="btn btn-secondary btn-sm" onclick="loadRepliesQueue()"><i class="ti ti-refresh"></i> Refresh</button>
       </div>
@@ -5071,7 +5071,7 @@ function renderLoggerPage(){
   // Accounts/Programs/Review tabs don't restate their tab name as a heading).
   const standalone = state.currentPage === 'logger';
   return `
-  ${standalone ? `<div class="page-head"><h1 class="page-h1">Logger</h1><div class="page-sub">Quickly capture any touch point - LinkedIn messages, calls, meetings, proposals, research and more - straight into your database.</div></div>` : `<div class="muted" style="font-size:12.5px;margin:-4px 0 16px;max-width:70ch;">Quickly capture any touch point - LinkedIn messages, calls, meetings, proposals, research and more - straight into your database.</div>`}
+  ${standalone ? `<div class="page-head"><h1 class="page-h1">Logger</h1><div class="page-sub">Quickly capture any touch point: LinkedIn messages, calls, meetings, proposals, research and more.</div></div>` : `<div class="muted" style="font-size:12.5px;margin:-4px 0 16px;max-width:70ch;">Quickly capture any touch point: LinkedIn messages, calls, meetings, proposals, research and more.</div>`}
   <div class="logger-type-grid" style="grid-template-columns:repeat(3,minmax(140px,180px));margin-bottom:16px;">
     <div class="logger-type-btn ${mode==='manual'?'active':''}" onclick="setLoggerMode('manual')"><i class="ti ti-edit"></i> Manual</div>
     <div class="logger-type-btn ${mode==='ai'?'active':''}" onclick="setLoggerMode('ai')"><i class="ti ti-sparkles"></i> Quick Capture</div>
@@ -16135,7 +16135,6 @@ function renderProgramStrategyPage(){
     <div>
       <a href="#" onclick="navigate('companyuniverse');return false;" class="muted" style="font-size:12px;display:inline-flex;align-items:center;gap:4px;margin-bottom:8px;"><i class="ti ti-arrow-left"></i> Back to Company Universe</a>
       <h1 class="page-h1">${esc(ctx.companyName)} · ${esc(ctx.programName)}</h1>
-      <div class="page-sub">Strategy brief for this program</div>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
       <button class="btn btn-secondary btn-sm" onclick="navigate('profile');selectProfileCompany('${esc(ctx.companyName)}')"><i class="ti ti-hierarchy-2"></i> View company profile</button>
@@ -16232,7 +16231,7 @@ function renderProgramsCard(){
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-progress-bolt"></i> Active programs</div>
       <button class="btn btn-primary btn-sm" onclick="openProgramCapture()"><i class="ti ti-message-plus"></i> Log a finding</button>
     </div>
-    <div class="desc">Which companies are running a transformation program right now: Twenty2's first GTM step. A company with a program in delivery (or slipping) that isn't in a campaign yet is your next target.</div>
+    <div class="desc">Which companies are running a transformation program right now - Twenty2's first GTM step. One mid-program with no campaign yet is your next target.</div>
     ${(p && !p.error && all.length) ? `
       <div class="uf-bar" style="margin-bottom:10px;">
         ${ddGroup('Program type', 'type', types)}
@@ -19439,7 +19438,7 @@ function renderCampaignMessagePerformance(){
   return `
   <div class="card" style="margin-bottom:16px;">
     <div class="section-title" style="margin-bottom:10px;"><i class="ti ti-arrow-back-up"></i> Message-level reply rate &amp; response time</div>
-    <div class="desc">How each message in the sequence performs on its own, ground-truthed off logged replies (not just "moved to the next stage" - sends can go out on schedule with no reply confirmed) - this is where a real drop-off shows.</div>
+    <div class="desc">How each message performs on its own, ground-truthed off logged replies rather than "moved to the next stage" - this is where a real drop-off shows.</div>
     ${!data ? '<div class="muted"><i class="ti ti-loader-2"></i> Loading...</div>' :
       data.error ? `<div class="muted">Could not load: ${esc(friendlyErr(data.error))}</div>` :
       !data.messages.some(m=>m.sent) ? '<div class="empty-state">No messages sent in this campaign yet.</div>' : `
