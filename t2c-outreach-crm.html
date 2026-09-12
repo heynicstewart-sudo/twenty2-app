@@ -1846,6 +1846,7 @@ function goToNewCampaign(){
 
 function goToRunIntelligence(){
   window.__intelSubTab = 'intelligence';
+  window.__engineHasRun = true;
   navigate('intelligence');
   runIntelligence();
 }
@@ -20855,6 +20856,7 @@ function renderIntelligence(){
 
   <div class="engine-group-heading"><i class="ti ti-brain"></i> Engine results</div>
   <div id="intelMeta" class="desc"></div>
+  <div id="engineResultsGroup" ${window.__engineHasRun ? '' : 'hidden'}>
   <div class="card" style="margin-bottom:12px;">
     <div class="section-title"><i class="ti ti-chart-line"></i> Campaign performance</div>
     <div class="perf-table-wrap" id="campaignPerformanceWrap">
@@ -20887,8 +20889,14 @@ function renderIntelligence(){
       <ul id="intelOptimisation"><li class="muted">Run Engine to see optimisation suggestions</li></ul>
     </div>
   </div>
+  </div>
+  ${window.__engineHasRun ? '' : `
+  <div class="card" style="margin-bottom:16px;">
+    <div class="muted" style="font-size:12.5px;">Press <strong>Run Engine</strong> above to generate campaign performance, suggestions, cold-contact and relationship-health lists, message drafts, learning insights, and optimisation suggestions - all in one pass.</div>
+  </div>`}
 
-  <div class="engine-group-heading"><i class="ti ti-chart-bar"></i> Analytics &amp; what's working</div>
+  <div class="engine-group-heading"><i class="ti ti-target-arrow"></i> What's working</div>
+  <div id="engineWhatsWorkingGroup" ${window.__engineHasRun ? '' : 'hidden'}>
   <div class="card" style="margin-bottom:12px;">
     <div class="section-title"><i class="ti ti-target-arrow"></i> What's working</div>
     <p class="muted" style="font-size:12px;margin-bottom:10px;">Which ICP roles, products, industries and methods actually turn into booked meetings.</p>
@@ -20916,10 +20924,14 @@ function renderIntelligence(){
       </div>
     </div>
   </div>
+  </div>
+  ${window.__engineHasRun ? '' : `<div class="card" style="margin-bottom:16px;"><div class="muted" style="font-size:12.5px;">Also filled in by Run Engine.</div></div>`}
+
+  <div class="engine-group-heading"><i class="ti ti-chart-bar"></i> Analytics</div>
   ${renderAnalytics()}
 
   <div class="engine-group-heading"><i class="ti ti-activity-heartbeat"></i> Engine health</div>
-  <div class="card" style="margin-bottom:16px;">
+  <div class="card" style="margin-bottom:16px;" ${window.__engineHasRun ? '' : 'hidden'} id="engineHealthGroup">
     <div id="healthMeta" class="muted" style="font-size:11.5px;margin-bottom:6px;"></div>
     <div class="mini-cards health-stat-grid" id="healthStats" style="margin-bottom:0;">
       <div class="mini-card"><div class="num" id="healthTotalContacts">—</div><div class="label">Total contacts</div></div>
@@ -20932,6 +20944,7 @@ function renderIntelligence(){
       <ul id="healthByStage" style="padding-left:18px;font-size:12.5px;line-height:1.6;"><li class="muted">Run Engine to see the breakdown</li></ul>
     </div>
   </div>
+  ${window.__engineHasRun ? '' : `<div class="card" style="margin-bottom:16px;"><div class="muted" style="font-size:12.5px;">Also filled in by Run Engine.</div></div>`}
 
   <div class="card" style="margin-top:16px;">
     <div class="section-title"><i class="ti ti-school"></i> Learning Data</div>
@@ -21073,6 +21086,13 @@ async function runEngineHealth(){
 // updates its own section in place, just no longer has its own button to
 // manage the disabled/spinner state of.
 async function runEngine(){
+  // The result cards below start hidden (see renderIntelligence) so a
+  // first-time visit isn't a wall of a dozen identical "Run Engine to see
+  // X" placeholders. Reveal them up front, before the fetches below write
+  // into their children, rather than only after everything resolves.
+  const firstRun = !window.__engineHasRun;
+  window.__engineHasRun = true;
+  if(firstRun) renderPage();
   const btn = document.getElementById('runEngineBtn');
   const original = btn.innerHTML;
   btn.disabled = true;
