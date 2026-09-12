@@ -1961,19 +1961,16 @@ function applyClientBranding(c){
 }
 
 // Redesign plan §1 retired the old standalone Agency nav item (its content
-// moved into Settings - renderAgencyPage). This same hydrateSession hook now
-// un-hides the new Agency Dashboard page instead (renderAgencyDashPage:
-// cross-client status, Nic's own tasks, a day planner) once a real
-// multi-client session confirms there's more than one client for it to be
-// useful for - a single-client deployment has nothing for it to show.
-function ensureAgencyNav(s){
-  const entry = NAV.find(n => n.id === 'agencydash');
-  if(!entry) return;
-  const show = !!(s && (s.controlPlane || (s.clients && s.clients.length > 1)));
-  if(entry.hidden === !show) return;
-  entry.hidden = !show;
-  renderSidebar();
-}
+// moved into Settings - renderAgencyPage). The new Agency Dashboard page
+// (renderAgencyDashPage: cross-client status, Nic's own tasks, a day
+// planner) deliberately doesn't get a main-sidebar item either - it isn't
+// part of the day-to-day per-client workflow the sidebar is for, so it's
+// reached from the client switcher instead (see renderClientSwitcher's
+// "Agency dashboard" entry), right next to the other cross-client action
+// that dropdown already offers. NAV keeps an 'agencydash' entry (permanently
+// hidden from the sidebar) purely so navigate()'s topbar-title lookup and
+// renderPage's dispatch still resolve it by id like every other page.
+function ensureAgencyNav(s){}
 
 function renderClientSwitcher(s){
   const host = document.getElementById('clientSwitcher');
@@ -1996,9 +1993,23 @@ function renderClientSwitcher(s){
       '<i class="ti ti-chevron-down"></i>'+
     '</button>'+
     '<div class="client-switcher-menu" id="clientSwitcherMenu" hidden>'+
+      '<button class="client-switcher-item" onclick="goToAgencyDash()">'+
+        '<span class="cs-badge" style="background:var(--ink);color:#fff;"><i class="ti ti-building-community"></i></span>'+
+        '<span>Agency dashboard</span>'+
+      '</button>'+
+      '<div class="client-switcher-sep"></div>'+
       '<div class="client-switcher-label">Switch client</div>'+
       items+
     '</div>';
+}
+
+// The Agency Dashboard (cross-client status, Nic's own tasks, a day
+// planner) lives off this dropdown rather than the main sidebar - it isn't
+// part of the per-client workflow the sidebar is for, and this is already
+// where "look across clients" actions live.
+function goToAgencyDash(){
+  closeClientSwitcherOnce();
+  navigate('agencydash');
 }
 
 function toggleClientSwitcher(ev){
