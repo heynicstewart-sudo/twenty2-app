@@ -2596,9 +2596,9 @@ async function validateClientBase(){
       el.textContent = 'Reachable - Contacts' + (d.tables.Companies ? ', Companies' : '') + (d.tables.Campaigns ? ', Campaigns' : '') + ' found';
     } else {
       el.style.color = 'var(--danger)';
-      el.textContent = d.error || 'Not reachable';
+      el.textContent = friendlyErr(d.error) || 'Not reachable';
     }
-  } catch(err){ el.style.color = 'var(--danger)'; el.textContent = err.message; }
+  } catch(err){ el.style.color = 'var(--danger)'; el.textContent = friendlyErr(err.message); }
 }
 
 async function submitClientForm(slug){
@@ -2624,7 +2624,7 @@ async function submitClientForm(slug){
     closeModal();
     setTimeout(() => location.reload(), 400);
   } catch(err){
-    if(errEl){ errEl.textContent = err.message; errEl.style.display = 'block'; }
+    if(errEl){ errEl.textContent = friendlyErr(err.message); errEl.style.display = 'block'; }
     else toast(friendlyErr(err.message), 'warn');
     if(saveBtn) saveBtn.disabled = false;
   }
@@ -7214,7 +7214,7 @@ const GTM_MOTION_TEMPLATES = {
     loop: true,
     loopCaption: '',
     stages: [
-      { icon:'ti-circle-1', title:'First stage', body:'What happens first.', tag:'' }
+      { icon:'ti-circle-number-1', title:'First stage', body:'What happens first.', tag:'' }
     ]
   }
 };
@@ -7225,10 +7225,27 @@ const GTM_ICON_CHOICES = [
   'ti-world-search','ti-chart-pie','ti-map-2','ti-flag','ti-masks-theater','ti-chart-dots',
   'ti-bulb','ti-rocket','ti-users-group','ti-search','ti-speakerphone','ti-mail',
   'ti-calendar-event','ti-coin','ti-chart-arrows-vertical','ti-affiliate','ti-adjustments',
-  'ti-circle-1','ti-circle-2','ti-circle-3','ti-circle-4','ti-circle-5','ti-circle-6'
+  'ti-circle-number-1','ti-circle-number-2','ti-circle-number-3','ti-circle-number-4','ti-circle-number-5','ti-circle-number-6'
 ];
 
 function gtmDeepClone(o){ return JSON.parse(JSON.stringify(o)); }
+// A GTM Motion saved before this fix (or the old default-icon fallback,
+// which built the same bad string) may still have 'ti-circle-1'..'ti-circle-6'
+// on file - those Tabler classes don't exist, so the icon silently rendered
+// nothing. Remap on read so already-saved motions self-heal without needing
+// a data migration.
+function gtmValidIcon(icon){
+  if(!icon) return null;
+  const m = /^ti-circle-([1-6])$/.exec(icon);
+  return m ? ('ti-circle-number-' + m[1]) : icon;
+}
+// A raw class like "ti-message-2-heart" is fine as a CSS hook but reads as
+// jargon in a <select> option - a native <select> can't render the actual
+// glyph per-option, so this is the readable stand-in (the live preview icon
+// next to the select is what actually shows the picture).
+function gtmIconLabel(ic){
+  return ic.replace(/^ti-/, '').split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
 
 function gtmClientName(){
   const c = (typeof activeClient === 'function' && activeClient()) || null;
@@ -7246,7 +7263,7 @@ function normalizeGtmMotion(m){
     loopCaption: (m.loopCaption || '').toString(),
     stages: m.stages.map((s, i) => ({
       id: s.id || ('gs' + Date.now() + '_' + i + '_' + Math.floor(Math.random() * 1000)),
-      icon: s.icon || ('ti-circle-' + Math.min(i + 1, 9)),
+      icon: gtmValidIcon(s.icon) || ('ti-circle-number-' + Math.min(i + 1, 9)),
       title: (s.title || ('Stage ' + (i + 1))).toString(),
       body: (s.body || '').toString(),
       tag: (s.tag || '').toString()
@@ -7289,7 +7306,7 @@ function saveGtmMotion(){
       if(el2) el2.textContent = 'Saved';
     } catch(err){
       const el2 = document.getElementById('gtmMotionSaveStatus');
-      if(el2) el2.textContent = 'Could not save - ' + err.message;
+      if(el2) el2.textContent = 'Could not save - ' + friendlyErr(err.message);
     }
   }, 700);
 }
@@ -7380,7 +7397,7 @@ function gtmAddStage(){
   if(!m) return;
   m.stages.push({
     id: 'gs' + Date.now() + '_' + Math.floor(Math.random() * 1000),
-    icon: 'ti-circle-' + Math.min(m.stages.length + 1, 9),
+    icon: 'ti-circle-number-' + Math.min(m.stages.length + 1, 9),
     title: 'New stage', body: 'What happens at this stage.', tag: ''
   });
   saveGtmMotion();
@@ -7523,7 +7540,10 @@ function renderGtmMotionPage(){
           </div>` : ''}
         </div>
         ${edit
-          ? `<select onchange="gtmSetStageIcon('${s.id}',this.value)" style="font-size:12px;margin:8px 0;width:100%;">${GTM_ICON_CHOICES.map(ic => `<option value="${ic}" ${ic===s.icon ? 'selected' : ''}>${ic.replace('ti-','')}</option>`).join('')}</select>`
+          ? `<div style="display:flex;align-items:center;gap:8px;margin:8px 0;">
+              <i class="ti ${esc(s.icon)} gtm-stage-icon" style="margin:0;"></i>
+              <select onchange="gtmSetStageIcon('${s.id}',this.value)" style="font-size:12px;flex:1;">${GTM_ICON_CHOICES.map(ic => `<option value="${ic}" ${ic===s.icon ? 'selected' : ''}>${esc(gtmIconLabel(ic))}</option>`).join('')}</select>
+            </div>`
           : `<i class="ti ${esc(s.icon)} gtm-stage-icon"></i>`}
         <h4 ${ceStage(s.id,'title')} style="${edit ? 'outline:none;border-bottom:1px dashed var(--border);' : ''}">${esc(s.title)}</h4>
         <p ${ceStage(s.id,'body')} style="${edit ? 'outline:none;' : ''}">${esc(s.body)}</p>
@@ -7756,7 +7776,7 @@ function saveIcpProfile(){
       if(el2) el2.textContent = 'Saved';
     } catch(err){
       const el2 = document.getElementById('icpSaveStatus');
-      if(el2) el2.textContent = 'Could not save - ' + err.message;
+      if(el2) el2.textContent = 'Could not save - ' + friendlyErr(err.message);
     }
   }, 700);
 }
@@ -17242,7 +17262,7 @@ function saveArch(key){
       if(s) s.textContent = 'Saved';
     } catch(err){
       const s = document.getElementById('archSaveStatus');
-      if(s) s.textContent = 'Could not save - ' + err.message;
+      if(s) s.textContent = 'Could not save - ' + friendlyErr(err.message);
     }
   }, 650);
 }
@@ -20933,7 +20953,7 @@ async function runIntelligence(){
     toast('Engine updated', 'success');
   } catch(err){
     console.warn('Intelligence request failed:', err.message);
-    document.getElementById('intelMeta').textContent = 'Could not run engine: ' + err.message;
+    document.getElementById('intelMeta').textContent = 'Could not run engine: ' + friendlyErr(err.message);
     toast('Could not run engine: ' + friendlyErr(err.message), 'warn');
   }
 }
@@ -20991,7 +21011,7 @@ async function runTrackInsights(){
     toast('Insights updated', 'success');
   } catch(err){
     console.warn('Track insights request failed:', err.message);
-    document.getElementById('insightsMeta').textContent = 'Could not run insights: ' + err.message;
+    document.getElementById('insightsMeta').textContent = 'Could not run insights: ' + friendlyErr(err.message);
     toast('Could not run insights: ' + friendlyErr(err.message), 'warn');
   }
 }
@@ -21018,7 +21038,7 @@ async function runEngineHealth(){
     toast('Engine health refreshed', 'success');
   } catch(err){
     console.warn('Engine health request failed:', err.message);
-    document.getElementById('healthMeta').textContent = 'Could not refresh health: ' + err.message;
+    document.getElementById('healthMeta').textContent = 'Could not refresh health: ' + friendlyErr(err.message);
     toast('Could not refresh health: ' + friendlyErr(err.message), 'warn');
   }
 }
@@ -23594,7 +23614,7 @@ async function refreshCompanyProfile(btn){
     if(status) status.textContent = errs.length ? `${data.pagesScraped}/4 pages scraped - ${errs.join('; ')}` : `All 4 pages scraped just now`;
   } catch(err){
     toast('Could not refresh company profile: ' + friendlyErr(err.message), 'warn');
-    if(status) status.textContent = 'Failed: ' + err.message;
+    if(status) status.textContent = 'Failed: ' + friendlyErr(err.message);
   } finally {
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-refresh"></i> Refresh Company Profile'; }
   }
