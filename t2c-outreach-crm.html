@@ -8181,30 +8181,25 @@ function renderGrid(){
   <button class="btn btn-ghost btn-sm" style="margin-bottom:10px;" onclick="gridBackAction()"><i class="ti ti-arrow-left"></i> ${window.__gridReturnTo && window.__gridReturnTo.campaignId ? 'Back to campaign' : 'Grids'}</button>
   <div class="section-title" style="margin-bottom:14px;"><i class="ti ti-grid-dots"></i> ${esc(grid.name)}</div>
   ${campaignsForGrid(grid.id).length ? `<div style="margin-bottom:10px;">${campaignsForGrid(grid.id).map(c=>`<span class="pill" style="background:var(--tint-blue-bg);color:var(--tint-blue-fg);">Linked to ${esc(c.name)}</span>`).join(' ')}</div>` : ''}
-  <div class="toolbar">
+  <div class="toolbar" style="margin-bottom:10px;">
     <div class="field">
       <label>Add company</label>
       <input id="newCompanyInput" placeholder="e.g. BHP">
     </div>
     <button class="btn btn-secondary" onclick="addGridCompany()"><i class="ti ti-plus"></i> Add company</button>
-    <button type="button" class="btn btn-secondary" onclick="document.getElementById('csvImportInput').click()"><i class="ti ti-file-upload"></i> Import companies from CSV</button>
-    <input type="file" id="csvImportInput" accept=".csv" style="display:none;" onchange="handleCsvImport(event)">
     <div class="field">
       <label>Add job title column</label>
       <input id="newColInput" placeholder="e.g. Head of Delivery">
     </div>
     <button class="btn btn-secondary" onclick="addGridColumn()"><i class="ti ti-plus"></i> Add column</button>
+  </div>
+  <input type="file" id="csvImportInput" accept=".csv" style="display:none;" onchange="handleCsvImport(event)">
+  <div class="toolbar">
     <button class="btn btn-primary" id="runSearchBtn" onclick="runDailySearch()" ${isGridSearchRunning(grid.id) ? 'disabled' : ''}><i class="ti ti-search"></i> ${isGridSearchRunning(grid.id) ? 'Searching...' : 'Run daily search'}</button>
     <button class="btn btn-secondary" onclick="openAddContactModal()"><i class="ti ti-user-plus"></i> Add contact</button>
     <button class="btn btn-secondary" onclick="openImportCompanyModal({ gridId: currentGrid().id })"><i class="ti ti-building-community"></i> Import from company</button>
     <button class="btn btn-secondary" onclick="openApolloSearchModal()"><i class="ti ti-building-skyscraper"></i> Search Apollo</button>
-    <div style="width:1px;align-self:stretch;background:var(--border-light);margin:0 2px;"></div>
-    <button class="btn btn-ghost" onclick="resetGrid()"><i class="ti ti-refresh"></i> Reset</button>
-    <button class="btn btn-secondary" onclick="exportContactsCsv()"><i class="ti ti-file-download"></i> Export contacts</button>
-    <button class="btn btn-secondary" id="syncAirtableBtn" onclick="syncAllContactsToAirtable()"><i class="ti ti-cloud-upload"></i> Sync</button>
-    <div style="width:1px;align-self:stretch;background:var(--border-light);margin:0 2px;"></div>
-    <button class="btn btn-secondary" id="findCompanyLinkedInBtn" onclick="findCompanyLinkedInPages()"><i class="ti ti-brand-linkedin"></i> Find LinkedIn pages</button>
-    <button class="btn btn-secondary" id="orgIdBtn" onclick="fetchLinkedInOrgIds()"><i class="ti ti-id"></i> Get LinkedIn org IDs</button>
+    <button class="btn btn-ghost" onclick="toggleGridMoreMenu(event,'${grid.id}')"><i class="ti ti-dots"></i> More tools</button>
   </div>
   <div id="gridNotification"></div>
   ${renderGridViewToolbar(grid.id)}
@@ -9693,6 +9688,39 @@ function addDays(dateStr, days){
   d.setDate(d.getDate() + days);
   return isoDate(d);
 }
+
+// Grid toolbar used to dump 9 buttons in a row (import/export/sync/reset/
+// LinkedIn lookups all sitting at the same visual weight as the actions you
+// use every day). Folded the occasional-use ones into this menu - same
+// ctx-menu/arch-menu-label/arch-menu-sep pieces already used for the
+// campaign-status dropdown and the canvas Insert menu, so grouped dropdown
+// menus read the same way everywhere in the app instead of each page
+// inventing its own toolbar shape.
+function toggleGridMoreMenu(e, gridId){
+  e.stopPropagation();
+  closeGridMoreMenu();
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  menu.id = 'gridMoreMenu';
+  const rect = e.target.closest('button').getBoundingClientRect();
+  menu.style.right = (window.innerWidth - rect.right) + 'px';
+  menu.style.left = 'auto';
+  menu.style.top = (rect.bottom + 4) + 'px';
+  menu.innerHTML = `
+    <div class="arch-menu-label">Import &amp; export</div>
+    <div class="ctx-item" onclick="closeGridMoreMenu();document.getElementById('csvImportInput').click()"><i class="ti ti-file-upload"></i> Import companies from CSV</div>
+    <div class="ctx-item" onclick="closeGridMoreMenu();exportContactsCsv()"><i class="ti ti-file-download"></i> Export contacts</div>
+    <div class="ctx-item" onclick="closeGridMoreMenu();syncAllContactsToAirtable()"><i class="ti ti-cloud-upload"></i> Sync</div>
+    <div class="arch-menu-sep"></div>
+    <div class="arch-menu-label">LinkedIn lookups</div>
+    <div class="ctx-item" onclick="closeGridMoreMenu();findCompanyLinkedInPages()"><i class="ti ti-brand-linkedin"></i> Find LinkedIn pages</div>
+    <div class="ctx-item" onclick="closeGridMoreMenu();fetchLinkedInOrgIds()"><i class="ti ti-id"></i> Get LinkedIn org IDs</div>
+    <div class="arch-menu-sep"></div>
+    <div class="ctx-item" style="color:var(--danger);" onclick="closeGridMoreMenu();resetGrid()"><i class="ti ti-refresh"></i> Reset grid</div>`;
+  document.body.appendChild(menu);
+  setTimeout(() => document.addEventListener('click', closeGridMoreMenu, { once:true }), 0);
+}
+function closeGridMoreMenu(){ const m = document.getElementById('gridMoreMenu'); if(m) m.remove(); }
 
 // Grid toolbar's "Reset" button - warns that this permanently deletes the
 // grid's contacts and companies from Airtable, then on confirm wipes them
