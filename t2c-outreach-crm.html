@@ -15075,9 +15075,12 @@ function renderCampaignStrategyTab(campaign){
     <div class="field"><label>Pitch angle</label><textarea id="stratPitch" rows="3">${esc(campaign.pitchAngle||'')}</textarea></div>
     <div class="field"><label>Objection handling</label><textarea id="stratObjections" rows="3">${esc(campaign.objectionHandling||'')}</textarea></div>
     <div class="field"><label>Success metric</label><input id="stratSuccessMetric" value="${esc(campaign.successMetric||'')}"></div>
+
+    <div class="uf-label" style="display:block;margin:18px 0 10px;">CTAs &amp; targeting rules</div>
     <div class="field"><label>CTAs (one per line)</label><textarea id="stratCtas" rows="3" placeholder="e.g. Change Value Check&#10;Free session&#10;Community Connect event">${esc(campaign.ctas||'')}</textarea><div class="muted" style="font-size:11px;margin-top:4px;">Used by the Sales tab's "CTA converting to bookings" chart - match these labels when logging touch points for best results.</div></div>
     <div class="field"><label>Decision Maker Criteria (one keyword per line)</label><textarea id="stratDecisionMakerCriteria" rows="3" placeholder="e.g. CEO&#10;Director&#10;Head of">${esc(campaign.decisionMakerCriteria||'')}</textarea><div class="muted" style="font-size:11px;margin-top:4px;">Case-insensitive substring match against a contact's Job Title - defines who counts as "the right person" for this campaign's Pipeline tab. A fixed mechanical rule, not Engine-judged, so the bar can't drift.</div></div>
     ${(campaign.type||'linkedin')!=='email' ? `
+    <div class="uf-label" style="display:block;margin:18px 0 10px;">Sequence mechanics</div>
     <div class="field">
       <label>Connection request note</label>
       <select id="stratNoteMode">
