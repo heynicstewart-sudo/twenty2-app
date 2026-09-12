@@ -541,6 +541,8 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .tgt-key-name{font-size:12.5px;font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .tgt-key-role{font-size:11px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .tgt-key-empty{font-size:11.5px;color:var(--text-dim);}
+.dash-action-row{margin:0 -6px;padding:8px 6px;border-radius:8px;transition:background .12s ease;}
+.dash-action-row:hover,.dash-action-row:focus-visible{background:var(--surface-2);}
 
 /* Account dashboard (Targets, default view) - 3-column bento: pinned-account
    switcher lives in the header, Top ICPs is a tall right-hand column
@@ -550,13 +552,13 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .acct-dash-grid{display:grid;grid-template-columns:1.05fr .95fr .95fr;gap:16px;align-items:stretch;}
 .adg-actions{grid-column:1;grid-row:1;}
 .adg-cal{grid-column:2;grid-row:1;}
-.adg-icps{grid-column:3;grid-row:1;}
+.adg-icps{grid-column:3;grid-row:1 / span 2;}
 .adg-revenue{grid-column:1;grid-row:2;}
 .adg-pipeline{grid-column:2;grid-row:2;}
 .adg-enrich{grid-column:1 / -1;grid-row:3;}
 @media(max-width:1100px){
   .acct-dash-grid{grid-template-columns:1fr 1fr;}
-  .adg-icps{grid-column:1 / -1;grid-row:3;}
+  .adg-icps{grid-column:1 / -1;grid-row:3 / span 1;}
   .adg-enrich{grid-row:4;}
 }
 .enrich-cols{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;}
@@ -3512,9 +3514,9 @@ function renderDashActions(profile){
 
   return `
   <div class="card adg-actions">
-    <div class="section-title" style="margin-bottom:6px;">Actions</div>
+    <div class="section-title" style="margin-bottom:6px;display:flex;align-items:center;gap:6px;">Actions ${all.length ? `<span class="count-pill has">${all.length}</span>` : ''}</div>
     ${items.length ? items.map(a => `
-      <div style="padding:8px 0;border-bottom:1px solid var(--border-light);display:flex;justify-content:space-between;gap:8px;">
+      <div class="dash-action-row" tabindex="0" role="button" style="border-bottom:1px solid var(--border-light);display:flex;justify-content:space-between;gap:8px;cursor:pointer;" onclick="openContactDrawer('${esc(a.name)}', ${a.campaignName ? `'${esc(a.campaignName)}'` : 'null'})" onkeydown="onRowKeydown(event)">
         <div style="min-width:0;">
           <div style="font-weight:600;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(a.name)}</div>
           <div class="muted" style="font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(a.jobTitle || '')}${a.campaignName ? ' · ' + esc(a.campaignName) : ''}</div>
@@ -3784,6 +3786,7 @@ function initAccountDashboardCharts(name){
 // sub-tab (renderCampaignsAreaSubNav). Same markup and helpers as before.
 function renderGridsListView(){
   return `
+  <div class="page-head"><h1 class="page-h1">Contact grids</h1><div class="page-sub">Company x job-title matrices that feed a campaign's contact list.</div></div>
   ${renderCampaignsAreaSubNav('grids')}
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
@@ -20397,6 +20400,7 @@ function syncCampaignStatusToAirtable(campaign){
 
 function renderSalesPage(){
   return `
+  <div class="page-head"><h1 class="page-h1">Calendar</h1><div class="page-sub">Booked meetings across every campaign, by rep.</div></div>
   ${renderCampaignsAreaSubNav('calendar')}
   ${renderCalendar()}
   `;
