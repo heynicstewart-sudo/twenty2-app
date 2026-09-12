@@ -16130,8 +16130,9 @@ async function loadProgramDiscovery(){
   window.__programDiscovery = null;
   try {
     const res = await fetch('/api/programs/discovery');
-    window.__programDiscovery = res.ok ? await res.json() : { error: true };
-  } catch(err){ window.__programDiscovery = { error: true }; }
+    const json = await res.json().catch(() => ({}));
+    window.__programDiscovery = res.ok ? json : { error: json.error || 'Request failed' };
+  } catch(err){ window.__programDiscovery = { error: err.message }; }
   if(['home','settings','companyuniverse'].includes(state.currentPage)) renderPage();
 }
 // One card per pending finding - same uco-card look and dropdown-chip filter
@@ -16412,7 +16413,7 @@ async function resolveProgramQueueItem(id, action){
 function renderProgramDiscoverySettingsCard(){
   const d = window.__programDiscovery;
   if(!d) return '';
-  if(d.error) return `<div class="settings-section card"><div class="section-title"><i class="ti ti-robot"></i> Program discovery</div><div class="muted" style="font-size:12px;">Could not load. The Settings fields may not exist in your database yet.</div></div>`;
+  if(d.error) return `<div class="settings-section card"><div class="section-title"><i class="ti ti-robot"></i> Program discovery</div><div class="muted" style="font-size:12px;">Couldn't load: ${esc(friendlyErr(d.error))} <button class="btn btn-ghost btn-sm" onclick="window.__programDiscovery=undefined;loadProgramDiscovery();"><i class="ti ti-refresh"></i> Try again</button></div></div>`;
   const st = d.settings || {};
   const running = !!window.__programDiscoveryRunning;
   const log = d.log || [];
@@ -27285,13 +27286,25 @@ function renderSettings(){
   `;
 }
 
+// The single most destructive action in the app - it wipes shared data for
+// every user of this client, not just something scoped to this browser -
+// so it gets stronger friction than an ordinary delete-confirm modal: the
+// button stays disabled until the operator types the exact phrase, the same
+// pattern GitHub/AWS use for an irreversible, account-wide delete.
+const RESET_ALL_DATA_PHRASE = 'DELETE ALL DATA';
 function confirmResetAllData(){
-  const body = `<p style="font-size:13px;">This will permanently delete all contacts, companies, touch points and related data from the database. This cannot be undone. Are you sure?</p>`;
+  const body = `
+    <p style="font-size:13px;">This will permanently delete all contacts, companies, touch points and related data from the database - shared data, not just this browser's. This cannot be undone.</p>
+    <p style="font-size:13px;margin-top:10px;">Type <strong>${RESET_ALL_DATA_PHRASE}</strong> to confirm.</p>
+    <input id="resetAllDataConfirmInput" type="text" style="width:100%;margin-top:6px;" autocomplete="off" spellcheck="false" oninput="document.getElementById('confirmResetAllDataBtn').disabled = this.value !== '${RESET_ALL_DATA_PHRASE}';">
+  `;
   const footer = `
     <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-    <button class="btn btn-primary" id="confirmResetAllDataBtn" style="background:var(--danger);border-color:var(--danger);" onclick="resetAllDataConfirmed()"><i class="ti ti-trash"></i> Wipe all data</button>
+    <button class="btn btn-primary" id="confirmResetAllDataBtn" disabled style="background:var(--danger);border-color:var(--danger);" onclick="resetAllDataConfirmed()"><i class="ti ti-trash"></i> Wipe all data</button>
   `;
   openModal('Reset all data', body, footer);
+  const input = document.getElementById('resetAllDataConfirmInput');
+  if(input) input.focus();
 }
 
 async function resetAllDataConfirmed(){
