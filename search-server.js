@@ -21837,6 +21837,111 @@ app.get('/api/agency/overview', async (req, res) => {
   }
 });
 
+// ---- Agency Tasks (the Agency Dashboard's task list + day-blocking +
+// personal calendar) ----
+// Lives in the control-plane base, not a per-client base - these are Nic's
+// own tasks/meetings, spanning every client (or none - Client Slug is
+// optional). Same AGENCY_CONTROL_BASE_ID + controlBaseRequest the Clients
+// table already uses, just pointed at the new Tasks table.
+const TASKS_TABLE = 'Tasks';
+const TASK_FIELD_MAP = {
+  title: 'Title', notes: 'Notes', status: 'Status', type: 'Type',
+  clientSlug: 'Client Slug', accountName: 'Account Name',
+  dueDate: 'Due Date', scheduledDate: 'Scheduled Date',
+  scheduledStart: 'Scheduled Start', durationMinutes: 'Duration Minutes',
+};
+function taskFromRecord(r) {
+  const f = r.fields || {};
+  return {
+    id: r.id,
+    title: f['Title'] || '',
+    notes: f['Notes'] || '',
+    status: f['Status'] || 'To do',
+    type: f['Type'] || 'Task',
+    clientSlug: f['Client Slug'] || '',
+    accountName: f['Account Name'] || '',
+    dueDate: f['Due Date'] || null,
+    scheduledDate: f['Scheduled Date'] || null,
+    scheduledStart: f['Scheduled Start'] || '',
+    durationMinutes: f['Duration Minutes'] != null ? f['Duration Minutes'] : null,
+    createdAt: f['Created At'] || null,
+  };
+}
+function taskFieldsFromBody(body) {
+  const fields = {};
+  for (const [k, airtableName] of Object.entries(TASK_FIELD_MAP)) {
+    if (body[k] === undefined) continue;
+    if (k === 'durationMinutes') {
+      fields[airtableName] = body[k] === null || body[k] === '' ? null : Number(body[k]);
+    } else {
+      fields[airtableName] = body[k] === null ? '' : body[k];
+    }
+  }
+  return fields;
+}
+
+// All tasks, or optionally filtered by scheduledDate range for the
+// day-blocking calendar (?from=YYYY-MM-DD&to=YYYY-MM-DD). Small dataset (one
+// person's own tasks) so filtering client-side after one full fetch is
+// simpler and just as fast as an Airtable formula for this volume.
+app.get('/api/agency/tasks', async (req, res) => {
+  try {
+    const data = await controlBaseRequest('GET', '?pageSize=100&sort%5B0%5D%5Bfield%5D=Scheduled%20Date&sort%5B0%5D%5Bdirection%5D=asc', undefined, TASKS_TABLE);
+    let records = data.records || [];
+    // Airtable caps a single page at 100 - paginate if this ever grows past that.
+    let offset = data.offset;
+    while (offset) {
+      const next = await controlBaseRequest('GET', `?pageSize=100&offset=${encodeURIComponent(offset)}`, undefined, TASKS_TABLE);
+      records = records.concat(next.records || []);
+      offset = next.offset;
+    }
+    let tasks = records.map(taskFromRecord);
+    if (req.query.from) tasks = tasks.filter(t => t.scheduledDate && t.scheduledDate >= req.query.from);
+    if (req.query.to) tasks = tasks.filter(t => t.scheduledDate && t.scheduledDate <= req.query.to);
+    res.json({ tasks });
+  } catch (err) {
+    console.error('Agency tasks list error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/agency/tasks', async (req, res) => {
+  const title = (req.body && req.body.title || '').toString().trim();
+  if (!title) return res.status(400).json({ error: 'title is required' });
+  try {
+    const fields = taskFieldsFromBody(req.body || {});
+    fields['Title'] = title;
+    if (!fields['Status']) fields['Status'] = 'To do';
+    if (!fields['Type']) fields['Type'] = 'Task';
+    const data = await controlBaseRequest('POST', '', { records: [{ fields }] }, TASKS_TABLE);
+    res.json({ task: taskFromRecord(data.records[0]) });
+  } catch (err) {
+    console.error('Agency task create error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/agency/tasks/:id', async (req, res) => {
+  try {
+    const fields = taskFieldsFromBody(req.body || {});
+    const data = await controlBaseRequest('PATCH', '', { records: [{ id: req.params.id, fields }] }, TASKS_TABLE);
+    res.json({ task: taskFromRecord(data.records[0]) });
+  } catch (err) {
+    console.error('Agency task update error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/agency/tasks/:id', async (req, res) => {
+  try {
+    await controlBaseRequest('DELETE', `?records[]=${encodeURIComponent(req.params.id)}`, undefined, TASKS_TABLE);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Agency task delete error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---- Client CRUD (the "New client" / "Edit client" form in the Agency view) ----
 // Writes rows to the Clients table in the control-plane base. Requires
 // AGENCY_CONTROL_BASE_ID and an Airtable token with data.records:write on
@@ -21895,9 +22000,9 @@ function clientFieldsFromForm(body) {
   return fields;
 }
 
-async function controlBaseRequest(method, pathSuffix, body) {
+async function controlBaseRequest(method, pathSuffix, body, table) {
   if (!AGENCY_CONTROL_BASE_ID) throw new Error('AGENCY_CONTROL_BASE_ID not configured');
-  const url = `https://api.airtable.com/v0/${AGENCY_CONTROL_BASE_ID}/${encodeURIComponent(CLIENTS_TABLE)}${pathSuffix || ''}`;
+  const url = `https://api.airtable.com/v0/${AGENCY_CONTROL_BASE_ID}/${encodeURIComponent(table || CLIENTS_TABLE)}${pathSuffix || ''}`;
   const res = await airtableFetchWithRetry(url, {
     method,
     headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}`, 'Content-Type': 'application/json' },

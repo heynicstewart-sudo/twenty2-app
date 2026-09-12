@@ -1367,6 +1367,12 @@ function esc(str){ return (str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').r
 function friendlyErr(msg){
   let s = (msg === null || msg === undefined) ? '' : String(msg);
   if(/AIRTABLE_API_KEY not configured/i.test(s)) return "The database isn't connected yet.";
+  // Generic catch-all for the same category of leak from any other env var
+  // this app checks for (AGENCY_CONTROL_BASE_ID, ANTHROPIC_API_KEY, ...) -
+  // matches "SOME_ENV_VAR not configured" and swaps it for plain language
+  // instead of needing a one-off case added here every time a new one appears.
+  const envVarMatch = s.match(/\b([A-Z][A-Z0-9_]{3,})\s+not configured\b/);
+  if(envVarMatch) return "This isn't set up yet - check the deployment's configuration.";
   s = s.replace(/\bAirtable\b/gi, 'the database');
   s = s.replace(/^the database/, 'The database');
   return s;
@@ -1896,7 +1902,11 @@ const NAV = [
   { id:'settings', label:'Settings', icon:'ti-settings', hidden:true },
   { id:'contentcalendar', label:'Calendar', icon:'ti-calendar-month', hidden:true },
   { id:'grids', label:'Grids', icon:'ti-layout-grid', hidden:true },
-  { id:'grid', label:'Grid', icon:'ti-grid-dots', hidden:true }
+  { id:'grid', label:'Grid', icon:'ti-grid-dots', hidden:true },
+  // Starts hidden like the others above - ensureAgencyNav flips this on
+  // once GET /api/session confirms the deployment actually runs multiple
+  // clients (single-client deployments have nothing for this page to show).
+  { id:'agencydash', label:'Agency', icon:'ti-building-community', hidden:true }
 ];
 
 // Which sidebar item stays lit up while on a page that has none of its own.
@@ -1950,13 +1960,20 @@ function applyClientBranding(c){
   if(state.currentPage === 'home') renderPage();
 }
 
-// Redesign plan §1: the Agency nav item is retired - the topbar client-
-// switcher (renderClientSwitcher, right below) already fully switches
-// clients on its own, and renderAgencyPage's other content (overview grid,
-// weekly report, extension status, new-client button) relocated into
-// Settings (renderSettings). Left as a no-op call site rather than removed,
-// so hydrateSession's call doesn't need touching too.
-function ensureAgencyNav(s){}
+// Redesign plan §1 retired the old standalone Agency nav item (its content
+// moved into Settings - renderAgencyPage). This same hydrateSession hook now
+// un-hides the new Agency Dashboard page instead (renderAgencyDashPage:
+// cross-client status, Nic's own tasks, a day planner) once a real
+// multi-client session confirms there's more than one client for it to be
+// useful for - a single-client deployment has nothing for it to show.
+function ensureAgencyNav(s){
+  const entry = NAV.find(n => n.id === 'agencydash');
+  if(!entry) return;
+  const show = !!(s && (s.controlPlane || (s.clients && s.clients.length > 1)));
+  if(entry.hidden === !show) return;
+  entry.hidden = !show;
+  renderSidebar();
+}
 
 function renderClientSwitcher(s){
   const host = document.getElementById('clientSwitcher');
@@ -2052,6 +2069,273 @@ function renderAgencyPage(){
 
   <div id="agencyOverviewGrid">${renderAgencyOverviewGrid(window.__agencyOverview)}</div>
   <div id="weeklyReportStage" style="position:fixed;left:-99999px;top:0;"></div>`;
+}
+
+/* ===================== AGENCY DASHBOARD (Nic's own cross-client view) =====================
+   New top-level page (agencydash) - visible once ensureAgencyNav confirms a
+   real multi-client session. Three sub-tabs sharing one page-head, the same
+   seq-tabs pattern Campaigns/Grids/Calendar already share:
+   - Dashboard: the existing per-client overview grid above (contacts/active
+     campaigns/touch points this week) plus a couple of task-count tiles.
+   - Tasks: Nic's own task list, stored in the control-plane base's Tasks
+     table (not any client's CRM base - not client data).
+   - Calendar: a day planner - unscheduled tasks/meetings on the left, an
+     hourly timeline on the right. A scheduled task IS a calendar block, so
+     one view covers both the "block out timer" and "personal calendar" asks
+     rather than building two separate calendars that would drift apart. */
+
+function renderAgencyDashSubNav(active){
+  const items = [['dashboard','Dashboard'],['tasks','Tasks'],['calendar','Calendar']];
+  return `<div class="seq-tabs" style="margin-bottom:16px;">
+    ${items.map(([id,label]) => `<div class="seq-tab ${active===id?'active':''}" onclick="setAgencyDashTab('${id}')">${label}</div>`).join('')}
+  </div>`;
+}
+function setAgencyDashTab(tab){
+  window.__agencyDashTab = tab;
+  renderPage();
+}
+function renderAgencyDashPage(){
+  const tab = window.__agencyDashTab || 'dashboard';
+  return `
+  <div class="page-head"><h1 class="page-h1">Agency</h1><div class="page-sub">Every client at a glance, your own tasks, and a day planner - one portal instead of switching into each client to check on it.</div></div>
+  ${renderAgencyDashSubNav(tab)}
+  ${tab==='dashboard' ? renderAgencyDashboardTab() : ''}
+  ${tab==='tasks' ? renderAgencyTasksTab() : ''}
+  ${tab==='calendar' ? renderAgencyCalendarTab() : ''}
+  `;
+}
+
+/* ---- Dashboard tab ---- */
+function renderAgencyDashboardTab(){
+  const tasks = Array.isArray(window.__agencyTasks) ? window.__agencyTasks : [];
+  const today = isoDate(TODAY);
+  const dueToday = tasks.filter(t => t.status !== 'Done' && (t.dueDate === today || t.scheduledDate === today)).length;
+  const overdue = tasks.filter(t => t.status !== 'Done' && t.dueDate && t.dueDate < today).length;
+  const clientCount = ((window.__agencyOverview && window.__agencyOverview.clients) || []).length;
+  const tile = (n, label, danger) => `<div class="card" style="flex:1;min-width:150px;text-align:center;cursor:pointer;" onclick="setAgencyDashTab('tasks')"><div style="font-size:22px;font-weight:800;${danger&&n?`color:${danger};`:''}">${n}</div><div class="muted" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;">${label}</div></div>`;
+  return `
+  <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:16px;">
+    <div class="card" style="flex:1;min-width:150px;text-align:center;"><div style="font-size:22px;font-weight:800;">${clientCount}</div><div class="muted" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;">Clients</div></div>
+    ${tile(dueToday, 'Due today', 'var(--warning)')}
+    ${tile(overdue, 'Overdue', 'var(--danger)')}
+  </div>
+  <div class="card" style="margin-bottom:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-building-community"></i> Client status</div>
+      <button class="btn btn-secondary btn-sm" onclick="loadAgencyOverview(true)"><i class="ti ti-refresh"></i> Refresh</button>
+    </div>
+    <div class="muted" style="font-size:12px;margin-top:2px;">Contacts, active campaigns and touch points this week, per client. Click a card to switch into that workspace.</div>
+  </div>
+  <div id="agencyOverviewGrid">${renderAgencyOverviewGrid(window.__agencyOverview)}</div>
+  `;
+}
+
+/* ---- Tasks tab + shared task CRUD (also used by the Calendar tab) ---- */
+const AGENCY_TASK_STATUSES = ['To do', 'In progress', 'Done'];
+async function loadAgencyTasks(force){
+  if(!force && window.__agencyTasks !== undefined) return;
+  window.__agencyTasks = null;
+  try {
+    const res = await fetch('/api/agency/tasks');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__agencyTasks = Array.isArray(data.tasks) ? data.tasks : [];
+  } catch(err){
+    window.__agencyTasks = { error: err.message };
+  }
+  if(state.currentPage === 'agencydash') renderPage();
+}
+function renderAgencyTasksTab(){
+  const t = window.__agencyTasks;
+  if(t === undefined || t === null) return '<div class="card"><div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading tasks...</div></div>';
+  if(t.error) return `<div class="card"><div class="empty-state">Couldn't load tasks: ${esc(friendlyErr(t.error))} <button class="btn btn-ghost btn-sm" onclick="loadAgencyTasks(true)"><i class="ti ti-refresh"></i> Try again</button></div></div>`;
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-checklist"></i> Tasks &amp; meetings</div>
+      <button class="btn btn-primary btn-sm" onclick="openAgencyTaskForm()"><i class="ti ti-plus"></i> New</button>
+    </div>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;align-items:start;">
+    ${AGENCY_TASK_STATUSES.map(status => {
+      const rows = t.filter(x => (x.status||'To do') === status).sort((a,b) => (a.dueDate||'9999').localeCompare(b.dueDate||'9999'));
+      return `
+      <div class="card">
+        <div class="section-title" style="margin-bottom:8px;">${esc(status)} <span class="count-pill has">${rows.length}</span></div>
+        ${rows.length ? rows.map(renderAgencyTaskRow).join('') : '<div class="empty-state">Nothing here.</div>'}
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+function renderAgencyTaskRow(t){
+  const today = isoDate(TODAY);
+  const overdue = t.dueDate && t.dueDate < today && t.status !== 'Done';
+  const meta = [t.clientSlug, t.accountName].filter(Boolean).join(' · ') || 'Agency-wide';
+  return `
+  <div class="dash-action-row" tabindex="0" role="button" style="border-bottom:1px solid var(--border-light);" onclick="openAgencyTaskForm('${t.id}')" onkeydown="onRowKeydown(event)">
+    <div style="display:flex;justify-content:space-between;gap:8px;">
+      <strong style="font-size:12.5px;">${t.type==='Meeting'?'<i class=\"ti ti-users\" style=\"font-size:11px;\"></i> ':''}${esc(t.title)}</strong>
+      ${t.dueDate ? `<span class="muted" style="font-size:11px;flex:none;${overdue?'color:var(--danger);font-weight:700;':''}">${fmtDate(t.dueDate)}</span>` : ''}
+    </div>
+    <div class="muted" style="font-size:11px;margin-top:2px;">${esc(meta)}${t.scheduledDate ? ` · scheduled ${fmtDate(t.scheduledDate)}${t.scheduledStart ? ' '+esc(t.scheduledStart) : ''}` : ''}</div>
+  </div>`;
+}
+function openAgencyTaskForm(id){
+  const tasks = Array.isArray(window.__agencyTasks) ? window.__agencyTasks : [];
+  const t = id ? tasks.find(x => x.id === id) : null;
+  window.__agencyTaskFormId = id || null;
+  const clientSlugs = [...new Set(((window.__agencyOverview && window.__agencyOverview.clients) || []).map(c => c.slug))];
+  openModal(t ? 'Edit task' : 'New task', `
+    <div class="field"><label>Title</label><input id="atfTitle" value="${esc(t?t.title:'')}"></div>
+    <div class="two-col" style="gap:10px;">
+      <div class="field"><label>Type</label><select id="atfType"><option value="Task" ${!t||t.type!=='Meeting'?'selected':''}>Task</option><option value="Meeting" ${t&&t.type==='Meeting'?'selected':''}>Meeting</option></select></div>
+      <div class="field"><label>Status</label><select id="atfStatus">${AGENCY_TASK_STATUSES.map(s=>`<option ${t&&t.status===s?'selected':''}>${esc(s)}</option>`).join('')}</select></div>
+    </div>
+    <div class="two-col" style="gap:10px;">
+      <div class="field"><label>Client (optional)</label><input id="atfClient" list="atfClientList" value="${esc(t?t.clientSlug:'')}" placeholder="e.g. twenty2"><datalist id="atfClientList">${clientSlugs.map(s=>`<option value="${esc(s)}">`).join('')}</datalist></div>
+      <div class="field"><label>Account (optional)</label><input id="atfAccount" value="${esc(t?t.accountName:'')}" placeholder="Company name"></div>
+    </div>
+    <div class="field"><label>Due date (optional)</label><input type="date" id="atfDue" value="${t&&t.dueDate?t.dueDate:''}"></div>
+    <div class="uf-label" style="display:block;margin:14px 0 8px;">Schedule (day planner)</div>
+    <div class="two-col" style="gap:10px;">
+      <div class="field"><label>Date</label><input type="date" id="atfSchedDate" value="${t&&t.scheduledDate?t.scheduledDate:(window.__agencyDashTab==='calendar'?agencyCalDate():'')}"></div>
+      <div class="field"><label>Start time</label><input type="time" id="atfSchedStart" value="${t&&t.scheduledStart?t.scheduledStart:''}"></div>
+    </div>
+    <div class="field" style="max-width:160px;"><label>Duration (minutes)</label><input type="number" id="atfDuration" min="5" step="5" value="${t&&t.durationMinutes?t.durationMinutes:30}"></div>
+    <div class="field"><label>Notes</label><textarea id="atfNotes" rows="3">${esc(t?t.notes:'')}</textarea></div>
+  `, `
+    ${t ? `<button class="btn btn-ghost" style="color:var(--danger);margin-right:auto;" onclick="deleteAgencyTask('${t.id}')"><i class="ti ti-trash"></i> Delete</button>` : ''}
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" id="atfSaveBtn" onclick="saveAgencyTask()">${t?'Save':'Create'}</button>
+  `);
+}
+async function saveAgencyTask(){
+  const id = window.__agencyTaskFormId;
+  const title = (document.getElementById('atfTitle').value||'').trim();
+  if(!title){ toast('Give it a title first', 'warn'); return; }
+  const schedDate = document.getElementById('atfSchedDate').value || null;
+  const schedStart = document.getElementById('atfSchedStart').value || '';
+  const body = {
+    title,
+    type: document.getElementById('atfType').value,
+    status: document.getElementById('atfStatus').value,
+    clientSlug: (document.getElementById('atfClient').value||'').trim(),
+    accountName: (document.getElementById('atfAccount').value||'').trim(),
+    dueDate: document.getElementById('atfDue').value || null,
+    scheduledDate: schedStart ? schedDate : null,
+    scheduledStart: schedDate ? schedStart : '',
+    durationMinutes: Number(document.getElementById('atfDuration').value) || 30,
+    notes: document.getElementById('atfNotes').value||''
+  };
+  const btn = document.getElementById('atfSaveBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Saving…'; }
+  try {
+    const res = await fetch(id ? `/api/agency/tasks/${id}` : '/api/agency/tasks', {
+      method: id ? 'PATCH' : 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    if(!Array.isArray(window.__agencyTasks)) window.__agencyTasks = [];
+    if(id){
+      const i = window.__agencyTasks.findIndex(x=>x.id===id);
+      if(i>-1) window.__agencyTasks[i] = data.task;
+    } else {
+      window.__agencyTasks.push(data.task);
+    }
+    closeModal();
+    toast(id ? 'Task updated' : 'Task created', 'success');
+    renderPage();
+  } catch(err){
+    toast('Could not save: ' + friendlyErr(err.message), 'warn');
+    if(btn){ btn.disabled = false; btn.innerHTML = id?'Save':'Create'; }
+  }
+}
+async function deleteAgencyTask(id){
+  closeModal();
+  try {
+    const res = await fetch(`/api/agency/tasks/${id}`, { method:'DELETE' });
+    const data = await res.json().catch(()=>({}));
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__agencyTasks = (Array.isArray(window.__agencyTasks) ? window.__agencyTasks : []).filter(x=>x.id!==id);
+    toast('Task removed', 'success');
+    renderPage();
+  } catch(err){
+    toast('Could not remove: ' + friendlyErr(err.message), 'warn');
+  }
+}
+
+/* ---- Calendar tab: a day planner - doubles as the "block out timer" and
+   "personal calendar" asks, since a scheduled task/meeting IS a calendar
+   block. Shares the Tasks tab's data + openAgencyTaskForm for editing. ---- */
+const AGENCY_CAL_START_HOUR = 7;
+const AGENCY_CAL_END_HOUR = 19;
+const AGENCY_CAL_PX_PER_MIN = 1.1;
+function agencyCalDate(){
+  if(!window.__agencyCalDate) window.__agencyCalDate = isoDate(TODAY);
+  return window.__agencyCalDate;
+}
+function agencyCalNav(days){
+  const d = new Date(agencyCalDate()+'T00:00:00');
+  d.setDate(d.getDate()+days);
+  window.__agencyCalDate = isoDate(d);
+  renderPage();
+}
+function agencyCalToday(){ window.__agencyCalDate = isoDate(TODAY); renderPage(); }
+function renderAgencyCalendarTab(){
+  const t = window.__agencyTasks;
+  if(t === undefined || t === null) return '<div class="card"><div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading...</div></div>';
+  if(t.error) return `<div class="card"><div class="empty-state">Couldn't load: ${esc(friendlyErr(t.error))} <button class="btn btn-ghost btn-sm" onclick="loadAgencyTasks(true)"><i class="ti ti-refresh"></i> Try again</button></div></div>`;
+  const date = agencyCalDate();
+  const dateLabel = new Date(date+'T00:00:00').toLocaleDateString('en-AU',{weekday:'long', day:'numeric', month:'long'});
+  const scheduled = t.filter(x => x.scheduledDate === date && x.scheduledStart).sort((a,b)=>a.scheduledStart.localeCompare(b.scheduledStart));
+  const unscheduled = t.filter(x => x.status !== 'Done' && (!x.scheduledDate || !x.scheduledStart));
+  const totalMinutes = (AGENCY_CAL_END_HOUR-AGENCY_CAL_START_HOUR)*60;
+
+  const blocks = scheduled.map(x => {
+    const parts = x.scheduledStart.split(':').map(Number);
+    const startMin = (parts[0]*60+(parts[1]||0)) - AGENCY_CAL_START_HOUR*60;
+    const dur = x.durationMinutes || 30;
+    const top = Math.max(0, startMin*AGENCY_CAL_PX_PER_MIN);
+    const height = Math.max(20, dur*AGENCY_CAL_PX_PER_MIN - 2);
+    const bg = x.type === 'Meeting' ? 'var(--tint-blue-bg)' : 'var(--tint-gold-bg)';
+    const fg = x.type === 'Meeting' ? 'var(--tint-blue-fg)' : 'var(--tint-gold-fg)';
+    return `<div tabindex="0" role="button" style="position:absolute;left:6px;right:6px;top:${top}px;height:${height}px;background:${bg};color:${fg};border-radius:8px;padding:4px 8px;font-size:11.5px;font-weight:700;overflow:hidden;cursor:pointer;" onclick="openAgencyTaskForm('${x.id}')" onkeydown="onRowKeydown(event)" title="${esc(x.title)}">${esc(x.scheduledStart)} · ${esc(x.title)}</div>`;
+  }).join('');
+
+  const hourLines = [];
+  for(let hr = AGENCY_CAL_START_HOUR; hr <= AGENCY_CAL_END_HOUR; hr++){
+    const top = (hr-AGENCY_CAL_START_HOUR)*60*AGENCY_CAL_PX_PER_MIN;
+    const label = (hr%12===0?12:hr%12) + (hr<12?'am':'pm');
+    hourLines.push(`<div style="position:absolute;left:0;right:0;top:${top}px;border-top:1px solid var(--border-light);"></div><div style="position:absolute;left:-34px;top:${top-6}px;font-size:10px;color:var(--muted);width:30px;text-align:right;">${label}</div>`);
+  }
+
+  return `
+  <div style="display:grid;grid-template-columns:260px 1fr;gap:16px;align-items:start;">
+    <div class="card">
+      <div class="section-title" style="margin-bottom:8px;">Unscheduled</div>
+      <div class="muted" style="font-size:11px;margin:-4px 0 10px;">Tasks and meetings with no time slot yet. Open one to give it a day and time.</div>
+      ${unscheduled.length ? unscheduled.map(x => `
+        <div class="dash-action-row" tabindex="0" role="button" style="border-bottom:1px solid var(--border-light);" onclick="openAgencyTaskForm('${x.id}')" onkeydown="onRowKeydown(event)">
+          <div style="font-weight:600;font-size:12.5px;">${x.type==='Meeting'?'<i class=\"ti ti-users\" style=\"font-size:11px;\"></i> ':''}${esc(x.title)}</div>
+          <div class="muted" style="font-size:11px;">${x.dueDate ? 'Due '+fmtDate(x.dueDate) : (x.clientSlug||x.accountName||'Agency-wide')}</div>
+        </div>`).join('') : '<div class="empty-state">Nothing to schedule.</div>'}
+      <button class="btn btn-secondary btn-sm" style="width:100%;margin-top:10px;" onclick="openAgencyTaskForm()"><i class="ti ti-plus"></i> New</button>
+    </div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+        <div class="section-title" style="margin-bottom:0;">${esc(dateLabel)}</div>
+        <div style="display:flex;gap:6px;">
+          <button class="btn btn-secondary btn-sm" onclick="agencyCalNav(-1)"><i class="ti ti-chevron-left"></i></button>
+          <button class="btn btn-secondary btn-sm" onclick="agencyCalToday()">Today</button>
+          <button class="btn btn-secondary btn-sm" onclick="agencyCalNav(1)"><i class="ti ti-chevron-right"></i></button>
+        </div>
+      </div>
+      <div style="position:relative;height:${totalMinutes*AGENCY_CAL_PX_PER_MIN}px;margin-left:40px;border-left:1px solid var(--border-light);">
+        ${hourLines.join('')}
+        ${blocks}
+      </div>
+    </div>
+  </div>`;
 }
 
 async function refreshExtensionStatus(){
@@ -2700,7 +2984,7 @@ function renderPage(){
 
   // 'research' deleted outright (redesign plan §1) - renderResearch() is
   // left defined (harmless dead code) but no longer reachable via dispatch.
-  const renderers = { home: renderHome, companyuniverse: renderCompanyUniverse, programstrategy: renderProgramStrategyPage, reviewdetail: renderReviewDetailPage, profile: renderProfilePage, gtmmotion: renderGtmMotionPage, icpbuilder: renderIcpBuilderPage, competitormap: renderCompetitorMapPage, replies: renderReplies, logger: renderLoggerPage, grids: renderGridsListView, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, contentcalendar: renderContentCalendarPage, settings: renderSettings, agency: renderAgencyPage };
+  const renderers = { home: renderHome, companyuniverse: renderCompanyUniverse, programstrategy: renderProgramStrategyPage, reviewdetail: renderReviewDetailPage, profile: renderProfilePage, gtmmotion: renderGtmMotionPage, icpbuilder: renderIcpBuilderPage, competitormap: renderCompetitorMapPage, replies: renderReplies, logger: renderLoggerPage, grids: renderGridsListView, grid: renderGrid, campaigns: renderCampaigns, calendar: renderSalesPage, intelligence: renderIntelligencePage, content: renderContent, contentcalendar: renderContentCalendarPage, settings: renderSettings, agency: renderAgencyPage, agencydash: renderAgencyDashPage };
   el.innerHTML = renderers[state.currentPage]();
   afterRender(state.currentPage);
 
@@ -2941,6 +3225,10 @@ function afterRender(page){
   const isMultiClientSession = !!(window.__session && (window.__session.controlPlane || (window.__session.clients && window.__session.clients.length > 1)));
   if(page === 'settings' && isMultiClientSession && window.__agencyOverview === undefined) loadAgencyOverview();
   if(page === 'settings' && isMultiClientSession) { refreshExtensionStatus(); refreshMondaySyncHealth(); }
+  if(page === 'agencydash'){
+    if(window.__agencyOverview === undefined) loadAgencyOverview();
+    if(window.__agencyTasks === undefined) loadAgencyTasks();
+  }
   if(page === 'campaigns' && (window.__campaignView || 'list') === 'list'){
     loadAllCampaignFunnels();
     loadCampaignIcpHealth();
