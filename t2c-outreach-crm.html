@@ -15381,7 +15381,7 @@ function renderLostDealsSection(data){
     </div>
     <div style="display:flex;flex-direction:column;gap:0;">
       ${data.lost.slice(0, 20).map(d => `
-        <div style="padding:8px 0;border-bottom:1px solid var(--border-light);cursor:pointer;" onclick="navigate('profile');selectProfileCompany('${esc(d.companyName)}')">
+        <div tabindex="0" role="button" style="padding:8px 0;border-bottom:1px solid var(--border-light);cursor:pointer;" onclick="navigate('profile');selectProfileCompany('${esc(d.companyName)}')" onkeydown="onRowKeydown(event)">
           <div style="display:flex;justify-content:space-between;gap:8px;">
             <strong style="font-size:12.5px;">${esc(d.companyName||'Unknown company')}</strong>
             <span class="muted" style="font-size:11px;flex:none;">${d.dealValue ? '$'+d.dealValue.toLocaleString() : ''} ${d.date ? '· '+fmtDate(d.date) : ''}</span>
@@ -15428,7 +15428,7 @@ function renderStalledRelationshipsSection(data){
     </div>
     <div style="display:flex;flex-direction:column;gap:0;">
       ${data.stalled.slice(0, 20).map(d => `
-        <div style="padding:8px 0;border-bottom:1px solid var(--border-light);cursor:pointer;" onclick="navigate('profile');selectProfileCompany('${esc(d.companyName)}')">
+        <div tabindex="0" role="button" style="padding:8px 0;border-bottom:1px solid var(--border-light);cursor:pointer;" onclick="navigate('profile');selectProfileCompany('${esc(d.companyName)}')" onkeydown="onRowKeydown(event)">
           <div style="display:flex;justify-content:space-between;gap:8px;">
             <strong style="font-size:12.5px;">${esc(d.companyName||'Unknown company')}</strong>
             <span class="muted" style="font-size:11px;flex:none;">${d.dealValue ? '$'+d.dealValue.toLocaleString() : ''} ${d.date ? '· '+fmtDate(d.date) : ''}</span>
