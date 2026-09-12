@@ -1339,7 +1339,7 @@ function daysBetween(dateStr, endStr){
   return Math.max(0, Math.round((d2 - d1) / 86400000));
 }
 function fmtDate(dateStr){
-  if(!dateStr) return '—';
+  if(!dateStr) return '–';
   const d = new Date(dateStr);
   return d.toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'});
 }
@@ -2467,9 +2467,9 @@ function renderAgencyOverviewGrid(data){
         : c.error
           ? `<div class="muted" style="font-size:11.5px;padding:8px 0;">${esc(friendlyErr(c.error))}</div>`
           : `<div style="display:flex;justify-content:space-around;padding:10px 0 4px;">
-              ${stat('Contacts', c.totalContacts ?? '—')}
-              ${stat('Campaigns', c.activeCampaigns ?? '—')}
-              ${stat('Touches / wk', c.touchPointsThisWeek ?? '—')}
+              ${stat('Contacts', c.totalContacts ?? '–')}
+              ${stat('Campaigns', c.activeCampaigns ?? '–')}
+              ${stat('Touches / wk', c.touchPointsThisWeek ?? '–')}
             </div>`;
       const reportBtn = c.paused ? '' : `<button class="btn btn-secondary btn-sm" style="width:100%;margin-top:8px;" id="weeklyReportBtn-${esc(c.slug)}" onclick="event.stopPropagation();generateWeeklyReport('${esc(c.slug)}')"><i class="ti ti-download"></i> Export report (PDF)</button>`;
       return `<div class="card" style="cursor:pointer;position:relative;" onclick="switchClient('${esc(c.slug)}')">
@@ -2770,7 +2770,7 @@ function renderEngineDrawer(){
       <div class="engine-messages" id="engineMessages">
         ${window.__engineHistory.length
           ? window.__engineHistory.map(m => `<div class="engine-msg ${m.role}">${esc(m.content)}</div>`).join('')
-          : `<div class="engine-empty">No messages yet — ask the Engine anything about ${esc(scopeLabel)}, or run a shortcut below.</div>`}
+          : `<div class="engine-empty">No messages yet. Ask the Engine anything about ${esc(scopeLabel)}, or run a shortcut below.</div>`}
         ${sending ? `<div class="engine-msg loading"><i class="ti ti-loader-2"></i> Thinking…</div>` : ''}
       </div>
       <div class="engine-shortcuts">
@@ -3057,7 +3057,7 @@ function renderReplies(){
       <div class="page-head" style="display:flex;align-items:flex-end;justify-content:space-between;gap:16px;">
         <div>
           <h1 class="page-h1">Replies ${rows && rows.length ? `<span class="page-meta"><span class="tcol-dot" style="background:var(--accent);"></span> ${rows.length} waiting</span>` : ''}</h1>
-          <div class="page-sub">Every contact who has replied and is waiting on us, most useful first. The draft is already written — review it, steer it, approve.</div>
+          <div class="page-sub">Every contact who has replied and is waiting on us, most useful first. The draft is already written. Review it, steer it, approve.</div>
         </div>
         <button class="btn btn-secondary btn-sm" onclick="loadRepliesQueue()"><i class="ti ti-refresh"></i> Refresh</button>
       </div>
@@ -3071,13 +3071,13 @@ function renderReplyCard(r){
   const badge = s ? `<span style="font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:999px;background:${s.bg};color:${s.fg};">${s.label}</span>` : '';
   const waiting = r.daysWaiting === null ? '' : (r.daysWaiting === 0 ? 'replied today' : `replied ${r.daysWaiting}d ago`);
   const attn = r.needsAttention
-    ? `<div style="font-size:11.5px;color:var(--warning);background:var(--warning-bg);border:1px solid var(--sand);border-radius:8px;padding:7px 10px;margin-bottom:8px;"><i class="ti ti-alert-triangle"></i> <strong>Needs your input</strong>${r.attentionNote ? ' — '+esc(r.attentionNote) : ''}</div>`
+    ? `<div style="font-size:11.5px;color:var(--warning);background:var(--warning-bg);border:1px solid var(--sand);border-radius:8px;padding:7px 10px;margin-bottom:8px;"><i class="ti ti-alert-triangle"></i> <strong>Needs your input</strong>${r.attentionNote ? ': '+esc(r.attentionNote) : ''}</div>`
     : '';
   const nameHtml = r.linkedInUrl
     ? `<a href="${esc(r.linkedInUrl)}" target="_blank" rel="noopener" style="font-weight:700;">${esc(r.contactName)}</a>`
     : `<span style="font-weight:700;">${esc(r.contactName)}</span>`;
   const staleNote = r.draftStale && r.draft
-    ? '<div class="muted" style="font-size:11px;margin-bottom:4px;"><i class="ti ti-alert-circle"></i> A newer reply came in after this draft — regenerate to refresh it.</div>'
+    ? '<div class="muted" style="font-size:11px;margin-bottom:4px;"><i class="ti ti-alert-circle"></i> A newer reply came in after this draft. Regenerate to refresh it.</div>'
     : '';
   return `
     <div class="card" id="replyCard-${id}" style="padding:14px 16px;margin-bottom:12px;">
@@ -3090,7 +3090,7 @@ function renderReplyCard(r){
       ${attn}
       <div style="font-size:12.5px;background:var(--surface-2);border-radius:8px;padding:8px 10px;margin:6px 0 10px;">
         <span class="muted" style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;">Their reply</span><br>
-        ${esc(r.lastInbound || '(no message text captured — open the thread on LinkedIn)')}
+        ${esc(r.lastInbound || '(no message text captured, open the thread on LinkedIn)')}
         ${r.thread ? `<div style="margin-top:6px;"><a href="#" onclick="toggleReplyThread('${id}');return false;" style="font-size:11px;">Show full thread</a><pre id="replyThread-${id}" hidden style="white-space:pre-wrap;font-family:inherit;font-size:11.5px;margin-top:6px;padding-top:6px;border-top:1px solid var(--border);">${esc(r.thread)}</pre></div>` : ''}
       </div>
       <div id="replyArea-${id}">
@@ -3111,7 +3111,7 @@ function renderReplyDraftArea(r){
     <textarea id="replyDraft-${id}" rows="5" style="width:100%;margin-bottom:8px;">${esc(r.draft||'')}</textarea>
     ${framingNoteHtml}
     <div style="width:100%;margin-bottom:8px;padding:8px;border:1px dashed var(--border);border-radius:6px;">
-      <div class="muted" style="font-size:11px;margin-bottom:4px;"><i class="ti ti-message-2-cog"></i> Not right? Steer it — ${esc(r.campaignName)} · reply</div>
+      <div class="muted" style="font-size:11px;margin-bottom:4px;"><i class="ti ti-message-2-cog"></i> Not right? Steer it · ${esc(r.campaignName)} · reply</div>
       <textarea id="reply-${id}-steer" rows="2" style="width:100%;" placeholder="e.g. shorter, drop the second question, don't pitch yet"></textarea>
       <label style="display:flex;gap:6px;align-items:center;font-size:11px;margin-top:5px;">
         <input type="checkbox" id="reply-${id}-remember" checked> Remember for ${esc(r.campaignName)} · reply
@@ -3271,7 +3271,7 @@ async function replyApprove(id){
   const textarea = document.getElementById('replyDraft-'+id);
   if(!r || !textarea) return;
   const message = textarea.value.trim();
-  if(!message){ toast('Nothing to send — the draft is empty', 'warn'); return; }
+  if(!message){ toast('Nothing to send: the draft is empty', 'warn'); return; }
 
   try { await navigator.clipboard.writeText(message); }
   catch(e){ textarea.focus(); textarea.select(); document.execCommand('copy'); }
@@ -3279,7 +3279,7 @@ async function replyApprove(id){
   const original = r.__original || r.draft || '';
   const draftOutcome = message === original ? 'Sent verbatim' : 'Sent edited';
   const area = document.getElementById('replyArea-'+id);
-  if(area) area.innerHTML = '<div class="muted" style="font-size:12.5px;padding:6px 0;"><i class="ti ti-loader-2"></i> Copied — logging…</div>';
+  if(area) area.innerHTML = '<div class="muted" style="font-size:12.5px;padding:6px 0;"><i class="ti ti-loader-2"></i> Copied, logging…</div>';
 
   try {
     const res = await fetch(`/api/campaign/${encodeURIComponent(r.campaignName)}/contacts/${r.contactId}/mark-sent`, {
@@ -3288,7 +3288,7 @@ async function replyApprove(id){
     });
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
-    toast('Reply copied and logged — paste it into LinkedIn', 'success');
+    toast('Reply copied and logged. Paste it into LinkedIn', 'success');
     window.__repliesQueue = (window.__repliesQueue || []).filter(x => x.campaignContactId !== id);
     delete (window.__repliesById || {})[id];
     const card = document.getElementById('replyCard-'+id);
@@ -3565,7 +3565,7 @@ function renderDashActions(profile){
     let kind = null, label = null;
     if(!c.everContacted){ kind = 'notContacted'; label = 'Not yet contacted'; }
     else if(latest && latest.replyReceived){ kind = 'reply'; label = 'Reply to review'; }
-    else if(latest){ kind = 'nextStep'; label = (latest.stage ? esc(latest.stage) + ' — ' : '') + 'next step due'; }
+    else if(latest){ kind = 'nextStep'; label = (latest.stage ? esc(latest.stage) + ' · ' : '') + 'next step due'; }
     if(!kind) return null;
     return { name: c.name, jobTitle: c.jobTitle, campaignName: latest ? latest.campaignName : '', label, kind };
   }).filter(Boolean).sort((a, b) => DASH_ACTION_KIND[a.kind].rank - DASH_ACTION_KIND[b.kind].rank);
@@ -3628,7 +3628,7 @@ function renderDashTopIcps(profile){
               <span class="tgt-key-ava">${esc((c.name || '?').trim()[0] || '?').toUpperCase()}</span>
               <div style="min-width:0;">
                 <div class="tgt-key-name">${esc(c.name)}</div>
-                <div class="tgt-key-role">${esc(c.jobTitle || '—')}</div>
+                <div class="tgt-key-role">${esc(c.jobTitle || '–')}</div>
               </div>
             </div>
             ${c.isDecisionMaker ? '<span class="pill" title="Decision maker" style="background:var(--tint-green-bg);color:var(--tint-green-fg);flex:none;">DM</span>' : ''}
@@ -3687,7 +3687,7 @@ function pipelineCylinderSvg(buckets){
   const lastBand = bands[bands.length - 1];
   const bottomEllipse = lastBand ? `<ellipse cx="65" cy="${lastBand.top + lastBand.h}" rx="50" ry="16" fill="${lastBand.color}" opacity=".82" stroke="var(--card-bg)" stroke-width="1.5"/>` : '';
   const label = esc(buckets.map(b => `${b.label}: ${b.n}`).join(', '));
-  return `<svg viewBox="0 0 130 ${totalH}" width="130" height="${Math.min(totalH, 150)}" role="img" aria-label="Sales pipeline — ${label}">${parts}${bottomEllipse}</svg>`;
+  return `<svg viewBox="0 0 130 ${totalH}" width="130" height="${Math.min(totalH, 150)}" role="img" aria-label="Sales pipeline: ${label}">${parts}${bottomEllipse}</svg>`;
 }
 
 function renderDashPipeline(profile){
@@ -3719,7 +3719,7 @@ function renderDashEnrichment(name, profile){
     <div class="enrich-cols">
       <div>
         <div class="enrich-h">Firmographics</div>
-        <div style="font-size:12.5px;">${esc(c.industry || '—')}${c.sector ? ' · ' + esc(c.sector) : ''}</div>
+        <div style="font-size:12.5px;">${esc(c.industry || '–')}${c.sector ? ' · ' + esc(c.sector) : ''}</div>
         ${c.linkedinUrl ? `<a href="${esc(c.linkedinUrl)}" target="_blank" rel="noopener" class="muted" style="font-size:11px;">Company LinkedIn</a>` : ''}
       </div>
       <div>
@@ -3752,7 +3752,7 @@ function renderDashSynthesis(name){
   if(s === undefined || s === null) return '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading…</div>';
   if(s.error) return `<div class="muted" style="font-size:12px;">Couldn't generate a summary. ${genBtn('Try again')}</div>`;
   if(s.notGenerated){
-    return `<div class="muted" style="font-size:12px;">${s.reason === 'not-enough-data' ? 'Not enough on file yet to summarise — check back once there are programs, activity, or deals logged.' : 'Not generated yet.'}</div>${genBtn('Generate summary')}`;
+    return `<div class="muted" style="font-size:12px;">${s.reason === 'not-enough-data' ? 'Not enough on file yet to summarise. Check back once there are programs, activity, or deals logged.' : 'Not generated yet.'}</div>${genBtn('Generate summary')}`;
   }
   return `
     <div style="font-size:12px;white-space:pre-wrap;">${esc(s.summary || '')}</div>
@@ -3803,7 +3803,7 @@ function renderCompanyMessagesBody(name){
         <strong>${esc(r.contactName)}</strong>
         <span class="muted" style="font-size:11px;">${r.connectionSentDate ? fmtDate(r.connectionSentDate) : ''}</span>
       </div>
-      <div class="muted" style="font-size:11px;">${esc(r.campaignName || '—')}${r.sequenceStage ? ' · ' + esc(r.sequenceStage) : ''}</div>
+      <div class="muted" style="font-size:11px;">${esc(r.campaignName || '–')}${r.sequenceStage ? ' · ' + esc(r.sequenceStage) : ''}</div>
       ${(r.finalMessageSent || r.nextMessageDraft) ? `<div style="font-size:12px;margin-top:4px;white-space:pre-wrap;">${esc((r.finalMessageSent || r.nextMessageDraft).slice(0, 280))}${(r.finalMessageSent || r.nextMessageDraft).length > 280 ? '…' : ''}</div>` : ''}
     </div>`).join('');
 }
@@ -3869,7 +3869,7 @@ function renderGridsListView(){
               <td class="perf-name">No campaign <span class="pill" style="background:var(--surface-2);color:var(--muted);margin-left:4px;">Virtual</span></td>
               <td>${noCampCompanies}</td>
               <td>${noCampCount}</td>
-              <td>—</td>
+              <td>–</td>
               <td><span class="tag tag-found">Browse</span></td>
               <td></td>
             </tr>`;
@@ -4409,7 +4409,7 @@ async function runContextParseScreenshot(){
         <p style="font-size:12.5px;"><strong>${esc(data.contactName)}</strong> ${data.replied ? '<span class="tag tag-connected">Replied</span>' : '<span class="tag tag-opened">No reply yet</span>'}</p>
         <p style="font-size:12px;margin-top:6px;">${esc(data.messageSummary)}</p>
         ${data.campaignScoped
-          ? `<p class="muted" style="font-size:11.5px;margin-top:8px;">Sequence stage in this campaign: ${esc(data.previousStage||'—')} &rarr; ${esc(data.newStage||'—')}</p>`
+          ? `<p class="muted" style="font-size:11.5px;margin-top:8px;">Sequence stage in this campaign: ${esc(data.previousStage||'–')} &rarr; ${esc(data.newStage||'–')}</p>`
           : `<p class="muted" style="font-size:11.5px;margin-top:8px;">No campaign active, so sequence stage wasn't advanced - open this from a campaign's Engine tab to track that.</p>`}
         ${data.draft ? `<div style="margin-top:10px;"><div style="font-weight:700;font-size:11.5px;">Next message draft</div><textarea readonly rows="4" style="margin-top:4px;">${esc(data.draft)}</textarea></div>` : ''}
       `;
@@ -4791,7 +4791,7 @@ function renderLoggerContactResults(){
   if(!q){ el.innerHTML = ''; return; }
   const matches = state.contacts.filter(c => c.name.toLowerCase().includes(q) || (c.company||'').toLowerCase().includes(q)).slice(0, 8);
   el.innerHTML = matches.length
-    ? matches.map(c => `<div class="logger-result-row" onclick="loggerSelectContact('${c.id}')">${esc(c.name)}${c.company ? ` <span class="muted">— ${esc(c.company)}${c.role ? ', '+esc(c.role) : ''}</span>` : ''}</div>`).join('')
+    ? matches.map(c => `<div class="logger-result-row" onclick="loggerSelectContact('${c.id}')">${esc(c.name)}${c.company ? ` <span class="muted">· ${esc(c.company)}${c.role ? ', '+esc(c.role) : ''}</span>` : ''}</div>`).join('')
     : '<p class="muted" style="font-size:12px;">No matches - use "Add a new contact" below.</p>';
 }
 
@@ -5098,7 +5098,7 @@ async function runLoggerParseConversation(){
     // work out - that gets the friendlier inline treatment instead.
     if(!res.ok) throw new Error(typeof data.error === 'string' ? data.error : ('Request failed with status '+res.status));
     if(data.error){
-      l.convoParseError = data.message || "We couldn't read that — try rewording or breaking it into shorter entries";
+      l.convoParseError = data.message || "We couldn't read that. Try rewording or breaking it into shorter entries";
       renderPage();
       return;
     }
@@ -5665,7 +5665,7 @@ async function runLoggerConnectionsMatch(){
     lc.shots = [];
     renderPage();
   } catch(err){
-    lc.result = { error: "We couldn't read that — try rewording or a clearer screenshot" };
+    lc.result = { error: "We couldn't read that. Try rewording or a clearer screenshot" };
     console.warn('Log connections match failed:', err.message);
     renderPage();
   } finally {
@@ -5725,7 +5725,7 @@ async function runLoggerAIExtract(){
     // (friendly inline error instead).
     if(!res.ok) throw new Error(typeof data.error === 'string' ? data.error : ('Request failed with status '+res.status));
     if(data.error){
-      ai.parseError = data.message || "We couldn't read that — try rewording or breaking it into shorter entries";
+      ai.parseError = data.message || "We couldn't read that. Try rewording or breaking it into shorter entries";
       renderPage();
       return;
     }
@@ -5839,7 +5839,7 @@ function renderLoggerAIContactResultsHTML(query){
   if(!q) return '';
   const matches = state.contacts.filter(c => c.name.toLowerCase().includes(q) || (c.company||'').toLowerCase().includes(q)).slice(0, 6);
   if(!matches.length) return '<p class="muted" style="font-size:12px;">No matches.</p>';
-  return matches.map(c => `<div class="logger-result-row" onclick="loggerAISelectContact(this.closest('[data-logger-ai-id]').dataset.loggerAiId,'${c.id}')">${esc(c.name)}${c.company ? ` <span class="muted">— ${esc(c.company)}</span>` : ''}</div>`).join('');
+  return matches.map(c => `<div class="logger-result-row" onclick="loggerAISelectContact(this.closest('[data-logger-ai-id]').dataset.loggerAiId,'${c.id}')">${esc(c.name)}${c.company ? ` <span class="muted">· ${esc(c.company)}</span>` : ''}</div>`).join('');
 }
 
 function renderLoggerAIContactResults(localId, query){
@@ -6437,7 +6437,7 @@ function renderTodaysActions(campaign){
       ${TODAYS_ACTIONS_TABS.map(([key,label]) => `<div class="seq-tab ${activeTab===key?'active':''}" onclick="setTodaysActionsTab('${key}')">${label} <span class="count-pill ${counts[key]>0?'has':''}" style="margin-left:4px;">${counts[key]}</span></div>`).join('')}
     </div>
     <div id="todaysActionsList">
-      ${filtered.length ? filtered.map(a => renderTodaysActionItem(a)).join('') : '<div class="empty-state">Nothing needs attention today — nice work.</div>'}
+      ${filtered.length ? filtered.map(a => renderTodaysActionItem(a)).join('') : '<div class="empty-state">Nothing needs attention today. Nice work.</div>'}
     </div>
   </div>`;
 }
@@ -6475,7 +6475,7 @@ function renderTodaysActionItem(a){
       </div>
       <div style="text-align:right;">
         <span class="pill" id="actionPill-${c.id}">${esc(a.type)}</span>
-        <div class="muted" style="font-size:11px;margin-top:4px;">${a.daysSinceTouch===null?'—':a.daysSinceTouch+'d since last touch'}</div>
+        <div class="muted" style="font-size:11px;margin-top:4px;">${a.daysSinceTouch===null?'–':a.daysSinceTouch+'d since last touch'}</div>
         <div class="muted" style="font-size:11px;margin-top:2px;">Recommended: ${esc(method)}</div>
       </div>
     </div>
@@ -6607,7 +6607,7 @@ function renderFastActionCard(a){
     <div class="todo-item-actions">
       <div id="fastActionArea-${c.id}" style="display:contents;">
         ${(!email && a.type === 'Send connection')
-          ? `<a class="btn btn-primary btn-sm" href="${esc(c.url||'#')}" target="_blank" rel="noopener" onclick="handleContactLinkedInOpened('${c.id}')"><i class="ti ti-brand-linkedin"></i> ${a.connectionArm === 'No note' ? 'Send — no note' : 'Send connection'}</a>`
+          ? `<a class="btn btn-primary btn-sm" href="${esc(c.url||'#')}" target="_blank" rel="noopener" onclick="handleContactLinkedInOpened('${c.id}')"><i class="ti ti-brand-linkedin"></i> ${a.connectionArm === 'No note' ? 'Send (no note)' : 'Send connection'}</a>`
           : `<button class="btn btn-primary btn-sm" onclick="handleGenerateFastMessage('${c.id}')"><i class="ti ti-sparkles"></i> ${email ? 'Draft email' : 'Generate message'}</button>`}
       </div>
       ${(!email && a.type === 'Send connection' && a.connectionArm === 'No note') ? `<span class="muted" style="font-size:11px;align-self:center;">A/B: send this one <strong>without</strong> a note</span>` : ''}
@@ -6700,7 +6700,7 @@ async function handleMarkAllActionsDone(){
   });
   window.__todaysActions = {};
   const list = document.getElementById('todaysActionsList');
-  if(list) list.innerHTML = '<div class="empty-state">Nothing needs attention today — nice work.</div>';
+  if(list) list.innerHTML = '<div class="empty-state">Nothing needs attention today. Nice work.</div>';
   const markAllBtn = document.getElementById('markAllDoneBtn');
   if(markAllBtn) markAllBtn.remove();
 
@@ -6971,7 +6971,7 @@ async function handleGenerateFastMessage(cid){
       <textarea id="fastActionDraft-${cid}" rows="4" style="width:100%;margin-bottom:8px;">${esc(data.message)}</textarea>
       ${ctaNoteHtml}${framingNoteHtml}${profiledNoteHtml}
       <div style="width:100%;margin-bottom:8px;padding:8px;border:1px dashed var(--border);border-radius:6px;">
-        <div class="muted" style="font-size:11px;margin-bottom:4px;"><i class="ti ti-message-2-cog"></i> Not right? Steer it — ${esc(action.campaignName)} · ${esc(stageLabel)}${ruleCount ? ` · ${ruleCount} standing rule${ruleCount===1?'':'s'}` : ''}</div>
+        <div class="muted" style="font-size:11px;margin-bottom:4px;"><i class="ti ti-message-2-cog"></i> Not right? Steer it · ${esc(action.campaignName)} · ${esc(stageLabel)}${ruleCount ? ` · ${ruleCount} standing rule${ruleCount===1?'':'s'}` : ''}</div>
         <textarea id="fast-${cid}-steer" rows="2" style="width:100%;" placeholder="e.g. too long and too hedgy, 3 sentences, no 'I might be wrong' caveats"></textarea>
         <label style="display:flex;gap:6px;align-items:center;font-size:11px;margin-top:5px;">
           <input type="checkbox" id="fast-${cid}-remember" checked> Remember for ${esc(action.campaignName)} · ${esc(stageLabel)}
@@ -7125,7 +7125,7 @@ async function generateContactBrief(cid){
   panel.innerHTML = '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Generating brief...</div>';
 
   const touchHistory = (c.touchPoints || []).slice().sort((x,y)=>new Date(x.date)-new Date(y.date))
-    .map(tp => `${tp.date} — ${tp.type}${tp.communicationMethod ? ' ('+tp.communicationMethod+')' : ''}: ${tp.notes || 'no notes'}${(tp.painPoints && tp.painPoints.length) ? ' [pain points: '+tp.painPoints.join(', ')+']' : ''}`)
+    .map(tp => `${tp.date} · ${tp.type}${tp.communicationMethod ? ' ('+tp.communicationMethod+')' : ''}: ${tp.notes || 'no notes'}${(tp.painPoints && tp.painPoints.length) ? ' [pain points: '+tp.painPoints.join(', ')+']' : ''}`)
     .join('\n') || 'No touch points logged yet.';
 
   const isMessage = method === 'LinkedIn message' || method === 'Email';
@@ -7514,7 +7514,7 @@ function renderGtmLiveStrip(){
     <div class="muted" style="font-size:10.5px;">${label}</div></div>`;
   return `
   <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px;">
-    ${w && w.icpConfigured ? tile('ICP accounts in a campaign', `${w.inCampaignCount ?? '—'}/${w.icpCompanyCount ?? '—'}`) : ''}
+    ${w && w.icpConfigured ? tile('ICP accounts in a campaign', `${w.inCampaignCount ?? '–'}/${w.icpCompanyCount ?? '–'}`) : ''}
     ${c ? tile('ICP leads', `${c.leadsIcp}/${c.leadsTotal}`) : ''}
     ${c ? tile('ICP opportunities', `${c.oppsIcp}/${c.oppsTotal}`) : ''}
     ${c ? tile('ICP customers', `${c.customersIcp}/${c.customersTotal}`) : ''}
@@ -7563,7 +7563,7 @@ function renderGtmMotionPage(){
     <p ${ceMeta('intro')} style="${edit ? 'outline:none;' : ''}">${esc(m.intro)}</p>
     ${edit ? `<div style="margin-top:14px;display:flex;align-items:center;gap:10px;">
       <span class="toggle-switch ${m.loop ? 'on' : ''}" onclick="gtmToggleLoop()"><span class="knob"></span></span>
-      <span style="font-size:12px;color:rgba(255,255,255,.82);">${m.loop ? 'Flywheel — the last stage loops back to the first' : 'Linear funnel — stages run start to finish'}</span>
+      <span style="font-size:12px;color:rgba(255,255,255,.82);">${m.loop ? 'Flywheel: the last stage loops back to the first' : 'Linear funnel: stages run start to finish'}</span>
     </div>` : ''}
   </div>
 
@@ -7911,12 +7911,12 @@ function icpFitStatus(m){
   if(rs.some(r => r === 'weak')) return { key: 'stop', label: 'Not a fit yet', color: 'var(--danger)', tint: 'red' };
   if(rs.every(r => r === 'strong')) return { key: 'go', label: 'Strong ICP fit', color: 'var(--success)', tint: 'green' };
   if(rs.some(r => !r)) return { key: 'unknown', label: 'Still mapping', color: 'var(--muted)', tint: 'grey' };
-  return { key: 'caution', label: 'Partial fit — sharpen it', color: 'var(--tint-amber-fg)', tint: 'amber' };
+  return { key: 'caution', label: 'Partial fit, sharpen it', color: 'var(--tint-amber-fg)', tint: 'amber' };
 }
 
 function icpPct(a, b){
-  if(b === null || b === undefined || b === '' || !b) return '—';
-  if(a === null || a === undefined || a === '') return '—';
+  if(b === null || b === undefined || b === '' || !b) return '–';
+  if(a === null || a === undefined || a === '') return '–';
   return Math.round((a / b) * 100) + '%';
 }
 
@@ -7928,10 +7928,10 @@ function renderIcpComputedPanel(){
   if(!c) return '';
   const row = (label, icp, total) => `
     <tr><td class="ss-name">${label}</td>
-      <td class="ss-num">${icp ?? '—'}</td>
-      <td class="ss-num">${total ?? '—'}</td>
+      <td class="ss-num">${icp ?? '–'}</td>
+      <td class="ss-num">${total ?? '–'}</td>
       <td class="ss-num" style="font-weight:700;">${icpPct(icp, total)}</td></tr>`;
-  const wr = v => (v === null || v === undefined) ? '—' : v + '%';
+  const wr = v => (v === null || v === undefined) ? '–' : v + '%';
   return `
   <div style="border:1px solid var(--border-light);border-radius:10px;padding:12px;margin-bottom:14px;background:var(--surface-2);">
     <div style="display:flex;justify-content:space-between;align-items:baseline;">
@@ -7948,7 +7948,7 @@ function renderIcpComputedPanel(){
         </tbody>
       </table>
     </div>
-    <div class="muted" style="font-size:11px;margin-top:8px;">Win rate — ICP <b>${wr(c.winRateIcp)}</b> vs non-ICP <b>${wr(c.winRateNonIcp)}</b>. Fill the table below with your own read, or use these.</div>
+    <div class="muted" style="font-size:11px;margin-top:8px;">Win rate: ICP <b>${wr(c.winRateIcp)}</b> vs non-ICP <b>${wr(c.winRateNonIcp)}</b>. Fill the table below with your own read, or use these.</div>
   </div>`;
 }
 
@@ -7990,7 +7990,7 @@ function renderIcpBuilderPage(){
   const ce = (path, ph) => edit
     ? `contenteditable="true" spellcheck="false" data-ph="${esc(ph||'')}" onblur="icpEditField('${path}',this)" class="icp-ce"`
     : '';
-  const show = v => esc(v || (edit ? '' : '—'));
+  const show = v => esc(v || (edit ? '' : '–'));
 
   const trk = m.tracking;
 
@@ -8018,7 +8018,7 @@ function renderIcpBuilderPage(){
   </div>
 
   <div class="card" style="margin-bottom:16px;">
-    <div class="section-title" style="margin-bottom:2px;"><i class="ti ti-venn-diagram-2"></i> The fit test — the green spot</div>
+    <div class="section-title" style="margin-bottom:2px;"><i class="ti ti-venn-diagram-2"></i> The fit test: the green spot</div>
     <div class="desc">An ICP is the overlap: an <strong>urgent, important problem</strong> you solve, a segment with <strong>budget</strong> to fix it, and a space that's <strong>underserved</strong> enough for you to be 10&times; better. Rate each, then read the centre.</div>
     <div class="icp-fit-grid">
       <div class="icp-venn">
@@ -8045,7 +8045,7 @@ function renderIcpBuilderPage(){
 
   <div class="card" style="margin-bottom:16px;">
     <div class="section-title" style="margin-bottom:2px;"><i class="ti ti-arrows-diff"></i> Where you're 10&times; better</div>
-    <div class="desc">The default competitor is usually "a spreadsheet" or "do nothing" — and that's a real competitor. Name it, then name the one segment, angle or feature where you beat it by 10&times;.</div>
+    <div class="desc">The default competitor is usually "a spreadsheet" or "do nothing". That's a real competitor. Name it, then name the one segment, angle or feature where you beat it by 10&times;.</div>
     <div class="two-col" style="gap:14px;">
       <div class="field"><label>The default competitor</label>
         <div ${ce('edge.defaultCompetitor','e.g. an internal PMO with a spreadsheet / a big-4 firm on a 9-month SOW')} style="font-size:12.5px;line-height:1.55;${edit?'outline:none;border:1px dashed var(--border);border-radius:6px;padding:8px;min-height:40px;':''}">${show(m.edge.defaultCompetitor)}</div>
@@ -8066,7 +8066,7 @@ function renderIcpBuilderPage(){
     </div>
     <div class="desc">${m.revenue.stage==='revenue'
       ? 'Mine the revenue data: where do you actually win, why, and what makes you different? Beat that back into the profile above.'
-      : 'No revenue data yet — write the thesis, then test it as fast as possible and revisit this once deals land.'}</div>
+      : 'No revenue data yet. Write the thesis, then test it as fast as possible and revisit this once deals land.'}</div>
     ${m.revenue.stage==='revenue' ? `
       <div class="field"><label>Where we win</label><div ${ce('revenue.winsWhere','Which segments / deal types close')} style="font-size:12.5px;${edit?'outline:none;border:1px dashed var(--border);border-radius:6px;padding:8px;min-height:34px;':''}">${show(m.revenue.winsWhere)}</div></div>
       <div class="field"><label>Why we win there</label><div ${ce('revenue.winsWhy','What tips those deals to us')} style="font-size:12.5px;${edit?'outline:none;border:1px dashed var(--border);border-radius:6px;padding:8px;min-height:34px;':''}">${show(m.revenue.winsWhy)}</div></div>
@@ -8078,7 +8078,7 @@ function renderIcpBuilderPage(){
 
   <div class="card" style="margin-bottom:16px;">
     <div class="section-title" style="margin-bottom:2px;"><i class="ti ti-route"></i> Track it through the funnel</div>
-    <div class="desc">Don't file the ICP and forget it. Tag every lead, opportunity and customer ICP / non-ICP, and watch the rates diverge — that's the evidence that mobilises the whole motion.</div>
+    <div class="desc">Don't file the ICP and forget it. Tag every lead, opportunity and customer ICP / non-ICP, and watch the rates diverge. That's the evidence that mobilises the whole motion.</div>
     ${renderIcpComputedPanel()}
     <div class="spreadsheet-wrap" style="margin-bottom:12px;">
       <table class="spreadsheet-table" style="min-width:520px;">
@@ -8087,8 +8087,8 @@ function renderIcpBuilderPage(){
           ${[['Leads','leadsIcp','leadsTotal'],['Opportunities','oppsIcp','oppsTotal'],['Customers','customersIcp','customersTotal']].map(([label,ik,tk]) => `
             <tr>
               <td class="ss-name">${label}</td>
-              <td class="ss-num">${edit?`<input type="number" min="0" value="${trk[ik]??''}" onchange="icpSetTracking('${ik}',this.value)" style="width:64px;text-align:right;">`:(trk[ik]??'—')}</td>
-              <td class="ss-num">${edit?`<input type="number" min="0" value="${trk[tk]??''}" onchange="icpSetTracking('${tk}',this.value)" style="width:64px;text-align:right;">`:(trk[tk]??'—')}</td>
+              <td class="ss-num">${edit?`<input type="number" min="0" value="${trk[ik]??''}" onchange="icpSetTracking('${ik}',this.value)" style="width:64px;text-align:right;">`:(trk[ik]??'–')}</td>
+              <td class="ss-num">${edit?`<input type="number" min="0" value="${trk[tk]??''}" onchange="icpSetTracking('${tk}',this.value)" style="width:64px;text-align:right;">`:(trk[tk]??'–')}</td>
               <td class="ss-num" style="font-weight:700;">${icpPct(trk[ik],trk[tk])}</td>
             </tr>
           `).join('')}
@@ -8096,13 +8096,13 @@ function renderIcpBuilderPage(){
       </table>
     </div>
     <div class="two-col" style="gap:14px;">
-      <div class="field"><label>Win rate — ICP vs non-ICP</label>
+      <div class="field"><label>Win rate: ICP vs non-ICP</label>
         <div style="display:flex;gap:8px;">
           <div ${ce('tracking.winRateIcp','ICP %')} style="flex:1;font-size:12.5px;${edit?'outline:none;border:1px dashed var(--border);border-radius:6px;padding:7px;':''}">${show(trk.winRateIcp)}</div>
           <div ${ce('tracking.winRateNonIcp','non-ICP %')} style="flex:1;font-size:12.5px;${edit?'outline:none;border:1px dashed var(--border);border-radius:6px;padding:7px;':''}">${show(trk.winRateNonIcp)}</div>
         </div>
       </div>
-      <div class="field"><label>Churn — ICP vs non-ICP</label>
+      <div class="field"><label>Churn: ICP vs non-ICP</label>
         <div style="display:flex;gap:8px;">
           <div ${ce('tracking.churnIcp','ICP %')} style="flex:1;font-size:12.5px;${edit?'outline:none;border:1px dashed var(--border);border-radius:6px;padding:7px;':''}">${show(trk.churnIcp)}</div>
           <div ${ce('tracking.churnNonIcp','non-ICP %')} style="flex:1;font-size:12.5px;${edit?'outline:none;border:1px dashed var(--border);border-radius:6px;padding:7px;':''}">${show(trk.churnNonIcp)}</div>
@@ -8116,7 +8116,7 @@ function renderIcpBuilderPage(){
 
   <div class="card" style="margin-bottom:16px;">
     <div class="section-title" style="margin-bottom:2px;"><i class="ti ti-list-details"></i> The attributes</div>
-    <div class="desc">The concrete filters — what you screen a company against before anyone drafts a word.</div>
+    <div class="desc">The concrete filters: what you screen a company against before anyone drafts a word.</div>
     ${m.attributes.map(a => `
       <div class="icp-attr-row">
         <div ${edit?`contenteditable="true" spellcheck="false" onblur="icpEditAttr('${a.id}','label',this)" class="icp-ce"`:''} style="font-weight:700;font-size:12px;width:190px;flex:none;${edit?'outline:none;border-bottom:1px dashed var(--border);':''}">${esc(a.label)}</div>
@@ -8169,7 +8169,7 @@ function renderGrid(){
     return `
     <button class="btn btn-ghost btn-sm" style="margin-bottom:10px;" onclick="navigate('home')"><i class="ti ti-arrow-left"></i> Home</button>
     <div class="section-title" style="margin-bottom:6px;"><i class="ti ti-grid-dots"></i> ${esc(grid.name)}</div>
-    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Every contact not attached to a campaign, by company and job title. Read-only — they drop off here once their grid is linked to a campaign or they're added to one.</p>
+    <p class="muted" style="font-size:12.5px;margin-bottom:14px;">Every contact not attached to a campaign, by company and job title. Read-only. They drop off here once their grid is linked to a campaign or they're added to one.</p>
     <div id="gridNotification"></div>
     ${renderGridViewToolbar(grid.id)}
     <div id="gridViewArea">${renderGridViewArea(grid, cols)}</div>
@@ -8340,7 +8340,7 @@ function renderUnassignedGridRow(grid, cols){
   return unassigned.map(c => `
     <tr class="unassigned-row" style="background:var(--surface-2);">
       <td class="company-cell"><span class="muted" style="font-style:italic;">No company yet</span></td>
-      ${cols.map(role => role === c.role ? `<td>${renderGridCellHTML(c)}</td>` : '<td><div class="cell-empty">—</div></td>').join('')}
+      ${cols.map(role => role === c.role ? `<td>${renderGridCellHTML(c)}</td>` : '<td><div class="cell-empty">–</div></td>').join('')}
     </tr>
   `).join('');
 }
@@ -8476,9 +8476,9 @@ function spreadsheetRowData(c, gridId, seqMap){
     sequenceStage: seqMap ? (seqMap[c.name.trim().toLowerCase()] || '') : '',
     touchPoints: (c.touchPoints||[]).length,
     lastContact: last,
-    lastContactDisplay: last ? fmtDate(last) : '—',
+    lastContactDisplay: last ? fmtDate(last) : '–',
     nextDraft: draft,
-    nextDraftDisplay: draft ? (draft.length > 60 ? esc(draft.slice(0,60))+'…' : esc(draft)) : '—',
+    nextDraftDisplay: draft ? (draft.length > 60 ? esc(draft.slice(0,60))+'…' : esc(draft)) : '–',
     emailAddress: c.email || '',
     dms: counts.dms, calls: counts.calls, coffee: counts.coffee, email: counts.email
   };
@@ -8515,7 +8515,7 @@ function renderContactSpreadsheet(grid){
     });
   }
 
-  if(!columns.length) return '<div class="empty-state">No columns selected — use Columns to pick some.</div>';
+  if(!columns.length) return '<div class="empty-state">No columns selected. Use Columns to pick some.</div>';
   if(!contacts.length) return '<div class="empty-state">No contacts in this grid yet.</div>';
 
   const campaignName = currentGridCampaignName();
@@ -8538,7 +8538,7 @@ function renderContactSpreadsheet(grid){
               if(c.key === 'nextDraft') return `<td class="ss-draft" title="${esc(row.nextDraft || '')}">${row.nextDraftDisplay}</td>`;
               if(c.numeric) return `<td class="ss-num">${row[c.key]}</td>`;
               if(c.key === 'lastContact') return `<td>${row.lastContactDisplay}</td>`;
-              return `<td>${esc((row[c.key]||'—').toString())}</td>`;
+              return `<td>${esc((row[c.key]||'–').toString())}</td>`;
             }).join('')}
           </tr>
         `).join('')}
@@ -8687,7 +8687,7 @@ function removeGridColumn(index){
   if(!role) return;
   const occupied = gridContacts(grid.id).filter(c => c.role === role && !isContactExcludedFromGrid(c)).length;
   if(occupied){
-    const body = `<p style="font-size:13px;">${occupied} contact${occupied===1?' is':'s are'} in the "${esc(role)}" column. Removing it hides ${occupied===1?'it':'them'} from this grid — they stay in the database and keep their job title, and they'll show again if you add the column back.</p>`;
+    const body = `<p style="font-size:13px;">${occupied} contact${occupied===1?' is':'s are'} in the "${esc(role)}" column. Removing it hides ${occupied===1?'it':'them'} from this grid. They stay in the database and keep their job title, and they'll show again if you add the column back.</p>`;
     const footer = `
       <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
       <button class="btn btn-primary" style="background:var(--danger);border-color:var(--danger);" onclick="doRemoveGridColumn(${index})"><i class="ti ti-trash"></i> Remove column</button>
@@ -8897,28 +8897,28 @@ function openCsvColumnModal(rows){
     <div class="field">
       <label>Which column contains the job title? <span class="muted" style="font-weight:400;">(optional)</span></label>
       <select id="csvContactColumn">
-        <option value="">— None —</option>
+        <option value="">None</option>
         ${optionsHtml}
       </select>
     </div>
     <div class="field">
-      <label>Which column contains the contact's name? <span class="muted" style="font-weight:400;">(optional — the business name is used if blank)</span></label>
+      <label>Which column contains the contact's name? <span class="muted" style="font-weight:400;">(optional, the business name is used if blank)</span></label>
       <select id="csvNameColumn">
-        <option value="">— None —</option>
+        <option value="">None</option>
         ${optionsHtml}
       </select>
     </div>
     <div class="field">
       <label>Which column contains the contact's email? <span class="muted" style="font-weight:400;">(optional)</span></label>
       <select id="csvEmailColumn">
-        <option value="">— None —</option>
+        <option value="">None</option>
         ${optionsHtml}
       </select>
     </div>
     <div class="field">
-      <label>Which column contains the business website? <span class="muted" style="font-weight:400;">(optional — "Research business" uses it to find a contact email)</span></label>
+      <label>Which column contains the business website? <span class="muted" style="font-weight:400;">(optional, "Research business" uses it to find a contact email)</span></label>
       <select id="csvWebsiteColumn">
-        <option value="">— None —</option>
+        <option value="">None</option>
         ${optionsHtml}
       </select>
     </div>
@@ -9144,7 +9144,7 @@ function openApolloSearchModal(){
   const sizeBuckets = ['1-10','11-20','21-50','51-100','101-200','201-500','501-1000','1001-2000','2001-5000','5001-10000','10001+'];
   const preselected = ['1-10','11-20','21-50'];
   const body = `
-    <div class="field"><label>Company (optional)</label><input id="apolloCompany" placeholder="e.g. Strike Energy — or a domain like strikeenergy.com.au"></div>
+    <div class="field"><label>Company (optional)</label><input id="apolloCompany" placeholder="e.g. Strike Energy, or a domain like strikeenergy.com.au"></div>
     <div class="field"><label>Job title</label><input id="apolloJobTitle" placeholder="e.g. Founder, CEO, Head of Growth"></div>
     <div class="field"><label>Location</label><input id="apolloLocation" placeholder="e.g. United States"></div>
     <div class="field"><label>Industry / keywords</label><input id="apolloKeywords" placeholder="e.g. B2B consulting, marketing agency, SaaS"></div>
@@ -9215,7 +9215,7 @@ function renderApolloResults(){
           <input type="checkbox" class="apollo-result-checkbox" value="${i}" style="margin-top:3px;">
           <span>
             <strong>${esc(r.name)}</strong><br>
-            <span class="muted" style="font-size:12px;">${esc(r.jobTitle || '—')} &middot; ${esc(r.company || '—')}</span><br>
+            <span class="muted" style="font-size:12px;">${esc(r.jobTitle || '–')} &middot; ${esc(r.company || '–')}</span><br>
             ${r.linkedinUrl ? `<a href="${esc(r.linkedinUrl)}" target="_blank" rel="noopener" style="font-size:11.5px;">${esc(r.linkedinUrl)}</a>` : '<span class="muted" style="font-size:11.5px;">No LinkedIn URL found</span>'}
           </span>
         </label>
@@ -9371,7 +9371,7 @@ async function runDailySearch(roleFilter){
   }));
 
   const cells = [...emptyCells, ...fillCells];
-  if(!cells.length){ toast('Nothing new to search — every cell either has a contact or has already been checked','warn'); return; }
+  if(!cells.length){ toast('Nothing new to search. Every cell either has a contact or has already been checked','warn'); return; }
 
   const btn = document.getElementById('runSearchBtn');
   if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Searching...'; }
@@ -9413,7 +9413,7 @@ async function runDailySearch(roleFilter){
 function resetStuckSearchingCells(cells){
   cells.forEach(({company,role}) => {
     const el = document.querySelector(`.cell-searching[data-company="${cssEscape(company)}"][data-role="${cssEscape(role)}"]`);
-    if(el) el.outerHTML = `<div class="cell-empty" data-company="${esc(company)}" data-role="${esc(role)}" title="The search request itself failed — try again">Search error — try again</div>`;
+    if(el) el.outerHTML = `<div class="cell-empty" data-company="${esc(company)}" data-role="${esc(role)}" title="The search request itself failed, try again">Search error, try again</div>`;
   });
 }
 
@@ -9427,7 +9427,7 @@ function renderGridSearchStatus(completed, total, foundCount, filledCount, gridI
   const parts = [];
   if(foundCount) parts.push(`${foundCount} found`);
   if(filledCount) parts.push(`${filledCount} filled`);
-  const message = `Searching ${completed} of ${total} — ${parts.length ? parts.join(', ') : '0 found'} so far...`;
+  const message = `Searching ${completed} of ${total}: ${parts.length ? parts.join(', ') : '0 found'} so far...`;
   const cancelBtn = `<button class="btn btn-ghost btn-sm" style="margin-left:10px;" onclick="cancelGridSearch('${gridId}')"><i class="ti ti-player-stop"></i> Cancel</button>`;
   const el = document.getElementById('gridNotification');
   if(el) el.innerHTML = `<div class="card" style="margin-bottom:14px;display:flex;align-items:center;"><i class="ti ti-loader-2"></i>&nbsp;${message}${cancelBtn}</div>`;
@@ -9483,11 +9483,11 @@ function finishGridSearchUI(gridId, job){
   const el = document.getElementById('gridNotification');
   if(!el) return;
   if(job.status === 'error'){
-    el.innerHTML = `<div class="card" style="background:var(--tint-red-bg);border-color:rgba(0,0,0,0.06);margin-bottom:14px;"><i class="ti ti-alert-circle" style="color:var(--danger);"></i> Daily search failed — ${esc(job.error||'unknown error')}</div>`;
+    el.innerHTML = `<div class="card" style="background:var(--tint-red-bg);border-color:rgba(0,0,0,0.06);margin-bottom:14px;"><i class="ti ti-alert-circle" style="color:var(--danger);"></i> Daily search failed: ${esc(job.error||'unknown error')}</div>`;
   } else if(job.status === 'cancelled'){
-    el.innerHTML = `<div class="card" style="background:#f5f1e8;border-color:#e5dcc8;margin-bottom:14px;"><i class="ti ti-player-stop"></i> Search stopped — ${esc(job.error === 'Grid no longer exists' ? 'this grid no longer exists' : 'cancelled')}. ${esc(gridSearchResultSummary(job))} before stopping.</div>`;
+    el.innerHTML = `<div class="card" style="background:#f5f1e8;border-color:#e5dcc8;margin-bottom:14px;"><i class="ti ti-player-stop"></i> Search stopped: ${esc(job.error === 'Grid no longer exists' ? 'this grid no longer exists' : 'cancelled')}. ${esc(gridSearchResultSummary(job))} before stopping.</div>`;
   } else {
-    el.innerHTML = `<div class="card" style="background:var(--tint-green-bg);border-color:rgba(0,0,0,0.06);margin-bottom:14px;"><i class="ti ti-circle-check" style="color:var(--success);"></i> Daily search complete — ${esc(gridSearchResultSummary(job))} across ${job.total} open items.</div>`;
+    el.innerHTML = `<div class="card" style="background:var(--tint-green-bg);border-color:rgba(0,0,0,0.06);margin-bottom:14px;"><i class="ti ti-circle-check" style="color:var(--success);"></i> Daily search complete: ${esc(gridSearchResultSummary(job))} across ${job.total} open items.</div>`;
   }
 }
 
@@ -9555,14 +9555,14 @@ function applyGridSearchResult(grid, result){
     if(newContacts.length > 1) renderPage();
     else if(cellEl) cellEl.outerHTML = renderGridCellHTML(newContacts[0]);
   } else if(error){
-    if(cellEl) cellEl.outerHTML = `<div class="cell-empty" data-company="${esc(company)}" data-role="${esc(role)}" title="The search request itself failed — try again">Search error — try again</div>`;
+    if(cellEl) cellEl.outerHTML = `<div class="cell-empty" data-company="${esc(company)}" data-role="${esc(role)}" title="The search request itself failed, try again">Search error, try again</div>`;
   } else {
     touchGrid(grid.id);
     // No longer picked up by the next "Run daily search" (that's the whole
     // point of searchedCells), so this cell needs its own explicit way
     // back for the case a rep actually knows something's changed here -
     // see retryGridCell.
-    if(cellEl) cellEl.outerHTML = `<div class="cell-empty" data-company="${esc(company)}" data-role="${esc(role)}" style="cursor:pointer;" onclick="retryGridCell('${esc(company)}','${esc(role)}')" title="Couldn't find a verified LinkedIn profile last search (checked ${fmtDate(isoDate(TODAY))}) - won't be retried automatically to save Serper credits. Click to check this one cell again.">No confident match — checked ${fmtDate(isoDate(TODAY))}, click to retry</div>`;
+    if(cellEl) cellEl.outerHTML = `<div class="cell-empty" data-company="${esc(company)}" data-role="${esc(role)}" style="cursor:pointer;" onclick="retryGridCell('${esc(company)}','${esc(role)}')" title="Couldn't find a verified LinkedIn profile last search (checked ${fmtDate(isoDate(TODAY))}) - won't be retried automatically to save Serper credits. Click to check this one cell again.">No confident match, checked ${fmtDate(isoDate(TODAY))}, click to retry</div>`;
   }
 }
 
@@ -10359,7 +10359,7 @@ async function readConnectionsScreenshot(){
 
   const matched = candidates.filter(c => matchedIds.includes(c.id));
   if(!matched.length){
-    toast("Couldn't match anyone from that screenshot — try a clearer image", 'warn');
+    toast("Couldn't match anyone from that screenshot. Try a clearer image", 'warn');
     return;
   }
 
@@ -10454,7 +10454,7 @@ function renderRoadmap(contactsOverride){
   ${excludedCount ? `<div class="muted" style="font-size:11.5px;margin-top:8px;"><i class="ti ti-user-off"></i> ${excludedCount} contact${excludedCount===1?'':'s'} excluded from this campaign (not shown on the board).</div>` : ''}
 
   <div class="archive-box">
-    <div class="archive-toggle" onclick="toggleArchive()"><i class="ti ti-chevron-${state.archiveOpen?'down':'right'}"></i> Pending connections — unsuccessful (${state.deadContacts.length})</div>
+    <div class="archive-toggle" onclick="toggleArchive()"><i class="ti ti-chevron-${state.archiveOpen?'down':'right'}"></i> Pending connections, unsuccessful (${state.deadContacts.length})</div>
     ${state.archiveOpen ? `
     <div class="card" style="margin-top:10px;">
       <table style="width:100%;border-collapse:collapse;">
@@ -10498,7 +10498,7 @@ function renderKCard(c, colKey){
         ${seqStage ? `<div style="margin-top:4px;"><span class="tp-badge" title="Sequence stage in this campaign"><i class="ti ti-route"></i> ${esc(seqStage)}</span></div>` : ''}
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
-        <span class="day-badge ${dayBadgeClass(days)}">${days == null ? '—' : days + 'd'}</span>
+        <span class="day-badge ${dayBadgeClass(days)}">${days == null ? '–' : days + 'd'}</span>
         <span class="tp-badge" title="Touch points logged"><i class="ti ti-target-arrow"></i> ${(c.touchPoints||[]).length}</span>
         <button class="btn btn-ghost btn-sm" style="padding:2px 6px;" onclick="event.stopPropagation();handleSkipContact('${c.id}')" title="Skip - exclude from this campaign"><i class="ti ti-player-skip-forward"></i></button>
       </div>
@@ -10639,7 +10639,7 @@ function renderBusinessPanelHtml(profile){
       ${BUSINESS_FIELDS.map(([key,label]) => `
         <div style="margin-top:8px;">
           <div style="font-weight:700;font-size:11.5px;">${esc(label)}</div>
-          <div class="intel-draft-text" style="margin-top:2px;">${esc(profile[key] || '—')}</div>
+          <div class="intel-draft-text" style="margin-top:2px;">${esc(profile[key] || '–')}</div>
         </div>`).join('')}
     </div>`;
 }
@@ -10687,7 +10687,7 @@ async function researchBusiness(cid){
       const gEl = document.getElementById('genEmailAddress'); if(gEl && !gEl.value) gEl.value = data.emailSaved;
     }
     if(panel) panel.innerHTML = renderBusinessPanelHtml(data.profile);
-    toast(data.emailSaved ? `Researched — found email ${data.emailSaved}` : 'Business researched — brief saved to notes', 'success');
+    toast(data.emailSaved ? `Researched, found email ${data.emailSaved}` : 'Business researched, brief saved to notes', 'success');
     regenerateOpenMessageModalIfNeeded(cid);
   } catch(err){
     if(panel) panel.innerHTML = `<div class="muted" style="font-size:12.5px;">Could not research this business: ${esc(friendlyErr(err.message))}</div>`;
@@ -10721,7 +10721,7 @@ function renderEnrichmentPanelHtml(cid, profile){
       ${ENRICHMENT_FIELDS.map(([key,label]) => `
         <div style="margin-top:8px;">
           <div style="font-weight:700;font-size:11.5px;">${esc(label)}</div>
-          <div class="intel-draft-text" style="margin-top:2px;">${esc(profile[key] || '—')}</div>
+          <div class="intel-draft-text" style="margin-top:2px;">${esc(profile[key] || '–')}</div>
         </div>
         ${key === 'recentActivity' ? renderEnrichmentRecentPosts(recentPosts) : ''}
       `).join('')}
@@ -10810,7 +10810,7 @@ async function loadContactRecentPosts(cid){
 async function copyEnrichmentProfile(cid){
   const profile = window.__enrichmentProfiles && window.__enrichmentProfiles[cid];
   if(!profile) return;
-  const text = ENRICHMENT_FIELDS.map(([key,label]) => `${label}: ${profile[key] || '—'}`).join('\n');
+  const text = ENRICHMENT_FIELDS.map(([key,label]) => `${label}: ${profile[key] || '–'}`).join('\n');
   try {
     await navigator.clipboard.writeText(text);
   } catch(err){
@@ -11113,7 +11113,7 @@ async function markSent(cid, key){
   // or a placeholder noting there's no draft on file.
   const campaign = state.campaigns.find(x => x.id === window.__roadmapCampaignId) || activeCampaignForContact(c);
   if(!campaign) return;
-  const message = (c.generated && c.generated[key]) || `${MSG_STEP_LABELS[key] || key} to ${c.name} — marked as sent manually, no draft on file.`;
+  const message = (c.generated && c.generated[key]) || `${MSG_STEP_LABELS[key] || key} to ${c.name}, marked as sent manually, no draft on file.`;
   try {
     const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/contacts/${cid}/mark-sent`, {
       method: 'POST',
@@ -11515,7 +11515,7 @@ function renderContactEnrichmentSection(c){
     return `
     <div class="section-title" style="font-size:13px;"><i class="ti ti-search"></i> Enrichment</div>
     <div class="muted" style="font-size:11px;margin-bottom:6px;">Last enriched ${fmtDate(profile.date)}</div>
-    ${ENRICHMENT_FIELDS.map(([key,label]) => `<div style="font-size:12px;margin-top:6px;"><strong>${esc(label)}:</strong> ${esc(profile[key]||'—')}</div>`).join('')}
+    ${ENRICHMENT_FIELDS.map(([key,label]) => `<div style="font-size:12px;margin-top:6px;"><strong>${esc(label)}:</strong> ${esc(profile[key]||'–')}</div>`).join('')}
     `;
   }
   return `
@@ -12081,7 +12081,7 @@ async function saveContactDrawerNote(){
       .then(res2 => res2.json())
       .then(d2 => {
         (d2.actions || []).forEach(a => {
-          toastWithUndo(`Calendar reminder created: ${a.description} — ${fmtDate(a.dueDate)}. Undo?`, () => {
+          toastWithUndo(`Calendar reminder created: ${a.description} (${fmtDate(a.dueDate)}). Undo?`, () => {
             fetch(`/api/reminders/${a.reminderId}`, { method:'DELETE' }).catch(err => console.warn('Undo delete failed:', err.message));
           });
         });
@@ -12201,7 +12201,7 @@ function renderAccountContactsSection(contacts, companyName){
           </div>
         </div>
         <div class="muted" style="font-size:11.5px;">${esc(c.jobTitle||'No title on file')}${c.connectionSentDate?` · req sent ${fmtDate(c.connectionSentDate)}`:''}</div>
-        ${c.campaignStatuses.length ? c.campaignStatuses.map(s=>`<div class="muted" style="font-size:11px;margin-top:2px;">${esc(s.campaignName)} — ${esc(s.stage)}${s.replyReceived?' · replied':''}</div>`).join('') : '<div class="muted" style="font-size:11px;margin-top:2px;font-style:italic;">Not yet targeted in any campaign</div>'}
+        ${c.campaignStatuses.length ? c.campaignStatuses.map(s=>`<div class="muted" style="font-size:11px;margin-top:2px;">${esc(s.campaignName)} · ${esc(s.stage)}${s.replyReceived?' · replied':''}</div>`).join('') : '<div class="muted" style="font-size:11px;margin-top:2px;font-style:italic;">Not yet targeted in any campaign</div>'}
       </div>
     `).join('')}`}
   </div>`;
@@ -12241,8 +12241,8 @@ function renderCompanyPeopleModal(){
   const s = window.__companyPeople;
   if(!s) return;
   if(s.step === 'input'){
-    openModal(`Add people — ${esc(s.company)}`, `
-      <div class="muted" style="font-size:12px;margin-bottom:8px;">Open the company's <b>People</b> tab (or "People you may know") on LinkedIn, select the list and paste it here — or drop a screenshot. The Engine pulls out names, titles and profile URLs; you review before anything is saved.</div>
+    openModal(`Add people: ${esc(s.company)}`, `
+      <div class="muted" style="font-size:12px;margin-bottom:8px;">Open the company's <b>People</b> tab (or "People you may know") on LinkedIn, select the list and paste it here, or drop a screenshot. The Engine pulls out names, titles and profile URLs; you review before anything is saved.</div>
       <textarea id="cpPeopleText" rows="7" placeholder="Paste the LinkedIn people list here…" style="width:100%;">${esc(s.text||'')}</textarea>
       <div class="learning-panel" ${dropZoneAttrs('cpPeopleImageInput')} style="margin:10px 0;">
         <h4 style="font-size:12px;"><i class="ti ti-photo"></i> Or drop screenshot(s)</h4>
@@ -12256,7 +12256,7 @@ function renderCompanyPeopleModal(){
   }
   // review step
   const rows = s.proposals || [];
-  openModal(`Review — ${esc(s.company)}`, `
+  openModal(`Review: ${esc(s.company)}`, `
     <div class="desc">${rows.length} ${rows.length===1?'person':'people'} found. Set a connection status for anyone you've already reached out to, then import.</div>
     <div style="display:flex;flex-direction:column;gap:8px;max-height:52vh;overflow-y:auto;">
       ${rows.map((p,i)=>`
@@ -12367,9 +12367,9 @@ function renderCompanyEnrichmentSection(c, fresh){
     return `
     <div class="section-title" style="font-size:13px;"><i class="ti ti-search"></i> Enrichment</div>
     <div class="muted" style="font-size:11px;margin-bottom:6px;">Last enriched ${fmtDate(fresh.enrichedDate)}</div>
-    <div style="font-size:12px;"><strong>Industry:</strong> ${esc(fresh.industry||'—')}</div>
-    <div style="font-size:12px;margin-top:6px;"><strong>Estimated size:</strong> ${esc(fresh.estimatedSize||'—')}</div>
-    <div style="font-size:12px;margin-top:6px;"><strong>LinkedIn signal:</strong> ${esc(fresh.linkedinSignalSummary||'—')}</div>
+    <div style="font-size:12px;"><strong>Industry:</strong> ${esc(fresh.industry||'–')}</div>
+    <div style="font-size:12px;margin-top:6px;"><strong>Estimated size:</strong> ${esc(fresh.estimatedSize||'–')}</div>
+    <div style="font-size:12px;margin-top:6px;"><strong>LinkedIn signal:</strong> ${esc(fresh.linkedinSignalSummary||'–')}</div>
     ${(fresh.recentNews||[]).length ? `<div style="font-size:12px;margin-top:6px;"><strong>Recent news:</strong><ul style="margin:4px 0 0 16px;padding:0;">${fresh.recentNews.map(n=>`<li>${esc(n)}</li>`).join('')}</ul></div>` : ''}
     ${(fresh.techStack||[]).length ? `<div style="font-size:12px;margin-top:6px;"><strong>Tech stack:</strong> ${esc(fresh.techStack.join(', '))}</div>` : ''}
     `;
@@ -12525,10 +12525,10 @@ function renderDeepResearchSection(dr){
   return `
     <div class="section-title" style="font-size:13px;"><i class="ti ti-telescope"></i> Deep research</div>
     <div class="muted" style="font-size:11px;margin-bottom:6px;">Researched ${fmtDate(dr.researchedAt)}. Press Deep research to refresh.</div>
-    <div style="font-size:12px;"><strong>Headcount:</strong> ${esc(dr.headcountEstimate||'—')}</div>
-    <div style="font-size:12px;margin-top:6px;"><strong>Funding:</strong> ${esc(dr.fundingStatus||'—')}</div>
-    <div style="font-size:12px;margin-top:6px;"><strong>Growth signals:</strong> ${esc(dr.growthSignals||'—')}</div>
-    <div style="font-size:12px;margin-top:6px;"><strong>Likely challenges:</strong> ${esc(dr.challenges||'—')}</div>
+    <div style="font-size:12px;"><strong>Headcount:</strong> ${esc(dr.headcountEstimate||'–')}</div>
+    <div style="font-size:12px;margin-top:6px;"><strong>Funding:</strong> ${esc(dr.fundingStatus||'–')}</div>
+    <div style="font-size:12px;margin-top:6px;"><strong>Growth signals:</strong> ${esc(dr.growthSignals||'–')}</div>
+    <div style="font-size:12px;margin-top:6px;"><strong>Likely challenges:</strong> ${esc(dr.challenges||'–')}</div>
     ${list('Leadership team', dr.leadershipTeam)}
     ${list('Recent news', dr.recentNews)}
     ${list('Competitors', dr.competitors)}
@@ -12559,7 +12559,7 @@ async function saveCompanyDrawerNote(){
       .then(res2 => res2.json())
       .then(d2 => {
         (d2.actions || []).forEach(a => {
-          toastWithUndo(`Calendar reminder created: ${a.description} — ${fmtDate(a.dueDate)}. Undo?`, () => {
+          toastWithUndo(`Calendar reminder created: ${a.description} (${fmtDate(a.dueDate)}). Undo?`, () => {
             fetch(`/api/reminders/${a.reminderId}`, { method:'DELETE' }).catch(err => console.warn('Undo delete failed:', err.message));
           });
         });
@@ -12749,7 +12749,7 @@ function openBookingModal(cid){
   const c = state.contacts.find(x=>x.id===cid);
   if(!c) return;
   const body = `
-    <div class="field"><label>Contact</label><input value="${esc(c.name)} — ${esc(c.company)}" disabled></div>
+    <div class="field"><label>Contact</label><input value="${esc(c.name)} · ${esc(c.company)}" disabled></div>
     <div class="field"><label>What is booked?</label>
       <select id="bkService">${state.settings.services.map(s=>`<option value="${esc(s)}">${esc(s)}</option>`).join('')}</select>
     </div>
@@ -12795,7 +12795,7 @@ async function confirmBooking(cid){
     console.warn('Could not sync booking to Airtable: no active campaign found for this contact.');
     return;
   }
-  const dealNotes = [notes, cta ? `CTA: ${cta}` : ''].filter(Boolean).join(' — ');
+  const dealNotes = [notes, cta ? `CTA: ${cta}` : ''].filter(Boolean).join(' · ');
   try {
     const dealRes = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/deals`, {
       method: 'POST',
@@ -13287,9 +13287,9 @@ function openGenerateModal(cid, stageKey, onDone){
         <input id="genEmailAddress" value="${esc(c.email||'')}" placeholder="paste their email here" style="flex:1;min-width:0;" onblur="saveGenEmailAddress('${cid}')" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}">
         <button type="button" class="btn btn-secondary" id="genEmailSaveBtn" onclick="saveGenEmailAddress('${cid}')"><i class="ti ti-device-floppy"></i></button>
       </div>
-      <div class="muted" style="font-size:11px;margin-top:3px;">Saved straight to this contact — same field as the profile drawer.</div>
+      <div class="muted" style="font-size:11px;margin-top:3px;">Saved straight to this contact, same field as the profile drawer.</div>
     </div>` : ''}
-    <div class="field"><label>Role / Stage</label><input value="${esc(c.role ? c.role+' — ' : '')}${esc(stageLabel)}" disabled></div>
+    <div class="field"><label>Role / Stage</label><input value="${esc(c.role ? c.role+' · ' : '')}${esc(stageLabel)}" disabled></div>
     <div class="field">
       <label style="display:flex;justify-content:space-between;align-items:center;">
         <span>Profile notes</span>
@@ -13301,7 +13301,7 @@ function openGenerateModal(cid, stageKey, onDone){
     ${isEmailCamp ? '' : `
     <div class="field">
       <label>Their profile</label>
-      ${screenshotBoxHtml('profile', "Send screenshot/s of their profile — bio, posts, work history — and I'll use it to write a sharper message.")}
+      ${screenshotBoxHtml('profile', "Send screenshot/s of their profile: bio, posts, work history, and I'll use it to write a sharper message.")}
     </div>`}
     <div class="field">
       <label>${isEmailCamp ? 'Their reply so far' : 'Conversation history'}</label>
@@ -13323,7 +13323,7 @@ function openGenerateModal(cid, stageKey, onDone){
   // the notes/screenshots are usually added first, so generation is an
   // explicit "Generate" click (regenerateMessage). The button relabels itself
   // to "Regenerate" once a first draft exists.
-  openModal((isEmailCamp ? 'Write email — ' : 'Write message — ')+stageLabel, body, footer);
+  openModal((isEmailCamp ? 'Write email: ' : 'Write message: ')+stageLabel, body, footer);
 }
 
 async function copyGenEmailAddress(){
@@ -13751,7 +13751,7 @@ function campaignIcpHealthFor(campaign){
 function campaignIcpCell(campaign){
   const h = window.__campaignIcpHealth;
   if(h === undefined || h === null) return '<span class="muted">·</span>';
-  if(h.error || !h.icpConfigured) return '<span class="muted">—</span>';
+  if(h.error || !h.icpConfigured) return '<span class="muted">–</span>';
   const stat = campaignIcpHealthFor(campaign);
   if(!stat || !stat.total) return '<span class="muted">·</span>';
   const pct = stat.onIcpPct;
@@ -13767,11 +13767,11 @@ function campaignFunnelStep(funnel, key){
 }
 function campaignFunnelReplyRate(campaign){
   const f = (window.__campaignFunnels || {})[campaign.id];
-  return (f && !f.error && typeof f.replyRate === 'number') ? f.replyRate + '%' : '—';
+  return (f && !f.error && typeof f.replyRate === 'number') ? f.replyRate + '%' : '–';
 }
 function campaignFunnelConversionRate(campaign){
   const f = (window.__campaignFunnels || {})[campaign.id];
-  return (f && !f.error && typeof f.conversionRate === 'number') ? f.conversionRate + '%' : '—';
+  return (f && !f.error && typeof f.conversionRate === 'number') ? f.conversionRate + '%' : '–';
 }
 
 // Reader over the cached funnel. Everything is null while the funnel is
@@ -13836,7 +13836,7 @@ function renderCampaignListView(){
           ${campaigns.map(renderCampaignListRow).join('')}
         </tbody>
       </table>
-    </div>` : `<div class="empty-state">No campaigns yet — start one with New Campaign.</div>`}
+    </div>` : `<div class="empty-state">No campaigns yet. Start one with New Campaign.</div>`}
   </div>
   `;
 }
@@ -13845,7 +13845,7 @@ function renderCampaignListRow(campaign){
   const m = campaignMetrics(campaign);
   const statusClass = CAMPAIGN_STATUS_CLASS[campaign.status] || 'campaign-status-draft';
   const isEmail = (campaign.type || 'linkedin') === 'email';
-  const n = v => (v === null || v === undefined) ? '—' : v;
+  const n = v => (v === null || v === undefined) ? '–' : v;
   const cell = m.loading ? '<span class="muted">·</span>' : (m.error ? '<span class="muted" title="'+esc(friendlyErr(m.error))+'">!</span>' : null);
   // Email campaigns have no connect step and a fixed emailed/replied/booked
   // funnel, not a per-message ladder - showing "· / · / ·" under a
@@ -13860,7 +13860,7 @@ function renderCampaignListRow(campaign){
     <td>${campaignIcpCell(campaign)}</td>
     <td>${cell ?? (isEmail ? '<span class="muted">n/a</span>' : n(m.connected))}</td>
     <td>${cell ?? (isEmail ? `${n(m.m1)} emailed` : `${n(m.m1)} / ${n(m.m2)} / ${n(m.m3)}`)}</td>
-    <td>${cell ?? (m.replyRate === null ? '—' : m.replyRate + '%')}</td>
+    <td>${cell ?? (m.replyRate === null ? '–' : m.replyRate + '%')}</td>
     <td>${cell ?? n(m.meetings)}</td>
     <td>${fmtDate(campaign.updatedAt || campaign.createdAt)}</td>
   </tr>`;
@@ -13900,8 +13900,8 @@ function renderCampaignChatTab(){
     <div class="field" style="margin-bottom:14px;">
       <label style="font-size:12px;font-weight:700;">Outreach type</label>
       <select id="campaignChatType" onchange="window.__campaignChat.campaignType = this.value">
-        <option value="linkedin"${(chat.campaignType||'linkedin')!=='email'?' selected':''}>LinkedIn — connection request then DM sequence</option>
-        <option value="email"${chat.campaignType==='email'?' selected':''}>Email — the drafter writes cold emails at each stage</option>
+        <option value="linkedin"${(chat.campaignType||'linkedin')!=='email'?' selected':''}>LinkedIn, connection request then DM sequence</option>
+        <option value="email"${chat.campaignType==='email'?' selected':''}>Email, the drafter writes cold emails at each stage</option>
       </select>
     </div>
     <div class="campaign-chat-progress">
@@ -14501,7 +14501,7 @@ function renderImportCompanyModal(){
   ])].sort();
   if(s.step === 'pick'){
     openModal('Import from a company', `
-      <div class="muted" style="font-size:12px;margin-bottom:8px;">Pick a company and pull its people straight in — all of them, or just the roles you want.</div>
+      <div class="muted" style="font-size:12px;margin-bottom:8px;">Pick a company and pull its people straight in, all of them, or just the roles you want.</div>
       <input id="importCompanyInput" list="importCompanyList" placeholder="Company name…" value="${esc(s.company||'')}" style="width:100%;">
       <datalist id="importCompanyList">${companyNames.map(n => `<option value="${esc(n)}">`).join('')}</datalist>
     `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="importCoNextBtn" onclick="importCompanyLoadContacts()">Next</button>`);
@@ -14518,7 +14518,7 @@ function renderImportCompanyModal(){
     ${icpCount ? `<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;margin-bottom:6px;"><input type="radio" name="importCoMode" ${s.mode==='icp'?'checked':''} onchange="window.__importCompany.mode='icp';renderImportCompanyModal()"> ICP roles / decision-makers only (${icpCount})</label>` : ''}
     <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;margin-bottom:6px;"><input type="radio" name="importCoMode" ${s.mode==='roles'?'checked':''} onchange="window.__importCompany.mode='roles';renderImportCompanyModal()"> Pick roles</label>
     ${s.mode==='roles' ? `<div style="max-height:34vh;overflow-y:auto;border:1px solid var(--border-light);border-radius:var(--radius-input);padding:8px 10px;margin:4px 0;">
-      ${roles.length ? roles.map(r => `<label style="display:flex;align-items:center;gap:6px;font-size:12px;padding:2px 0;"><input type="checkbox" ${s.roles.has(r)?'checked':''} onchange="importCompanyToggleRole('${esc(r).replace(/'/g,"\\'")}', this.checked)" style="width:auto;"> ${esc(r)} <span class="muted">(${contacts.filter(c=>(c.jobTitle||'').trim()===r).length})</span></label>`).join('') : '<div class="muted" style="font-size:12px;">No job titles on file — use "All".</div>'}
+      ${roles.length ? roles.map(r => `<label style="display:flex;align-items:center;gap:6px;font-size:12px;padding:2px 0;"><input type="checkbox" ${s.roles.has(r)?'checked':''} onchange="importCompanyToggleRole('${esc(r).replace(/'/g,"\\'")}', this.checked)" style="width:auto;"> ${esc(r)} <span class="muted">(${contacts.filter(c=>(c.jobTitle||'').trim()===r).length})</span></label>`).join('') : '<div class="muted" style="font-size:12px;">No job titles on file. Use "All".</div>'}
     </div>` : ''}
   `, `<button class="btn btn-secondary" onclick="window.__importCompany.step='pick';renderImportCompanyModal()">Back</button><button class="btn btn-primary" id="importCoGoBtn" onclick="confirmImportCompany()">Import</button>`);
 }
@@ -14538,7 +14538,7 @@ async function importCompanyLoadContacts(){
     if(!res.ok) throw new Error(data.error || 'Request failed');
     s.contacts = data.accountContacts || [];
     if(!s.contacts.length){
-      toast('No contacts on file for that company yet — add people to it first', 'warn');
+      toast('No contacts on file for that company yet. Add people to it first', 'warn');
       if(btn){ btn.disabled = false; btn.innerHTML = 'Next'; }
       return;
     }
@@ -14565,7 +14565,7 @@ async function confirmImportCompany(){
     if(!campaign) return;
     let grid = (campaign.gridIds||[]).map(id => state.grids.find(g=>g.id===id)).find(Boolean);
     if(!grid){
-      grid = createGrid(`${s.company} — ${campaign.name}`.slice(0, 80));
+      grid = createGrid(`${s.company} · ${campaign.name}`.slice(0, 80));
       campaign.gridIds = campaign.gridIds || [];
       campaign.gridIds.push(grid.id);
       syncCampaignToAirtable(campaign);
@@ -14617,7 +14617,7 @@ function openImportGridModal(campaignId){
       ${available.map(g => `
         <label class="checkbox-item" style="display:flex;align-items:center;padding:6px 0;">
           <input type="checkbox" value="${g.id}" class="import-grid-checkbox">
-          <span style="margin-left:8px;">${esc(g.name)} <span class="muted">— ${g.companies.length} companies, ${gridContacts(g.id).length} contacts</span></span>
+          <span style="margin-left:8px;">${esc(g.name)} <span class="muted">· ${g.companies.length} companies, ${gridContacts(g.id).length} contacts</span></span>
         </label>
       `).join('')}
     </div>
@@ -14711,7 +14711,7 @@ async function repairCampaignContacts(campaignId){
     const footer = `
       <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
       <button class="btn btn-primary" id="repairGoBtn" onclick="runRepairCampaignContacts('${campaignId}')"><i class="ti ti-check"></i> Run repair</button>`;
-    openModal('Repair sync — ' + p.campaign, body, footer);
+    openModal('Repair sync: ' + p.campaign, body, footer);
   } catch(err){
     toast('Could not check: ' + friendlyErr(err.message), 'warn');
   } finally {
@@ -14731,7 +14731,7 @@ async function runRepairCampaignContacts(campaignId){
     const data = await res.json();
     if(!res.ok || !data.success) throw new Error(data.error || 'Repair failed');
     closeModal();
-    toast(`Done — re-linked ${data.relinked}, merged ${data.merged}, removed ${data.deleted}. ${data.remaining} rows now.`, 'success');
+    toast(`Done: re-linked ${data.relinked}, merged ${data.merged}, removed ${data.deleted}. ${data.remaining} rows now.`, 'success');
     window.__campaignFunnels = window.__campaignFunnels || {};
     delete window.__campaignFunnels[campaignId];
     if(window.__campaignSequenceStages) delete window.__campaignSequenceStages[campaignId];
@@ -14762,14 +14762,14 @@ function renderCampaignFunnelStrip(campaign){
       <div class="funnel-strip-step">
         <div class="funnel-strip-num">${s.count}</div>
         <div class="funnel-strip-label">${esc(s.label)}</div>
-        ${i>0 ? `<div class="funnel-strip-conv ${fromPrev!==null && fromPrev < 40 ? 'is-drop' : ''}">${fromPrev!==null ? fromPrev+'%' : '—'}</div>` : `<div class="funnel-strip-conv">&nbsp;</div>`}
+        ${i>0 ? `<div class="funnel-strip-conv ${fromPrev!==null && fromPrev < 40 ? 'is-drop' : ''}">${fromPrev!==null ? fromPrev+'%' : '–'}</div>` : `<div class="funnel-strip-conv">&nbsp;</div>`}
       </div>
       ${i < steps.length-1 ? '<div class="funnel-strip-arrow"><i class="ti ti-chevron-right"></i></div>' : ''}`;
   }).join('');
   return `
   <div class="card" style="margin-bottom:14px;">
     <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
-      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-filter"></i> Funnel — where contacts drop off</div>
+      <div class="section-title" style="margin-bottom:0;"><i class="ti ti-filter"></i> Funnel: where contacts drop off</div>
       <div class="muted" style="font-size:11px;">
         ${typeof f.replyRate === 'number' ? `${f.replyRate}% reply rate · ` : ''}${f.excluded||0} excluded${f.noOutcomeAfterM3 ? ` · ${f.noOutcomeAfterM3} dead after M3` : ''}
       </div>
@@ -14917,7 +14917,7 @@ function openSequenceEditModal(campaignId, stageKey){
     <button class="btn btn-secondary" onclick="aiRedraftSequenceStage('${campaignId}','${stageKey}')"><i class="ti ti-sparkles"></i> Engine redraft</button>
     <button class="btn btn-primary" onclick="saveSequenceStageEdit('${campaignId}','${stageKey}')"><i class="ti ti-check"></i> Save</button>
   `;
-  openModal(`Edit — ${label}`, body, footer);
+  openModal(`Edit: ${label}`, body, footer);
 }
 
 function saveSequenceStageEdit(campaignId, stageKey){
@@ -14985,7 +14985,7 @@ async function aiRedraftSequenceStage(campaignId, stageKey){
   }
   const contentEl = document.getElementById('seqEditContent');
   if(contentEl) contentEl.value = result;
-  if(statusEl) statusEl.textContent = 'Redraft ready — review and Save to keep it.';
+  if(statusEl) statusEl.textContent = 'Redraft ready. Review and Save to keep it.';
 }
 
 function openAddCampaignContactsModal(campaignId){
@@ -15015,7 +15015,7 @@ function renderAddContactsList(){
   el.innerHTML = available.map(c => `
     <label class="checkbox-item" style="display:flex;align-items:center;padding:6px 0;">
       <input type="checkbox" value="${c.id}" class="add-contact-checkbox">
-      <span style="margin-left:8px;">${esc(c.name)} <span class="muted">— ${esc(c.role)} &middot; ${esc(c.company)} &middot; ${esc(gridNameForContact(c))}</span></span>
+      <span style="margin-left:8px;">${esc(c.name)} <span class="muted">· ${esc(c.role)} &middot; ${esc(c.company)} &middot; ${esc(gridNameForContact(c))}</span></span>
     </label>
   `).join('');
 }
@@ -15112,7 +15112,7 @@ function renderCampaignPipelineTab(campaign){
             <div style="font-weight:600;">${esc(a.companyName || 'Unknown company')}</div>
             ${a.companyName ? `<button class="btn btn-ghost btn-sm" style="flex:none;" onclick="navigate('profile');selectProfileCompany('${esc(a.companyName)}')"><i class="ti ti-hierarchy-2"></i> View account board</button>` : ''}
           </div>
-          ${a.matches.length ? `<div class="muted" style="font-size:12px;">${a.matches.map(m=>`${esc(m.name)} (${esc(m.jobTitle)}) — ${esc(m.stage)}`).join(', ')}</div>` : ''}
+          ${a.matches.length ? `<div class="muted" style="font-size:12px;">${a.matches.map(m=>`${esc(m.name)} (${esc(m.jobTitle)}) · ${esc(m.stage)}`).join(', ')}</div>` : ''}
           ${a.nonMatches.length ? `<div class="muted" style="font-size:11.5px;">Reached but not a match: ${a.nonMatches.map(m=>`${esc(m.name)} (${esc(m.jobTitle||'no title on file')})`).join(', ')}</div>` : ''}
         </div>
       `).join('')}
@@ -15129,10 +15129,10 @@ function renderCampaignStrategyTab(campaign){
     <div class="field">
       <label>Outreach type</label>
       <select id="stratCampaignType">
-        <option value="linkedin"${(campaign.type||'linkedin')!=='email'?' selected':''}>LinkedIn — connection request then DM sequence</option>
-        <option value="email"${(campaign.type)==='email'?' selected':''}>Email — the drafter writes cold emails at each stage</option>
+        <option value="linkedin"${(campaign.type||'linkedin')!=='email'?' selected':''}>LinkedIn, connection request then DM sequence</option>
+        <option value="email"${(campaign.type)==='email'?' selected':''}>Email, the drafter writes cold emails at each stage</option>
       </select>
-      <div class="muted" style="font-size:11px;margin-top:4px;">Changes what the message drafter produces for this campaign. Everything else — stages, tracking, analytics — works the same.</div>
+      <div class="muted" style="font-size:11px;margin-top:4px;">Changes what the message drafter produces for this campaign. Everything else, stages, tracking, analytics, works the same.</div>
     </div>
     <div class="field"><label>Goal</label><textarea id="stratGoal" rows="2">${esc(campaign.goal||'')}</textarea></div>
     <div class="field"><label>Target ICP</label><textarea id="stratIcp" rows="2">${esc(campaign.targetSegmentSummary||'')}</textarea></div>
@@ -15151,7 +15151,7 @@ function renderCampaignStrategyTab(campaign){
       <select id="stratNoteMode">
         <option value="Note"${(campaign.connectionNoteMode||'Note')==='Note'?' selected':''}>Send with a drafted note</option>
         <option value="No note"${campaign.connectionNoteMode==='No note'?' selected':''}>Send with no note</option>
-        <option value="Split test"${campaign.connectionNoteMode==='Split test'?' selected':''}>Split test — 50/50 note vs no note</option>
+        <option value="Split test"${campaign.connectionNoteMode==='Split test'?' selected':''}>Split test, 50/50 note vs no note</option>
       </select>
       <div class="muted" style="font-size:11px;margin-top:4px;">A strong profile often gets higher acceptance with no note. Split test assigns each contact an arm and reports acceptance per arm on the Analytics tab.</div>
     </div>
@@ -15307,10 +15307,10 @@ function renderGtmSectorTable(bySector){
             <td style="padding:6px 8px;font-weight:600;">${esc(s.sector)}</td>
             <td style="padding:6px 8px;">${s.totalContacted}</td>
             <td style="padding:6px 8px;">${s.connectedPlus}</td>
-            <td style="padding:6px 8px;">${s.replyRatePct!==null ? s.replyRatePct+'%' : '—'}</td>
+            <td style="padding:6px 8px;">${s.replyRatePct!==null ? s.replyRatePct+'%' : '–'}</td>
             <td style="padding:6px 8px;">${s.meetingsBooked}</td>
             <td style="padding:6px 8px;font-weight:${s.won?'700':'400'};color:${s.won?'var(--success)':'inherit'};">${s.won}</td>
-            <td style="padding:6px 8px;">${s.topCompany ? `<span class="${s.topCompanyConcentrationPct>=70?'muted':''}" style="${s.topCompanyConcentrationPct>=70?'color:var(--warning,#b45309);font-weight:600;':''}">${s.topCompanyConcentrationPct}% from ${esc(s.topCompany)}</span>` : '—'}</td>
+            <td style="padding:6px 8px;">${s.topCompany ? `<span class="${s.topCompanyConcentrationPct>=70?'muted':''}" style="${s.topCompanyConcentrationPct>=70?'color:var(--warning,#b45309);font-weight:600;':''}">${s.topCompanyConcentrationPct}% from ${esc(s.topCompany)}</span>` : '–'}</td>
           </tr>
         `).join('')}
         </tbody>
@@ -15345,7 +15345,7 @@ function renderGtmPerformanceSection(data){
             <td style="padding:6px 8px;font-weight:600;">${esc(s.sizeBand)} · ${esc(s.momentum)} · ${esc(s.workloadType)}</td>
             <td style="padding:6px 8px;">${s.totalContacted}</td>
             <td style="padding:6px 8px;">${s.connectedPlus}</td>
-            <td style="padding:6px 8px;">${s.replyRatePct!==null ? s.replyRatePct+'%' : '—'}</td>
+            <td style="padding:6px 8px;">${s.replyRatePct!==null ? s.replyRatePct+'%' : '–'}</td>
             <td style="padding:6px 8px;">${s.meetingsBooked}</td>
             <td style="padding:6px 8px;font-weight:${s.won?'700':'400'};color:${s.won?'var(--success)':'inherit'};">${s.won}</td>
             <td style="padding:6px 8px;">${(s.winningCampaignNames.length?s.winningCampaignNames:s.campaignNames).slice(0,2).map(esc).join(', ')}${s.campaignNames.length>2?'…':''}</td>
@@ -15496,7 +15496,7 @@ function renderAccountAutopsySection(digest){
       </div>
       ${items.map(r => `
         <div style="padding:8px 0 8px 4px;border-bottom:1px solid var(--border-light);">
-          <div style="font-size:12.5px;"><strong>${esc(r.contactName)}</strong> <span class="muted">— ${esc(r.campaignName)}</span></div>
+          <div style="font-size:12.5px;"><strong>${esc(r.contactName)}</strong> <span class="muted">· ${esc(r.campaignName)}</span></div>
           <div style="font-size:12.5px;margin-top:2px;">${esc(r.realReason || 'No clear diagnosis.')}</div>
           ${r.evidenceQuote ? `<div class="muted" style="font-size:11.5px;margin-top:2px;font-style:italic;">"${esc(r.evidenceQuote)}"</div>` : ''}
         </div>
@@ -15525,7 +15525,7 @@ function renderAccountSegmentationGrid(){
           ${SEGMENTATION_SIZE_COLS.map(s => {
             const cos = cellFor(s, m);
             return `<div style="background:var(--surface-2);border:1px solid var(--border-light);border-radius:6px;padding:6px;min-height:44px;font-size:11px;">
-              ${cos.length ? cos.map(c=>`<span class="tp-item" style="cursor:pointer;display:block;padding:2px 0;" onclick="openCompanyDrawer('${esc(c.companyName)}')">${esc(c.companyName)}</span>`).join('') : '<span class="muted">—</span>'}
+              ${cos.length ? cos.map(c=>`<span class="tp-item" style="cursor:pointer;display:block;padding:2px 0;" onclick="openCompanyDrawer('${esc(c.companyName)}')">${esc(c.companyName)}</span>`).join('') : '<span class="muted">–</span>'}
             </div>`;
           }).join('')}
         `).join('')}
@@ -15714,7 +15714,7 @@ function renderProgramStrategyPage(){
   <div class="page-head" style="align-items:flex-start;">
     <div>
       <a href="#" onclick="navigate('companyuniverse');return false;" class="muted" style="font-size:12px;display:inline-flex;align-items:center;gap:4px;margin-bottom:8px;"><i class="ti ti-arrow-left"></i> Back to Company Universe</a>
-      <h1 class="page-h1">${esc(ctx.companyName)} — ${esc(ctx.programName)}</h1>
+      <h1 class="page-h1">${esc(ctx.companyName)} · ${esc(ctx.programName)}</h1>
       <div class="page-sub">Strategy brief for this program</div>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -15740,7 +15740,7 @@ function createCampaignFromProgramStrategy(companyName, programName){
   const campaign = { id: uid('camp'), createdAt: isoDate(TODAY) };
   state.campaigns.push(campaign);
   Object.assign(campaign, {
-    name: `${companyName} — ${programName}`,
+    name: `${companyName} · ${programName}`,
     goal: `Open a conversation with ${companyName} around their ${programName}`,
     targetSegmentSummary: jobTitles.length ? `${jobTitles.map(j=>j.title).join(', ')} at ${companyName}` : companyName,
     product: '',
@@ -15752,7 +15752,7 @@ function createCampaignFromProgramStrategy(companyName, programName){
     strategyBrief: [
       `Program: ${programName} at ${companyName}`,
       s.whatsHappening ? `What's happening: ${s.whatsHappening}` : '',
-      jobTitles.length ? `Target job titles: ${jobTitles.map(j => j.title + (j.reason ? ' — ' + j.reason : '')).join('; ')}` : '',
+      jobTitles.length ? `Target job titles: ${jobTitles.map(j => j.title + (j.reason ? ': ' + j.reason : '')).join('; ')}` : '',
       s.strategy ? `Strategy: ${s.strategy}` : ''
     ].filter(Boolean).join('\n\n'),
     status: 'Draft',
@@ -15801,7 +15801,7 @@ function renderProgramsCard(){
   const body = () => {
     if(p === undefined || p === null) return '<div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading…</div>';
     if(p.error) return `<div class="empty-state">Couldn't load active programs: ${esc(friendlyErr(p.error))} <button class="btn btn-ghost btn-sm" onclick="window.__programs=undefined;loadPrograms();"><i class="ti ti-refresh"></i> Try again</button></div>`;
-    if(!all.length) return `<div class="empty-state" style="padding:24px;">No programs logged yet. Press <b>Log a finding</b> and paste anything you've found — a news line, a LinkedIn post, a note from a call — and the Engine files it against the right company.</div>`;
+    if(!all.length) return `<div class="empty-state" style="padding:24px;">No programs logged yet. Press <b>Log a finding</b> and paste anything you've found: a news line, a LinkedIn post, a note from a call, and the Engine files it against the right company.</div>`;
     if(!rows.length) return '<div class="muted" style="font-size:12px;">No companies match this filter.</div>';
     return `<div class="uco-grid">${rows.map(r => renderProgramCoCard(r)).join('')}</div>`;
   };
@@ -15812,7 +15812,7 @@ function renderProgramsCard(){
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-progress-bolt"></i> Active programs</div>
       <button class="btn btn-primary btn-sm" onclick="openProgramCapture()"><i class="ti ti-message-plus"></i> Log a finding</button>
     </div>
-    <div class="desc">Which companies are running a transformation program right now — Twenty2's first GTM step. A company with a program in delivery (or slipping) that isn't in a campaign yet is your next target.</div>
+    <div class="desc">Which companies are running a transformation program right now: Twenty2's first GTM step. A company with a program in delivery (or slipping) that isn't in a campaign yet is your next target.</div>
     ${(p && !p.error && all.length) ? `
       <div class="uf-bar" style="margin-bottom:10px;">
         ${ddGroup('Program type', 'type', types)}
@@ -15846,16 +15846,16 @@ function renderProgramCaptureModal(){
   if(s.step === 'input'){
     const batch = s.mode === 'batch';
     const tab = (on) => `padding:5px 12px;border-radius:var(--radius-input);font-size:12px;cursor:pointer;border:1px solid var(--border-light);${on ? 'background:var(--accent);color:#fff;font-weight:700;' : 'background:var(--surface-2);'}`;
-    openModal(batch ? 'Log findings — batch' : 'Log a finding', `
+    openModal(batch ? 'Log findings (batch)' : 'Log a finding', `
       ${s.prefillCompany ? '' : `<div style="display:flex;gap:6px;margin-bottom:10px;">
         <span style="${tab(!batch)}" onclick="window.__progCapture.mode='single';renderProgramCaptureModal()">One finding</span>
         <span style="${tab(batch)}" onclick="window.__progCapture.mode='batch';renderProgramCaptureModal()">Paste a batch</span>
       </div>`}
       ${batch ? `
-        <div class="muted" style="font-size:12px;margin-bottom:8px;">One finding per line — a research dump, a list of companies + what you found. The Engine classifies each and files it against the right company. Up to 25 at a time.</div>
-        <textarea id="progBulkText" rows="9" placeholder="Rio Tinto — new SAP S/4HANA rollout announced Aug 2026, go-live 2028&#10;Water Corp — appointed a Chief Transformation Officer&#10;South32 — operating model review underway per H1 results call" style="width:100%;">${esc(s.bulkText || '')}</textarea>
+        <div class="muted" style="font-size:12px;margin-bottom:8px;">One finding per line: a research dump, a list of companies + what you found. The Engine classifies each and files it against the right company. Up to 25 at a time.</div>
+        <textarea id="progBulkText" rows="9" placeholder="Rio Tinto: new SAP S/4HANA rollout announced Aug 2026, go-live 2028&#10;Water Corp: appointed a Chief Transformation Officer&#10;South32: operating model review underway per H1 results call" style="width:100%;">${esc(s.bulkText || '')}</textarea>
       ` : `
-        <div class="muted" style="font-size:12px;margin-bottom:8px;">Paste whatever you found — a news headline, a LinkedIn post, a line from a call. The Engine works out which company it's about and whether it's a program, a signal, or just a note.</div>
+        <div class="muted" style="font-size:12px;margin-bottom:8px;">Paste whatever you found: a news headline, a LinkedIn post, a line from a call. The Engine works out which company it's about and whether it's a program, a signal, or just a note.</div>
         <textarea id="progCaptureText" rows="6" placeholder="e.g. 'Water Corporation has kicked off a multi-year SAP S/4HANA replacement, go-live slipped to 2027…'" style="width:100%;">${esc(s.text || '')}</textarea>
         ${s.prefillCompany ? `<div class="muted" style="font-size:11px;margin-top:6px;">Will attach to <b>${esc(s.prefillCompany)}</b> unless the text points elsewhere.</div>` : ''}
       `}
@@ -15871,11 +15871,11 @@ function renderProgramCaptureModal(){
   const companies = (window.__programs && window.__programs.companies || []).map(c => c.companyName);
   const allCompanyNames = [...new Set([...(state.contacts||[]).map(c => c.company).filter(Boolean), ...companies, ...(pr.candidateCompanies||[])])].sort();
   const destLabel = { program: 'Active program', signal: 'Company signal', note: 'Company note' }[pr.destination] || 'Note';
-  openModal('Confirm — ' + destLabel, `
+  openModal('Confirm: ' + destLabel, `
     <div class="field"><label>Company</label>
       <input id="progPropCompany" list="progPropCompanyList" value="${esc(pr.companyName || s.prefillCompany || '')}" style="width:100%;">
       <datalist id="progPropCompanyList">${allCompanyNames.map(n => `<option value="${esc(n)}">`).join('')}</datalist>
-      ${pr.companyMatched ? '<div class="muted" style="font-size:10.5px;margin-top:3px;color:var(--success);">Matched a company on file</div>' : '<div class="muted" style="font-size:10.5px;margin-top:3px;color:var(--warning);">Not matched — pick the right one</div>'}
+      ${pr.companyMatched ? '<div class="muted" style="font-size:10.5px;margin-top:3px;color:var(--success);">Matched a company on file</div>' : '<div class="muted" style="font-size:10.5px;margin-top:3px;color:var(--warning);">Not matched, pick the right one</div>'}
     </div>
     <div class="field"><label>This is a</label>
       <select id="progPropDest" onchange="progPropSetDest(this.value)">
@@ -16093,7 +16093,7 @@ async function progBulkAcceptHighConfidence(){
 
 /* ==================== PROGRAM DISCOVERY AGENT (Home + Settings) ==================== */
 function progDiscoWhen(iso){
-  if(!iso) return '—';
+  if(!iso) return '–';
   try { return new Date(iso).toLocaleString('en-AU',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}); }
   catch(e){ return fmtDate(iso); }
 }
@@ -16126,7 +16126,7 @@ function progQueueWhat(q){
       + (q.program.phase ? ` · <span style="color:${programPhaseColor(q.program.phase)};font-weight:700;">${esc(q.program.phase)}</span>` : '')
       + (q.program.type ? ` · ${esc(q.program.type)}` : '');
   }
-  return esc(q.signal || q.note || '—');
+  return esc(q.signal || q.note || '–');
 }
 function progConfTag(c){
   if(!c) return '';
@@ -16157,7 +16157,7 @@ async function loadProgramDiscovery(){
 // aren't filed against a company yet. Clicking the card body still opens that
 // company's profile, same as the other card grids.
 function renderProgramQueueCard(q){
-  const nm = esc(q.companyName || '—');
+  const nm = esc(q.companyName || '–');
   const initial = esc((q.companyName || '?').trim()[0] || '?').toUpperCase();
   const newBadge = q.isNewCompany ? `<span class="badge" style="background:var(--tint-blue-bg);color:var(--tint-blue-fg);font-size:9px;">NEW</span>` : '';
   // A "program" finding's box opens the same strategy report as an Active
@@ -16168,7 +16168,7 @@ function renderProgramQueueCard(q){
     ? `<div class="uco-prog uco-prog-row" onclick="event.stopPropagation();openQueueProgramStrategy('${q.id}')"><span class="k">${esc(progQueueTypeLabel(q))}</span><span class="v">${progQueueWhat(q)}</span></div>`
     : `<div class="uco-prog"><span class="k">${esc(progQueueTypeLabel(q))}</span><span class="v">${progQueueWhat(q)}</span></div>`;
   return `
-  <div class="uco-card" onclick="${nm !== '—' ? `navigate('profile');selectProfileCompany('${nm}')` : ''}">
+  <div class="uco-card" onclick="${nm !== '–' ? `navigate('profile');selectProfileCompany('${nm}')` : ''}">
     <div class="uco-top">${progHeatTag(q.heatBand)}${newBadge}</div>
     <div class="uco-name"><span class="uco-ava">${initial}</span><b>${nm}</b></div>
     ${progBox}
@@ -16281,7 +16281,7 @@ function renderProgramDiscoveryCard(){
   const grid = !all.length
     ? ''
     : (rows.length ? `<div class="uco-grid" style="margin-top:12px;">${rows.map(renderProgramQueueCard).join('')}</div>`
-      : `<div class="muted" style="font-size:12px;margin-top:12px;">No findings match this filter.${(!f.heat.length && coldCount) ? ` ${coldCount} low-priority finding${coldCount===1?'':'s'} hidden by default — add Heat &gt; Low priority to see them.` : ''}</div>`);
+      : `<div class="muted" style="font-size:12px;margin-top:12px;">No findings match this filter.${(!f.heat.length && coldCount) ? ` ${coldCount} low-priority finding${coldCount===1?'':'s'} hidden by default. Add Heat &gt; Low priority to see them.` : ''}</div>`);
 
   return `
   <div class="card" style="margin-bottom:22px;">
@@ -16295,9 +16295,9 @@ function renderProgramDiscoveryCard(){
       </div>
     </div>
     <div class="muted" style="font-size:11.5px;margin:6px 0 0;">
-      The agent scans for transformation programs — re-checks known accounts and surfaces new ICP-sector companies. Ranked by opportunity heat: phase, ICP fit, whether the account is already in a campaign, and how fresh the source is. High-confidence findings file themselves; the rest wait here for a yes/no.
-      ${d.settings.enabled ? ' Also runs automatically every Monday.' : ' Automatic weekly runs are <b>off</b> — turn them on in Settings once you’re happy with a manual run.'}
-      ${last ? ` Last run ${progDiscoWhen(last.ranAt)} — scanned ${last.companiesScanned}, filed ${last.autoFiled}, ${last.queued} queued${last.newCompanies?`, ${last.newCompanies} new`:''}${(last.errors&&last.errors.length)?`, ${last.errors.length} error(s)`:''}.` : ''}
+      The agent scans for transformation programs, re-checking known accounts and surfacing new ICP-sector companies. Ranked by opportunity heat: phase, ICP fit, whether the account is already in a campaign, and how fresh the source is. High-confidence findings file themselves; the rest wait here for a yes/no.
+      ${d.settings.enabled ? ' Also runs automatically every Monday.' : ' Automatic weekly runs are <b>off</b>. Turn them on in Settings once you’re happy with a manual run.'}
+      ${last ? ` Last run ${progDiscoWhen(last.ranAt)}: scanned ${last.companiesScanned}, filed ${last.autoFiled}, ${last.queued} queued${last.newCompanies?`, ${last.newCompanies} new`:''}${(last.errors&&last.errors.length)?`, ${last.errors.length} error(s)`:''}.` : ''}
     </div>
     ${filterBar}
     ${grid}
@@ -16322,7 +16322,7 @@ async function runProgramDiscoveryNow(mode){
     const res = await fetch('/api/programs/discovery/run', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ mode: m }) });
     const s = await res.json();
     if(!res.ok && res.status !== 409) throw new Error(s.error || 'Run failed');
-    toast('Discovery run started — this can take a few minutes. You can keep working.');
+    toast('Discovery run started. This can take a few minutes. You can keep working.');
     await pollProgramDiscovery();
   } catch(err){
     toast('Discovery run failed: ' + friendlyErr(err.message), 'warn');
@@ -16339,7 +16339,7 @@ async function pollProgramDiscovery(){
     if(!d.running){
       window.__programDiscoveryRunning = false;
       const last = d.log && d.log[0];
-      if(last) toast(`Discovery done — scanned ${last.companiesScanned}, filed ${last.autoFiled}, ${last.queued} to review${last.newCompanies?`, ${last.newCompanies} new`:''}${(last.errors&&last.errors.length)?` (${last.errors.length} error(s))`:''}`, (last.errors&&last.errors.length)?'warn':'success');
+      if(last) toast(`Discovery done: scanned ${last.companiesScanned}, filed ${last.autoFiled}, ${last.queued} to review${last.newCompanies?`, ${last.newCompanies} new`:''}${(last.errors&&last.errors.length)?` (${last.errors.length} error(s))`:''}`, (last.errors&&last.errors.length)?'warn':'success');
       window.__programs = undefined; loadPrograms();
       window.__icpWorklist = undefined; loadIcpWorklist();
       renderPage();
@@ -16348,7 +16348,7 @@ async function pollProgramDiscovery(){
     if(['home','settings','companyuniverse'].includes(state.currentPage)) renderPage();
   }
   window.__programDiscoveryRunning = false; renderPage();
-  toast('Discovery is taking longer than expected — check back shortly.', 'warn');
+  toast('Discovery is taking longer than expected. Check back shortly.', 'warn');
 }
 function progDiscoQueueDone(){
   closeModal();
@@ -16365,7 +16365,7 @@ function openProgramDiscoveryQueue(){
   const rowHtml = q => `
       <div id="progQRow-${q.id}" style="border:1px solid var(--border);border-radius:12px;padding:14px 16px;background:var(--surface);">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
-          <div style="font-weight:700;font-size:13.5px;line-height:1.3;">${esc(q.companyName||'—')}${q.isNewCompany ? ` <span class="badge" style="background:var(--tint-blue-bg);color:var(--tint-blue-fg);font-size:9px;">NEW</span>` : ''}</div>
+          <div style="font-weight:700;font-size:13.5px;line-height:1.3;">${esc(q.companyName||'–')}${q.isNewCompany ? ` <span class="badge" style="background:var(--tint-blue-bg);color:var(--tint-blue-fg);font-size:9px;">NEW</span>` : ''}</div>
           <div style="display:flex;align-items:center;gap:6px;flex:none;">
             ${progHeatTag(q.heatBand)}
             <span class="badge" style="background:var(--surface-2);font-size:9px;">${esc(progQueueTypeLabel(q))}</span>
@@ -16438,7 +16438,7 @@ function renderProgramDiscoverySettingsCard(){
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:6px;">
       <div>
         <div class="section-title" style="margin-bottom:2px;"><i class="ti ti-robot"></i> Program discovery agent</div>
-        <div class="muted" style="font-size:12px;">Weekly web scan (Mondays 7am) for transformation programs — re-checks known accounts and finds new ICP-sector companies. High-confidence findings are filed automatically; the rest go to the Home review queue. Needs SERPER_API_KEY + ANTHROPIC_API_KEY. Runs on the ambient (cheaper) model.</div>
+        <div class="muted" style="font-size:12px;">Weekly web scan (Mondays 7am) for transformation programs: re-checks known accounts and finds new ICP-sector companies. High-confidence findings are filed automatically; the rest go to the Home review queue. Needs SERPER_API_KEY + ANTHROPIC_API_KEY. Runs on the ambient (cheaper) model.</div>
       </div>
       <button class="btn btn-secondary btn-sm" onclick="runProgramDiscoveryNow()" ${running?'disabled':''}><i class="ti ${running?'ti-loader-2':'ti-radar'}"></i> ${running?'Scanning…':'Run now'}</button>
     </div>
@@ -16538,10 +16538,10 @@ function setUniverseTab(t){ window.__universeTab = t; renderPage(); }
 // the detail living on its own page (renderReviewDetailPage) - same
 // card-summary-then-full-page pattern as Program Strategy.
 const REVIEW_DETAIL_META = {
-  performance: { title: "What's actually converting", desc: 'Every outreach touch on file, rolled up by ICP segment — not one campaign in isolation.' },
+  performance: { title: "What's actually converting", desc: 'Every outreach touch on file, rolled up by ICP segment, not one campaign in isolation.' },
   autopsy: { title: 'Account-wide GTM review', desc: 'Diagnoses every stalled contact across every campaign and groups the real reasons, so a recurring objection shows up once, not thirty times.' },
-  lostdeals: { title: 'Why deals are lost', desc: "Every Lost deal on file, structured by reason — Twenty2's own pipeline as well as outreach-generated." },
-  stalled: { title: 'Stalled relationships', desc: 'Gone quiet, paused, or an early warning — worth knowing before it becomes a loss.' }
+  lostdeals: { title: 'Why deals are lost', desc: "Every Lost deal on file, structured by reason: Twenty2's own pipeline as well as outreach-generated." },
+  stalled: { title: 'Stalled relationships', desc: 'Gone quiet, paused, or an early warning, worth knowing before it becomes a loss.' }
 };
 function openReviewDetail(key){
   window.__reviewDetailKey = key;
@@ -16563,7 +16563,7 @@ function renderReviewTiles(){
 
   let perfTile;
   if(!perf) perfTile = renderReviewTile({ key:'performance', label:"What's converting", value:'<i class="ti ti-loader-2"></i>', delta:'Loading…', deltaClass:'flat', icon:'ti-chart-histogram' });
-  else if(perf.error) perfTile = renderReviewTile({ key:'performance', label:"What's converting", value:'—', delta:'Could not load', deltaClass:'error', icon:'ti-chart-histogram' });
+  else if(perf.error) perfTile = renderReviewTile({ key:'performance', label:"What's converting", value:'–', delta:'Could not load', deltaClass:'error', icon:'ti-chart-histogram' });
   else {
     const rows = perf.bySector || [];
     const totalContacted = rows.reduce((s,r) => s + (r.totalContacted||0), 0);
@@ -16572,12 +16572,12 @@ function renderReviewTiles(){
   }
 
   const autopsyTile = !digest
-    ? renderReviewTile({ key:'autopsy', label:'GTM review', value:'—', delta:'Tap to run', deltaClass:'flat', icon:'ti-stethoscope' })
+    ? renderReviewTile({ key:'autopsy', label:'GTM review', value:'–', delta:'Tap to run', deltaClass:'flat', icon:'ti-stethoscope' })
     : renderReviewTile({ key:'autopsy', label:'GTM review', value:(digest.results||[]).length, delta:(digest.results||[]).length ? `${digest.results.length} stalled flagged` : 'nothing stalled', icon:'ti-stethoscope' });
 
   let lostTile;
   if(!lost) lostTile = renderReviewTile({ key:'lostdeals', label:'Why deals are lost', value:'<i class="ti ti-loader-2"></i>', delta:'Loading…', deltaClass:'flat', icon:'ti-mood-sad' });
-  else if(lost.error) lostTile = renderReviewTile({ key:'lostdeals', label:'Why deals are lost', value:'—', delta:'Could not load', deltaClass:'error', icon:'ti-mood-sad' });
+  else if(lost.error) lostTile = renderReviewTile({ key:'lostdeals', label:'Why deals are lost', value:'–', delta:'Could not load', deltaClass:'error', icon:'ti-mood-sad' });
   else {
     const n = (lost.lost||[]).length, topReason = (lost.byReason||[])[0];
     lostTile = renderReviewTile({ key:'lostdeals', label:'Why deals are lost', value:n, delta: topReason ? `Top: ${topReason.reason}` : 'none logged', icon:'ti-mood-sad' });
@@ -16585,14 +16585,14 @@ function renderReviewTiles(){
 
   let stalledTile;
   if(!stalled) stalledTile = renderReviewTile({ key:'stalled', label:'Stalled relationships', value:'<i class="ti ti-loader-2"></i>', delta:'Loading…', deltaClass:'flat', icon:'ti-cloud-pause' });
-  else if(stalled.error) stalledTile = renderReviewTile({ key:'stalled', label:'Stalled relationships', value:'—', delta:'Could not load', deltaClass:'error', icon:'ti-cloud-pause' });
+  else if(stalled.error) stalledTile = renderReviewTile({ key:'stalled', label:'Stalled relationships', value:'–', delta:'Could not load', deltaClass:'error', icon:'ti-cloud-pause' });
   else {
     const n = (stalled.stalled||[]).length, topReason = (stalled.byReason||[])[0];
     stalledTile = renderReviewTile({ key:'stalled', label:'Stalled relationships', value:n, delta: topReason ? `Top: ${topReason.reason}` : 'none logged', icon:'ti-cloud-pause' });
   }
 
   return `
-  <div class="muted" style="font-size:12.5px;margin:-2px 0 16px;max-width:70ch;">The learning loop — what the account base is telling you, so the next campaign is built on evidence instead of a guess. Tap a tile for the full breakdown.</div>
+  <div class="muted" style="font-size:12.5px;margin:-2px 0 16px;max-width:70ch;">The learning loop: what the account base is telling you, so the next campaign is built on evidence instead of a guess. Tap a tile for the full breakdown.</div>
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;">
     ${perfTile}${autopsyTile}${lostTile}${stalledTile}
   </div>`;
@@ -16640,7 +16640,7 @@ function renderCompanyUniverse(){
   <div class="page-head" style="display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;">
     <div>
       <h1 class="page-h1">Company Universe</h1>
-      <div class="page-sub">Find and qualify the accounts worth working — ICP fit, live transformation programs, and what the account base is teaching you.</div>
+      <div class="page-sub">Find and qualify the accounts worth working: ICP fit, live transformation programs, and what the account base is teaching you.</div>
     </div>
     <div style="display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;width:100%;">
       ${renderUniverseHeaderIndicators()}
@@ -16750,7 +16750,7 @@ function renderProfilePage(){
     </div>` : '';
 
   const searchCard = searchOpen ? `
-  ${!selectedCompany ? `<div class="page-head"><h1 class="page-h1">Contact Profiles</h1><div class="page-sub">Map an account's transformation and where Twenty2 fits — the free-value artifact you bring to the first conversation.</div></div>` : ''}
+  ${!selectedCompany ? `<div class="page-head"><h1 class="page-h1">Contact Profiles</h1><div class="page-sub">Map an account's transformation and where Twenty2 fits: the free-value artifact you bring to the first conversation.</div></div>` : ''}
   <div class="card" style="margin-bottom:12px;">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-search"></i> Find a company or person</div>
@@ -16770,7 +16770,7 @@ function renderProfilePage(){
         </div>
         <div style="min-width:200px;">
           <div class="muted" style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Companies</div>
-          ${companyResults.length ? companyResults.map(name => `<div class="tp-item ${selectedCompany===name?'active':''}" tabindex="0" role="button" style="cursor:pointer;" onclick="selectProfileCompany('${esc(name)}')" onkeydown="onRowKeydown(event)"><strong>${esc(name)}</strong></div>`).join('') : `<div class="muted" style="font-size:12px;">No matches — hit <strong>Create "${esc(rawQuery)}"</strong> above to add it.</div>`}
+          ${companyResults.length ? companyResults.map(name => `<div class="tp-item ${selectedCompany===name?'active':''}" tabindex="0" role="button" style="cursor:pointer;" onclick="selectProfileCompany('${esc(name)}')" onkeydown="onRowKeydown(event)"><strong>${esc(name)}</strong></div>`).join('') : `<div class="muted" style="font-size:12px;">No matches. Hit <strong>Create "${esc(rawQuery)}"</strong> above to add it.</div>`}
         </div>
       </div>
     ` : ''}
@@ -17271,9 +17271,9 @@ async function archSyncFromMonday(key){
     if(!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
     if(data.status === 'synced'){
       await loadChangeArchitecture(key);
-      toast(`Synced from Monday — ${data.contacts || 0} contact note${data.contacts === 1 ? '' : 's'}, ${data.preserved || 0} of your own element${data.preserved === 1 ? '' : 's'} kept.`, 'success');
+      toast(`Synced from Monday: ${data.contacts || 0} contact note${data.contacts === 1 ? '' : 's'}, ${data.preserved || 0} of your own element${data.preserved === 1 ? '' : 's'} kept.`, 'success');
     } else if(data.status === 'no_content'){
-      toast('Nothing in Monday for this company yet — canvas left as is.', 'warn');
+      toast('Nothing in Monday for this company yet. Canvas left as is.', 'warn');
     } else {
       toast('Monday sync skipped: ' + (data.reason || data.status || 'unknown'), 'warn');
     }
@@ -17599,7 +17599,7 @@ function archPickEntity(companyName, kind){
     // record, not just those a contact happens to reference.
     options = allCompanyNames().map(n => ({ id: n, name: n, sub: '' }));
   }
-  const rows = options.map((o, i) => `<div class="arch-pick-row" data-i="${i}" onclick="archConfirmEntity('${esc(companyName)}','${kind}',${i})"><strong>${esc(o.name)}</strong>${o.sub ? `<span class="muted"> — ${esc(o.sub)}</span>` : ''}</div>`).join('');
+  const rows = options.map((o, i) => `<div class="arch-pick-row" data-i="${i}" onclick="archConfirmEntity('${esc(companyName)}','${kind}',${i})"><strong>${esc(o.name)}</strong>${o.sub ? `<span class="muted"> · ${esc(o.sub)}</span>` : ''}</div>`).join('');
   window.__archPickOptions = options;
   openModal(title, `
     <input id="archPickSearch" type="text" placeholder="Search…" style="width:100%;margin-bottom:10px;" oninput="archFilterPick()">
@@ -18177,7 +18177,7 @@ function archElInnerHtml(companyName, el){
       <div class="arch-chart-wrap">
         ${c && c.title ? `<div class="arch-chart-title">${esc(c.title)}</div>` : ''}
         ${c && c.data.labels.length ? `<div class="arch-chart-canvas"><canvas id="archChart-${el.id}"></canvas></div>`
-          : `<div class="arch-chart-empty muted">No data yet — double-click to add</div>`}
+          : `<div class="arch-chart-empty muted">No data yet, double-click to add</div>`}
       </div>`;
   }
   if(el.type === 'image'){
@@ -18368,7 +18368,7 @@ function renderChangeArchitectureCanvas(companyName){
       <div style="display:flex;gap:6px;align-items:center;">
         <span id="archSaveStatus" class="muted" style="font-size:11px;"></span>
         ${isComp ? '' : `<button class="btn ${d.layers.orgMap?'btn-primary':'btn-secondary'} btn-sm" title="Show the live CRM contact map on this canvas" onclick="archToggleOrgMap('${esc(companyName)}')"><i class="ti ti-sitemap"></i> Org map</button>
-        <button class="btn btn-secondary btn-sm" id="archMondayBtn" title="Rebuild this canvas from the latest Monday.com context notes, stakeholder map and next actions — keeps anything you placed by hand" onclick="archSyncFromMonday('${esc(companyName)}')"><i class="ti ti-refresh"></i> Sync from Monday</button>`}
+        <button class="btn btn-secondary btn-sm" id="archMondayBtn" title="Rebuild this canvas from the latest Monday.com context notes, stakeholder map and next actions, keeps anything you placed by hand" onclick="archSyncFromMonday('${esc(companyName)}')"><i class="ti ti-refresh"></i> Sync from Monday</button>`}
         <div class="arch-menu" id="archInsertMenu">
           <button class="btn btn-primary btn-sm" onclick="event.stopPropagation();archToggleInsertMenu()"><i class="ti ti-plus"></i> Insert</button>
           <div class="arch-menu-list">
@@ -18398,7 +18398,7 @@ function renderChangeArchitectureCanvas(companyName){
         </div>
       </div>
     </div>
-    <div class="desc">Freeform board — drag empty space to pan, scroll to zoom. Insert cards, shapes, sticky notes and charts; double-click to edit text; select an element for colour, shape and connectors. Paste or drop an image, PDF or link straight onto the board.${d.layers.orgMap ? ' The live contact map updates itself as the CRM changes.' : ''} Everything autosaves.</div>
+    <div class="desc">Freeform board: drag empty space to pan, scroll to zoom. Insert cards, shapes, sticky notes and charts; double-click to edit text; select an element for colour, shape and connectors. Paste or drop an image, PDF or link straight onto the board.${d.layers.orgMap ? ' The live contact map updates itself as the CRM changes.' : ''} Everything autosaves.</div>
     <div id="archToolbarHolder">${archInlineToolbarHtml(companyName)}</div>
     <div id="archViewport" class="arch-viewport" tabindex="0" onmousedown="archViewportMouseDown(event)" onwheel="archWheel(event)" onpaste="archViewportPaste(event,'${esc(companyName)}')" ondragover="archViewportDragOver(event)" ondrop="archViewportDrop(event,'${esc(companyName)}')">
       <div id="archScene" class="arch-scene" style="width:${ARCH_SCENE_W}px;height:${ARCH_SCENE_H}px;">
@@ -18406,7 +18406,7 @@ function renderChangeArchitectureCanvas(companyName){
         <div id="archEdgeLabels" class="arch-edge-labels"></div>
         ${els}
       </div>
-      ${!allEls.length ? `<div class="arch-empty muted">Empty canvas — press <b>Insert</b>${isComp ? '' : ', or turn on <b>Org map</b> to pull in the contact tree'}.</div>` : ''}
+      ${!allEls.length ? `<div class="arch-empty muted">Empty canvas. Press <b>Insert</b>${isComp ? '' : ', or turn on <b>Org map</b> to pull in the contact tree'}.</div>` : ''}
     </div>
   </div>`;
 }
@@ -18417,10 +18417,10 @@ function archNewCanvasDialog(companyName){
   openModal('New canvas for ' + esc(companyName), `
     <div class="field"><label>Canvas name</label><input id="archNewName" placeholder="e.g. Stakeholder map" value="Canvas"></div>
     <div class="muted" style="font-size:11.5px;margin:10px 0 6px;">What do you want to import from this account?</div>
-    <label class="arch-imp"><input type="checkbox" id="archImpOrg" checked> Contact org map <span class="muted">— live company + contact tree</span></label>
-    <label class="arch-imp"><input type="checkbox" id="archImpChart" checked> Touch-point chart <span class="muted">— activity by type</span></label>
+    <label class="arch-imp"><input type="checkbox" id="archImpOrg" checked> Contact org map <span class="muted">· live company + contact tree</span></label>
+    <label class="arch-imp"><input type="checkbox" id="archImpChart" checked> Touch-point chart <span class="muted">· activity by type</span></label>
     <label class="arch-imp"><input type="checkbox" id="archImpDeals" checked> Deals + relationship note</label>
-    <label class="arch-imp"><input type="checkbox" id="archImpArch" checked> Change-architecture starter <span class="muted">— 5 labelled shapes</span></label>
+    <label class="arch-imp"><input type="checkbox" id="archImpArch" checked> Change-architecture starter <span class="muted">· 5 labelled shapes</span></label>
     <div style="margin-top:8px;display:flex;gap:10px;">
       <button class="btn btn-ghost btn-sm" onclick="archImpSetAll(true)">Everything</button>
       <button class="btn btn-ghost btn-sm" onclick="archImpSetAll(false)">Nothing</button>
@@ -18459,7 +18459,7 @@ async function archCreateCanvasFromDialog(companyName){
       chart: { kind: 'bar', title: 'Touch points by type', source: data.labels.length ? 'auto:touchpoints-by-type' : 'manual', data, pulledAt: data.labels.length ? new Date().toISOString() : null } });
   }
   if(wantDeals){
-    let text = 'Deals & relationship — nothing on file yet.';
+    let text = 'Deals & relationship: nothing on file yet.';
     try {
       const res = await fetch(`/api/companies/profile?name=${encodeURIComponent(companyName)}`);
       const j = await res.json();
@@ -18467,7 +18467,7 @@ async function archCreateCanvasFromDialog(companyName){
         const lines = [];
         const rf = j.relationshipFlag;
         if(rf) lines.push(`TWENTY2 RELATIONSHIP: ${rf.status}${rf.tier ? ' (Tier ' + rf.tier + ')' : ''}` + (rf.notes ? '\n' + rf.notes : ''));
-        (j.deals || []).forEach(dl => lines.push(`• ${dl.outcome}${dl.dealValue ? ' — $' + Number(dl.dealValue).toLocaleString() : ''}${dl.date ? ' (' + fmtDate(dl.date) + ')' : ''}`));
+        (j.deals || []).forEach(dl => lines.push(`• ${dl.outcome}${dl.dealValue ? ' ($' + Number(dl.dealValue).toLocaleString() + ')' : ''}${dl.date ? ' (' + fmtDate(dl.date) + ')' : ''}`));
         if(lines.length) text = lines.join('\n');
       }
     } catch(e){}
@@ -18590,8 +18590,8 @@ function renderIcpSegmentationModal(campaignId){
       if(cos.length && (!biggest || cos.length > biggest.count)) biggest = { size:s, momentum:m, count:cos.length };
     }));
     const suggestion = biggest
-      ? `Most companies here are <b>${esc(biggest.size)}</b> · <b>${esc(biggest.momentum)}</b> — ${biggest.count} of ${data.totalCompanies}. Check the Angle Library (Settings) has an entry matching that segment before this campaign goes out.`
-      : (unscored.length ? 'Nothing scored yet — run Score ICP below to see where your companies cluster.' : '');
+      ? `Most companies here are <b>${esc(biggest.size)}</b> · <b>${esc(biggest.momentum)}</b>, ${biggest.count} of ${data.totalCompanies}. Check the Angle Library (Settings) has an entry matching that segment before this campaign goes out.`
+      : (unscored.length ? 'Nothing scored yet. Run Score ICP below to see where your companies cluster.' : '');
     body = `
       <div class="desc" style="margin-bottom:10px;">${data.scoredCount} of ${data.totalCompanies} scored.</div>
       ${suggestion ? `<div class="scorecard-warn" style="margin-bottom:12px;"><i class="ti ti-bulb"></i> ${suggestion}</div>` : ''}
@@ -18604,7 +18604,7 @@ function renderIcpSegmentationModal(campaignId){
             ${SEGMENTATION_SIZE_COLS.map(s => {
               const cos = cellFor(s, m);
               return `<div style="background:var(--surface-2);border:1px solid var(--border-light);border-radius:6px;padding:6px;min-height:44px;font-size:11px;">
-                ${cos.length ? cos.map(c=>esc(c.companyName)).join(', ') : '<span class="muted">—</span>'}
+                ${cos.length ? cos.map(c=>esc(c.companyName)).join(', ') : '<span class="muted">–</span>'}
               </div>`;
             }).join('')}
           `).join('')}
@@ -18694,7 +18694,7 @@ function renderReengagementSection(campaign){
       list.map(c => `
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--border-light);">
           <div style="font-size:12.5px;">
-            <strong>${esc(c.contactName)}</strong> <span class="muted">— ${esc(c.jobTitle||'')}${c.linkedInUrl?` · <a href="${esc(c.linkedInUrl)}" target="_blank" rel="noopener">LinkedIn</a>`:''}</span>
+            <strong>${esc(c.contactName)}</strong> <span class="muted">· ${esc(c.jobTitle||'')}${c.linkedInUrl?` · <a href="${esc(c.linkedInUrl)}" target="_blank" rel="noopener">LinkedIn</a>`:''}</span>
             <div class="muted" style="font-size:11px;margin-top:2px;">${esc(c.signal)}</div>
           </div>
           <button class="btn btn-secondary btn-sm" onclick="reengageContact('${campaign.id}','${c.contactId}')">Re-engage</button>
@@ -18715,7 +18715,7 @@ function renderConnectionTimeoutSection(campaign){
 
     <div style="border-top:1px solid var(--border-light);margin-top:14px;padding-top:14px;">
       <div class="section-title" style="font-size:13px;"><i class="ti ti-user-x"></i> Stale requests to withdraw</div>
-      <div class="muted" style="font-size:12px;margin-bottom:8px;">Connection requests still pending after 14+ days. Leaving them hanging quietly hurts your reach — withdraw them on LinkedIn, then mark them here.</div>
+      <div class="muted" style="font-size:12px;margin-bottom:8px;">Connection requests still pending after 14+ days. Leaving them hanging quietly hurts your reach. Withdraw them on LinkedIn, then mark them here.</div>
       <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
         <button class="btn btn-secondary btn-sm" onclick="loadStaleConnections('${campaign.id}')"><i class="ti ti-refresh"></i> ${stale ? 'Refresh' : 'Find stale requests'}</button>
         <a class="btn btn-ghost btn-sm" href="https://www.linkedin.com/mynetwork/invitation-manager/sent/" target="_blank" rel="noopener"><i class="ti ti-brand-linkedin"></i> Open LinkedIn sent invitations</a>
@@ -18745,13 +18745,13 @@ async function loadStaleConnections(campaignId){
 }
 
 function renderStaleConnListHtml(campaignId, rows){
-  if(!rows.length) return '<span class="muted" style="font-size:12.5px;">No stale requests — every pending connection is under 14 days old.</span>';
+  if(!rows.length) return '<span class="muted" style="font-size:12.5px;">No stale requests. Every pending connection is under 14 days old.</span>';
   return `
     <div style="max-height:220px;overflow-y:auto;border:1px solid var(--border-light);border-radius:8px;padding:8px;">
       ${rows.map(r => `
         <label style="display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:12.5px;">
           <input type="checkbox" class="stale-conn-cb" value="${esc(r.contactId||'')}" checked>
-          <span>${esc(r.contactName)}${r.linkedInUrl ? ` <a href="${esc(r.linkedInUrl)}" target="_blank" rel="noopener" style="color:var(--blue);"><i class="ti ti-external-link" style="font-size:11px;"></i></a>` : ''} <span class="muted">— ${r.daysPending}d pending</span></span>
+          <span>${esc(r.contactName)}${r.linkedInUrl ? ` <a href="${esc(r.linkedInUrl)}" target="_blank" rel="noopener" style="color:var(--blue);"><i class="ti ti-external-link" style="font-size:11px;"></i></a>` : ''} <span class="muted">· ${r.daysPending}d pending</span></span>
         </label>
       `).join('')}
     </div>
@@ -19004,7 +19004,7 @@ function renderVariantPerformanceCard(campaign){
     <div class="mini-cards" style="grid-template-columns:repeat(${Math.min(4,Object.keys(stats).length)},1fr);margin-bottom:0;">
       ${Object.entries(stats).map(([label,s]) => `
         <div class="mini-card">
-          <div class="num">${s.ratePct!==null?s.ratePct+'%':'—'}</div>
+          <div class="num">${s.ratePct!==null?s.ratePct+'%':'–'}</div>
           <div class="label">${esc(label)}</div>
           <div class="muted" style="font-size:11px;margin-top:6px;">${s.accepted} / ${s.sent} accepted</div>
         </div>`).join('')}
@@ -19024,7 +19024,7 @@ function renderCampaignMessagePerformance(){
       <div class="mini-cards" style="grid-template-columns:repeat(3,1fr);margin-bottom:0;">
         ${data.messages.map(m => `
         <div class="mini-card">
-          <div class="num">${m.sent ? m.replyRate+'%' : '—'}</div>
+          <div class="num">${m.sent ? m.replyRate+'%' : '–'}</div>
           <div class="label">${esc(m.label)} reply rate</div>
           <div class="muted" style="font-size:11px;margin-top:6px;">${m.sent ? `${m.replied} / ${m.sent} replied${m.avgResponseDays!==null ? ` · avg ${m.avgResponseDays}d to reply` : ''}` : 'not sent yet'}</div>
         </div>`).join('')}
@@ -19094,13 +19094,13 @@ function renderAcceptedReviewCard(campaign){
   return `
   <div class="card" style="margin-bottom:16px;">
     <div class="section-title" style="margin-bottom:4px;"><i class="ti ti-list-search"></i> Review accepted contacts (${silent.length})</div>
-    <div class="desc">Accepted your request but haven't replied. Skim the roles and summaries against your ICP — a low reply rate is usually the wrong person, not just the wrong message. Exclude anyone who isn't a fit.</div>
+    <div class="desc">Accepted your request but haven't replied. Skim the roles and summaries against your ICP. A low reply rate is usually the wrong person, not just the wrong message. Exclude anyone who isn't a fit.</div>
     <div style="max-height:280px;overflow-y:auto;">
       ${silent.slice(0,40).map(c => `
         <div style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--border-light);">
           <div style="flex:1;min-width:0;">
-            <div style="font-size:12.5px;font-weight:600;cursor:pointer;" onclick="openContactDrawer('${esc(c.name)}','${esc(campaign.name)}')">${esc(c.name)} <span class="muted" style="font-weight:400;">— ${esc(c.role||'')}</span>${c.url?` <a href="${esc(c.url)}" target="_blank" rel="noopener" style="color:var(--blue);"><i class="ti ti-brand-linkedin" style="font-size:11px;"></i></a>`:''}</div>
-            <div class="muted" style="font-size:11px;margin-top:2px;line-height:1.4;">${esc((c.aiSummary||c.summary||'').replace(/\{[\s\S]*?\}/,'').trim().slice(0,160) || 'No summary on file — enrich this contact.')}</div>
+            <div style="font-size:12.5px;font-weight:600;cursor:pointer;" onclick="openContactDrawer('${esc(c.name)}','${esc(campaign.name)}')">${esc(c.name)} <span class="muted" style="font-weight:400;">· ${esc(c.role||'')}</span>${c.url?` <a href="${esc(c.url)}" target="_blank" rel="noopener" style="color:var(--blue);"><i class="ti ti-brand-linkedin" style="font-size:11px;"></i></a>`:''}</div>
+            <div class="muted" style="font-size:11px;margin-top:2px;line-height:1.4;">${esc((c.aiSummary||c.summary||'').replace(/\{[\s\S]*?\}/,'').trim().slice(0,160) || 'No summary on file. Enrich this contact.')}</div>
           </div>
           <button class="btn btn-ghost btn-sm" style="flex-shrink:0;" onclick="handleSkipContact('${c.id}')" title="Exclude from this campaign"><i class="ti ti-user-off"></i></button>
         </div>
@@ -19116,7 +19116,7 @@ function renderConnectionAbCard(ab){
   if(!show) return '';
   const arm = (label, s) => `
     <div class="mini-card">
-      <div class="num">${s && s.ratePct!==null ? s.ratePct+'%' : '—'}</div>
+      <div class="num">${s && s.ratePct!==null ? s.ratePct+'%' : '–'}</div>
       <div class="label">${label} accepted</div>
       <div class="muted" style="font-size:11px;margin-top:6px;">${s ? `${s.accepted} / ${s.sent} sent` : 'no data'}</div>
     </div>`;
@@ -19244,14 +19244,14 @@ function renderCampaignAnalyticsTab(campaign){
       ${(sc.icpHealth && sc.icpHealth.total) ? (() => {
         const h = sc.icpHealth, pct = h.onIcpPct;
         const tone = pct >= 70 ? 'var(--success)' : pct >= 40 ? 'var(--warning)' : 'var(--danger)';
-        return `<div class="scorecard-warn" style="border-left-color:${tone};"><i class="ti ti-crosshair"></i> <b style="color:${tone};">${pct}% on-ICP</b> — ${h.onIcp} of ${h.total} contacts in this campaign sit at companies tagged Twenty2's codified ICP.${pct < 50 ? ' Most of this campaign is off-ICP; worth a look.' : ''}</div>`;
+        return `<div class="scorecard-warn" style="border-left-color:${tone};"><i class="ti ti-crosshair"></i> <b style="color:${tone};">${pct}% on-ICP</b>: ${h.onIcp} of ${h.total} contacts in this campaign sit at companies tagged Twenty2's codified ICP.${pct < 50 ? ' Most of this campaign is off-ICP; worth a look.' : ''}</div>`;
       })() : ''}
       ${sc.diagnostic && sc.diagnostic.flag ? `<div class="scorecard-diag"><i class="ti ti-alert-triangle"></i> ${esc(sc.diagnostic.message)}</div>` : ''}
-      ${(sc.multiThread && sc.multiThread.length) ? `<div class="scorecard-warn"><i class="ti ti-users"></i> ${sc.multiThread.length} compan${sc.multiThread.length===1?'y has':'ies have'} 3+ contacts in this campaign — LinkedIn multi-threading works best at 2. ${sc.multiThread.map(m=>esc(m.company)+' ('+m.count+')').join(', ')}</div>` : ''}
+      ${(sc.multiThread && sc.multiThread.length) ? `<div class="scorecard-warn"><i class="ti ti-users"></i> ${sc.multiThread.length} compan${sc.multiThread.length===1?'y has':'ies have'} 3+ contacts in this campaign. LinkedIn multi-threading works best at 2. ${sc.multiThread.map(m=>esc(m.company)+' ('+m.count+')').join(', ')}</div>` : ''}
       <div style="position:relative;height:280px;margin-top:14px;"><canvas id="campAreaChart"></canvas></div>
       ${(sc.changeMarkers && sc.changeMarkers.length) ? `
         <div class="muted" style="font-size:11px;margin-top:10px;padding-top:10px;border-top:1px solid var(--border-light);">
-          <i class="ti ti-flag"></i> Changed in this window: ${sc.changeMarkers.map(m=>`${esc(m.date)} — ${esc(m.field)}: ${esc(String(m.from))} → ${esc(String(m.to))}`).join(' · ')}
+          <i class="ti ti-flag"></i> Changed in this window: ${sc.changeMarkers.map(m=>`${esc(m.date)} · ${esc(m.field)}: ${esc(String(m.from))} → ${esc(String(m.to))}`).join(' · ')}
         </div>` : ''}
     `}
   </div>
@@ -19686,7 +19686,7 @@ function renderPipelineFunnel(data){
     return `<div class="funnel-row">
       <div class="funnel-label">${s.label}</div>
       <div class="funnel-track"><div class="funnel-fill" style="width:${width}%">${s.count}</div></div>
-      <div class="funnel-conv">${conv!==null ? `${conv}% from prior${ofTop!==null?` · ${ofTop}% of all` : ''}` : '—'}</div>
+      <div class="funnel-conv">${conv!==null ? `${conv}% from prior${ofTop!==null?` · ${ofTop}% of all` : ''}` : '–'}</div>
     </div>`;
   }).join('');
   const meetingsCount = stageCounts[stageCounts.length-1].count;
@@ -19697,8 +19697,8 @@ function renderPipelineFunnel(data){
     <div class="section-title"><i class="ti ti-filter"></i> Pipeline progress</div>
     <div class="desc">Distinct contacts in this campaign who have reached each stage (from Campaign Contacts + Stage History), and the conversion into it. Meeting booked / Won / Lost come from the Deals table.${excluded ? ` ${excluded} contact${excluded===1?'':'s'} excluded, not counted below.` : ''}</div>
     ${rows}
-    <div class="funnel-row"><div class="funnel-label">Won</div><div class="funnel-track"><div class="funnel-fill won" style="width:${Math.max(4,Math.round(won/maxCount*100))}%">${won}</div></div><div class="funnel-conv">${meetingsCount?`${wonPct}% of meetings`:'—'}</div></div>
-    <div class="funnel-row"><div class="funnel-label">Lost</div><div class="funnel-track"><div class="funnel-fill lost" style="width:${Math.max(4,Math.round(lost/maxCount*100))}%">${lost}</div></div><div class="funnel-conv">${meetingsCount?`${lostPct}% of meetings`:'—'}</div></div>
+    <div class="funnel-row"><div class="funnel-label">Won</div><div class="funnel-track"><div class="funnel-fill won" style="width:${Math.max(4,Math.round(won/maxCount*100))}%">${won}</div></div><div class="funnel-conv">${meetingsCount?`${wonPct}% of meetings`:'–'}</div></div>
+    <div class="funnel-row"><div class="funnel-label">Lost</div><div class="funnel-track"><div class="funnel-fill lost" style="width:${Math.max(4,Math.round(lost/maxCount*100))}%">${lost}</div></div><div class="funnel-conv">${meetingsCount?`${lostPct}% of meetings`:'–'}</div></div>
   </div>`;
 }
 
@@ -20217,7 +20217,7 @@ function renderSalesTranscriptCard(campaign){
       <div style="font-weight:700;font-size:12px;margin-bottom:8px;">Past analyses</div>
       ${campaign.transcriptAnalyses.slice().reverse().map(a => `
         <div class="intel-draft">
-          <div class="intel-draft-head"><div class="intel-draft-name">${fmtDate(a.date)} &middot; Script adherence: ${esc(a.scriptAdherence||'—')}</div></div>
+          <div class="intel-draft-head"><div class="intel-draft-name">${fmtDate(a.date)} &middot; Script adherence: ${esc(a.scriptAdherence||'–')}</div></div>
           <div class="intel-draft-text">${esc(a.summary||'')}</div>
           ${(a.ctasUsed&&a.ctasUsed.length) ? `<div style="margin-top:6px;font-size:11.5px;"><strong>CTAs used:</strong> ${a.ctasUsed.map(t=>esc(t)).join(', ')}</div>` : ''}
           ${(a.objectionsRaised&&a.objectionsRaised.length) ? `<div style="margin-top:4px;font-size:11.5px;"><strong>Objections:</strong> ${a.objectionsRaised.map(t=>esc(t)).join(', ')}</div>` : ''}
@@ -20585,7 +20585,7 @@ function renderCalendar(){
         ${dayEvents.map(ev => ev.type === 'reminder' ? `<div class="event-chip reminder-chip" tabindex="0" role="button" onclick="openReminderConfirm('${ev.reminderId}')" onkeydown="onRowKeydown(event)"><i class="ti ti-bell" style="font-size:10px;"></i> ${esc((ev.description||'').slice(0,28))}
           <div class="event-tooltip">${esc(ev.description)}<br>${ev.contactName?esc(ev.contactName):(ev.companyName?esc(ev.companyName):'')}${ev.campaignName?' · '+esc(ev.campaignName):''}, ${fmtDate(ev.date)}</div>
         </div>` : `<div class="event-chip ${eventColorByAssignee(ev.assigneeId)}" tabindex="0" role="button" onclick="openDealNotesModal('${ev.dealId}')" onkeydown="onRowKeydown(event)">${esc(firstName(ev.contactName))} · ${esc(ev.stage)}
-          <div class="event-tooltip">${esc(ev.contactName)} — ${esc(ev.companyName)}<br>${esc(ev.campaignName)} · ${esc(ev.stage)}<br>${ev.assigneeName?esc(ev.assigneeName):'Unassigned'}, ${fmtDate(ev.date)}</div>
+          <div class="event-tooltip">${esc(ev.contactName)} · ${esc(ev.companyName)}<br>${esc(ev.campaignName)} · ${esc(ev.stage)}<br>${ev.assigneeName?esc(ev.assigneeName):'Unassigned'}, ${fmtDate(ev.date)}</div>
         </div>`).join('')}
       </div>`;
     }).join('')}
@@ -20598,7 +20598,7 @@ function openDealNotesModal(dealId){
   const deal = findDealById(dealId);
   const header = ev ? `
     <div style="margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border);font-size:12.5px;">
-      <div><strong>${esc(ev.contactName)}</strong> — ${esc(ev.companyName)}</div>
+      <div><strong>${esc(ev.contactName)}</strong> · ${esc(ev.companyName)}</div>
       <div class="muted">${esc(ev.campaignName)} · ${esc(ev.stage)} · ${ev.assigneeName?esc(ev.assigneeName):'Unassigned'} · ${fmtDate(ev.date)}</div>
     </div>` : '';
   openModal('Deal notes', header + renderDealNotesThread(deal), `<button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
@@ -20951,10 +20951,10 @@ function renderIntelligence(){
   <div class="card" style="margin-bottom:16px;" ${window.__engineHasRun ? '' : 'hidden'} id="engineHealthGroup">
     <div id="healthMeta" class="muted" style="font-size:11.5px;margin-bottom:6px;"></div>
     <div class="mini-cards health-stat-grid" id="healthStats" style="margin-bottom:0;">
-      <div class="mini-card"><div class="num" id="healthTotalContacts">—</div><div class="label">Total contacts</div></div>
-      <div class="mini-card"><div class="num" id="healthTouchPointsWeek">—</div><div class="label">Touch points this week</div></div>
-      <div class="mini-card"><div class="num" id="healthActiveCampaigns">—</div><div class="label">Active campaigns</div></div>
-      <div class="mini-card"><div class="num" id="healthConversionRate">—</div><div class="label">Overall conversion rate</div></div>
+      <div class="mini-card"><div class="num" id="healthTotalContacts">–</div><div class="label">Total contacts</div></div>
+      <div class="mini-card"><div class="num" id="healthTouchPointsWeek">–</div><div class="label">Touch points this week</div></div>
+      <div class="mini-card"><div class="num" id="healthActiveCampaigns">–</div><div class="label">Active campaigns</div></div>
+      <div class="mini-card"><div class="num" id="healthConversionRate">–</div><div class="label">Overall conversion rate</div></div>
     </div>
     <div style="margin-top:14px;">
       <div style="font-weight:700;font-size:12px;margin-bottom:6px;">Contacts by journey stage</div>
@@ -21003,7 +21003,7 @@ async function runIntelligence(){
     renderCampaignPerformance(data.campaignPerformance);
 
     const generatedAt = data.generatedAt ? new Date(data.generatedAt).toLocaleString('en-AU') : '';
-    document.getElementById('intelMeta').textContent = `Based on ${data.contactCount ?? '—'} contacts and ${data.touchPointCount ?? '—'} touch points${generatedAt ? ' · '+generatedAt : ''}`;
+    document.getElementById('intelMeta').textContent = `Based on ${data.contactCount ?? '–'} contacts and ${data.touchPointCount ?? '–'} touch points${generatedAt ? ' · '+generatedAt : ''}`;
     toast('Engine updated', 'success');
   } catch(err){
     console.warn('Intelligence request failed:', err.message);
@@ -21061,7 +21061,7 @@ async function runTrackInsights(){
       data.avgTouchPoints != null ? [`${data.avgTouchPoints} touch points on average across ${data.conversionCount} conversion${data.conversionCount===1?'':'s'}`] : [],
       'No conversions logged yet.');
 
-    document.getElementById('insightsMeta').textContent = `Based on ${data.conversionCount ?? '—'} logged conversions`;
+    document.getElementById('insightsMeta').textContent = `Based on ${data.conversionCount ?? '–'} logged conversions`;
     toast('Insights updated', 'success');
   } catch(err){
     console.warn('Track insights request failed:', err.message);
@@ -21078,10 +21078,10 @@ async function runEngineHealth(){
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || ('Request failed with status '+res.status));
 
-    document.getElementById('healthTotalContacts').textContent = data.totalContacts ?? '—';
-    document.getElementById('healthTouchPointsWeek').textContent = data.touchPointsThisWeek ?? '—';
-    document.getElementById('healthActiveCampaigns').textContent = data.activeCampaigns ?? '—';
-    document.getElementById('healthConversionRate').textContent = (data.overallConversionRate ?? '—') + '%';
+    document.getElementById('healthTotalContacts').textContent = data.totalContacts ?? '–';
+    document.getElementById('healthTouchPointsWeek').textContent = data.touchPointsThisWeek ?? '–';
+    document.getElementById('healthActiveCampaigns').textContent = data.activeCampaigns ?? '–';
+    document.getElementById('healthConversionRate').textContent = (data.overallConversionRate ?? '–') + '%';
 
     const stages = Array.isArray(data.contactsByStage) ? data.contactsByStage : [];
     renderIntelList('healthByStage',
@@ -21287,7 +21287,7 @@ function renderContent(){
   return `
   <div class="page-head">
     <h1 class="page-h1">Marketing</h1>
-    <div class="page-sub">The content engine that feeds outreach — buying signals to write about, drafts and calendar, and channel performance.</div>
+    <div class="page-sub">The content engine that feeds outreach: buying signals to write about, drafts and calendar, and channel performance.</div>
   </div>
   <div class="seq-tabs">
     ${CONTENT_SUBTABS.map(t => t[0]==='sep' ? '<div class="seq-tab-sep"></div>' : `<div class="seq-tab ${tab===t[0]?'active':''}" onclick="setContentSubTab('${t[0]}')">${t[1]}</div>`).join('')}
@@ -21405,7 +21405,7 @@ function renderContentSignalsList(signals, opts){
           <div style="font-weight:700;font-size:13.5px;margin-bottom:4px;">${esc(s.theme)}</div>
           <div class="muted" style="font-size:11.5px;">
             <span class="format-dot ${CONTENT_FORMAT_META[s.suggestedFormat] ? CONTENT_FORMAT_META[s.suggestedFormat].dotClass : ''}"></span>
-            Suggested: ${esc(s.suggestedFormat || '—')} &middot; Mentioned by ${s.frequency || (s.relatedContactNames.length + s.relatedCompanyNames.length)} contact${(s.frequency||0)===1?'':'s'}/compan${(s.frequency||0)===1?'y':'ies'}
+            Suggested: ${esc(s.suggestedFormat || '–')} &middot; Mentioned by ${s.frequency || (s.relatedContactNames.length + s.relatedCompanyNames.length)} contact${(s.frequency||0)===1?'':'s'}/compan${(s.frequency||0)===1?'y':'ies'}
           </div>
           ${s.relatedContactNames.length || s.relatedCompanyNames.length ? `<div style="margin-top:6px;">
             ${s.relatedContactNames.map(n=>`<span class="pill" style="margin:2px 4px 0 0;">${esc(n)}</span>`).join('')}
@@ -21595,7 +21595,7 @@ function renderContentAllTypesPanel(filterStatus){
             <div style="font-weight:700;font-size:13px;flex:1;">${esc(it.title || 'Untitled')}</div>
             ${contentStatusTag(it.status)}
           </div>
-          <div class="muted" style="font-size:11px;margin-top:6px;">Added ${it.dateAdded ? esc(fmtDate(it.dateAdded)) : '—'}</div>
+          <div class="muted" style="font-size:11px;margin-top:6px;">Added ${it.dateAdded ? esc(fmtDate(it.dateAdded)) : '–'}</div>
           <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;">
             <button class="btn btn-secondary btn-sm" onclick="copyContentItemBody('${esc(it.id)}', this)"><i class="ti ti-copy"></i> Copy</button>
             ${editable ? `<button class="btn btn-ghost btn-sm" onclick="openContentEditor('${esc(it.id)}')"><i class="ti ti-pencil"></i> Edit</button>` : ''}
@@ -21646,7 +21646,7 @@ function openNewContentDraftModal(prefill){
     </div>
     ${!prefill.signalId ? `<div class="field"><label>Topic</label><input id="newDraftTopic" placeholder="What should this be about?"></div>` : `<input type="hidden" id="newDraftTopic" value="">`}
     <div class="field"><label>Campaign (optional)</label>
-      <select id="newDraftCampaign"><option value="">— None —</option>${campaignOptions}</select>
+      <select id="newDraftCampaign"><option value="">None</option>${campaignOptions}</select>
     </div>
     <div class="field"><label>Length preference</label>
       <select id="newDraftLength"><option value="">Use account default</option><option value="Short">Short</option><option value="Medium">Medium</option><option value="Long">Long</option></select>
@@ -21938,7 +21938,7 @@ function renderContentCalendarTab(){
         return `<div class="cal-cell ${isToday?'today':''}">
           <div class="cal-date">${d}</div>
           ${events.map(ev => `<div class="event-chip" style="background:transparent;border-left:3px solid ${ev.format==='Blog'?'#44A574':(ev.format==='Newsletter'?'#8b5cf6':'#0084C5')};padding-left:4px;cursor:pointer;" onclick="setContentSubTab('drafts');openContentEditor('${ev.id}')">${esc(ev.title||'Untitled')}
-            <div class="event-tooltip">${esc(ev.title)} — ${esc(CONTENT_FORMAT_META[ev.format]?CONTENT_FORMAT_META[ev.format].label:ev.format)}</div>
+            <div class="event-tooltip">${esc(ev.title)} · ${esc(CONTENT_FORMAT_META[ev.format]?CONTENT_FORMAT_META[ev.format].label:ev.format)}</div>
           </div>`).join('')}
         </div>`;
       }).join('')}
@@ -22068,7 +22068,7 @@ function showContentCalPopover(evt, id){
   pop.innerHTML = `
     <div style="font-weight:800;font-size:13px;margin-bottom:6px;">${esc(it.title || 'Untitled')}</div>
     <div class="muted" style="font-size:11.5px;">Type: ${esc(normalizeContentType(it.type))}</div>
-    <div class="muted" style="font-size:11.5px;">Status: ${esc(it.status || '—')}</div>
+    <div class="muted" style="font-size:11.5px;">Status: ${esc(it.status || '–')}</div>
     ${it.scheduledDate ? `<div class="muted" style="font-size:11.5px;">Scheduled: ${esc(fmtDate(it.scheduledDate))}</div>` : ''}`;
   document.body.appendChild(pop);
   const r = pop.getBoundingClientRect();
@@ -22178,20 +22178,20 @@ function renderContentPerformanceSummary(posts){
   <div class="mini-cards" style="margin-bottom:16px;">
     <div class="mini-card" style="text-align:left;">
       <div class="label" style="margin-bottom:6px;">Top topics by avg. engagement</div>
-      ${topTopics.length ? topTopics.map(t=>`<div style="font-size:12.5px;">${esc(t.key)} <span class="muted">(${t.avg.toFixed(1)})</span></div>`).join('') : '<div class="muted">—</div>'}
+      ${topTopics.length ? topTopics.map(t=>`<div style="font-size:12.5px;">${esc(t.key)} <span class="muted">(${t.avg.toFixed(1)})</span></div>`).join('') : '<div class="muted">–</div>'}
     </div>
     <div class="mini-card">
-      <div class="num" style="font-size:16px;">${bestFormat?esc(bestFormat.key):'—'}</div>
+      <div class="num" style="font-size:16px;">${bestFormat?esc(bestFormat.key):'–'}</div>
       <div class="label">Best performing format</div>
     </div>
     <div class="mini-card">
-      <div class="num" style="font-size:16px;">${bestDay?esc(bestDay.key):'—'}</div>
+      <div class="num" style="font-size:16px;">${bestDay?esc(bestDay.key):'–'}</div>
       <div class="label">Best day to post</div>
     </div>
     <div class="mini-card" style="text-align:left;">
       <div class="label" style="margin-bottom:6px;">CTA usage</div>
-      <div style="font-size:12.5px;">Most used: ${mostUsedCta?esc(mostUsedCta.key):'—'}</div>
-      <div style="font-size:12.5px;">Highest engagement: ${bestConvertingCta?esc(bestConvertingCta.key):'—'}</div>
+      <div style="font-size:12.5px;">Most used: ${mostUsedCta?esc(mostUsedCta.key):'–'}</div>
+      <div style="font-size:12.5px;">Highest engagement: ${bestConvertingCta?esc(bestConvertingCta.key):'–'}</div>
     </div>
   </div>`;
 }
@@ -22224,14 +22224,14 @@ function renderContentPerformanceTable(posts){
       ${sorted.map(p=>`
         <tr style="cursor:pointer;" onclick="showContentPerformanceDetail('${p.id}')">
           <td><span class="muted" style="font-size:12px;text-decoration:underline;" onclick="event.stopPropagation();showContentPerformanceDetail('${p.id}')">View</span></td>
-          <td>${p.date ? esc(new Date(p.date).toLocaleDateString('en-AU')) : '—'}</td>
-          <td>${esc(p.topic||'—')}</td>
-          <td style="max-width:320px;white-space:normal;">${esc(p.whatWorked||'—')}</td>
-          <td>${esc(p.format||'—')}</td>
+          <td>${p.date ? esc(new Date(p.date).toLocaleDateString('en-AU')) : '–'}</td>
+          <td>${esc(p.topic||'–')}</td>
+          <td style="max-width:320px;white-space:normal;">${esc(p.whatWorked||'–')}</td>
+          <td>${esc(p.format||'–')}</td>
           <td>${p.likes ?? 0}</td>
           <td>${p.comments ?? 0}</td>
           <td>${p.engagementScore ?? 0}</td>
-          <td style="max-width:200px;white-space:normal;">${esc(p.ctaUsed||'—')}</td>
+          <td style="max-width:200px;white-space:normal;">${esc(p.ctaUsed||'–')}</td>
         </tr>
       `).join('')}
     </tbody>
@@ -22250,21 +22250,21 @@ function showContentPerformanceDetail(id){
   const p = posts.find(x=>x.id===id);
   if(!p) return;
   const body = `
-    <div class="field"><label>Post text</label><div style="white-space:pre-wrap;font-size:13.5px;">${esc(p.postText||'—')}</div></div>
+    <div class="field"><label>Post text</label><div style="white-space:pre-wrap;font-size:13.5px;">${esc(p.postText||'–')}</div></div>
     <div class="row" style="margin-top:14px;">
-      <div class="field"><label>Date</label><div>${p.date ? esc(new Date(p.date).toLocaleDateString('en-AU')) : '—'}</div></div>
-      <div class="field"><label>Topic</label><div>${esc(p.topic||'—')}</div></div>
+      <div class="field"><label>Date</label><div>${p.date ? esc(new Date(p.date).toLocaleDateString('en-AU')) : '–'}</div></div>
+      <div class="field"><label>Topic</label><div>${esc(p.topic||'–')}</div></div>
     </div>
     <div class="row">
-      <div class="field"><label>Format</label><div>${esc(p.format||'—')}</div></div>
-      <div class="field"><label>CTA used</label><div>${esc(p.ctaUsed||'—')}</div></div>
+      <div class="field"><label>Format</label><div>${esc(p.format||'–')}</div></div>
+      <div class="field"><label>CTA used</label><div>${esc(p.ctaUsed||'–')}</div></div>
     </div>
     <div class="row">
       <div class="field"><label>Likes</label><div>${p.likes ?? 0}</div></div>
       <div class="field"><label>Comments</label><div>${p.comments ?? 0}</div></div>
       <div class="field"><label>Engagement score</label><div>${p.engagementScore ?? 0}</div></div>
     </div>
-    <div class="field" style="margin-top:14px;"><label>What worked</label><div style="white-space:pre-wrap;font-size:13.5px;">${esc(p.whatWorked||'—')}</div></div>
+    <div class="field" style="margin-top:14px;"><label>What worked</label><div style="white-space:pre-wrap;font-size:13.5px;">${esc(p.whatWorked||'–')}</div></div>
   `;
   openModal('Post details', body, '<button class="btn btn-secondary" onclick="closeModal()">Close</button>');
 }
@@ -22479,7 +22479,7 @@ async function loadSeoGscDashboard(force){
 }
 
 function seoGscFmtInt(n){ return Math.round(n || 0).toLocaleString(); }
-function seoGscFmtPos(n){ return n ? Number(n).toFixed(1) : '—'; }
+function seoGscFmtPos(n){ return n ? Number(n).toFixed(1) : '–'; }
 
 function renderSeoGscDashboard(){
   const d = window.__seoGscDashboard;
@@ -22521,7 +22521,7 @@ function renderSeoGscDashboard(){
         <thead><tr><th>Keyword</th><th>Position</th><th>Clicks</th><th>Impressions</th></tr></thead>
         <tbody>
         ${queries.map(q => `<tr>
-          <td>${esc(q.query || '—')}</td>
+          <td>${esc(q.query || '–')}</td>
           <td>${seoGscFmtPos(q.position)}</td>
           <td>${seoGscFmtInt(q.clicks)}</td>
           <td>${seoGscFmtInt(q.impressions)}</td>
@@ -22582,7 +22582,7 @@ function renderSeoGscInsights(){
 }
 
 function renderSeoGscInsightCard(ins){
-  const badge = `<span class="tag ${SEO_INSIGHT_PRIORITY_CLASS[ins.priority] || 'tag-pending'}">${esc(ins.priority || '—')}</span>`;
+  const badge = `<span class="tag ${SEO_INSIGHT_PRIORITY_CLASS[ins.priority] || 'tag-pending'}">${esc(ins.priority || '–')}</span>`;
   const meta = [ins.keyword ? `Keyword: ${esc(ins.keyword)}` : '', ins.url ? esc(ins.url) : ''].filter(Boolean).join(' &middot; ');
   return `
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card);padding:14px;">
@@ -22801,7 +22801,7 @@ function renderSeoCampaignCard(c){
   const expanded = window.__seoCampaignExpanded === c.id;
   const prog = (window.__seoCampaignProgress || {})[c.id];
   const days = daysBetween(c.startDate);
-  const daysLabel = days === null ? '—' : (days === 0 ? 'Day 1' : days + ' day' + (days === 1 ? '' : 's') + ' running');
+  const daysLabel = days === null ? '–' : (days === 0 ? 'Day 1' : days + ' day' + (days === 1 ? '' : 's') + ' running');
   const statusTag = `<span class="tag ${SEO_CAMPAIGN_STATUS_TAG_CLASS[c.status] || 'tag-pending'}">${esc(c.status || 'Active')}</span>`;
 
   // Progress bar + post count come from the live progress payload once
@@ -22846,7 +22846,7 @@ function renderSeoCampaignCard(c){
           <div class="campaign-chat-progress-bar" style="height:8px;"><div class="campaign-chat-progress-fill" style="width:${pct}%;"></div></div>
         </div>
         <div style="text-align:center;">
-          <div style="font-size:18px;font-weight:800;color:var(--primary);">${posts === null ? '—' : posts}</div>
+          <div style="font-size:18px;font-weight:800;color:var(--primary);">${posts === null ? '–' : posts}</div>
           <div class="muted" style="font-size:11px;">post${posts === 1 ? '' : 's'} published</div>
         </div>
       </div>
@@ -22858,7 +22858,7 @@ function renderSeoCampaignCard(c){
 function seoPosFmt(n){ return (n === null || n === undefined) ? 'Not ranked' : Number(n).toFixed(1); }
 
 function seoMovementCell(m){
-  if(m === null || m === undefined) return '<span class="muted">—</span>';
+  if(m === null || m === undefined) return '<span class="muted">–</span>';
   if(m > 0) return `<span style="color:var(--success);font-weight:700;"><i class="ti ti-arrow-up"></i> ${m.toFixed(1)}</span>`;
   if(m < 0) return `<span style="color:var(--danger,#d64545);font-weight:700;"><i class="ti ti-arrow-down"></i> ${Math.abs(m).toFixed(1)}</span>`;
   return '<span class="muted">no change</span>';
@@ -22884,7 +22884,7 @@ function renderSeoCampaignProgressDetail(id){
       <div class="mini-cards" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px;">
         <div class="mini-card"><div class="num">${seoGscFmtInt(t.clicks)}</div><div class="label">Clicks since start</div></div>
         <div class="mini-card"><div class="num">${seoGscFmtInt(t.impressions)}</div><div class="label">Impressions since start</div></div>
-        <div class="mini-card"><div class="num">${t.position ? Number(t.position).toFixed(1) : '—'}</div><div class="label">Avg position</div></div>
+        <div class="mini-card"><div class="num">${t.position ? Number(t.position).toFixed(1) : '–'}</div><div class="label">Avg position</div></div>
       </div>
       ${hasDaily ? `
       <div class="field" style="margin-bottom:14px;">
@@ -22906,7 +22906,7 @@ function renderSeoCampaignProgressDetail(id){
       <thead><tr><th>Keyword</th><th>Start position</th><th>Current position</th><th>Movement</th></tr></thead>
       <tbody>
       ${movementSorted.map(k => `<tr>
-        <td>${esc(k.keyword || '—')}</td>
+        <td>${esc(k.keyword || '–')}</td>
         <td>${k.startPosition === null ? '<span class="muted">Not ranked</span>' : seoPosFmt(k.startPosition)}</td>
         <td>${k.currentPosition === null ? '<span class="muted">Not ranked</span>' : seoPosFmt(k.currentPosition)}</td>
         <td>${seoMovementCell(k.movement)}</td>
@@ -23180,13 +23180,13 @@ function renderSeoSitemapTable(){
     <tbody>
     ${list.map((row,i) => `
       <tr>
-        <td>${row.url ? `<a href="${esc(row.url)}" target="_blank" rel="noopener">${esc(row.title || row.url)}</a>` : esc(row.title || '—')}</td>
-        <td>${row.type ? `<span class="tag ${row.type==='Service'?'tag-messaging':'tag-started'}">${esc(row.type)}</span>` : '<span class="muted">—</span>'}</td>
-        <td>${esc(row.keyword || '—')}</td>
-        <td>${esc(row.publishedDate || '—')}</td>
+        <td>${row.url ? `<a href="${esc(row.url)}" target="_blank" rel="noopener">${esc(row.title || row.url)}</a>` : esc(row.title || '–')}</td>
+        <td>${row.type ? `<span class="tag ${row.type==='Service'?'tag-messaging':'tag-started'}">${esc(row.type)}</span>` : '<span class="muted">–</span>'}</td>
+        <td>${esc(row.keyword || '–')}</td>
+        <td>${esc(row.publishedDate || '–')}</td>
         <td>${row.linkedInDraft
           ? `<button class="btn btn-secondary btn-sm" onclick="sendSeoLinkedInToDraftCentre('${row.id}', this)"><i class="ti ti-send"></i> Send to Draft Centre</button>`
-          : '<span class="muted">—</span>'}</td>
+          : '<span class="muted">–</span>'}</td>
       </tr>`).join('')}
     </tbody>
   </table>
@@ -23287,7 +23287,7 @@ async function addServicePageToQueue(){
     document.getElementById('spqService').value = '';
     document.getElementById('spqLocation').value = '';
     if(document.getElementById('spqReferenceContent')) document.getElementById('spqReferenceContent').value = '';
-    toast(`Added "${service} — ${location}" to the queue`, 'success');
+    toast(`Added "${service} · ${location}" to the queue`, 'success');
     window.__seoServiceQueue = undefined;
     loadServicePageQueue(true);
   } catch(err){
@@ -23471,9 +23471,9 @@ function renderSeoKeywordTable(list){
     ${list.map(k => `
       <tr>
         <td>${esc(k.keyword)}</td>
-        <td>${k.volume ? k.volume.toLocaleString() : '—'}</td>
-        <td>${k.kd || '—'}</td>
-        <td>${esc(k.intent || '—')}</td>
+        <td>${k.volume ? k.volume.toLocaleString() : '–'}</td>
+        <td>${k.kd || '–'}</td>
+        <td>${esc(k.intent || '–')}</td>
         <td>${seoStatusTag(k.status)}</td>
         <td style="white-space:nowrap;">
           ${k.status === 'Generated' || k.status === 'Published'
@@ -24034,7 +24034,7 @@ function renderAeoCampaignsSection(){
 function renderAeoCampaignCard(c){
   const expanded = window.__aeoCampaignExpanded === c.id;
   const days = (c.daysRunning === null || c.daysRunning === undefined) ? null : c.daysRunning;
-  const daysLabel = days === null ? '—' : (days === 0 ? 'Day 1' : days + ' day' + (days === 1 ? '' : 's') + ' running');
+  const daysLabel = days === null ? '–' : (days === 0 ? 'Day 1' : days + ' day' + (days === 1 ? '' : 's') + ' running');
   const statusTag = `<span class="tag ${AEO_CAMPAIGN_STATUS_TAG_CLASS[c.status] || 'tag-pending'}">${esc(c.status || 'Active')}</span>`;
   const goalSummary = (c.goal || '').trim();
   const goalShort = goalSummary.length > 180 ? goalSummary.slice(0,177) + '...' : goalSummary;
@@ -24076,8 +24076,8 @@ function renderAeoCampaignDetail(c){
       <tbody>
       ${prompts.map(p => `
         <tr>
-          <td>${esc(p.prompt || '—')}${p.matched ? '' : ' <span class="muted" style="font-size:11px;">(not in library)</span>'}</td>
-          <td>${p.matched ? aeoStatusTag(p.contentStatus) : '<span class="muted">—</span>'}</td>
+          <td>${esc(p.prompt || '–')}${p.matched ? '' : ' <span class="muted" style="font-size:11px;">(not in library)</span>'}</td>
+          <td>${p.matched ? aeoStatusTag(p.contentStatus) : '<span class="muted">–</span>'}</td>
           <td>${p.generatedContentType
             ? `<span class="tag tag-started">${esc(p.generatedContentType)}</span> <span class="muted" style="font-size:11px;">${esc(p.generatedTitle || '')}${p.generatedDate ? ' &middot; ' + fmtDate(p.generatedDate) : ''}</span>`
             : '<span class="muted">Nothing yet</span>'}</td>
@@ -24094,7 +24094,7 @@ function aeoCampaignModalBody(c, prefill){
     ? esc((c.prompts || '').split(/\r?\n/).map(s=>s.trim()).filter(Boolean).join('\n'))
     : esc(p.prompts || '');
   return `
-    <div class="field"><label>Campaign name</label><input id="aeoCampaignName" value="${val('name')}" placeholder="e.g. Change Management Consulting — AEO"></div>
+    <div class="field"><label>Campaign name</label><input id="aeoCampaignName" value="${val('name')}" placeholder="e.g. Change Management Consulting, AEO"></div>
     <div class="field"><label>Product or service</label><input id="aeoCampaignProduct" value="${val('productOrService')}" placeholder="e.g. Change Management Consulting"></div>
     <div class="row">
       <div class="field"><label>Start date</label><input type="date" id="aeoCampaignStart" value="${c ? esc(c.startDate) : new Date().toISOString().slice(0,10)}"></div>
@@ -24517,7 +24517,7 @@ function renderContentSettingsTab(){
     <div class="row">
       <div class="field"><label>Tone</label>
         <select id="csTone">
-          <option value="">— Select —</option>
+          <option value="">Select…</option>
           ${['Authoritative','Conversational','Storytelling','Educational'].map(t=>`<option value="${t}" ${s.tone===t?'selected':''}>${t}</option>`).join('')}
         </select>
       </div>
@@ -24529,7 +24529,7 @@ function renderContentSettingsTab(){
     <div class="row">
       <div class="field"><label>Preferred LinkedIn post length</label>
         <select id="csLinkedinLength">
-          <option value="">— Select —</option>
+          <option value="">Select…</option>
           <option value="Short" ${s.linkedinLengthPreference==='Short'?'selected':''}>Short (under 150 words)</option>
           <option value="Medium" ${s.linkedinLengthPreference==='Medium'?'selected':''}>Medium (150–300 words)</option>
           <option value="Long" ${s.linkedinLengthPreference==='Long'?'selected':''}>Long (300+ words)</option>
@@ -24537,7 +24537,7 @@ function renderContentSettingsTab(){
       </div>
       <div class="field"><label>Preferred blog length</label>
         <select id="csBlogLength">
-          <option value="">— Select —</option>
+          <option value="">Select…</option>
           <option value="Short" ${s.blogLengthPreference==='Short'?'selected':''}>Short (~500 words)</option>
           <option value="Medium" ${s.blogLengthPreference==='Medium'?'selected':''}>Medium (800–1200 words)</option>
           <option value="Long" ${s.blogLengthPreference==='Long'?'selected':''}>Long (1500+ words)</option>
@@ -24640,7 +24640,7 @@ function gaRecords(tab){
   return Array.isArray(d.sheets[tab].records) ? d.sheets[tab].records : [];
 }
 
-function gaCampaignName(rec){ return gaField(rec, ['Campaign','Campaign name']) || '—'; }
+function gaCampaignName(rec){ return gaField(rec, ['Campaign','Campaign name']) || '–'; }
 
 function gaIsActive(rec){
   const st = gaField(rec, ['Campaign state','Campaign status','Status','State']).toLowerCase();
@@ -24679,8 +24679,8 @@ function gaAggregateRows(records, keyFn, extra){
   }));
 }
 
-function gaAdGroupName(rec){ return gaField(rec, ['Ad group','Ad Group','Ad group name']) || '—'; }
-function gaKeywordText(rec){ return gaField(rec, ['Keyword','Search keyword','Keyword text']) || '—'; }
+function gaAdGroupName(rec){ return gaField(rec, ['Ad group','Ad Group','Ad group name']) || '–'; }
+function gaKeywordText(rec){ return gaField(rec, ['Keyword','Search keyword','Keyword text']) || '–'; }
 
 async function loadGoogleAdsData(force){
   if(window.__googleAdsData !== undefined && !force) return;
@@ -24843,8 +24843,8 @@ function renderGoogleAdsKeywordsTable(){
       keyword: gaKeywordText(g.sample),
       campaign: gaCampaignName(g.sample),
       impressions: g.impressions, clicks: g.clicks, spend: g.spend, ctr: g.ctr, cpc: g.cpc,
-      qs: (g.extra.qs != null && String(g.extra.qs).trim() !== '') ? String(g.extra.qs).trim() : '—',
-      is: (g.extra.is != null && String(g.extra.is).trim() !== '') ? gaFmtPct(gaPct(g.extra.is)) : '—'
+      qs: (g.extra.qs != null && String(g.extra.qs).trim() !== '') ? String(g.extra.qs).trim() : '–',
+      is: (g.extra.is != null && String(g.extra.is).trim() !== '') ? gaFmtPct(gaPct(g.extra.is)) : '–'
     }))
     .sort((a,b) => b.spend - a.spend).slice(0, 20);
   let inner;
@@ -24881,7 +24881,7 @@ function renderGoogleAdsKeywordsTable(){
 function renderGoogleAdsSearchTermsTable(){
   const d = window.__googleAdsData;
   if(!d || d.error || window.__googleAdsDataLoading) return '';
-  const termText = t => gaField(t, ['Search term','Search Term','Query']) || '—';
+  const termText = t => gaField(t, ['Search term','Search Term','Query']) || '–';
   const rows = gaAggregateRows(gaRecords('Search Terms'), t => gaCampaignName(t) + ' ␟ ' + termText(t))
     .map(g => ({
       term: termText(g.sample),
@@ -25184,7 +25184,7 @@ function renderEmailTemplatesTab(){
             const isActive = x.id && x.id === activeId;
             return `<tr>
               <td>${esc(x.name)}</td>
-              <td>${x.createdDate ? esc(fmtDate(x.createdDate)) : '—'}</td>
+              <td>${x.createdDate ? esc(fmtDate(x.createdDate)) : '–'}</td>
               <td style="text-align:right;">
                 <button class="btn btn-sm ${isActive ? 'btn-primary' : 'btn-secondary'}" onclick="setEmailTemplateReference('${esc(x.id||'')}', '${esc((x.name||'').replace(/'/g,"\\'"))}')">
                   <i class="ti ${isActive ? 'ti-check' : 'ti-layout-board'}"></i> ${isActive ? 'Active reference' : 'Use as reference'}
@@ -25218,7 +25218,7 @@ function emailRerender(inner){
 }
 
 function fmtPctFrac(f){
-  if(f == null || isNaN(f)) return '—';
+  if(f == null || isNaN(f)) return '–';
   return (f * 100).toFixed(1) + '%';
 }
 
@@ -25294,7 +25294,7 @@ function renderEmailTemplatesList(){
     <div style="margin-top:10px;">
       <div class="muted" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;">Structure references on file</div>
       <ul style="margin:0;padding-left:16px;font-size:11.5px;">
-        ${t.map(x => `<li>${esc(x.name)}${x.createdDate ? ` <span class="muted">— ${esc(fmtDate(x.createdDate))}</span>` : ''}</li>`).join('')}
+        ${t.map(x => `<li>${esc(x.name)}${x.createdDate ? ` <span class="muted">· ${esc(fmtDate(x.createdDate))}</span>` : ''}</li>`).join('')}
       </ul>
     </div>`;
 }
@@ -25341,7 +25341,7 @@ function handlePastCampaignFile(event){
       .then(({ ok, data }) => {
         if(!ok || !data.success) throw new Error((data && data.error) || 'Request failed');
         if(data.id) cacheEmailTemplateHtml(data.id, html);
-        toast('Saved as a structure reference — its copy is not reused', 'success');
+        toast('Saved as a structure reference. Its copy is not reused', 'success');
         window.__emailTemplates = undefined;
         loadEmailTemplates();
       })
@@ -25361,14 +25361,14 @@ function renderEmailCopyTab(){
   } else {
     voiceCard = `
       <div class="field"><label>Email voice profile</label>
-        <textarea id="emailVoiceProfile" rows="5" placeholder="How these emails should sound — tone, sentence length, sign-off, the relationship with the reader, words to avoid.">${esc(s.voiceProfile || '')}</textarea>
+        <textarea id="emailVoiceProfile" rows="5" placeholder="How these emails should sound: tone, sentence length, sign-off, the relationship with the reader, words to avoid.">${esc(s.voiceProfile || '')}</textarea>
       </div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;">
         <button class="btn btn-primary btn-sm" onclick="saveEmailVoiceProfile()"><i class="ti ti-device-floppy"></i> Save voice profile</button>
         <button class="btn btn-secondary btn-sm" id="emailPastCampaignBtn" onclick="triggerPastCampaignUpload()"><i class="ti ti-upload"></i> Upload past campaign</button>
         <input type="file" id="emailPastCampaignInput" accept=".html,.htm,text/html" style="display:none;" onchange="handlePastCampaignFile(event)">
       </div>
-      <p class="muted" style="font-size:11.5px;margin-top:8px;">Uploaded HTML is stored in Email Templates as a <strong>structure reference only</strong> — layout and section order. The copy itself is never reused.</p>
+      <p class="muted" style="font-size:11.5px;margin-top:8px;">Uploaded HTML is stored in Email Templates as a <strong>structure reference only</strong>: layout and section order. The copy itself is never reused.</p>
       ${renderEmailTemplatesList()}
     `;
   }
@@ -25395,14 +25395,14 @@ function emailTemplatePickerHtml(){
     return `<div class="field"><label>Structure template</label><div class="muted" style="font-size:11.5px;"><i class="ti ti-loader-2"></i> Loading templates…</div></div>`;
   }
   const list = (t && !t.error && Array.isArray(t)) ? t : [];
-  const opts = ['<option value="">No template — free layout</option>']
+  const opts = ['<option value="">No template, free layout</option>']
     .concat(list.map(x => `<option value="${esc(x.id||'')}" ${String(x.id)===String(activeId)?'selected':''}>${esc(x.name||'Untitled template')}</option>`))
     .join('');
   return `<div class="field">
     <label>Structure template</label>
     <select onchange="onEmailTemplatePick(this.value)" ${window.__emailCopyLoading ? 'disabled' : ''}>${opts}</select>
     <div class="muted" style="font-size:11.5px;margin-top:4px;">${list.length
-      ? 'The Engine reproduces this template\'s layout exactly — same sections, same length — with fresh copy.'
+      ? 'The Engine reproduces this template\'s layout exactly: same sections, same length, with fresh copy.'
       : 'Upload a past campaign above to add one.'}</div>
   </div>`;
 }
@@ -25424,7 +25424,7 @@ function renderEmailGenerateCard(){
   <div class="card" style="margin-bottom:18px;">
     <div class="section-title"><i class="ti ti-sparkles"></i> Generate Copy</div>
     <p class="muted" style="font-size:12px;margin-bottom:12px;">Describe what this email needs to do. The Engine drafts subject, preheader, hero image search term, intro, body sections and CTA.</p>
-    <div class="field"><label>Campaign brief</label><textarea id="emailBrief" rows="4" placeholder="e.g. Community Connect — invite Perth members to the September in-person session, highlight the guest speaker, keep it warm and short.">${esc(f.brief || '')}</textarea></div>
+    <div class="field"><label>Campaign brief</label><textarea id="emailBrief" rows="4" placeholder="e.g. Community Connect: invite Perth members to the September in-person session, highlight the guest speaker, keep it warm and short.">${esc(f.brief || '')}</textarea></div>
     ${emailTemplatePickerHtml()}
     <button class="btn btn-primary btn-sm" ${window.__emailCopyLoading ? 'disabled' : ''} onclick="runGenerateEmailCopy()"><i class="ti ${window.__emailCopyLoading ? 'ti-loader-2' : 'ti-wand'}"></i> ${window.__emailCopyLoading ? 'Generating...' : 'Generate Copy'}</button>
   </div>`;
@@ -25598,7 +25598,7 @@ async function copyEmailField(key, btn){
   else if(key === 'preheader') text = c.preheader;
   else if(key === 'intro') text = c.intro;
   else if(key === 'hero') text = c.heroImage.url || c.heroImage.searchTerm;
-  else if(key === 'cta') text = [c.cta.label, c.cta.url].filter(Boolean).join(' — ');
+  else if(key === 'cta') text = [c.cta.label, c.cta.url].filter(Boolean).join(' · ');
   else if(key.indexOf('section:') === 0){
     const sec = c.bodySections[Number(key.split(':')[1])] || {};
     text = [sec.heading, sec.body].filter(Boolean).join('\n');
@@ -25813,7 +25813,7 @@ function renderEmailFeedbackPanel(){
   return `
   <div class="card" style="margin-bottom:18px;">
     <div class="section-title"><i class="ti ti-message-2"></i> Feedback</div>
-    <p class="muted" style="font-size:12px;margin-bottom:12px;">Tell the Engine what to change — "shorten section 2", "warmer tone", "drop the stats" — then Regenerate. It keeps everything you didn't flag. Or edit fields directly above and Approve.</p>
+    <p class="muted" style="font-size:12px;margin-bottom:12px;">Tell the Engine what to change, e.g. "shorten section 2", "warmer tone", "drop the stats", then Regenerate. It keeps everything you didn't flag. Or edit fields directly above and Approve.</p>
     <div class="field"><label>Written feedback</label><textarea id="emailFeedback" rows="3" placeholder="e.g. tone down the urgency, cut the third section, use plainer language...">${esc(fb.feedback || '')}</textarea></div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
       <button class="btn btn-primary btn-sm" ${window.__emailCopyLoading ? 'disabled' : ''} onclick="regenerateEmailCopyWithFeedback()"><i class="ti ${window.__emailCopyLoading ? 'ti-loader-2' : 'ti-refresh'}"></i> ${window.__emailCopyLoading ? 'Regenerating...' : 'Regenerate with feedback'}</button>
@@ -26060,9 +26060,9 @@ function renderEmailContactsTab(){
     return `<tr>
       <td>${esc(email)}</td>
       <td>${esc(omnisendContactName(c))}</td>
-      <td>${c.status ? `<span class="tag ${omnisendStatusClass(c.status)}">${esc(c.status)}</span>` : '—'}</td>
-      <td style="white-space:normal;">${esc(omnisendContactTags(c)) || '—'}</td>
-      <td>${omnisendContactLastEngaged(c) ? esc(fmtDate(omnisendContactLastEngaged(c))) : '—'}</td>
+      <td>${c.status ? `<span class="tag ${omnisendStatusClass(c.status)}">${esc(c.status)}</span>` : '–'}</td>
+      <td style="white-space:normal;">${esc(omnisendContactTags(c)) || '–'}</td>
+      <td>${omnisendContactLastEngaged(c) ? esc(fmtDate(omnisendContactLastEngaged(c))) : '–'}</td>
       <td>${lkCell}</td>
       <td><button class="btn btn-secondary btn-sm" onclick="addOmnisendContactToCampaign(${i}, this)"><i class="ti ti-user-plus"></i> Add to Campaign</button></td>
     </tr>`;
@@ -26131,7 +26131,7 @@ async function addOmnisendContactToCampaign(i, btn){
     const data = await res.json();
     if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
     contactId = data.recordId;
-    toast(data.skipped ? 'Contact already in Contacts — Lead Source unchanged' : 'Added to Contacts with Lead Source = Omnisend', 'success');
+    toast(data.skipped ? 'Contact already in Contacts, Lead Source unchanged' : 'Added to Contacts with Lead Source = Omnisend', 'success');
   } catch(err){
     toast('Could not add contact: ' + friendlyErr(err.message), 'warn');
     if(btn){ btn.disabled = false; btn.innerHTML = '<i class="ti ti-user-plus"></i> Add to Campaign'; }
@@ -26211,7 +26211,7 @@ function renderEmailListHealthTab(){
   const rows = preview.map(c => `<tr>
     <td>${esc(c.email || '')}</td>
     <td>${esc(omnisendContactName(c))}</td>
-    <td>${omnisendContactLastEngaged(c) ? esc(fmtDate(omnisendContactLastEngaged(c))) : '—'}</td>
+    <td>${omnisendContactLastEngaged(c) ? esc(fmtDate(omnisendContactLastEngaged(c))) : '–'}</td>
   </tr>`).join('');
   return `
   <div class="card" style="margin-bottom:18px;">
@@ -26377,8 +26377,8 @@ function renderUniverseCoCard(c){
   const stats = `
     <div class="uco-stats">
       <div class="uco-stat"><span class="k">Contacts</span><span class="v">${c.knownContacts || 0}</span></div>
-      <div class="uco-stat"><span class="k">Relationship</span><span class="v">${esc(c.relationshipStatus || '—')}</span></div>
-      <div class="uco-stat"><span class="k">Momentum</span><span class="v">${esc(c.momentum || '—')}</span></div>
+      <div class="uco-stat"><span class="k">Relationship</span><span class="v">${esc(c.relationshipStatus || '–')}</span></div>
+      <div class="uco-stat"><span class="k">Momentum</span><span class="v">${esc(c.momentum || '–')}</span></div>
     </div>`;
   return `
   <div class="uco-card" onclick="navigate('profile');selectProfileCompany('${nm}')">
@@ -26616,7 +26616,7 @@ function renderUniverseAccountsList(){
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-filter"></i> Accounts</div>
       <button class="btn btn-secondary btn-sm" id="scoreIcpBtnUniverse" onclick="scoreIcpBulkAccountWide()"><i class="ti ti-sparkles"></i> Score ICP</button>
     </div>
-    <div class="muted" style="font-size:12.5px;margin:-4px 0 0;">Every company on file, filterable by size, industry, relationship, program and campaign status — filter down instead of hunting through fixed sections.</div>
+    <div class="muted" style="font-size:12.5px;margin:-4px 0 0;">Every company on file, filterable by size, industry, relationship, program and campaign status. Filter down instead of hunting through fixed sections.</div>
     <div class="uf-bar">
       <div class="uf-group"><input type="text" class="uf-search" id="universeSearchInput" placeholder="Search company name… (press /)" value="${esc(f.search||'')}" oninput="setUniverseSearchLive(this.value)"></div>
       ${ddGroup('Size', 'size', universeDistinct(all,'sizeBand'))}
@@ -27032,7 +27032,7 @@ function renderResearchEventCard(e){
   <div class="card" style="text-align:left;padding:14px;">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
       <div style="font-weight:700;font-size:13px;flex:1;">${esc(e.eventName||'Untitled event')}</div>
-      <span class="tag tag-messaging">${esc(e.eventType||'—')}</span>
+      <span class="tag tag-messaging">${esc(e.eventType||'–')}</span>
     </div>
     <div class="muted" style="font-size:11.5px;margin-top:6px;">${fmtDate(e.date)}${e.participantCount ? ` &middot; ${e.participantCount} participants` : ''}</div>
     ${themesPreview ? `<div style="font-size:12px;margin-top:8px;">${esc(themesPreview)}</div>` : ''}
@@ -27071,7 +27071,7 @@ function renderWebsiteLeadCard(lead){
   return `
   <div class="card" style="text-align:left;padding:14px;">
     <div style="font-weight:700;font-size:13px;">${esc(lead.fullName||'Unknown')}</div>
-    <div class="muted" style="font-size:11.5px;margin-top:4px;">${esc(lead.companyName||'—')}</div>
+    <div class="muted" style="font-size:11.5px;margin-top:4px;">${esc(lead.companyName||'–')}</div>
     <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
       <span class="tag tag-booked">${esc(cvc && cvc.archetype ? cvc.archetype : 'Unscored')}</span>
       ${cvc && cvc.overallScore != null ? `<span class="pill">${esc(String(cvc.overallScore))}/100</span>` : ''}
@@ -27116,7 +27116,7 @@ function openCvcModalFromDrawer(){
 }
 
 function openCvcModal(cvc, name){
-  const scoreRow = (label, val) => `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);"><span class="muted" style="font-size:12px;">${esc(label)}</span><strong style="font-size:13px;">${val != null && val !== '' ? esc(String(val)) + '/100' : '—'}</strong></div>`;
+  const scoreRow = (label, val) => `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);"><span class="muted" style="font-size:12px;">${esc(label)}</span><strong style="font-size:13px;">${val != null && val !== '' ? esc(String(val)) + '/100' : '–'}</strong></div>`;
   const renderInsight = (ins) => (ins && (ins.title || ins.body)) ? `<div style="margin-bottom:10px;"><div style="font-weight:700;font-size:12.5px;">${esc(ins.title||'')}</div><div class="muted" style="font-size:12px;margin-top:2px;">${esc(ins.body||'')}</div></div>` : '';
   const body = `
     <div style="margin-bottom:14px;">
@@ -27130,15 +27130,15 @@ function openCvcModal(cvc, name){
       ${scoreRow('Performance', cvc.performanceScore)}
     </div>
     <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px;">
-      <div style="flex:1;min-width:180px;"><div class="muted" style="font-size:11px;font-weight:700;">PRIMARY LEAK</div><div style="font-size:13px;margin-top:2px;">${esc(cvc.primaryLeak||'—')}</div></div>
-      <div style="flex:1;min-width:180px;"><div class="muted" style="font-size:11px;font-weight:700;">SECONDARY LEAK</div><div style="font-size:13px;margin-top:2px;">${esc(cvc.secondaryLeak||'—')}</div></div>
+      <div style="flex:1;min-width:180px;"><div class="muted" style="font-size:11px;font-weight:700;">PRIMARY LEAK</div><div style="font-size:13px;margin-top:2px;">${esc(cvc.primaryLeak||'–')}</div></div>
+      <div style="flex:1;min-width:180px;"><div class="muted" style="font-size:11px;font-weight:700;">SECONDARY LEAK</div><div style="font-size:13px;margin-top:2px;">${esc(cvc.secondaryLeak||'–')}</div></div>
     </div>
     ${(cvc.insights||[]).length ? `<div class="muted" style="font-size:11px;font-weight:700;margin-bottom:6px;">INSIGHTS</div>${cvc.insights.map(renderInsight).join('')}` : ''}
-    <div style="margin-top:14px;"><div class="muted" style="font-size:11px;font-weight:700;">STRENGTH</div><div style="font-size:13px;margin-top:2px;">${esc(cvc.strength||'—')}</div></div>
-    <div style="margin-top:10px;"><div class="muted" style="font-size:11px;font-weight:700;">RECOMMENDATION</div><div style="font-size:13px;margin-top:2px;">${esc(cvc.recommendation||'—')}</div></div>
-    <div style="margin-top:10px;"><div class="muted" style="font-size:11px;font-weight:700;">CTA REASON</div><div style="font-size:13px;margin-top:2px;">${esc(cvc.ctaReason||'—')}</div></div>
+    <div style="margin-top:14px;"><div class="muted" style="font-size:11px;font-weight:700;">STRENGTH</div><div style="font-size:13px;margin-top:2px;">${esc(cvc.strength||'–')}</div></div>
+    <div style="margin-top:10px;"><div class="muted" style="font-size:11px;font-weight:700;">RECOMMENDATION</div><div style="font-size:13px;margin-top:2px;">${esc(cvc.recommendation||'–')}</div></div>
+    <div style="margin-top:10px;"><div class="muted" style="font-size:11px;font-weight:700;">CTA REASON</div><div style="font-size:13px;margin-top:2px;">${esc(cvc.ctaReason||'–')}</div></div>
   `;
-  openModal(`Change Value Check — ${esc(name||'')}`, body);
+  openModal(`Change Value Check: ${esc(name||'')}`, body);
 }
 
 /* ===================== SETTINGS PAGE ===================== */
