@@ -22088,6 +22088,42 @@ app.post('/api/agency/time-entries/start', async (req, res) => {
   }
 });
 
+// Logs a session that never went through the live timer - a second block
+// worked on the same task later the same day, a forgotten session added
+// after the fact, etc. Unlike /start (always Start=now, End left open to be
+// stopped later), this takes an already-complete start+end pair and writes
+// the record done, so it sits alongside any other sessions for the task
+// rather than needing one of them to be "the" running one.
+app.post('/api/agency/time-entries', async (req, res) => {
+  const taskId = (req.body && req.body.taskId || '').toString().trim();
+  const { start, end } = req.body || {};
+  if (!taskId) return res.status(400).json({ error: 'taskId is required' });
+  if (!start || !end) return res.status(400).json({ error: 'start and end are required' });
+  try {
+    const startDate = new Date(start);
+    const endDate = new Date(end);
+    if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) return res.status(400).json({ error: 'Invalid start or end time' });
+    if (endDate <= startDate) return res.status(400).json({ error: 'End time must be after the start time' });
+    const duration = Math.max(0, Math.round(((endDate - startDate) / 60000) * 10) / 10);
+    const taskData = await controlBaseRequest('GET', `/${encodeURIComponent(taskId)}`, undefined, TASKS_TABLE);
+    const task = taskFromRecord(taskData);
+    const fields = {
+      'Task': [taskId],
+      'Task Title': task.title || '',
+      'Client Slug': task.clientSlug || '',
+      'Date': startDate.toISOString().slice(0, 10),
+      'Start': startDate.toISOString(),
+      'End': endDate.toISOString(),
+      'Duration Minutes': duration
+    };
+    const created = await controlBaseRequest('POST', '', { records: [{ fields }] }, TIME_ENTRIES_TABLE);
+    res.json({ entry: timeEntryFromRecord(created.records[0]) });
+  } catch (err) {
+    console.error('Time entry manual-create error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 async function stopTimeEntryRecord(rec) {
   const start = new Date(rec.fields['Start']);
   const end = new Date();

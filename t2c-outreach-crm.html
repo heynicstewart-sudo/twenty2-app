@@ -2432,11 +2432,20 @@ function agencyTaskTimeEntriesHtml(taskId){
   const all = Array.isArray(window.__agencyTimeEntries) ? window.__agencyTimeEntries : [];
   const entries = all.filter(e => e.taskId === taskId && e.start && e.end)
     .sort((a,b) => (b.start||'').localeCompare(a.start||''));
-  if(!entries.length) return '';
   const hm = iso => { const d = new Date(iso); return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); };
+  const adding = window.__agencyAddingTimeEntryFor === taskId;
+  if(!entries.length && !adding) return `
+  <div class="field">
+    <label>Time logged</label>
+    <div class="muted" style="font-size:11.5px;margin:-2px 0 6px;">No sessions logged yet.</div>
+    <button class="btn btn-ghost btn-sm" onclick="agencyTimeEntryStartAdd('${taskId}')"><i class="ti ti-plus"></i> Add a session</button>
+  </div>`;
+  const task = (Array.isArray(window.__agencyTasks) ? window.__agencyTasks : []).find(t => t.id === taskId);
+  const defaultDate = (task && task.scheduledDate) || isoDate(TODAY);
   return `
   <div class="field">
     <label>Time logged</label>
+    <div class="muted" style="font-size:10.5px;margin:-2px 0 6px;">Separate blocks worked at different times of day are separate sessions - add each one rather than stretching a single session to cover both.</div>
     <div style="display:flex;flex-direction:column;gap:6px;">
       ${entries.map(e => `
         <div id="ate_row_${e.id}" style="display:flex;align-items:center;gap:8px;font-size:12px;">
@@ -2447,8 +2456,56 @@ function agencyTaskTimeEntriesHtml(taskId){
           <button class="btn btn-ghost btn-sm" title="Save corrected start/finish time" onclick="agencyTimeEntrySave('${e.id}')"><i class="ti ti-device-floppy"></i></button>
           <span class="muted" id="ate_dur_${e.id}" style="margin-left:auto;flex-shrink:0;">${Math.round(e.durationMinutes)}m</span>
         </div>`).join('')}
+      ${adding ? `
+      <div style="display:flex;align-items:center;gap:8px;font-size:12px;padding-top:6px;margin-top:2px;border-top:1px dashed var(--border-light);">
+        <input type="date" id="ate_new_date" value="${defaultDate}" style="width:130px;">
+        <input type="time" id="ate_new_start" style="width:110px;">
+        <span class="muted">&ndash;</span>
+        <input type="time" id="ate_new_end" style="width:110px;">
+        <button class="btn btn-primary btn-sm" title="Save this session" onclick="agencyTimeEntryConfirmAdd('${taskId}')"><i class="ti ti-check"></i></button>
+        <button class="btn btn-ghost btn-sm" title="Cancel" onclick="agencyTimeEntryCancelAdd('${taskId}')"><i class="ti ti-x"></i></button>
+      </div>` : `<button class="btn btn-ghost btn-sm" style="align-self:flex-start;margin-top:2px;" onclick="agencyTimeEntryStartAdd('${taskId}')"><i class="ti ti-plus"></i> Add a session</button>`}
     </div>
   </div>`;
+}
+function agencyTimeEntryStartAdd(taskId){
+  window.__agencyAddingTimeEntryFor = taskId;
+  openAgencyTaskForm(taskId);
+}
+function agencyTimeEntryCancelAdd(taskId){
+  window.__agencyAddingTimeEntryFor = null;
+  openAgencyTaskForm(taskId);
+}
+// Logs a session that never ran through the live timer - a second block
+// worked later the same task, a forgotten session, etc. Same
+// start+end -> Duration Minutes math as editing one (see agencyTimeEntrySave
+// and the server's POST handler), just creating a new row instead of
+// patching an existing one, so it sits alongside earlier sessions for the
+// same task rather than replacing any of them.
+async function agencyTimeEntryConfirmAdd(taskId){
+  const dateEl = document.getElementById('ate_new_date');
+  const startEl = document.getElementById('ate_new_start');
+  const endEl = document.getElementById('ate_new_end');
+  if(!dateEl.value || !startEl.value || !endEl.value){ toast('Fill in the date, start and finish time', 'warn'); return; }
+  const start = new Date(dateEl.value+'T00:00:00');
+  const [shh, smm] = startEl.value.split(':').map(Number);
+  start.setHours(shh, smm, 0, 0);
+  const end = new Date(start);
+  const [ehh, emm] = endEl.value.split(':').map(Number);
+  end.setHours(ehh, emm, 0, 0);
+  if(end <= start) end.setDate(end.getDate()+1);
+  try {
+    const res = await fetch('/api/agency/time-entries', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ taskId, start: start.toISOString(), end: end.toISOString() }) });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    if(!Array.isArray(window.__agencyTimeEntries)) window.__agencyTimeEntries = [];
+    window.__agencyTimeEntries.push(data.entry);
+    window.__agencyAddingTimeEntryFor = null;
+    toast('Session added', 'success');
+    openAgencyTaskForm(taskId);
+  } catch(err){
+    toast('Could not add: ' + friendlyErr(err.message), 'warn');
+  }
 }
 async function agencyTimeEntrySave(entryId){
   const entries = Array.isArray(window.__agencyTimeEntries) ? window.__agencyTimeEntries : [];
