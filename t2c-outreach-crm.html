@@ -2553,6 +2553,38 @@ function agencyCalNowInfo(scheduled){
   return { nowMin, current, next };
 }
 
+// Shared by the initial render and every tick, so the two never drift apart.
+function agencyCalNowTaskHtml(current, nowMin){
+  if(!current) return `<div class="muted" style="font-size:12.5px;">Nothing scheduled right now</div>`;
+  return `
+    <div style="font-weight:700;font-size:13px;">${esc(current.task.title)}</div>
+    <div class="muted" style="font-size:11.5px;">${current.end-nowMin}m left</div>
+    <div style="display:flex;gap:6px;margin-top:6px;">
+      <button class="btn btn-ghost btn-sm" onclick="agencyTaskExtend('${current.task.id}',15)" title="Add 15 minutes"><i class="ti ti-clock-plus"></i> +15m</button>
+      <button class="btn btn-ghost btn-sm" onclick="agencyTaskSkip('${current.task.id}')" title="Unschedule this task"><i class="ti ti-player-skip-forward"></i> Skip</button>
+    </div>`;
+}
+function agencyCalNextTaskHtml(next, nowMin){
+  return next
+    ? `<div style="font-weight:700;font-size:13px;">${esc(next.task.title)}</div><div class="muted" style="font-size:11.5px;">${esc(next.task.scheduledStart)} &middot; in ${next.start-nowMin}m</div>`
+    : `<div class="muted" style="font-size:12.5px;">Nothing else today</div>`;
+}
+// "Skip" unschedules a task (clears its time slot, sends it back to
+// Unscheduled) without deleting it - for a task you're not going to get to
+// today after all. "Extend" bumps a running task's duration in place, for
+// when it runs over - both are one click from the Now panel or a block,
+// instead of opening the full edit form for a quick adjustment.
+async function agencyTaskSkip(id){
+  await agencyTaskPatchAndRefresh(id, { scheduledDate: null, scheduledStart: '' });
+  toast('Unscheduled - back in the Unscheduled list', 'success');
+}
+async function agencyTaskExtend(id, minutes){
+  const task = (Array.isArray(window.__agencyTasks) ? window.__agencyTasks : []).find(x => x.id === id);
+  if(!task) return;
+  await agencyTaskPatchAndRefresh(id, { durationMinutes: (task.durationMinutes || 30) + minutes });
+  toast(`Extended by ${minutes}m`, 'success');
+}
+
 // Ticks the live time-line + Now/Next panel every 20s via direct DOM
 // writes - never a full renderPage(), which would be disruptive (closes
 // nothing here today, but would restart any drag in progress and is wasted
@@ -2570,13 +2602,9 @@ function agencyCalTick(){
   const nowLabel = document.getElementById('agencyCalNowLabel');
   if(nowLabel) nowLabel.textContent = new Date().toLocaleTimeString('en-AU',{hour:'numeric',minute:'2-digit'});
   const curEl = document.getElementById('agencyCalNowTask');
-  if(curEl) curEl.innerHTML = current
-    ? `<div style="font-weight:700;font-size:13px;">${esc(current.task.title)}</div><div class="muted" style="font-size:11.5px;">${current.end-nowMin}m left</div>`
-    : `<div class="muted" style="font-size:12.5px;">Nothing scheduled right now</div>`;
+  if(curEl) curEl.innerHTML = agencyCalNowTaskHtml(current, nowMin);
   const nextEl = document.getElementById('agencyCalNextTask');
-  if(nextEl) nextEl.innerHTML = next
-    ? `<div style="font-weight:700;font-size:13px;">${esc(next.task.title)}</div><div class="muted" style="font-size:11.5px;">${esc(next.task.scheduledStart)} &middot; in ${next.start-nowMin}m</div>`
-    : `<div class="muted" style="font-size:12.5px;">Nothing else today</div>`;
+  if(nextEl) nextEl.innerHTML = agencyCalNextTaskHtml(next, nowMin);
 }
 function agencyCalStartTicking(){
   if(window.__agencyCalTickTimer) clearInterval(window.__agencyCalTickTimer);
@@ -2599,7 +2627,9 @@ function renderAgencyCalDayView(t){
     const { bg, fg } = agencyCalTaskColor(it.colorIndex);
     const widthPct = 100/it.colCount;
     const leftPct = it.col*widthPct;
-    return `<div class="agency-drag" tabindex="0" role="button" draggable="true" style="position:absolute;left:calc(${leftPct}% + 2px);width:calc(${widthPct}% - 4px);top:${top}px;height:${height}px;background:${bg};color:${fg};border-radius:8px;padding:4px 8px;font-size:11.5px;font-weight:700;overflow:hidden;cursor:grab;" onclick="openAgencyTaskForm('${x.id}')" onkeydown="onRowKeydown(event)" ondragstart="onAgencyTaskDragStart(event,'${x.id}')" ondragend="onAgencyTaskDragEnd(event)" title="${esc(x.title)} (drag to move)">${esc(x.scheduledStart)} · ${esc(x.title)}</div>`;
+    return `<div class="agency-drag" tabindex="0" role="button" draggable="true" style="position:absolute;left:calc(${leftPct}% + 2px);width:calc(${widthPct}% - 4px);top:${top}px;height:${height}px;background:${bg};color:${fg};border-radius:8px;padding:4px 8px;font-size:11.5px;font-weight:700;overflow:hidden;cursor:grab;" onclick="openAgencyTaskForm('${x.id}')" onkeydown="onRowKeydown(event)" ondragstart="onAgencyTaskDragStart(event,'${x.id}')" ondragend="onAgencyTaskDragEnd(event)" title="${esc(x.title)} (drag to move, click to edit)">
+      <span onclick="event.stopPropagation();agencyTaskSkip('${x.id}')" title="Skip (unschedule)" style="position:absolute;top:1px;right:3px;line-height:1;padding:1px 3px;border-radius:4px;opacity:.7;">&times;</span>
+      ${esc(x.scheduledStart)} · ${esc(x.title)}</div>`;
   }).join('');
 
   const hourLines = [];
@@ -2618,11 +2648,11 @@ function renderAgencyCalDayView(t){
   <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
     <div class="card" style="flex:1;min-width:180px;padding:10px 14px;">
       <div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;"><i class="ti ti-player-play"></i> Now</div>
-      <div id="agencyCalNowTask" style="margin-top:2px;">${current ? `<div style="font-weight:700;font-size:13px;">${esc(current.task.title)}</div><div class="muted" style="font-size:11.5px;">${current.end-nowMin}m left</div>` : `<div class="muted" style="font-size:12.5px;">Nothing scheduled right now</div>`}</div>
+      <div id="agencyCalNowTask" style="margin-top:2px;">${agencyCalNowTaskHtml(current, nowMin)}</div>
     </div>
     <div class="card" style="flex:1;min-width:180px;padding:10px 14px;">
       <div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;"><i class="ti ti-arrow-right"></i> Next up</div>
-      <div id="agencyCalNextTask" style="margin-top:2px;">${next ? `<div style="font-weight:700;font-size:13px;">${esc(next.task.title)}</div><div class="muted" style="font-size:11.5px;">${esc(next.task.scheduledStart)} &middot; in ${next.start-nowMin}m</div>` : `<div class="muted" style="font-size:12.5px;">Nothing else today</div>`}</div>
+      <div id="agencyCalNextTask" style="margin-top:2px;">${agencyCalNextTaskHtml(next, nowMin)}</div>
     </div>
   </div>` : '';
 
