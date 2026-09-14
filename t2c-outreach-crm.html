@@ -2182,10 +2182,36 @@ function renderAgencyRevenueTile(){
 function agencyTimePeriodBounds(period){
   const today = isoDate(TODAY);
   if(period === 'today') return { from: today, to: today };
+  if(period === 'week'){
+    // Monday-based week start, computed without setHours(0,0,0,0) - that
+    // zeroes the clock to local midnight, which toISOString()-based
+    // isoDate() then rolls back to the previous UTC calendar day for
+    // anyone east of UTC (Perth included - see campaignPeriodBounds'
+    // custom-range fix). Only touching setDate() keeps TODAY's own
+    // time-of-day, which stays on the correct side of that boundary.
+    const d = new Date(TODAY);
+    const day = d.getDay();
+    d.setDate(d.getDate() + (day === 0 ? -6 : 1) - day);
+    return { from: isoDate(d), to: today };
+  }
+  if(period === 'custom'){
+    // The date picker already hands over a clean "YYYY-MM-DD" string - used
+    // as-is rather than round-tripped through a Date object, which is what
+    // avoids the isoDate() timezone pitfall entirely for this branch.
+    const to = window.__agencyTimeCustomTo || today;
+    const from = window.__agencyTimeCustomFrom || (() => { const d = new Date(TODAY); d.setDate(d.getDate()-6); return isoDate(d); })();
+    return { from, to };
+  }
   const first = new Date(TODAY); first.setDate(1);
   return { from: isoDate(first), to: today };
 }
 function setAgencyTimePeriod(period){ window.__agencyTimePeriod = period; renderPage(); }
+function setAgencyTimeCustomRange(field, value){
+  if(!value) return;
+  if(field === 'from') window.__agencyTimeCustomFrom = value;
+  else window.__agencyTimeCustomTo = value;
+  renderPage();
+}
 // Per scheduled task: the timer's actual tracked minutes if it was ever
 // run, otherwise the task's own (current) scheduled Duration Minutes - so
 // an untracked block still counts toward its client at whatever the block
@@ -2268,6 +2294,7 @@ function renderAgencyTimeProfitCard(){
     </div>`;
   }).join('');
   const totalHours = Object.values(byClient).reduce((s,m) => s+m, 0)/60;
+  const periodLabel = { today:'today', week:'this week', month:'this month', custom:'in this range' }[period] || 'in this range';
   return `
   <div class="card" style="margin-bottom:16px;">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
@@ -2275,13 +2302,20 @@ function renderAgencyTimeProfitCard(){
         <div class="section-title" style="margin-bottom:0;"><i class="ti ti-clock-hour-4"></i> Time &amp; profitability</div>
         <div class="muted" style="font-size:12px;margin-top:2px;">Timed hours where you ran the timer, scheduled duration where you didn't - against their retainer.</div>
       </div>
-      <div style="display:flex;gap:6px;">
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">
         <button class="btn ${period==='today'?'btn-primary':'btn-secondary'} btn-sm" onclick="setAgencyTimePeriod('today')">Today</button>
+        <button class="btn ${period==='week'?'btn-primary':'btn-secondary'} btn-sm" onclick="setAgencyTimePeriod('week')">This week</button>
         <button class="btn ${period==='month'?'btn-primary':'btn-secondary'} btn-sm" onclick="setAgencyTimePeriod('month')">This month</button>
+        <button class="btn ${period==='custom'?'btn-primary':'btn-secondary'} btn-sm" onclick="setAgencyTimePeriod('custom')">Custom</button>
       </div>
     </div>
+    ${period === 'custom' ? `
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;">
+      <div class="field" style="max-width:170px;"><label>From</label><input type="date" value="${esc(from)}" onchange="setAgencyTimeCustomRange('from',this.value)"></div>
+      <div class="field" style="max-width:170px;"><label>To</label><input type="date" value="${esc(to)}" onchange="setAgencyTimeCustomRange('to',this.value)"></div>
+    </div>` : ''}
     <div style="margin-top:10px;">
-      ${rows || `<div class="empty-state">No time tracked ${period==='today'?'today':'this month'} yet - start a timer from a task.</div>`}
+      ${rows || `<div class="empty-state">No time tracked ${esc(periodLabel)} yet - start a timer from a task.</div>`}
     </div>
     ${rows ? `<div class="muted" style="font-size:11px;margin-top:8px;">${totalHours.toFixed(1)}h total</div>` : ''}
   </div>`;
