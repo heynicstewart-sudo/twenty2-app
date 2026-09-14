@@ -3889,6 +3889,10 @@ function afterRender(page){
       if(window.__salesData && window.__salesConversionIntel) initSalesConversionCharts(window.__salesConversionIntel);
     }
   }
+  // Targets' pin-a-company search needs the full company list (see
+  // renderTargetPinSuggestions), not just companies with contacts already
+  // loaded - load it here too, not only when Company Universe is visited.
+  if(page === 'home' && window.__accountSegmentation === undefined) loadAccountSegmentation();
   if(page === 'intelligence' && (window.__intelSubTab||'intelligence') === 'context') ensureContextDataLoaded();
   if(page === 'companyuniverse'){
     if(window.__accountSegmentation === undefined) loadAccountSegmentation();
@@ -4344,6 +4348,7 @@ function renderHome(){
     </div>
     <div class="card">
       ${renderPinSearchWidget()}
+      <div id="targetPinSuggestions"></div>
       <div class="empty-state">No targets pinned yet. Search a company above, or use "Pin as target" from a company's profile.</div>
     </div>`;
   }
@@ -4424,8 +4429,18 @@ function renderTargetPinSuggestions(q){
   if(!host) return;
   const query = (q||'').trim().toLowerCase();
   if(query.length < 2){ host.innerHTML = ''; return; }
-  const names = [...new Set(state.contacts.map(c => (c.company||'').trim()).filter(Boolean))]
+  // Search every company on file (Company Universe's own dataset), not just
+  // companies that happen to already have a contact loaded - a company with
+  // no contacts yet (e.g. one just logged from a finding) used to be
+  // unsearchable here even though it exists on file.
+  const merged = universeMergedCompanies();
+  if(merged === null){
+    host.innerHTML = `<div class="muted" style="font-size:12px;margin-bottom:12px;"><i class="ti ti-loader-2"></i> Loading companies…</div>`;
+    return;
+  }
+  const names = [...new Set(merged.map(c => (c.name||'').trim()).filter(Boolean))]
     .filter(n => n.toLowerCase().includes(query) && !isPinnedTarget(n))
+    .sort()
     .slice(0, 8);
   host.innerHTML = names.length
     ? `<div style="margin-bottom:12px;display:flex;flex-wrap:wrap;gap:6px;">${names.map(n => `<button class="btn btn-secondary btn-sm" onclick="pinTarget('${esc(n)}')"><i class="ti ti-pin"></i> ${esc(n)}</button>`).join('')}</div>`
@@ -4486,7 +4501,7 @@ function renderAccountDashboard(name, rows){
   ${header}
   <div class="acct-dash-grid">
     ${renderDashActions(profile)}
-    ${renderDashCalendar(profile)}
+    ${renderDashCalendar(profile, nm)}
     ${renderDashTopIcps(profile)}
     ${renderDashRevenue(profile)}
     ${renderDashPipeline(profile)}
@@ -4595,13 +4610,17 @@ function renderDashActions(profile){
   </div>`;
 }
 
-function renderDashCalendar(profile){
+function renderDashCalendar(profile, companyName){
   if(!profile) return dashCardLoading('adg-cal', 'Key programs & events');
   const all = (profile.company.programs || []).slice().sort((a, b) => (b.detectedAt || '').localeCompare(a.detectedAt || ''));
   const programs = all.slice(0, 6);
+  const cn = companyName || (profile.company && profile.company.name) || '';
   return `
   <div class="card adg-cal">
-    <div class="section-title" style="margin-bottom:6px;">Key programs &amp; events</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+      <div class="section-title" style="margin-bottom:0;">Key programs &amp; events</div>
+      ${cn ? `<button class="btn btn-ghost btn-sm" onclick="openProgramCapture('${cn}')"><i class="ti ti-message-plus"></i> Log a finding</button>` : ''}
+    </div>
     ${programs.length ? programs.map(p => `
       <div class="tp-item">
         <div style="display:flex;justify-content:space-between;gap:8px;">
@@ -16337,6 +16356,14 @@ async function loadAccountSegmentation(){
     window.__accountSegmentationLoading = false;
   }
   if(state.currentPage === 'companyuniverse') renderPage();
+  // Targets' pin-search shows "Loading companies..." if segmentation wasn't
+  // ready yet when the user started typing - refresh it in place once the
+  // data lands, rather than leaving that message stuck until the next
+  // keystroke or a full page reload.
+  else if(state.currentPage === 'home'){
+    const input = document.getElementById('targetPinSearch');
+    if(input && input.value) renderTargetPinSuggestions(input.value);
+  }
 }
 
 async function scoreIcpBulkAccountWide(){
@@ -16722,13 +16749,16 @@ function renderProgramCoCard(r){
   // as a full page (openProgramStrategyModal - name kept for the queue-card
   // caller too), not the card's own click-through to profile. Shows the
   // stored 1-2 sentence summary once generated; a plain prompt beforehand.
-  const progRows = r.programs.map(pr => `
+  const progRows = r.programs.map((pr, i) => `
     <div class="uco-prog-row" onclick="event.stopPropagation();openProgramStrategyModal('${nm}','${esc(pr.name).replace(/'/g,"\\'")}')">
       <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline;">
         <b style="font-size:12.5px;">${esc(pr.name)}</b>
-        <span style="font-size:10.5px;font-weight:700;white-space:nowrap;color:${programPhaseColor(pr.phase)};">${esc(pr.phase)}</span>
+        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+          <span style="font-size:10.5px;font-weight:700;white-space:nowrap;color:${programPhaseColor(pr.phase)};">${esc(pr.phase)}</span>
+          <button class="btn btn-ghost btn-sm" style="padding:2px 5px;" title="Remove this program" onclick="event.stopPropagation();confirmDeleteUniverseProgram('${nm}',${i},'${esc(pr.name).replace(/'/g,"\\'")}')"><i class="ti ti-trash"></i></button>
+        </div>
       </div>
-      <div class="muted" style="font-size:11px;line-height:1.4;margin-top:2px;">${pr.strategy && pr.strategy.summary ? esc(pr.strategy.summary) : `${esc(pr.type)} · tap for strategy &amp; who to target`}</div>
+      <div class="muted" style="font-size:11px;line-height:1.4;margin-top:2px;">${pr.strategy && pr.strategy.summary ? esc(pr.strategy.summary) : (pr.note ? esc(pr.note) : `${esc(pr.type)} · tap for strategy &amp; who to target`)}</div>
     </div>`).join('');
   return `
   <div class="uco-card" onclick="navigate('profile');selectProfileCompany('${nm}')">
@@ -16737,6 +16767,26 @@ function renderProgramCoCard(r){
     ${progRows}
     <div class="uco-foot"><span>${r.inCampaign ? 'In a campaign' : 'Not in a campaign'}</span><span style="color:var(--accent);font-weight:700;">View company profile <i class="ti ti-arrow-right" style="font-size:12px;vertical-align:-1px;"></i></span></div>
   </div>`;
+}
+// Delete an accepted/filed program straight from the Company Universe card -
+// for exactly the "I accidentally accepted this" case, without having to
+// find the company's own profile drawer first. Confirms first since this
+// deletes real filed data (same pattern as confirmDeleteGrid/deleteClient).
+function confirmDeleteUniverseProgram(companyName, idx, programName){
+  const body = `<p style="font-size:13px;">Remove "${esc(programName)}" from ${esc(companyName)}'s active programs? This cannot be undone here.</p>`;
+  const footer = `
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" style="background:var(--danger);border-color:var(--danger);" onclick="deleteUniverseProgram('${esc(companyName)}',${idx})"><i class="ti ti-trash"></i> Remove</button>
+  `;
+  openModal(`Remove "${esc(programName)}"`, body, footer);
+}
+async function deleteUniverseProgram(companyName, idx){
+  closeModal();
+  const row = (window.__programs && window.__programs.companies || []).find(r => r.companyName === companyName);
+  if(!row) return;
+  const list = row.programs.slice();
+  list.splice(idx, 1);
+  await saveCompanyPrograms(companyName, list);
 }
 
 // ---- Program strategy page (pain points, job titles, GTM-tied approach) ----
@@ -16989,6 +17039,7 @@ function renderProgramProposalFields(pr){
         <div class="field"><label>Type</label><select id="progF_type">${PROGRAM_TYPES.map(t => `<option ${p.type===t?'selected':''}>${t}</option>`).join('')}</select></div>
         <div class="field"><label>Phase</label><select id="progF_phase">${PROGRAM_PHASES.map(ph => `<option ${p.phase===ph?'selected':''}>${ph}</option>`).join('')}</select></div>
       </div>
+      <div class="field"><label>Description</label><textarea id="progF_description" rows="2" placeholder="What this program actually is and why it matters - shown on the program's card.">${esc(p.description||p.note||'')}</textarea></div>
       <div class="field"><label>Evidence</label><textarea id="progF_evidence" rows="2">${esc(p.evidence||'')}</textarea></div>
       <div class="two-col" style="gap:10px;">
         <div class="field"><label>Source</label><input id="progF_source" value="${esc(p.source||'')}" placeholder="URL, or 'call' / 'LinkedIn'"></div>
@@ -17042,6 +17093,11 @@ async function progCaptureSave(){
         name: (document.getElementById('progF_name').value || '').trim() || 'Unnamed program',
         type: document.getElementById('progF_type').value,
         phase: document.getElementById('progF_phase').value,
+        // Stored as "note" server-side (parseCompanyPrograms' existing
+        // allowlisted field, previously unused) - shown to the user as
+        // "Description" since that's what it actually is: what the program
+        // is and why it matters, not a quoted source line like evidence.
+        note: (document.getElementById('progF_description').value || '').trim(),
         evidence: (document.getElementById('progF_evidence').value || '').trim(),
         source: (document.getElementById('progF_source').value || '').trim(),
         confidence: document.getElementById('progF_confidence').value,
@@ -17083,6 +17139,7 @@ async function progFileOne({ destination, companyName, program, signal, note, so
       name: (p.name || '').trim() || 'Unnamed program',
       type: PROGRAM_TYPES.includes(p.type) ? p.type : 'Other',
       phase: PROGRAM_PHASES.includes(p.phase) ? p.phase : 'Unknown',
+      note: (p.description || p.note || '').trim(),
       evidence: (p.evidence || '').trim(),
       source: (p.source || '').trim(),
       confidence: ['high','medium','low'].includes(p.confidence) ? p.confidence : 'medium',
@@ -17386,12 +17443,13 @@ function renderProgramDiscoveryCard(){
           ${modeOpt('both','Known + new')}${modeOpt('monitor','Known accounts only')}${modeOpt('discover','New companies only')}
         </select>
         <button class="btn btn-secondary btn-sm" onclick="runProgramDiscoveryNow()" ${running?'disabled':''}><i class="ti ${running?'ti-loader-2':'ti-radar'}"></i> ${running?'Scanning…':'Run now'}</button>
+        ${running ? `<button class="btn btn-ghost btn-sm" onclick="stopProgramDiscoveryNow()" ${window.__programDiscoveryStopping?'disabled':''}><i class="ti ti-player-stop-filled"></i> ${window.__programDiscoveryStopping?'Stopping…':'Stop'}</button>` : ''}
       </div>
     </div>
     <div class="muted" style="font-size:11.5px;margin:6px 0 0;">
       The agent scans for transformation programs, re-checking known accounts and surfacing new ICP-sector companies. Ranked by opportunity heat: phase, ICP fit, whether the account is already in a campaign, and how fresh the source is. High-confidence findings file themselves; the rest wait here for a yes/no.
       ${d.settings.enabled ? ' Also runs automatically every Monday.' : ' Automatic weekly runs are <b>off</b>. Turn them on in Settings once you’re happy with a manual run.'}
-      ${last ? ` Last run ${progDiscoWhen(last.ranAt)}: scanned ${last.companiesScanned}, filed ${last.autoFiled}, ${last.queued} queued${last.newCompanies?`, ${last.newCompanies} new`:''}${(last.errors&&last.errors.length)?`, ${last.errors.length} error(s)`:''}.` : ''}
+      ${last ? ` Last run ${progDiscoWhen(last.ranAt)}: scanned ${last.companiesScanned}, filed ${last.autoFiled}, ${last.queued} queued${last.newCompanies?`, ${last.newCompanies} new`:''}${(last.errors&&last.errors.length)?`, ${last.errors.length} error(s)`:''}${last.stopped?', stopped early':''}.` : ''}
     </div>
     ${filterBar}
     ${grid}
@@ -17421,6 +17479,25 @@ async function runProgramDiscoveryNow(mode){
   } catch(err){
     toast('Discovery run failed: ' + friendlyErr(err.message), 'warn');
     window.__programDiscoveryRunning = false; renderPage();
+  }
+}
+// Flags the running scan to stop after its current company/query - the
+// polling loop already underway (pollProgramDiscovery, kicked off by
+// runProgramDiscoveryNow) picks up `running` flipping back to false on its
+// own next poll, so this only needs to fire the request and update the
+// button state.
+async function stopProgramDiscoveryNow(){
+  if(window.__programDiscoveryStopping) return;
+  window.__programDiscoveryStopping = true; renderPage();
+  try {
+    const res = await fetch('/api/programs/discovery/stop', { method:'POST' });
+    const s = await res.json().catch(()=>({}));
+    if(!res.ok) throw new Error(s.error || 'Request failed');
+    toast('Stopping - finishing the current company first.');
+  } catch(err){
+    toast('Could not stop: ' + friendlyErr(err.message), 'warn');
+  } finally {
+    window.__programDiscoveryStopping = false; renderPage();
   }
 }
 async function pollProgramDiscovery(){
@@ -17534,7 +17611,10 @@ function renderProgramDiscoverySettingsCard(){
         <div class="section-title" style="margin-bottom:2px;"><i class="ti ti-robot"></i> Program discovery agent</div>
         <div class="muted" style="font-size:12px;">Weekly web scan (Mondays 7am) for transformation programs: re-checks known accounts and finds new ICP-sector companies. High-confidence findings are filed automatically; the rest go to the Home review queue. Needs SERPER_API_KEY + ANTHROPIC_API_KEY. Runs on the ambient (cheaper) model.</div>
       </div>
-      <button class="btn btn-secondary btn-sm" onclick="runProgramDiscoveryNow()" ${running?'disabled':''}><i class="ti ${running?'ti-loader-2':'ti-radar'}"></i> ${running?'Scanning…':'Run now'}</button>
+      <div style="display:flex;gap:6px;">
+        <button class="btn btn-secondary btn-sm" onclick="runProgramDiscoveryNow()" ${running?'disabled':''}><i class="ti ${running?'ti-loader-2':'ti-radar'}"></i> ${running?'Scanning…':'Run now'}</button>
+        ${running ? `<button class="btn btn-ghost btn-sm" onclick="stopProgramDiscoveryNow()" ${window.__programDiscoveryStopping?'disabled':''}><i class="ti ti-player-stop-filled"></i> ${window.__programDiscoveryStopping?'Stopping…':'Stop'}</button>` : ''}
+      </div>
     </div>
     <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;font-size:12px;">
       <label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" ${st.enabled?'checked':''} onchange="saveProgramDiscoverySettings({enabled:this.checked})" style="width:auto;"> <b>Run automatically every week</b></label>
@@ -17578,6 +17658,7 @@ function renderCompanyProgramsSection(company){
           <div style="flex:1;">
             <strong style="font-size:12.5px;">${esc(p.name)}</strong>
             <div class="muted" style="font-size:11px;">${esc(p.type)} · <span style="color:${programPhaseColor(p.phase)};font-weight:700;">${esc(p.phase)}</span>${p.confidence ? ` · ${esc(p.confidence)} confidence` : ''}${p.detectedAt ? ` · ${fmtDate(p.detectedAt)}` : ''}</div>
+            ${p.note ? `<div style="font-size:11.5px;margin-top:3px;">${esc(p.note)}</div>` : ''}
             ${p.evidence ? `<div style="font-size:11.5px;margin-top:3px;font-style:italic;">"${esc(p.evidence)}"</div>` : ''}
             ${p.source ? `<div class="muted" style="font-size:10.5px;margin-top:2px;">${esc(p.source)}</div>` : ''}
           </div>
@@ -17965,7 +18046,7 @@ function renderProfileAccountDashboard(name){
   ${header}
   <div class="acct-dash-grid">
     ${renderDashActions(profile)}
-    ${renderDashCalendar(profile)}
+    ${renderDashCalendar(profile, nm)}
     ${renderDashTopIcps(profile)}
     ${renderDashRevenue(profile)}
     ${renderDashPipeline(profile)}

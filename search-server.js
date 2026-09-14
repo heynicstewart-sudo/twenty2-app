@@ -4274,6 +4274,12 @@ async function runProgramDiscovery(opts = {}) {
       const yr = new Date().getFullYear();
       for (const c of pick) {
         if (!budgetLeft()) break;
+        // programDiscoveryRunState is declared further down the file but
+        // exists by the time this actually runs (this function is only ever
+        // invoked in the background, well after module load) - checked once
+        // per company so a stop request takes effect within one API call,
+        // not mid-scan.
+        if (programDiscoveryRunState.stopRequested) { summary.stopped = true; break; }
         const name = c.fields['Company Name'];
         try {
           const organic = await serperOrganic(`"${name}" (transformation OR "operating model" OR ERP OR restructure OR "ways of working") ${yr - 1}..${yr}`, 6);
@@ -4298,12 +4304,13 @@ async function runProgramDiscovery(opts = {}) {
     }
 
     // ---- discover pass ----
-    if (mode !== 'monitor' && budgetLeft()) {
+    if (mode !== 'monitor' && budgetLeft() && !programDiscoveryRunState.stopRequested) {
       let resultsText = '';
       const discoveryQueries = await buildDiscoveryQueries(icpProfile, await getGtmMotion().catch(() => null), settings.discoverQueries);
       budget.engine++; // the query-builder's Engine call (falls back to a heuristic if it fails)
       for (const { label, q } of discoveryQueries) {
         if (budget.serper >= serperCap) break;
+        if (programDiscoveryRunState.stopRequested) { summary.stopped = true; break; }
         const organic = await serperOrganic(q, 8);
         budget.serper++; summary.queriesRun++;
         resultsText += `\n\n## ${label}\n` + organic.map(o => `- ${o.title}\n  ${o.snippet}\n  ${o.link}${o.date ? `  (${o.date})` : ''}`).join('\n');
@@ -11678,7 +11685,7 @@ Return ONLY valid JSON, no markdown, in exactly this shape:
   "companyName": "the matched company name exactly as it appears in the list, or your best guess if not on the list",
   "companyMatched": true or false,
   "candidateCompanies": ["up to 5 names from the list this could plausibly be, best first"],
-  "program": { "name": "", "type": "one of: ${PROGRAM_TYPES.join(' | ')}", "phase": "one of: ${PROGRAM_PHASES.join(' | ')}", "evidence": "the most relevant quote from the paste, verbatim, <=300 chars", "source": "a URL from the paste if present, else '' ", "confidence": "high|medium|low" },
+  "program": { "name": "", "type": "one of: ${PROGRAM_TYPES.join(' | ')}", "phase": "one of: ${PROGRAM_PHASES.join(' | ')}", "description": "1-2 plain sentences on what this program actually is and why it matters for Twenty2 - not a repeat of the evidence quote", "evidence": "the most relevant quote from the paste, verbatim, <=300 chars", "source": "a URL from the paste if present, else '' ", "confidence": "high|medium|low" },
   "signal": { "summary": "one sentence" },
   "note": { "text": "one or two sentences worth keeping" }
 }
@@ -11705,6 +11712,7 @@ Only the object matching "destination" needs real content; leave the others as e
       name: (parsed.program && parsed.program.name) || '',
       type: PROGRAM_TYPES.includes(parsed.program && parsed.program.type) ? parsed.program.type : 'Other',
       phase: PROGRAM_PHASES.includes(parsed.program && parsed.program.phase) ? parsed.program.phase : 'Unknown',
+      description: ((parsed.program && parsed.program.description) || '').toString().slice(0, 1000),
       evidence: (parsed.program && parsed.program.evidence) || '',
       source: (parsed.program && parsed.program.source) || '',
       confidence: ['high', 'medium', 'low'].includes(parsed.program && parsed.program.confidence) ? parsed.program.confidence : 'medium'
@@ -11763,14 +11771,14 @@ app.post('/api/programs/bulk-capture', async (req, res) => {
 // One run at a time, in-process. A full scan can take minutes, so the run
 // endpoint kicks it off in the background and the client polls GET /discovery
 // for `running` to flip back to false.
-let programDiscoveryRunState = { running: false, startedAt: null, mode: null };
+let programDiscoveryRunState = { running: false, startedAt: null, mode: null, stopRequested: false };
 async function runProgramDiscoveryTracked(opts) {
   if (programDiscoveryRunState.running) return { skipped: true, reason: 'A discovery run is already in progress' };
-  programDiscoveryRunState = { running: true, startedAt: new Date().toISOString(), mode: opts && opts.mode || 'both' };
+  programDiscoveryRunState = { running: true, startedAt: new Date().toISOString(), mode: opts && opts.mode || 'both', stopRequested: false };
   try {
     return await runProgramDiscovery(opts);
   } finally {
-    programDiscoveryRunState = { running: false, startedAt: null, mode: null };
+    programDiscoveryRunState = { running: false, startedAt: null, mode: null, stopRequested: false };
   }
 }
 
@@ -11785,6 +11793,16 @@ app.post('/api/programs/discovery/run', async (req, res) => {
   if (wait) return res.json(await runProgramDiscoveryTracked(opts));
   runProgramDiscoveryTracked(opts).catch(err => console.warn('Background discovery run failed:', err.message));
   res.json({ started: true, mode: opts.mode || 'both' });
+});
+
+// Flags the in-progress run to stop - it finishes the company/query it's
+// currently on, then exits its loop early instead of hard-killing the
+// request mid-write (which could leave a company's Programs (JSON) field
+// half-updated). Whatever it found before stopping is still saved.
+app.post('/api/programs/discovery/stop', async (req, res) => {
+  if (!programDiscoveryRunState.running) return res.status(409).json({ error: 'No discovery run is in progress' });
+  programDiscoveryRunState.stopRequested = true;
+  res.json({ ok: true });
 });
 
 // The Home card + review queue read this.
