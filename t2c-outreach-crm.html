@@ -20157,7 +20157,7 @@ function saveCampaignStrategy(campaignId){
 // a whole. Charts render via Chart.js once the canvases exist in the DOM -
 // see initCampaignAnalyticsCharts(), called from afterRender.
 
-const CAMPAIGN_PERIOD_OPTIONS = [ ['thisWeek','This week'], ['lastWeek','Last week'], ['30d','Last 30 days'], ['60d','Last 60 days'], ['quarter','This quarter'] ];
+const CAMPAIGN_PERIOD_OPTIONS = [ ['thisWeek','This week'], ['lastWeek','Last week'], ['30d','Last 30 days'], ['60d','Last 60 days'], ['quarter','This quarter'], ['custom','Custom range'] ];
 const LEAD_STATUS_META = [ ['messaging','Messaging','#FFD05D'], ['warm','Warm','#FF834C'], ['booked','Booked','#44A574'], ['lost','Lost','#c44a2a'] ];
 
 function startOfWeek(d){
@@ -20174,6 +20174,21 @@ function campaignPeriodBounds(periodKey){
   else if(periodKey === 'lastWeek'){ const ws = startOfWeek(today); end = new Date(ws); end.setDate(end.getDate()-1); start = new Date(ws); start.setDate(start.getDate()-7); }
   else if(periodKey === '30d'){ start = new Date(today); start.setDate(start.getDate()-29); end = today; }
   else if(periodKey === '60d'){ start = new Date(today); start.setDate(start.getDate()-59); end = today; }
+  else if(periodKey === 'custom'){
+    // Defaults to the last 7 days until the user actually picks dates in
+    // the From/To inputs (setCampaignAnalyticsCustomRange). The explicit
+    // picks are parsed with a 'Z' (UTC midnight), not local midnight like
+    // every other date in this function - isoDate() below formats via
+    // toISOString(), which rolls a *local* midnight back to the previous
+    // UTC day for anyone east of UTC (Perth included), so a date the user
+    // typed in the picker would silently come back one day earlier. UTC
+    // midnight round-trips through toISOString() exactly, so what the user
+    // typed is what gets sent to the server - the fallback below still
+    // shares `today`'s local-midnight anchor like every other preset.
+    const to = window.__campaignAnalyticsCustomTo ? new Date(window.__campaignAnalyticsCustomTo+'T00:00:00Z') : today;
+    const from = window.__campaignAnalyticsCustomFrom ? new Date(window.__campaignAnalyticsCustomFrom+'T00:00:00Z') : (() => { const d = new Date(today); d.setDate(d.getDate()-6); return d; })();
+    start = from; end = to;
+  }
   else { const q = Math.floor(today.getMonth()/3); start = new Date(today.getFullYear(), q*3, 1); end = today; }
   end = new Date(end); end.setHours(23,59,59,999);
   const spanMs = end - start;
@@ -20210,6 +20225,17 @@ async function loadCampaignScorecard(campaign){
 
 function setCampaignAnalyticsPeriod(period){
   window.__campaignAnalyticsPeriod = period;
+  window.__campaignScorecard = undefined;
+  renderPage();
+}
+// Either date input changing reloads the scorecard - campaignPeriodBounds
+// falls back to a sensible default (last 7 days) for whichever side hasn't
+// been picked yet, so this never has to wait for both before showing
+// something.
+function setCampaignAnalyticsCustomRange(field, value){
+  if(!value) return;
+  if(field === 'from') window.__campaignAnalyticsCustomFrom = value;
+  else window.__campaignAnalyticsCustomTo = value;
   window.__campaignScorecard = undefined;
   renderPage();
 }
@@ -20380,12 +20406,29 @@ function renderScorecardTile(t){
   const denom = (typeof t.denom === 'number')
     ? `<div class="kpi-sub">from ${t.denom} ${esc(t.denomLabel||'')}</div>`
     : '<div class="kpi-sub">&nbsp;</div>';
+  const clickable = t.label === 'Meetings booked';
   return `
-    <div class="kpi-tile">
+    <div class="kpi-tile" ${clickable ? `tabindex="0" role="button" style="cursor:pointer;" onclick="showScorecardMeetingsBooked()" onkeydown="onRowKeydown(event)" title="Show who's here"` : ''}>
       <div class="kpi-label">${esc(t.label)}</div>
       <div class="kpi-value">${t.value}${pill}</div>
       ${denom}
     </div>`;
+}
+// The "Meetings booked" KPI tile's own drill-down - separate from the
+// funnel strip's per-step one (showFunnelStepContacts) since this tile is
+// scoped to the Time range picker's window, not the funnel's
+// booked-ever-cumulative count.
+function showScorecardMeetingsBooked(){
+  const sc = window.__campaignScorecard;
+  const contacts = sc && Array.isArray(sc.meetingsBookedContacts) ? sc.meetingsBookedContacts : [];
+  const body = contacts.length ? `
+    <div style="display:flex;flex-direction:column;">
+      ${contacts.map(c => `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border-light);font-size:13px;">
+          <div><strong>${esc(c.name)}</strong>${c.company ? ` <span class="muted">· ${esc(c.company)}</span>` : ''}</div>
+        </div>`).join('')}
+    </div>` : '<div class="empty-state">No meetings booked in this time range.</div>';
+  openModal(`Meetings booked (${contacts.length})`, body, `<button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
 }
 
 // "Review accepted contacts" — the manual ICP-relevance scan from the Stan
@@ -20548,6 +20591,10 @@ function renderCampaignAnalyticsTab(campaign){
           ${CAMPAIGN_PERIOD_OPTIONS.map(([k,l])=>`<option value="${k}" ${period===k?'selected':''}>${l}</option>`).join('')}
         </select>
       </div>
+      ${period === 'custom' ? `
+      <div class="field" style="max-width:170px;"><label>From</label><input type="date" value="${esc(window.__campaignAnalyticsCustomFrom||'')}" onchange="setCampaignAnalyticsCustomRange('from',this.value)"></div>
+      <div class="field" style="max-width:170px;"><label>To</label><input type="date" value="${esc(window.__campaignAnalyticsCustomTo||'')}" onchange="setCampaignAnalyticsCustomRange('to',this.value)"></div>
+      ` : ''}
     </div>
     ${!sc ? '<div class="muted"><i class="ti ti-loader-2"></i> Loading scorecard…</div>' :
       sc.error ? `<div class="muted">Could not load scorecard: ${esc(friendlyErr(sc.error))}</div>` : `

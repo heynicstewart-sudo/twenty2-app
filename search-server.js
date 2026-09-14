@@ -5780,13 +5780,14 @@ app.get('/api/campaign/:id/scorecard', async (req, res) => {
     const positiveRepliesIn = (f, t) => myTps.filter(r =>
       touchPointIsReply(r.fields) && inIso(r.fields['Date'], f, t) &&
       (r.fields['Contact'] || []).some(cid => positiveSentimentContactIds.has(cid))).length;
-    const meetingsIn = (f, t) => {
+    const meetingsContactIdsIn = (f, t) => {
       const ids = new Set();
       myRows.forEach(r => { if (stageTransitionInRange(r, 'Meeting Booked', f, t)) ids.add((r.fields['Contact'] || [])[0]); });
       myDeals.forEach(r => { if ((r.fields['Outcome'] || '') !== 'Lost' && inIso(r.fields['Date'], f, t)) ids.add((r.fields['Contact'] || [])[0]); });
       ids.delete(undefined); ids.delete(null);
-      return ids.size;
+      return [...ids];
     };
+    const meetingsIn = (f, t) => meetingsContactIdsIn(f, t).length;
 
     const mkTile = (label, valFn, denomFn, denomLabel) => {
       const value = valFn(from, to);
@@ -5876,10 +5877,25 @@ app.get('/api/campaign/:id/scorecard', async (req, res) => {
       if (icpProfile) icpHealth = campaignIcpHealth(campaignRecord, contactRecords, ccRows);
     } catch (e) { icpHealth = null; }
 
+    // Resolves the "Meetings booked" tile's contact ids to display-ready
+    // {name, company} - reuses the contact/company maps built above for the
+    // multi-threading warning rather than fetching either table again.
+    const contactsById = {}; contactRecords.forEach(r => { contactsById[r.id] = r; });
+    const meetingsBookedContacts = meetingsContactIdsIn(from, to).map(cid => {
+      const contact = contactsById[cid];
+      const coId = contact ? companyByContactId[cid] : null;
+      return {
+        id: cid,
+        name: contact ? (contact.fields['Full Name'] || '') : '',
+        company: coId ? (companyNameById[coId] || '') : ''
+      };
+    }).filter(c => c.name);
+
     res.json({
       campaignName: campaignRecord.fields['Name'] || campaignRecord.fields['Campaign Name'] || '',
       from, to, prevFrom, prevTo,
       tiles, series, connectionAb, diagnostic, multiThread, changeMarkers, icpHealth,
+      meetingsBookedContacts,
       generatedAt: new Date().toISOString()
     });
   } catch (err) {
