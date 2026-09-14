@@ -2452,19 +2452,30 @@ function renderAgencyTasksTab(){
     ${AGENCY_TASK_STATUSES.map(status => {
       const rows = t.filter(x => (x.status||'To do') === status).sort((a,b) => (a.dueDate||'9999').localeCompare(b.dueDate||'9999'));
       return `
-      <div class="card">
+      <div class="card" ondragover="onAgencyDropZoneDragOver(event)" ondragleave="onAgencyDropZoneDragLeave(event)" ondrop="onAgencyStatusColumnDrop(event,'${esc(status)}')">
         <div class="section-title" style="margin-bottom:8px;">${esc(status)} <span class="count-pill has">${rows.length}</span></div>
         ${rows.length ? rows.map(renderAgencyTaskRow).join('') : '<div class="empty-state">Nothing here.</div>'}
       </div>`;
     }).join('')}
   </div>`;
 }
+// Drop on a status column moves the task there - same shared drag id and
+// PATCH-and-refresh helper the Calendar's drag-and-drop already uses.
+async function onAgencyStatusColumnDrop(e, status){
+  e.preventDefault();
+  if(e.currentTarget && e.currentTarget.classList) e.currentTarget.classList.remove('agency-drop-target');
+  const id = __agencyDragTaskId; __agencyDragTaskId = null;
+  if(!id) return;
+  const task = (Array.isArray(window.__agencyTasks) ? window.__agencyTasks : []).find(x => x.id === id);
+  if(!task || (task.status||'To do') === status) return;
+  await agencyTaskPatchAndRefresh(id, { status });
+}
 function renderAgencyTaskRow(t){
   const today = isoDate(TODAY);
   const overdue = t.dueDate && t.dueDate < today && t.status !== 'Done';
   const meta = [t.clientSlug, t.accountName].filter(Boolean).join(' · ') || 'Agency-wide';
   return `
-  <div class="dash-action-row" tabindex="0" role="button" style="border-bottom:1px solid var(--border-light);display:flex;justify-content:space-between;align-items:center;gap:8px;" onclick="openAgencyTaskForm('${t.id}')" onkeydown="onRowKeydown(event)">
+  <div class="dash-action-row agency-drag" tabindex="0" role="button" draggable="true" style="border-bottom:1px solid var(--border-light);display:flex;justify-content:space-between;align-items:center;gap:8px;cursor:grab;" onclick="openAgencyTaskForm('${t.id}')" onkeydown="onRowKeydown(event)" ondragstart="onAgencyTaskDragStart(event,'${t.id}')" ondragend="onAgencyTaskDragEnd(event)">
     <div style="flex:1;min-width:0;">
       <div style="display:flex;justify-content:space-between;gap:8px;">
         <strong style="font-size:12.5px;">${t.type==='Meeting'?'<i class=\"ti ti-users\" style=\"font-size:11px;\"></i> ':''}${esc(t.title)}</strong>
