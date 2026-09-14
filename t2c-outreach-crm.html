@@ -780,7 +780,9 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .funnel-fill.lost{background:var(--danger);}
 .funnel-conv{width:150px;flex-shrink:0;font-size:11px;color:var(--muted);text-align:right;}
 .funnel-strip{display:flex;align-items:stretch;gap:2px;overflow-x:auto;padding-bottom:4px;}
-.funnel-strip-step{flex:1 1 0;min-width:78px;text-align:center;padding:8px 6px;background:var(--surface-2);border:1px solid var(--border-light);border-radius:var(--radius-card);}
+.funnel-strip-step{flex:1 1 0;min-width:78px;text-align:center;padding:8px 6px;background:var(--surface-2);border:1px solid var(--border-light);border-radius:var(--radius-card);transition:border-color .12s ease,background .12s ease;}
+.funnel-strip-step:hover{border-color:var(--accent);background:var(--accent-dim);}
+.funnel-strip-step:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
 .funnel-strip-num{font-size:19px;font-weight:800;line-height:1.1;color:var(--accent-strong);}
 .funnel-strip-label{font-size:10.5px;font-weight:700;color:var(--muted);margin-top:2px;text-transform:uppercase;letter-spacing:.02em;}
 .funnel-strip-conv{font-size:11px;font-weight:700;color:var(--success);margin-top:4px;}
@@ -1486,13 +1488,14 @@ function getRoadmapColumn(c){
     return 'pending';
   }
 
+  if(liveStage === 'Meeting Booked') return 'booked';
   if(liveStage === 'Connected') return 'made';
   if(/^Message \d Sent$/.test(liveStage) || /^Pending Reply/.test(liveStage) || /^Ready for Message/.test(liveStage)) return 'messaging';
-  // Found/Connection Requested/Connection Pending/Meeting Booked (not yet
-  // separately columned) all land here, same as before this stage read
-  // sequence stage at all - as does the brief window before this campaign's
-  // Sequence Stage map has finished loading (liveStage === ''), falling
-  // back to local state just so the board isn't empty for that one render.
+  // Found/Connection Requested/Connection Pending all land here, same as
+  // before this stage read sequence stage at all - as does the brief window
+  // before this campaign's Sequence Stage map has finished loading
+  // (liveStage === ''), falling back to local state just so the board isn't
+  // empty for that one render.
   if(!liveStage){
     if(c.state === 'messaging') return 'messaging';
     if(c.state === 'connected') return 'made';
@@ -13367,9 +13370,12 @@ async function confirmBooking(cid){
   renderPage();
 
   // Same Deals + Touch Point writes the Sales tab's "Log a deal" flow makes
-  // (POST /api/campaign/:name/deals, POST /api/airtable/touchpoint) - a
-  // booking is a won deal, tagged to whichever campaign this contact's
-  // Roadmap card belongs to.
+  // (POST /api/campaign/:name/deals, POST /api/airtable/touchpoint), tagged
+  // to whichever campaign this contact's Roadmap card belongs to. Outcome
+  // starts "Pending", same as every other freshly logged deal (see
+  // openAddDealModal) - a booked meeting is not a sale yet. It only becomes
+  // "Won" if that meeting actually converts, via the Sales Log's own Outcome
+  // dropdown (updateDealField) once that's known - never automatically here.
   const campaign = state.campaigns.find(x => x.id === window.__roadmapCampaignId) || activeCampaignForContact(c);
   if(!campaign){
     console.warn('Could not sync booking to Airtable: no active campaign found for this contact.');
@@ -13380,7 +13386,7 @@ async function confirmBooking(cid){
     const dealRes = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/deals`, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ contactId: cid, outcome: 'Won', dealValue: 0, notes: dealNotes, date })
+      body: JSON.stringify({ contactId: cid, outcome: 'Pending', dealValue: 0, notes: dealNotes, date })
     });
     const dealData = await dealRes.json();
     if(!dealRes.ok || !dealData.success) throw new Error(dealData.error || 'Deal save failed');
@@ -13401,6 +13407,25 @@ async function confirmBooking(cid){
     });
     const tpData = await tpRes.json();
     if(!tpRes.ok || !tpData.success) throw new Error(tpData.error || 'Touch point save failed');
+
+    // The booking button only flips c.thread.booked (session-only local
+    // state) - without also writing the real Campaign Contacts.Sequence
+    // Stage, this contact keeps showing under whatever stage it was in
+    // before (e.g. "Messaging") on the Roadmap board and everywhere else
+    // that reads the live Sequence Stage, even though a meeting was in fact
+    // booked. Same endpoint/cache-patch the drawer's manual stage editor
+    // uses (updateContactDrawerStage).
+    const stageRes = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/contacts/${encodeURIComponent(cid)}/stage`, {
+      method: 'PATCH',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ stage: 'Meeting Booked' })
+    });
+    const stageData = await stageRes.json();
+    if(!stageRes.ok || !stageData.success) throw new Error(stageData.error || 'Stage update failed');
+    window.__campaignSequenceStages = window.__campaignSequenceStages || {};
+    window.__campaignSequenceStages[campaign.id] = window.__campaignSequenceStages[campaign.id] || {};
+    window.__campaignSequenceStages[campaign.id][c.name.trim().toLowerCase()] = stageData.sequenceStage;
+    if(state.currentPage === 'campaigns' || window.__roadmapCampaignId) renderPage();
   } catch(err){
     console.warn('Could not sync booking to Airtable:', err.message);
     toast('Booked locally, but could not sync to the database: ' + friendlyErr(err.message), 'warn');
@@ -15353,7 +15378,7 @@ function renderCampaignFunnelStrip(campaign){
     const prev = i > 0 ? steps[i-1].count : null;
     const fromPrev = (prev && prev > 0) ? Math.round(s.count/prev*100) : null;
     return `
-      <div class="funnel-strip-step">
+      <div class="funnel-strip-step" tabindex="0" role="button" style="cursor:pointer;" title="Show who's here" onclick="showFunnelStepContacts('${esc(campaign.id)}','${esc(s.key)}')" onkeydown="onRowKeydown(event)">
         <div class="funnel-strip-num">${s.count}</div>
         <div class="funnel-strip-label">${esc(s.label)}</div>
         ${i>0 ? `<div class="funnel-strip-conv ${fromPrev!==null && fromPrev < 40 ? 'is-drop' : ''}">${fromPrev!==null ? fromPrev+'%' : '–'}</div>` : `<div class="funnel-strip-conv">&nbsp;</div>`}
@@ -15369,7 +15394,27 @@ function renderCampaignFunnelStrip(campaign){
       </div>
     </div>
     <div class="funnel-strip">${cells}</div>
+    <div class="muted" style="font-size:10.5px;margin-top:8px;">Click any step to see who's in it.</div>
   </div>`;
+}
+
+// Clicking a funnel step tile shows exactly who's counted in it - the
+// canonical funnel endpoint now resolves each step's contact ids to
+// {name, company, stage} itself, so this just reads what's already loaded.
+function showFunnelStepContacts(campaignId, stepKey){
+  const f = (window.__campaignFunnels || {})[campaignId];
+  const step = f && Array.isArray(f.steps) ? f.steps.find(s => s.key === stepKey) : null;
+  if(!step) return;
+  const contacts = Array.isArray(step.contacts) ? step.contacts : [];
+  const body = contacts.length ? `
+    <div style="display:flex;flex-direction:column;">
+      ${contacts.map(c => `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border-light);font-size:13px;">
+          <div><strong>${esc(c.name)}</strong>${c.company ? ` <span class="muted">· ${esc(c.company)}</span>` : ''}</div>
+          ${c.stage ? `<span class="tag" style="background:var(--sidebar-hover-bg);flex-shrink:0;">${esc(c.stage)}</span>` : ''}
+        </div>`).join('')}
+    </div>` : '<div class="empty-state">No contacts at this stage.</div>';
+  openModal(`${esc(step.label)} (${step.count})`, body, `<button class="btn btn-secondary" onclick="closeModal()">Close</button>`);
 }
 
 // Sequence Stage now lives on Campaign Contacts (Airtable), filtered to

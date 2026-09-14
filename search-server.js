@@ -5548,30 +5548,39 @@ function buildFunnelContacts(ccRows, campaignRecordId, dealsByContactId) {
 // [{outcome}]. Returns the step counts + step-to-step conversion the UI draws.
 function computeCampaignFunnel(funnelContacts, deals, emailMode, sequenceLength) {
   const active = funnelContacts.filter(c => !c.off);
-  const reached = minRung => active.filter(c => c.furthestRung >= minRung).length;
+  const reachedContacts = minRung => active.filter(c => c.furthestRung >= minRung);
+  const reached = minRung => reachedContacts(minRung).length;
+  const idsOf = arr => arr.map(c => c.contactId).filter(Boolean);
   // Rung a contact reaches only once they've replied (the gate clears to
   // "Ready for Message 2"). Monotonic with the rest of the ladder.
   const repliedRung = FUNNEL_LADDER.indexOf('Ready for Message 2');
   const seqLen = (Number.isFinite(+sequenceLength) && +sequenceLength >= 1 && +sequenceLength <= 8) ? Math.round(+sequenceLength) : 3;
+  const bookedContacts = funnelContacts.filter(c => c.booked);
+  // Won/Lost are per-deal outcomes, not funnel-ladder rungs (see the block
+  // comment above) - dedupe to distinct contacts same as the count below.
+  const wonContactIds = [...new Set((deals || []).filter(d => d.outcome === 'Won' && d.contactId).map(d => d.contactId))];
   const messageSteps = [];
-  for (let n = 1; n <= seqLen; n++) messageSteps.push({ key: `m${n}`, label: `Message ${n} sent`, count: reached(messageRung(n)) });
+  for (let n = 1; n <= seqLen; n++) {
+    const cs = reachedContacts(messageRung(n));
+    messageSteps.push({ key: `m${n}`, label: `Message ${n} sent`, count: cs.length, contactIds: idsOf(cs) });
+  }
   const steps = emailMode ? [
     // Email campaigns have no connection step and follow-ups go out
     // regardless of reply, so the follow-up counts aren't funnel rungs -
     // they'd break monotonicity. The real drop-off points are: emailed at
     // all -> replied -> booked -> won.
-    { key: 'contacts', label: 'Contacts', count: funnelContacts.length },
-    { key: 'm1', label: 'Emailed', count: reached(RUNG.m1) },
-    { key: 'replied', label: 'Replied', count: reached(repliedRung) },
-    { key: 'meeting', label: 'Booked', count: funnelContacts.filter(c => c.booked).length },
-    { key: 'won', label: 'Won', count: (deals || []).filter(d => d.outcome === 'Won').length }
+    { key: 'contacts', label: 'Contacts', count: funnelContacts.length, contactIds: idsOf(funnelContacts) },
+    { key: 'm1', label: 'Emailed', count: reached(RUNG.m1), contactIds: idsOf(reachedContacts(RUNG.m1)) },
+    { key: 'replied', label: 'Replied', count: reached(repliedRung), contactIds: idsOf(reachedContacts(repliedRung)) },
+    { key: 'meeting', label: 'Booked', count: bookedContacts.length, contactIds: idsOf(bookedContacts) },
+    { key: 'won', label: 'Won', count: wonContactIds.length, contactIds: wonContactIds }
   ] : [
-    { key: 'contacts', label: 'Contacts', count: funnelContacts.length },
-    { key: 'connectionSent', label: 'Connection sent', count: active.filter(c => c.connectionSentDate || c.furthestRung >= RUNG.connectionSent).length },
-    { key: 'connected', label: 'Connected', count: reached(RUNG.connected) },
+    { key: 'contacts', label: 'Contacts', count: funnelContacts.length, contactIds: idsOf(funnelContacts) },
+    { key: 'connectionSent', label: 'Connection sent', count: active.filter(c => c.connectionSentDate || c.furthestRung >= RUNG.connectionSent).length, contactIds: idsOf(active.filter(c => c.connectionSentDate || c.furthestRung >= RUNG.connectionSent)) },
+    { key: 'connected', label: 'Connected', count: reached(RUNG.connected), contactIds: idsOf(reachedContacts(RUNG.connected)) },
     ...messageSteps,
-    { key: 'meeting', label: 'Meeting booked', count: funnelContacts.filter(c => c.booked).length },
-    { key: 'won', label: 'Won', count: (deals || []).filter(d => d.outcome === 'Won').length }
+    { key: 'meeting', label: 'Meeting booked', count: bookedContacts.length, contactIds: idsOf(bookedContacts) },
+    { key: 'won', label: 'Won', count: wonContactIds.length, contactIds: wonContactIds }
   ];
   steps.forEach((s, i) => {
     const prev = i > 0 ? steps[i - 1].count : null;
@@ -5598,11 +5607,15 @@ app.get('/api/campaign/:id/funnel', async (req, res) => {
     const campaignRecord = await resolveCampaignRecord(decodeURIComponent(req.params.id));
     if (!campaignRecord) return res.status(404).json({ error: 'Campaign not found' });
 
-    const [ccRows, dealRecords, tpRecords] = await Promise.all([
+    const [ccRows, dealRecords, tpRecords, contactRecords, companyRecords] = await Promise.all([
       fetchCampaignContactsRows(),
       airtableFetchAllRecords('Deals'),
-      airtableFetchAllRecords('Touch Points')
+      airtableFetchAllRecords('Touch Points'),
+      airtableFetchAllRecords('Contacts'),
+      airtableFetchAllRecords('Companies')
     ]);
+    const contactsById = {}; contactRecords.forEach(r => { contactsById[r.id] = r; });
+    const companiesById = {}; companyRecords.forEach(r => { companiesById[r.id] = r; });
 
     const myDeals = dealRecords
       .filter(r => (r.fields['Campaign'] || []).includes(campaignRecord.id))
@@ -5636,6 +5649,27 @@ app.get('/api/campaign/:id/funnel', async (req, res) => {
     const replyDenomKey = emailMode ? 'm1' : 'connected';
     const connected = (funnel.steps.find(s => s.key === replyDenomKey) || {}).count || 0;
     const meetings = (funnel.steps.find(s => s.key === 'meeting') || {}).count || 0;
+
+    // Resolve each step's bare contact ids into display-ready {id, name,
+    // company, stage} so the funnel strip's "who is in this bucket" modal
+    // needs no second round trip - same contact/company shape sales-overview
+    // already exposes elsewhere in this file.
+    const currentStageByContactId = {};
+    funnelContacts.forEach(fc => { currentStageByContactId[fc.contactId] = fc.current; });
+    funnel.steps.forEach(s => {
+      s.contacts = (s.contactIds || []).map(cid => {
+        const contact = contactsById[cid];
+        const companyId = contact ? (contact.fields['Company'] || [])[0] || null : null;
+        const company = companyId ? companiesById[companyId] : null;
+        return {
+          id: cid,
+          name: contact ? (contact.fields['Full Name'] || '') : '',
+          company: company ? (company.fields['Company Name'] || '') : '',
+          stage: currentStageByContactId[cid] || ''
+        };
+      }).filter(c => c.name);
+      delete s.contactIds;
+    });
 
     res.json({
       campaignName: campaignRecord.fields['Name'] || campaignRecord.fields['Campaign Name'] || '',
