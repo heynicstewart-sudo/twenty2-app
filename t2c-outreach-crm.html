@@ -2404,34 +2404,39 @@ function agencyTaskTimeEntriesHtml(taskId){
       ${entries.map(e => `
         <div id="ate_row_${e.id}" style="display:flex;align-items:center;gap:8px;font-size:12px;">
           <span class="muted" style="width:70px;flex-shrink:0;">${fmtDate(isoDate(new Date(e.start)))}</span>
-          <span style="width:44px;flex-shrink:0;">${hm(e.start)}</span>
+          <input type="time" id="ate_start_${e.id}" value="${hm(e.start)}" style="width:110px;">
           <span class="muted">&ndash;</span>
           <input type="time" id="ate_end_${e.id}" value="${hm(e.end)}" style="width:110px;">
-          <button class="btn btn-ghost btn-sm" title="Save corrected finish time" onclick="agencyTimeEntrySaveEnd('${e.id}')"><i class="ti ti-device-floppy"></i></button>
+          <button class="btn btn-ghost btn-sm" title="Save corrected start/finish time" onclick="agencyTimeEntrySave('${e.id}')"><i class="ti ti-device-floppy"></i></button>
           <span class="muted" id="ate_dur_${e.id}" style="margin-left:auto;flex-shrink:0;">${Math.round(e.durationMinutes)}m</span>
         </div>`).join('')}
     </div>
   </div>`;
 }
-async function agencyTimeEntrySaveEnd(entryId){
+async function agencyTimeEntrySave(entryId){
   const entries = Array.isArray(window.__agencyTimeEntries) ? window.__agencyTimeEntries : [];
   const entry = entries.find(e => e.id === entryId);
-  const input = document.getElementById('ate_end_'+entryId);
-  if(!entry || !input || !input.value) return;
+  const startInput = document.getElementById('ate_start_'+entryId);
+  const endInput = document.getElementById('ate_end_'+entryId);
+  if(!entry || !startInput || !endInput || !startInput.value || !endInput.value) return;
+  // Both times are anchored to the session's original calendar day - the
+  // row has no date picker of its own, just the two clock times within it.
   const start = new Date(entry.start);
+  const [startHH, startMM] = startInput.value.split(':').map(Number);
+  start.setHours(startHH, startMM, 0, 0);
   const end = new Date(start);
-  const [hh, mm] = input.value.split(':').map(Number);
-  end.setHours(hh, mm, 0, 0);
+  const [endHH, endMM] = endInput.value.split(':').map(Number);
+  end.setHours(endHH, endMM, 0, 0);
   if(end <= start) end.setDate(end.getDate()+1); // finish time is past midnight relative to the start
   try {
-    const res = await fetch(`/api/agency/time-entries/${entryId}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ end: end.toISOString() }) });
+    const res = await fetch(`/api/agency/time-entries/${entryId}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ start: start.toISOString(), end: end.toISOString() }) });
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
     const i = entries.findIndex(e => e.id === entryId);
     if(i>-1) entries[i] = data.entry;
     const durEl = document.getElementById('ate_dur_'+entryId);
     if(durEl) durEl.textContent = Math.round(data.entry.durationMinutes) + 'm';
-    toast('Finish time updated', 'success');
+    toast('Time updated', 'success');
   } catch(err){
     toast('Could not update: ' + friendlyErr(err.message), 'warn');
   }

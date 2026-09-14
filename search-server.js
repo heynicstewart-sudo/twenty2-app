@@ -22110,30 +22110,39 @@ app.post('/api/agency/time-entries/:id/stop', async (req, res) => {
 });
 
 // Corrects a session after the fact - e.g. forgot to press Stop and it kept
-// running past when the work actually finished. Pass either `end` (a full
-// ISO timestamp, recomputes Duration Minutes from Start) or `durationMinutes`
-// directly (recomputes End from Start + that duration) - the client only
-// ever sends `end`, `durationMinutes` is there for API completeness.
+// running past when the work actually finished, or the start time itself
+// was off. Pass `start` and/or `end` (full ISO timestamps) to move either
+// end of the session - Duration Minutes is always recomputed from whichever
+// start/end result. `durationMinutes` alone (recomputes End from Start +
+// that duration) is kept for API completeness; the client always sends
+// start+end together.
 app.patch('/api/agency/time-entries/:id', async (req, res) => {
   try {
-    const { end, durationMinutes } = req.body || {};
+    const { start, end, durationMinutes } = req.body || {};
     const data = await controlBaseRequest('GET', `/${encodeURIComponent(req.params.id)}`, undefined, TIME_ENTRIES_TABLE);
-    const start = new Date(data.fields['Start']);
-    if (isNaN(start.getTime())) return res.status(400).json({ error: 'This session has no start time to correct against' });
+    const origStart = new Date(data.fields['Start']);
+    if (isNaN(origStart.getTime())) return res.status(400).json({ error: 'This session has no start time to correct against' });
+    let startDate = origStart;
+    if (start) {
+      startDate = new Date(start);
+      if (isNaN(startDate.getTime())) return res.status(400).json({ error: 'Invalid start time' });
+    }
     let endDate, duration;
     if (end) {
       endDate = new Date(end);
       if (isNaN(endDate.getTime())) return res.status(400).json({ error: 'Invalid end time' });
-      duration = Math.max(0, Math.round(((endDate - start) / 60000) * 10) / 10);
+      duration = Math.max(0, Math.round(((endDate - startDate) / 60000) * 10) / 10);
     } else if (durationMinutes != null && !isNaN(+durationMinutes)) {
       duration = Math.max(0, +durationMinutes);
-      endDate = new Date(start.getTime() + duration * 60000);
+      endDate = new Date(startDate.getTime() + duration * 60000);
     } else {
       return res.status(400).json({ error: 'end or durationMinutes is required' });
     }
-    if (endDate <= start) return res.status(400).json({ error: 'End time must be after the start time' });
+    if (endDate <= startDate) return res.status(400).json({ error: 'End time must be after the start time' });
+    const fields = { 'End': endDate.toISOString(), 'Duration Minutes': duration };
+    if (start) fields['Start'] = startDate.toISOString();
     const updated = await controlBaseRequest('PATCH', '', {
-      records: [{ id: req.params.id, fields: { 'End': endDate.toISOString(), 'Duration Minutes': duration } }]
+      records: [{ id: req.params.id, fields }]
     }, TIME_ENTRIES_TABLE);
     res.json({ entry: timeEntryFromRecord(updated.records[0]) });
   } catch (err) {
