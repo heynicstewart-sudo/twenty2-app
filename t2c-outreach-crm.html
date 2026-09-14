@@ -2138,7 +2138,7 @@ function renderAgencyDashPage(){
   const tab = window.__agencyDashTab || 'dashboard';
   const [title, sub] = AGENCY_DASH_TAB_HEAD[tab] || AGENCY_DASH_TAB_HEAD.dashboard;
   return `
-  <div class="page-head"><h1 class="page-h1">${esc(title)}</h1><div class="page-sub">${esc(sub)}</div></div>
+  <div class="page-head"><h1 class="page-h1">${esc(title)}</h1><div class="page-sub">${esc(sub)}</div>${agencyTimerBadgeHtml()}</div>
   ${tab==='dashboard' ? renderAgencyDashboardTab() : ''}
   ${tab==='tasks' ? renderAgencyTasksTab() : ''}
   ${tab==='calendar' ? renderAgencyCalendarTab() : ''}
@@ -2174,6 +2174,60 @@ function renderAgencyRevenueTile(){
     </div>` : `<div class="muted" style="font-size:12px;margin-top:10px;">No retainer amounts set yet - add one from a client's edit form (the gear icon on its card below).</div>`}
   </div>`;
 }
+// Day/month time-and-profitability card: hours tracked per client from
+// window.__agencyTimeEntries (loaded by loadAgencyTimeEntries), against
+// each client's Monthly Retainer - hours out vs money in, the whole point
+// of the timer. $/hr only makes sense against a full month's retainer, not
+// a single day's slice of it, so it's shown for "This month" only.
+function agencyTimePeriodBounds(period){
+  const today = isoDate(TODAY);
+  if(period === 'today') return { from: today, to: today };
+  const first = new Date(TODAY); first.setDate(1);
+  return { from: isoDate(first), to: today };
+}
+function setAgencyTimePeriod(period){ window.__agencyTimePeriod = period; renderPage(); }
+function renderAgencyTimeProfitCard(){
+  const entries = window.__agencyTimeEntries;
+  if(entries === undefined || entries === null) return `<div class="card" style="margin-bottom:16px;"><div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading time entries...</div></div>`;
+  if(entries.error) return `<div class="card" style="margin-bottom:16px;"><div class="empty-state">Couldn't load time entries: ${esc(friendlyErr(entries.error))} <button class="btn btn-ghost btn-sm" onclick="loadAgencyTimeEntries(true)"><i class="ti ti-refresh"></i> Try again</button></div></div>`;
+  const period = window.__agencyTimePeriod || 'month';
+  const { from, to } = agencyTimePeriodBounds(period);
+  const inRange = entries.filter(e => e.durationMinutes != null && e.date >= from && e.date <= to);
+  const byClient = {};
+  inRange.forEach(e => { const key = e.clientSlug || '__agency'; byClient[key] = (byClient[key]||0) + e.durationMinutes; });
+  const clients = ((window.__agencyOverview && window.__agencyOverview.clients) || []);
+  const rows = Object.entries(byClient).sort((a,b) => b[1]-a[1]).map(([slug, mins]) => {
+    const hours = mins/60;
+    const client = clients.find(c => c.slug === slug);
+    const name = client ? (client.name || slug) : (slug === '__agency' ? 'Agency-wide (no client)' : slug);
+    const rate = (period === 'month' && client && client.retainerAmount && hours > 0) ? client.retainerAmount / hours : null;
+    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--border-light);font-size:12.5px;">
+      <strong>${esc(name)}</strong>
+      <div style="display:flex;gap:14px;align-items:center;">
+        <span class="muted">${hours.toFixed(1)}h</span>
+        ${rate!=null ? `<span style="font-weight:700;">${fmtMoney(rate)}/hr</span>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+  const totalHours = inRange.reduce((s,e) => s+e.durationMinutes, 0)/60;
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+      <div>
+        <div class="section-title" style="margin-bottom:0;"><i class="ti ti-clock-hour-4"></i> Time &amp; profitability</div>
+        <div class="muted" style="font-size:12px;margin-top:2px;">Hours tracked per client from the Calendar's timer, against their retainer.</div>
+      </div>
+      <div style="display:flex;gap:6px;">
+        <button class="btn ${period==='today'?'btn-primary':'btn-secondary'} btn-sm" onclick="setAgencyTimePeriod('today')">Today</button>
+        <button class="btn ${period==='month'?'btn-primary':'btn-secondary'} btn-sm" onclick="setAgencyTimePeriod('month')">This month</button>
+      </div>
+    </div>
+    <div style="margin-top:10px;">
+      ${rows || `<div class="empty-state">No time tracked ${period==='today'?'today':'this month'} yet - start a timer from a task.</div>`}
+    </div>
+    ${rows ? `<div class="muted" style="font-size:11px;margin-top:8px;">${totalHours.toFixed(1)}h total</div>` : ''}
+  </div>`;
+}
 function renderAgencyDashboardTab(){
   const tasks = Array.isArray(window.__agencyTasks) ? window.__agencyTasks : [];
   const today = isoDate(TODAY);
@@ -2188,6 +2242,7 @@ function renderAgencyDashboardTab(){
     ${tile(overdue, 'Overdue', 'var(--danger)')}
   </div>
   ${renderAgencyRevenueTile()}
+  ${renderAgencyTimeProfitCard()}
   <div class="card" style="margin-bottom:16px;">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-building-community"></i> Client status</div>
@@ -2214,6 +2269,102 @@ async function loadAgencyTasks(force){
   }
   if(state.currentPage === 'agencydash') renderPage();
 }
+
+/* ---- Time tracking (start/stop timer per task) ----
+   window.__agencyTimer holds the one-timer-at-a-time client state; the
+   server is the real guard (starting a new session auto-stops any other
+   open one), this is just so the UI doesn't need a round trip to know
+   whether a button should say Start or Stop. window.__agencyTimeEntries is
+   every session this month-ish, used both to resume an in-progress timer
+   after a reload and to build the Time & profitability card. */
+async function loadAgencyTimeEntries(force){
+  if(!force && window.__agencyTimeEntries !== undefined) return;
+  window.__agencyTimeEntries = null;
+  try {
+    const res = await fetch('/api/agency/time-entries');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    const entries = Array.isArray(data.entries) ? data.entries : [];
+    window.__agencyTimeEntries = entries;
+    // Resume a timer left running from a previous session/reload.
+    const open = entries.find(e => e.start && !e.end);
+    if(open && !window.__agencyTimer){
+      window.__agencyTimer = { entryId: open.id, taskId: open.taskId, taskTitle: open.taskTitle, startedAt: new Date(open.start).getTime() };
+      agencyTimerStartTicking();
+    }
+  } catch(err){
+    window.__agencyTimeEntries = { error: err.message };
+  }
+  if(state.currentPage === 'agencydash') renderPage();
+}
+async function agencyTimerStart(taskId){
+  if(window.__agencyTimer && window.__agencyTimer.taskId === taskId) return;
+  const task = (Array.isArray(window.__agencyTasks) ? window.__agencyTasks : []).find(x => x.id === taskId);
+  if(!task) return;
+  try {
+    const res = await fetch('/api/agency/time-entries/start', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ taskId }) });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__agencyTimer = { entryId: data.entry.id, taskId, taskTitle: task.title, startedAt: Date.now() };
+    agencyTimerStartTicking();
+    toast('Timer started: ' + task.title, 'success');
+    renderPage();
+  } catch(err){
+    toast('Could not start timer: ' + friendlyErr(err.message), 'warn');
+  }
+}
+async function agencyTimerStop(){
+  const timer = window.__agencyTimer;
+  if(!timer) return;
+  try {
+    const res = await fetch(`/api/agency/time-entries/${timer.entryId}/stop`, { method:'POST' });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__agencyTimer = null;
+    if(window.__agencyTimerTickTimer){ clearInterval(window.__agencyTimerTickTimer); window.__agencyTimerTickTimer = null; }
+    if(Array.isArray(window.__agencyTimeEntries)) window.__agencyTimeEntries.push(data.entry);
+    toast(`Logged ${Math.round(data.entry.durationMinutes)}m on ${timer.taskTitle}`, 'success');
+    renderPage();
+  } catch(err){
+    toast('Could not stop timer: ' + friendlyErr(err.message), 'warn');
+  }
+}
+function agencyTimerStartTicking(){
+  if(window.__agencyTimerTickTimer) clearInterval(window.__agencyTimerTickTimer);
+  window.__agencyTimerTickTimer = setInterval(agencyTimerTick, 1000);
+  agencyTimerTick();
+}
+function agencyTimerTick(){
+  // Only a genuinely stopped timer kills the interval - the badge/modal
+  // elements it writes to come and go with navigation (they only exist on
+  // the Agency page), and that's fine: skip the DOM write, keep ticking, so
+  // the elapsed time is still correct whenever they reappear.
+  if(!window.__agencyTimer){ if(window.__agencyTimerTickTimer){ clearInterval(window.__agencyTimerTickTimer); window.__agencyTimerTickTimer = null; } return; }
+  const els = document.querySelectorAll('.agency-timer-elapsed');
+  if(!els.length) return;
+  const secs = Math.max(0, Math.floor((Date.now() - window.__agencyTimer.startedAt)/1000));
+  const h = Math.floor(secs/3600), m = Math.floor((secs%3600)/60), s = secs%60;
+  const text = (h ? String(h).padStart(2,'0')+':' : '') + String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
+  els.forEach(el => { el.textContent = text; });
+}
+// Reusable play/stop icon for any task row (Tasks board, Calendar blocks,
+// Unscheduled list) - one function so every entry point stays in sync with
+// whichever task the running timer actually belongs to.
+function agencyTimerButtonHtml(task){
+  const running = window.__agencyTimer && window.__agencyTimer.taskId === task.id;
+  return `<button class="btn btn-ghost btn-sm" style="padding:3px 6px;flex-shrink:0;" onclick="event.stopPropagation();${running ? 'agencyTimerStop()' : `agencyTimerStart('${task.id}')`}" title="${running ? 'Stop timer' : 'Start timer'}"><i class="ti ${running ? 'ti-player-stop-filled' : 'ti-player-play'}" style="${running ? 'color:var(--danger);' : ''}"></i></button>`;
+}
+// Persistent badge so a running timer stays visible across all three Agency
+// tabs, not just wherever it was started - shown in the page-head.
+function agencyTimerBadgeHtml(){
+  const timer = window.__agencyTimer;
+  if(!timer) return '';
+  return `<div style="display:inline-flex;align-items:center;gap:8px;background:var(--tint-red-bg);color:var(--tint-red-fg);padding:6px 12px;border-radius:var(--radius-pill);font-size:12.5px;font-weight:700;margin-top:8px;">
+    <i class="ti ti-player-play-filled"></i> ${esc(timer.taskTitle)} <span class="agency-timer-elapsed" style="font-variant-numeric:tabular-nums;">00:00</span>
+    <button class="btn btn-ghost btn-sm" style="padding:2px 8px;color:inherit;" onclick="agencyTimerStop()"><i class="ti ti-player-stop-filled"></i> Stop</button>
+  </div>`;
+}
+
 function renderAgencyTasksTab(){
   const t = window.__agencyTasks;
   if(t === undefined || t === null) return '<div class="card"><div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading tasks...</div></div>';
@@ -2241,12 +2392,15 @@ function renderAgencyTaskRow(t){
   const overdue = t.dueDate && t.dueDate < today && t.status !== 'Done';
   const meta = [t.clientSlug, t.accountName].filter(Boolean).join(' · ') || 'Agency-wide';
   return `
-  <div class="dash-action-row" tabindex="0" role="button" style="border-bottom:1px solid var(--border-light);" onclick="openAgencyTaskForm('${t.id}')" onkeydown="onRowKeydown(event)">
-    <div style="display:flex;justify-content:space-between;gap:8px;">
-      <strong style="font-size:12.5px;">${t.type==='Meeting'?'<i class=\"ti ti-users\" style=\"font-size:11px;\"></i> ':''}${esc(t.title)}</strong>
-      ${t.dueDate ? `<span class="muted" style="font-size:11px;flex:none;${overdue?'color:var(--danger);font-weight:700;':''}">${fmtDate(t.dueDate)}</span>` : ''}
+  <div class="dash-action-row" tabindex="0" role="button" style="border-bottom:1px solid var(--border-light);display:flex;justify-content:space-between;align-items:center;gap:8px;" onclick="openAgencyTaskForm('${t.id}')" onkeydown="onRowKeydown(event)">
+    <div style="flex:1;min-width:0;">
+      <div style="display:flex;justify-content:space-between;gap:8px;">
+        <strong style="font-size:12.5px;">${t.type==='Meeting'?'<i class=\"ti ti-users\" style=\"font-size:11px;\"></i> ':''}${esc(t.title)}</strong>
+        ${t.dueDate ? `<span class="muted" style="font-size:11px;flex:none;${overdue?'color:var(--danger);font-weight:700;':''}">${fmtDate(t.dueDate)}</span>` : ''}
+      </div>
+      <div class="muted" style="font-size:11px;margin-top:2px;">${esc(meta)}${t.scheduledDate ? ` · scheduled ${fmtDate(t.scheduledDate)}${t.scheduledStart ? ' '+esc(t.scheduledStart) : ''}` : ''}</div>
     </div>
-    <div class="muted" style="font-size:11px;margin-top:2px;">${esc(meta)}${t.scheduledDate ? ` · scheduled ${fmtDate(t.scheduledDate)}${t.scheduledStart ? ' '+esc(t.scheduledStart) : ''}` : ''}</div>
+    ${agencyTimerButtonHtml(t)}
   </div>`;
 }
 function openAgencyTaskForm(id){
@@ -2254,7 +2408,12 @@ function openAgencyTaskForm(id){
   const t = id ? tasks.find(x => x.id === id) : null;
   window.__agencyTaskFormId = id || null;
   const clientSlugs = [...new Set(((window.__agencyOverview && window.__agencyOverview.clients) || []).map(c => c.slug))];
+  const timerRunning = t && window.__agencyTimer && window.__agencyTimer.taskId === t.id;
   openModal(t ? 'Edit task' : 'New task', `
+    ${t ? `<div class="field" style="display:flex;align-items:center;justify-content:space-between;background:var(--sidebar-hover-bg);padding:8px 12px;border-radius:8px;">
+      <div style="font-size:12px;font-weight:600;">${timerRunning ? `Timer running <span class="agency-timer-elapsed" style="font-variant-numeric:tabular-nums;">00:00</span>` : 'Track time on this task'}</div>
+      <button class="btn ${timerRunning?'btn-primary':'btn-secondary'} btn-sm" onclick="${timerRunning?'agencyTimerStop()':`agencyTimerStart('${t.id}')`}.then(()=>openAgencyTaskForm('${t.id}'))"><i class="ti ${timerRunning?'ti-player-stop-filled':'ti-player-play'}"></i> ${timerRunning?'Stop':'Start timer'}</button>
+    </div>` : ''}
     <div class="field"><label>Title</label><input id="atfTitle" value="${esc(t?t.title:'')}"></div>
     <div class="two-col" style="gap:10px;">
       <div class="field"><label>Type</label><select id="atfType"><option value="Task" ${!t||t.type!=='Meeting'?'selected':''}>Task</option><option value="Meeting" ${t&&t.type==='Meeting'?'selected':''}>Meeting</option></select></div>
@@ -2665,9 +2824,12 @@ function renderAgencyCalDayView(t){
       <div class="section-title" style="margin-bottom:8px;">Unscheduled</div>
       <div class="muted" style="font-size:11px;margin:-4px 0 10px;">Tasks and meetings with no time slot yet. Open one to give it a day and time.</div>
       ${unscheduled.length ? unscheduled.map(x => `
-        <div class="dash-action-row agency-drag" tabindex="0" role="button" draggable="true" style="border-bottom:1px solid var(--border-light);cursor:grab;" onclick="openAgencyTaskForm('${x.id}')" onkeydown="onRowKeydown(event)" ondragstart="onAgencyTaskDragStart(event,'${x.id}')" ondragend="onAgencyTaskDragEnd(event)" title="${esc(x.title)} (drag onto the timeline to schedule)">
-          <div style="font-weight:600;font-size:12.5px;">${x.type==='Meeting'?'<i class=\"ti ti-users\" style=\"font-size:11px;\"></i> ':''}${esc(x.title)}</div>
-          <div class="muted" style="font-size:11px;">${x.dueDate ? 'Due '+fmtDate(x.dueDate) : (x.clientSlug||x.accountName||'Agency-wide')}</div>
+        <div class="dash-action-row agency-drag" tabindex="0" role="button" draggable="true" style="border-bottom:1px solid var(--border-light);cursor:grab;display:flex;justify-content:space-between;align-items:center;gap:8px;" onclick="openAgencyTaskForm('${x.id}')" onkeydown="onRowKeydown(event)" ondragstart="onAgencyTaskDragStart(event,'${x.id}')" ondragend="onAgencyTaskDragEnd(event)" title="${esc(x.title)} (drag onto the timeline to schedule)">
+          <div style="flex:1;min-width:0;">
+            <div style="font-weight:600;font-size:12.5px;">${x.type==='Meeting'?'<i class=\"ti ti-users\" style=\"font-size:11px;\"></i> ':''}${esc(x.title)}</div>
+            <div class="muted" style="font-size:11px;">${x.dueDate ? 'Due '+fmtDate(x.dueDate) : (x.clientSlug||x.accountName||'Agency-wide')}</div>
+          </div>
+          ${agencyTimerButtonHtml(x)}
         </div>`).join('') : '<div class="empty-state">Nothing to schedule.</div>'}
       <button class="btn btn-secondary btn-sm" style="width:100%;margin-top:10px;" onclick="openAgencyTaskForm()"><i class="ti ti-plus"></i> New</button>
     </div>
@@ -3615,6 +3777,7 @@ function afterRender(page){
   if(page === 'agencydash'){
     if(window.__agencyOverview === undefined) loadAgencyOverview();
     if(window.__agencyTasks === undefined) loadAgencyTasks();
+    if(window.__agencyTimeEntries === undefined) loadAgencyTimeEntries();
   }
   if(page === 'campaigns' && (window.__campaignView || 'list') === 'list'){
     loadAllCampaignFunnels();

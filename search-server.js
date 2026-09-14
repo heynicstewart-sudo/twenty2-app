@@ -21990,6 +21990,102 @@ app.delete('/api/agency/tasks/:id', async (req, res) => {
   }
 });
 
+// ---- Time tracking (start/stop timer per task) ----
+// One row per session in the control base's Time Entries table. Client Slug
+// and Task Title are snapshotted at start time (not looked up live) so a
+// later task edit/delete never rewrites reporting history - same reasoning
+// as Deals snapshotting contact/company names elsewhere in this file.
+const TIME_ENTRIES_TABLE = 'Time Entries';
+function timeEntryFromRecord(r) {
+  const f = r.fields || {};
+  return {
+    id: r.id,
+    taskId: (f['Task'] || [])[0] || null,
+    taskTitle: f['Task Title'] || '',
+    clientSlug: f['Client Slug'] || '',
+    date: f['Date'] || '',
+    start: f['Start'] || null,
+    end: f['End'] || null,
+    durationMinutes: f['Duration Minutes'] != null ? f['Duration Minutes'] : null,
+  };
+}
+
+// Starts a session for a task. Auto-stops any other session left running
+// (the client only ever intends one timer at a time, but this is the real
+// guard - two open sessions would double-count hours in the profitability
+// view).
+app.post('/api/agency/time-entries/start', async (req, res) => {
+  const taskId = (req.body && req.body.taskId || '').toString().trim();
+  if (!taskId) return res.status(400).json({ error: 'taskId is required' });
+  try {
+    const openData = await controlBaseRequest('GET',
+      `?filterByFormula=${encodeURIComponent('{End}=BLANK()')}&pageSize=20`, undefined, TIME_ENTRIES_TABLE);
+    for (const rec of (openData.records || [])) {
+      await stopTimeEntryRecord(rec);
+    }
+
+    const taskData = await controlBaseRequest('GET', `/${encodeURIComponent(taskId)}`, undefined, TASKS_TABLE);
+    const task = taskFromRecord(taskData);
+    const now = new Date();
+    const fields = {
+      'Task': [taskId],
+      'Task Title': task.title || '',
+      'Client Slug': task.clientSlug || '',
+      'Date': now.toISOString().slice(0, 10),
+      'Start': now.toISOString(),
+    };
+    const created = await controlBaseRequest('POST', '', { records: [{ fields }] }, TIME_ENTRIES_TABLE);
+    res.json({ entry: timeEntryFromRecord(created.records[0]) });
+  } catch (err) {
+    console.error('Time entry start error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+async function stopTimeEntryRecord(rec) {
+  const start = new Date(rec.fields['Start']);
+  const end = new Date();
+  const durationMinutes = Math.max(0, Math.round(((end - start) / 60000) * 10) / 10);
+  const data = await controlBaseRequest('PATCH', '', {
+    records: [{ id: rec.id, fields: { 'End': end.toISOString(), 'Duration Minutes': durationMinutes } }]
+  }, TIME_ENTRIES_TABLE);
+  return data.records[0];
+}
+
+app.post('/api/agency/time-entries/:id/stop', async (req, res) => {
+  try {
+    const data = await controlBaseRequest('GET', `/${encodeURIComponent(req.params.id)}`, undefined, TIME_ENTRIES_TABLE);
+    const stopped = await stopTimeEntryRecord(data);
+    res.json({ entry: timeEntryFromRecord(stopped) });
+  } catch (err) {
+    console.error('Time entry stop error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// All entries, optionally date-ranged (?from=YYYY-MM-DD&to=YYYY-MM-DD) for
+// the day/month time-and-profitability view. Same small-dataset "fetch all,
+// filter client-side" approach as GET /api/agency/tasks.
+app.get('/api/agency/time-entries', async (req, res) => {
+  try {
+    const data = await controlBaseRequest('GET', '?pageSize=100', undefined, TIME_ENTRIES_TABLE);
+    let records = data.records || [];
+    let offset = data.offset;
+    while (offset) {
+      const next = await controlBaseRequest('GET', `?pageSize=100&offset=${encodeURIComponent(offset)}`, undefined, TIME_ENTRIES_TABLE);
+      records = records.concat(next.records || []);
+      offset = next.offset;
+    }
+    let entries = records.map(timeEntryFromRecord);
+    if (req.query.from) entries = entries.filter(e => e.date && e.date >= req.query.from);
+    if (req.query.to) entries = entries.filter(e => e.date && e.date <= req.query.to);
+    res.json({ entries });
+  } catch (err) {
+    console.error('Time entries list error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---- Client CRUD (the "New client" / "Edit client" form in the Agency view) ----
 // Writes rows to the Clients table in the control-plane base. Requires
 // AGENCY_CONTROL_BASE_ID and an Airtable token with data.records:write on
