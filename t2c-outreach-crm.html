@@ -2186,15 +2186,36 @@ function agencyTimePeriodBounds(period){
   return { from: isoDate(first), to: today };
 }
 function setAgencyTimePeriod(period){ window.__agencyTimePeriod = period; renderPage(); }
+// Per scheduled task: the timer's actual tracked minutes if it was ever
+// run, otherwise the task's own (current) scheduled Duration Minutes - so
+// an untracked block still counts toward its client at whatever the block
+// says right now, but the moment a timer runs against it even once, the
+// real tracked time takes over completely (not blended, not capped - a 1hr
+// block timed at 45m counts as 45m, not 60). Reading task.durationMinutes
+// live rather than a snapshot is what makes an edited-after-the-fact block
+// duration flow through automatically too.
+function agencyEffectiveMinutesByClient(tasks, entries, from, to){
+  const trackedByTaskId = {};
+  entries.forEach(e => { if(e.taskId && e.durationMinutes != null) trackedByTaskId[e.taskId] = (trackedByTaskId[e.taskId]||0) + e.durationMinutes; });
+  const byClient = {};
+  tasks.forEach(task => {
+    if(!task.scheduledDate || task.scheduledDate < from || task.scheduledDate > to) return;
+    const tracked = trackedByTaskId[task.id];
+    const mins = (tracked != null && tracked > 0) ? tracked : (task.durationMinutes || 0);
+    if(!mins) return;
+    const key = task.clientSlug || '__agency';
+    byClient[key] = (byClient[key]||0) + mins;
+  });
+  return byClient;
+}
 function renderAgencyTimeProfitCard(){
   const entries = window.__agencyTimeEntries;
-  if(entries === undefined || entries === null) return `<div class="card" style="margin-bottom:16px;"><div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading time entries...</div></div>`;
+  const tasks = window.__agencyTasks;
+  if(entries === undefined || entries === null || tasks === undefined || tasks === null) return `<div class="card" style="margin-bottom:16px;"><div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading time entries...</div></div>`;
   if(entries.error) return `<div class="card" style="margin-bottom:16px;"><div class="empty-state">Couldn't load time entries: ${esc(friendlyErr(entries.error))} <button class="btn btn-ghost btn-sm" onclick="loadAgencyTimeEntries(true)"><i class="ti ti-refresh"></i> Try again</button></div></div>`;
   const period = window.__agencyTimePeriod || 'month';
   const { from, to } = agencyTimePeriodBounds(period);
-  const inRange = entries.filter(e => e.durationMinutes != null && e.date >= from && e.date <= to);
-  const byClient = {};
-  inRange.forEach(e => { const key = e.clientSlug || '__agency'; byClient[key] = (byClient[key]||0) + e.durationMinutes; });
+  const byClient = agencyEffectiveMinutesByClient(Array.isArray(tasks) ? tasks : [], entries, from, to);
   const clients = ((window.__agencyOverview && window.__agencyOverview.clients) || []);
   const rows = Object.entries(byClient).sort((a,b) => b[1]-a[1]).map(([slug, mins]) => {
     const hours = mins/60;
@@ -2209,13 +2230,13 @@ function renderAgencyTimeProfitCard(){
       </div>
     </div>`;
   }).join('');
-  const totalHours = inRange.reduce((s,e) => s+e.durationMinutes, 0)/60;
+  const totalHours = Object.values(byClient).reduce((s,m) => s+m, 0)/60;
   return `
   <div class="card" style="margin-bottom:16px;">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
       <div>
         <div class="section-title" style="margin-bottom:0;"><i class="ti ti-clock-hour-4"></i> Time &amp; profitability</div>
-        <div class="muted" style="font-size:12px;margin-top:2px;">Hours tracked per client from the Calendar's timer, against their retainer.</div>
+        <div class="muted" style="font-size:12px;margin-top:2px;">Timed hours where you ran the timer, scheduled duration where you didn't - against their retainer.</div>
       </div>
       <div style="display:flex;gap:6px;">
         <button class="btn ${period==='today'?'btn-primary':'btn-secondary'} btn-sm" onclick="setAgencyTimePeriod('today')">Today</button>
