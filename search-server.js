@@ -39,7 +39,17 @@ if (BASIC_AUTH_USER && BASIC_AUTH_PASS) {
 }
 
 app.use(cors());
-app.use(express.json());
+// Base64 screenshot uploads (Log a finding, message drafting with a
+// LinkedIn/profile screenshot, company logos, canvas assets) all ride in
+// the JSON body, and a single full-resolution screen capture alone often
+// exceeds express.json()'s 100kb default once base64-encoded - it fails
+// here, in this GLOBAL middleware, before ever reaching a route's own more
+// generous express.json({limit}) (see /api/companies/:name/logo etc.):
+// body-parser throws PayloadTooLargeError and sends Express's default HTML
+// error page instead of JSON, which is the "<!DOCTYPE" parse error users
+// see. Raised here so every route gets real headroom, not just the ones
+// that happened to add their own override.
+app.use(express.json({ limit: '15mb' }));
 
 // ---- Multi-client (agency controller) tenant context ----
 // Every request runs inside tenantALS.run(tenant, ...) so the Airtable
@@ -821,7 +831,9 @@ function wantsRefresh(req) {
 const AMBIENT_MODEL = 'claude-sonnet-5';
 
 // ===================== MIDDLEWARE =====================
-app.use(express.json());
+// (express.json() is already registered once, near the top of the file -
+// this was a dead second registration: body-parser skips re-parsing a
+// request whose body it's already parsed, so it never actually did anything.)
 
 // ===================== AIRTABLE ROUTES =====================
 
