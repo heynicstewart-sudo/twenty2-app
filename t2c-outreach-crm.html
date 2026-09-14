@@ -2547,10 +2547,20 @@ function renderAgencyCalendarTab(){
 /* ---- Drag-and-drop rescheduling (month cells + the day timeline) ----
    One drag id (__agencyDragTaskId), one PATCH-and-refresh helper - both the
    month view (drop on a day -> moves its date) and the day view (drop on
-   the timeline -> moves its time) just compute a patch and hand it off. */
+   the timeline -> moves its time) just compute a patch and hand it off.
+   __agencyDragOffsetMin is the point within the block where it was picked
+   up (in minutes) - without it, a block grabbed anywhere but its very top
+   would jump so its TOP lands under the cursor on drop, instead of moving
+   naturally the way the cursor actually moved. */
 let __agencyDragTaskId = null;
-function onAgencyTaskDragStart(e, id){
+let __agencyDragOffsetMin = 0;
+function onAgencyTaskDragStart(e, id, fromBlock){
   __agencyDragTaskId = id;
+  __agencyDragOffsetMin = 0;
+  if(fromBlock && e.currentTarget){
+    const rect = e.currentTarget.getBoundingClientRect();
+    __agencyDragOffsetMin = (e.clientY - rect.top) / AGENCY_CAL_PX_PER_MIN;
+  }
   if(e.dataTransfer){ e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', id); } catch(err){} }
   if(e.target && e.target.classList) e.target.classList.add('dragging');
 }
@@ -2590,17 +2600,58 @@ async function onAgencyMonthCellDrop(e, dateStr){
   if(task.scheduledDate) await agencyTaskPatchAndRefresh(id, { scheduledDate: dateStr });
   else await agencyTaskPatchAndRefresh(id, { dueDate: dateStr });
 }
+
+// Snapped minutes-from-start-hour for wherever the cursor is over the
+// timeline right now, accounting for the grab offset so the block tracks
+// the cursor the way it was actually picked up, not by its top edge.
+function agencyCalSnappedMinutes(e, container){
+  const rect = container.getBoundingClientRect();
+  const raw = (e.clientY - rect.top) / AGENCY_CAL_PX_PER_MIN - __agencyDragOffsetMin;
+  let mins = Math.round(raw / 15) * 15;
+  const totalMinutes = (AGENCY_CAL_END_HOUR - AGENCY_CAL_START_HOUR) * 60;
+  return Math.max(0, Math.min(totalMinutes - 15, mins));
+}
+// Live drop-preview: a dashed band snapped to the nearest 15 minutes,
+// sized to the dragged task's own duration, updated on every dragover so
+// you can see exactly where it'll land - including mid-drag, mid-15-minute
+// moves - before letting go, instead of only finding out after the drop.
+function onAgencyDayTimelineDragOver(e){
+  e.preventDefault();
+  e.currentTarget.classList.add('agency-drop-target');
+  const task = (Array.isArray(window.__agencyTasks) ? window.__agencyTasks : []).find(x => x.id === __agencyDragTaskId);
+  const dur = task ? (task.durationMinutes || 30) : 30;
+  const mins = agencyCalSnappedMinutes(e, e.currentTarget);
+  let preview = document.getElementById('agencyCalDragPreview');
+  if(!preview){
+    preview = document.createElement('div');
+    preview.id = 'agencyCalDragPreview';
+    preview.style.cssText = 'position:absolute;left:0;right:0;border:2px dashed var(--accent);border-radius:8px;background:var(--accent-dim);pointer-events:none;z-index:3;';
+    e.currentTarget.appendChild(preview);
+  }
+  preview.style.top = (mins*AGENCY_CAL_PX_PER_MIN) + 'px';
+  preview.style.height = Math.max(20, dur*AGENCY_CAL_PX_PER_MIN - 2) + 'px';
+}
+function onAgencyDayTimelineDragLeave(e){
+  if(e.currentTarget && e.currentTarget.contains(e.relatedTarget)) return; // moved onto a child, not actually off the timeline
+  e.currentTarget.classList.remove('agency-drop-target');
+  const preview = document.getElementById('agencyCalDragPreview');
+  if(preview) preview.remove();
+}
 // Day view: dropping on the hourly timeline moves the task to that time
-// (snapped to 15 minutes), on whichever day is currently open. Dropping an
-// Unscheduled item here is how it gets its first time slot.
+// (snapped to 15 minutes, tracking wherever it was grabbed), on whichever
+// day is currently open. Dropping an Unscheduled item here is how it gets
+// its first time slot.
 async function onAgencyDayTimelineDrop(e){
   e.preventDefault();
   if(e.currentTarget && e.currentTarget.classList) e.currentTarget.classList.remove('agency-drop-target');
-  const id = __agencyDragTaskId; __agencyDragTaskId = null;
-  if(!id) return;
-  const rect = e.currentTarget.getBoundingClientRect();
-  let mins = AGENCY_CAL_START_HOUR*60 + Math.round((e.clientY - rect.top) / AGENCY_CAL_PX_PER_MIN / 15) * 15;
-  mins = Math.max(AGENCY_CAL_START_HOUR*60, Math.min(AGENCY_CAL_END_HOUR*60 - 5, mins));
+  const preview = document.getElementById('agencyCalDragPreview');
+  if(preview) preview.remove();
+  const id = __agencyDragTaskId;
+  if(!id){ __agencyDragTaskId = null; __agencyDragOffsetMin = 0; return; }
+  // Compute using the offset before clearing it - clearing first zeroes out
+  // the very value this calculation needs.
+  const mins = AGENCY_CAL_START_HOUR*60 + agencyCalSnappedMinutes(e, e.currentTarget);
+  __agencyDragTaskId = null; __agencyDragOffsetMin = 0;
   const hh = String(Math.floor(mins/60)).padStart(2,'0'), mm = String(mins%60).padStart(2,'0');
   await agencyTaskPatchAndRefresh(id, { scheduledDate: agencyCalDate(), scheduledStart: `${hh}:${mm}` });
 }
@@ -2786,22 +2837,31 @@ function renderAgencyCalDayView(t){
     const { bg, fg } = agencyCalTaskColor(it.colorIndex);
     const widthPct = 100/it.colCount;
     const leftPct = it.col*widthPct;
-    return `<div class="agency-drag" tabindex="0" role="button" draggable="true" style="position:absolute;left:calc(${leftPct}% + 2px);width:calc(${widthPct}% - 4px);top:${top}px;height:${height}px;background:${bg};color:${fg};border-radius:8px;padding:4px 8px;font-size:11.5px;font-weight:700;overflow:hidden;cursor:grab;" onclick="openAgencyTaskForm('${x.id}')" onkeydown="onRowKeydown(event)" ondragstart="onAgencyTaskDragStart(event,'${x.id}')" ondragend="onAgencyTaskDragEnd(event)" title="${esc(x.title)} (drag to move, click to edit)">
+    return `<div class="agency-drag" tabindex="0" role="button" draggable="true" style="position:absolute;left:calc(${leftPct}% + 2px);width:calc(${widthPct}% - 4px);top:${top}px;height:${height}px;background:${bg};color:${fg};border-radius:8px;padding:4px 8px;font-size:11.5px;font-weight:700;overflow:hidden;cursor:grab;" onclick="openAgencyTaskForm('${x.id}')" onkeydown="onRowKeydown(event)" ondragstart="onAgencyTaskDragStart(event,'${x.id}',true)" ondragend="onAgencyTaskDragEnd(event)" title="${esc(x.title)} (drag to move, click to edit)">
       <span onclick="event.stopPropagation();agencyTaskSkip('${x.id}')" title="Skip (unschedule)" style="position:absolute;top:1px;right:3px;line-height:1;padding:1px 3px;border-radius:4px;opacity:.7;">&times;</span>
       ${esc(x.scheduledStart)} · ${esc(x.title)}</div>`;
   }).join('');
 
+  // Hour lines plus lighter 15-minute sub-lines, both pointer-events:none so
+  // hovering over them while dragging doesn't fire spurious dragleave events
+  // on the timeline container itself (see onAgencyDayTimelineDragLeave).
   const hourLines = [];
   for(let hr = AGENCY_CAL_START_HOUR; hr <= AGENCY_CAL_END_HOUR; hr++){
     const top = (hr-AGENCY_CAL_START_HOUR)*60*AGENCY_CAL_PX_PER_MIN;
     const label = (hr%12===0?12:hr%12) + (hr<12?'am':'pm');
-    hourLines.push(`<div style="position:absolute;left:0;right:0;top:${top}px;border-top:1px solid var(--border-light);"></div><div style="position:absolute;left:-34px;top:${top-6}px;font-size:10px;color:var(--muted);width:30px;text-align:right;">${label}</div>`);
+    hourLines.push(`<div style="position:absolute;left:0;right:0;top:${top}px;border-top:1px solid var(--border-light);pointer-events:none;"></div><div style="position:absolute;left:-34px;top:${top-6}px;font-size:10px;color:var(--muted);width:30px;text-align:right;pointer-events:none;">${label}</div>`);
+    if(hr < AGENCY_CAL_END_HOUR){
+      [15,30,45].forEach(sub => {
+        const subTop = top + sub*AGENCY_CAL_PX_PER_MIN;
+        hourLines.push(`<div style="position:absolute;left:0;right:0;top:${subTop}px;border-top:1px dashed var(--border-light);opacity:.5;pointer-events:none;"></div>`);
+      });
+    }
   }
 
   const { nowMin, current, next } = isToday ? agencyCalNowInfo(scheduled) : { nowMin:null, current:null, next:null };
   const nowLineTop = isToday ? Math.max(0, (nowMin - AGENCY_CAL_START_HOUR*60) * AGENCY_CAL_PX_PER_MIN) : 0;
   const inRange = isToday && nowMin >= AGENCY_CAL_START_HOUR*60 && nowMin <= AGENCY_CAL_END_HOUR*60;
-  const nowLine = isToday ? `<div id="agencyCalNowLine" style="position:absolute;left:0;right:0;top:${nowLineTop}px;height:0;border-top:2px solid var(--danger);z-index:2;${inRange?'':'display:none;'}"><span id="agencyCalNowLabel" style="position:absolute;left:-42px;top:-8px;font-size:9.5px;font-weight:700;color:var(--danger);">${new Date().toLocaleTimeString('en-AU',{hour:'numeric',minute:'2-digit'})}</span></div>` : '';
+  const nowLine = isToday ? `<div id="agencyCalNowLine" style="position:absolute;left:0;right:0;top:${nowLineTop}px;height:0;border-top:2px solid var(--danger);z-index:2;pointer-events:none;${inRange?'':'display:none;'}"><span id="agencyCalNowLabel" style="position:absolute;left:-42px;top:-8px;font-size:9.5px;font-weight:700;color:var(--danger);">${new Date().toLocaleTimeString('en-AU',{hour:'numeric',minute:'2-digit'})}</span></div>` : '';
 
   const nowPanel = isToday ? `
   <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
@@ -2847,7 +2907,7 @@ function renderAgencyCalDayView(t){
             <button class="btn btn-secondary btn-sm" onclick="agencyCalNav(1)"><i class="ti ti-chevron-right"></i></button>
           </div>
         </div>
-        <div style="position:relative;height:${totalMinutes*AGENCY_CAL_PX_PER_MIN}px;margin-left:40px;border-left:1px solid var(--border-light);" ondragover="onAgencyDropZoneDragOver(event)" ondragleave="onAgencyDropZoneDragLeave(event)" ondrop="onAgencyDayTimelineDrop(event)">
+        <div style="position:relative;height:${totalMinutes*AGENCY_CAL_PX_PER_MIN}px;margin-left:40px;border-left:1px solid var(--border-light);" ondragover="onAgencyDayTimelineDragOver(event)" ondragleave="onAgencyDayTimelineDragLeave(event)" ondrop="onAgencyDayTimelineDrop(event)">
           ${hourLines.join('')}
           ${nowLine}
           ${blocks}
