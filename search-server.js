@@ -22093,6 +22093,39 @@ app.post('/api/agency/time-entries/:id/stop', async (req, res) => {
   }
 });
 
+// Corrects a session after the fact - e.g. forgot to press Stop and it kept
+// running past when the work actually finished. Pass either `end` (a full
+// ISO timestamp, recomputes Duration Minutes from Start) or `durationMinutes`
+// directly (recomputes End from Start + that duration) - the client only
+// ever sends `end`, `durationMinutes` is there for API completeness.
+app.patch('/api/agency/time-entries/:id', async (req, res) => {
+  try {
+    const { end, durationMinutes } = req.body || {};
+    const data = await controlBaseRequest('GET', `/${encodeURIComponent(req.params.id)}`, undefined, TIME_ENTRIES_TABLE);
+    const start = new Date(data.fields['Start']);
+    if (isNaN(start.getTime())) return res.status(400).json({ error: 'This session has no start time to correct against' });
+    let endDate, duration;
+    if (end) {
+      endDate = new Date(end);
+      if (isNaN(endDate.getTime())) return res.status(400).json({ error: 'Invalid end time' });
+      duration = Math.max(0, Math.round(((endDate - start) / 60000) * 10) / 10);
+    } else if (durationMinutes != null && !isNaN(+durationMinutes)) {
+      duration = Math.max(0, +durationMinutes);
+      endDate = new Date(start.getTime() + duration * 60000);
+    } else {
+      return res.status(400).json({ error: 'end or durationMinutes is required' });
+    }
+    if (endDate <= start) return res.status(400).json({ error: 'End time must be after the start time' });
+    const updated = await controlBaseRequest('PATCH', '', {
+      records: [{ id: req.params.id, fields: { 'End': endDate.toISOString(), 'Duration Minutes': duration } }]
+    }, TIME_ENTRIES_TABLE);
+    res.json({ entry: timeEntryFromRecord(updated.records[0]) });
+  } catch (err) {
+    console.error('Time entry update error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // All entries, optionally date-ranged (?from=YYYY-MM-DD&to=YYYY-MM-DD) for
 // the day/month time-and-profitability view. Same small-dataset "fetch all,
 // filter client-side" approach as GET /api/agency/tasks.

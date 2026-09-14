@@ -2386,6 +2386,57 @@ function agencyTimerBadgeHtml(){
   </div>`;
 }
 
+// Past sessions for one task, each with an editable "finished at" time - for
+// the "I forgot to press Stop and it ran over" case. Editing recomputes
+// Duration Minutes server-side from Start, so the corrected number is what
+// the Time & profitability card actually uses (see
+// agencyEffectiveMinutesByClient), not the over-long one the timer logged.
+function agencyTaskTimeEntriesHtml(taskId){
+  const all = Array.isArray(window.__agencyTimeEntries) ? window.__agencyTimeEntries : [];
+  const entries = all.filter(e => e.taskId === taskId && e.start && e.end)
+    .sort((a,b) => (b.start||'').localeCompare(a.start||''));
+  if(!entries.length) return '';
+  const hm = iso => { const d = new Date(iso); return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); };
+  return `
+  <div class="field">
+    <label>Time logged</label>
+    <div style="display:flex;flex-direction:column;gap:6px;">
+      ${entries.map(e => `
+        <div id="ate_row_${e.id}" style="display:flex;align-items:center;gap:8px;font-size:12px;">
+          <span class="muted" style="width:70px;flex-shrink:0;">${fmtDate(isoDate(new Date(e.start)))}</span>
+          <span style="width:44px;flex-shrink:0;">${hm(e.start)}</span>
+          <span class="muted">&ndash;</span>
+          <input type="time" id="ate_end_${e.id}" value="${hm(e.end)}" style="width:110px;">
+          <button class="btn btn-ghost btn-sm" title="Save corrected finish time" onclick="agencyTimeEntrySaveEnd('${e.id}')"><i class="ti ti-device-floppy"></i></button>
+          <span class="muted" id="ate_dur_${e.id}" style="margin-left:auto;flex-shrink:0;">${Math.round(e.durationMinutes)}m</span>
+        </div>`).join('')}
+    </div>
+  </div>`;
+}
+async function agencyTimeEntrySaveEnd(entryId){
+  const entries = Array.isArray(window.__agencyTimeEntries) ? window.__agencyTimeEntries : [];
+  const entry = entries.find(e => e.id === entryId);
+  const input = document.getElementById('ate_end_'+entryId);
+  if(!entry || !input || !input.value) return;
+  const start = new Date(entry.start);
+  const end = new Date(start);
+  const [hh, mm] = input.value.split(':').map(Number);
+  end.setHours(hh, mm, 0, 0);
+  if(end <= start) end.setDate(end.getDate()+1); // finish time is past midnight relative to the start
+  try {
+    const res = await fetch(`/api/agency/time-entries/${entryId}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ end: end.toISOString() }) });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    const i = entries.findIndex(e => e.id === entryId);
+    if(i>-1) entries[i] = data.entry;
+    const durEl = document.getElementById('ate_dur_'+entryId);
+    if(durEl) durEl.textContent = Math.round(data.entry.durationMinutes) + 'm';
+    toast('Finish time updated', 'success');
+  } catch(err){
+    toast('Could not update: ' + friendlyErr(err.message), 'warn');
+  }
+}
+
 function renderAgencyTasksTab(){
   const t = window.__agencyTasks;
   if(t === undefined || t === null) return '<div class="card"><div class="muted" style="font-size:12.5px;"><i class="ti ti-loader-2"></i> Loading tasks...</div></div>';
@@ -2435,6 +2486,7 @@ function openAgencyTaskForm(id){
       <div style="font-size:12px;font-weight:600;">${timerRunning ? `Timer running <span class="agency-timer-elapsed" style="font-variant-numeric:tabular-nums;">00:00</span>` : 'Track time on this task'}</div>
       <button class="btn ${timerRunning?'btn-primary':'btn-secondary'} btn-sm" onclick="${timerRunning?'agencyTimerStop()':`agencyTimerStart('${t.id}')`}.then(()=>openAgencyTaskForm('${t.id}'))"><i class="ti ${timerRunning?'ti-player-stop-filled':'ti-player-play'}"></i> ${timerRunning?'Stop':'Start timer'}</button>
     </div>` : ''}
+    ${t ? agencyTaskTimeEntriesHtml(t.id) : ''}
     <div class="field"><label>Title</label><input id="atfTitle" value="${esc(t?t.title:'')}"></div>
     <div class="two-col" style="gap:10px;">
       <div class="field"><label>Type</label><select id="atfType"><option value="Task" ${!t||t.type!=='Meeting'?'selected':''}>Task</option><option value="Meeting" ${t&&t.type==='Meeting'?'selected':''}>Meeting</option></select></div>
