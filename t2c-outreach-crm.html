@@ -13507,6 +13507,7 @@ function renderCompanyDrawerContent(data){
         <button class="btn btn-secondary btn-sm" id="enrichCompanyBtn" onclick="enrichCompanyDrawer()"><i class="ti ti-sparkles"></i> Enrich</button>
         <button class="btn btn-secondary btn-sm" id="deepResearchBtn" onclick="runDeepResearch()"><i class="ti ti-telescope"></i> Deep research</button>
         <button class="btn btn-secondary btn-sm" onclick="closeDrawer();navigate('profile');selectProfileCompany('${esc(c.name)}')"><i class="ti ti-hierarchy-2"></i> View account board</button>
+        <button class="btn btn-primary btn-sm" onclick="closeDrawer();targetCompanyAsCampaign('${esc(c.name)}')"><i class="ti ti-target-arrow"></i> Target with campaign</button>
       </div>
     </div>
   </div>
@@ -15630,6 +15631,68 @@ function renderCampaignGridTab(campaign){
   `;
 }
 
+/* ---- Turn one company straight into a single-account campaign ----
+   "I want to target this one company" - creates a Draft campaign scoped to
+   just that account, with its context (AI summary, notes, latest signal,
+   active programs) written into the campaign's own Strategy brief so
+   whoever builds messaging next has real grounding instead of a blank
+   campaign, then drops straight into the existing "Import from company"
+   flow (openImportCompanyModal/confirmImportCompany) pre-filled and
+   skipped ahead to the contact-picker - that flow already creates the grid,
+   links it to the campaign, and imports each existing contact by name
+   (Airtable dedupes by Full Name server-side, so this never creates
+   duplicate Contact rows, only reuses/updates the real ones). */
+async function targetCompanyAsCampaign(companyName){
+  if(!companyName) return;
+  let profile;
+  try {
+    const res = await fetch(`/api/companies/profile?name=${encodeURIComponent(companyName)}`);
+    profile = await res.json();
+    if(!res.ok) throw new Error(profile.error || 'Request failed');
+  } catch(err){
+    toast('Could not load ' + companyName + ': ' + friendlyErr(err.message), 'warn');
+    return;
+  }
+  const accountContacts = profile.accountContacts || [];
+  if(!accountContacts.length){
+    toast('No contacts on file for ' + companyName + ' yet - add people to it first.', 'warn');
+    return;
+  }
+  const c = profile.company || {};
+  const briefParts = [];
+  if(c.aiSummary) briefParts.push(c.aiSummary);
+  if(c.notes) briefParts.push('Notes: ' + c.notes);
+  if(c.latestSignal) briefParts.push(`Latest signal: ${c.latestSignal}${c.signalDate ? ' ('+fmtDate(c.signalDate)+')' : ''}`);
+  if(Array.isArray(c.programs) && c.programs.length){
+    briefParts.push('Active programs:\n' + c.programs.map(p => `- ${p.name} (${p.type}, ${p.phase})${p.note ? ': '+p.note : ''}`).join('\n'));
+  }
+  const campaign = {
+    id: uid('camp'), createdAt: isoDate(TODAY),
+    name: `${companyName} - Direct Target`,
+    goal: `Land a first conversation at ${companyName}.`,
+    strategyBrief: briefParts.join('\n\n') || `Single-account campaign targeting everyone on file at ${companyName}.`,
+    targetSegmentSummary: `Everyone on file at ${companyName}.`,
+    // Same shape saveCampaignToDraft's Object.assign gives every other
+    // freshly-created campaign - syncCampaignToAirtable/
+    // formatSequenceForAirtable assume these exist (not just truthy-checked)
+    // and throw on a plain undefined.
+    product: '', pitchAngle: '', objectionHandling: '', successMetric: '',
+    contactIds: [], gridIds: [], sequence: {}, estimatedConversions: '',
+    icpAlignment: null, conversationHistory: [],
+    status: 'Draft', type: 'linkedin', updatedAt: isoDate(TODAY)
+  };
+  state.campaigns.push(campaign);
+  toast(`Setting up a campaign for ${companyName}...`, 'success');
+  syncCampaignToAirtable(campaign, () => {
+    // Same shape importCompanyLoadContacts would have produced from a fresh
+    // fetch - reusing the profile call already made above instead of a
+    // second one, then jumping straight to the "choose which contacts"
+    // step since the company is already known.
+    window.__importCompany = { target: { campaignId: campaign.id }, company: companyName, step: 'choose', contacts: accountContacts, mode: 'all', roles: new Set() };
+    renderImportCompanyModal();
+  });
+}
+
 /* ---- Import a company's people into a grid or campaign ---- */
 // target: { gridId } or { campaignId }
 function openImportCompanyModal(target){
@@ -15735,7 +15798,16 @@ async function confirmImportCompany(){
   closeModal();
   window.__importCompany = null;
   toast(`${added} contact${added===1?'':'s'} imported from ${s.company}`, added ? 'success' : 'warn');
-  renderPage();
+  // Landing straight in the new campaign is the whole point of
+  // targetCompanyAsCampaign - this import step was the last thing standing
+  // between "pick a company" and a usable campaign. openCampaignDetail only
+  // sets the view flags, it doesn't navigate itself - set them first, then
+  // navigate('campaigns') so it actually lands on the detail view instead
+  // of wherever the drawer/profile page that started this flow was.
+  // Importing into a plain grid (target.gridId, no campaignId) still just
+  // re-renders in place.
+  if(s.target.campaignId){ openCampaignDetail(s.target.campaignId); navigate('campaigns'); }
+  else renderPage();
 }
 
 function createGridForCampaign(campaignId){
@@ -18007,6 +18079,7 @@ function renderProfilePage(){
     <strong style="font-size:13px;">${esc(selectedCompany)}</strong>
     <button class="btn btn-ghost btn-sm" style="margin-left:auto;" onclick="${isPinnedTarget(selectedCompany) ? `unpinTarget('${esc(selectedCompany)}')` : `pinTarget('${esc(selectedCompany)}')`}"><i class="ti ${isPinnedTarget(selectedCompany) ? 'ti-pin-filled' : 'ti-pin'}"></i> ${isPinnedTarget(selectedCompany) ? 'Pinned' : 'Pin as target'}</button>
     <button class="btn btn-ghost btn-sm" onclick="openCompanyPeopleModal('${esc(selectedCompany)}')"><i class="ti ti-user-plus"></i> Add people</button>
+    <button class="btn btn-ghost btn-sm" onclick="targetCompanyAsCampaign('${esc(selectedCompany)}')"><i class="ti ti-target-arrow"></i> Target with campaign</button>
     <button class="btn btn-ghost btn-sm" onclick="expandProfileSearch()"><i class="ti ti-switch-horizontal"></i> Change</button>
   </div>`;
 
