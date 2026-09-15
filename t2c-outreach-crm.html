@@ -4688,6 +4688,7 @@ function renderAccountDashboard(name, rows){
       </label>
       ${renderPinSearchWidget()}
       <button class="btn btn-ghost btn-sm" onclick="unpinTarget('${nm}')"><i class="ti ti-pin-filled"></i> Unpin</button>
+      <button class="btn btn-ghost btn-sm" onclick="targetCompanyAsCampaign('${nm}')"><i class="ti ti-target-arrow"></i> Target with campaign</button>
       <button class="btn btn-secondary btn-sm" onclick="navigate('profile');selectProfileCompany('${nm}')"><i class="ti ti-hierarchy-2"></i> Open full profile</button>
     </div>
   </div>
@@ -15924,11 +15925,19 @@ async function targetCompanyAsCampaign(companyName){
   if(Array.isArray(c.programs) && c.programs.length){
     briefParts.push('Active programs:\n' + c.programs.map(p => `- ${p.name} (${p.type}, ${p.phase})${p.note ? ': '+p.note : ''}`).join('\n'));
   }
+  // A single-account "Target with campaign" is a networking play, not a sales
+  // sequence - the whole point of going direct at one account is to become a
+  // known, trusted presence there, not to pitch. Goal and Strategy Notes are
+  // both read verbatim into every drafting prompt (buildCampaignOutreachPrompt
+  // etc.), so stating that plainly here is what actually keeps every message
+  // the Engine writes for this campaign value-first instead of sales-first -
+  // editable afterwards on the Strategy tab like any other campaign.
+  const networkingBrief = `This is a networking campaign, not a sales campaign - the goal is to become a genuinely valued, trusted contact at ${companyName}, not to land a deal. Every touch point should stand on its own as worth their time (a real insight, a relevant intro, something useful) rather than building toward a pitch. Don't sell Twenty2's services or push toward a CTA just because the sequence reached that step - only bring one up if the conversation itself clearly calls for it.`;
   const campaign = {
     id: uid('camp'), createdAt: isoDate(TODAY),
     name: `${companyName} - Direct Target`,
-    goal: `Land a first conversation at ${companyName}.`,
-    strategyBrief: briefParts.join('\n\n') || `Single-account campaign targeting everyone on file at ${companyName}.`,
+    goal: `Build a genuine relationship with the team at ${companyName} - become a known, trusted presence, not land a sale. Every touch point should give real value on its own.`,
+    strategyBrief: [networkingBrief, ...briefParts].join('\n\n'),
     targetSegmentSummary: `Everyone on file at ${companyName}.`,
     // Same shape saveCampaignToDraft's Object.assign gives every other
     // freshly-created campaign - syncCampaignToAirtable/
