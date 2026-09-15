@@ -2409,6 +2409,15 @@ async function agencyTimerStart(taskId){
     agencyTimerStartTicking();
     toast('Timer started: ' + task.title, 'success');
     renderPage();
+    // Starting the timer means the work is happening right now - put the
+    // task on today's day planner at the current time so a block actually
+    // shows up there. Previously only the Time Entries log got written; the
+    // task's own Scheduled Date/Start never moved, so stopping a timer on a
+    // task that had no prior schedule left no trace on the calendar at all,
+    // even though the session really was logged (see agencyTimerStop below,
+    // which fixes the block's length to match once the session ends).
+    const now = new Date();
+    agencyTaskPatchAndRefresh(taskId, { scheduledDate: isoDate(TODAY), scheduledStart: `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}` });
   } catch(err){
     toast('Could not start timer: ' + friendlyErr(err.message), 'warn');
   }
@@ -2423,8 +2432,13 @@ async function agencyTimerStop(){
     window.__agencyTimer = null;
     if(window.__agencyTimerTickTimer){ clearInterval(window.__agencyTimerTickTimer); window.__agencyTimerTickTimer = null; }
     if(Array.isArray(window.__agencyTimeEntries)) window.__agencyTimeEntries.push(data.entry);
-    toast(`Logged ${Math.round(data.entry.durationMinutes)}m on ${timer.taskTitle}`, 'success');
+    const loggedMinutes = Math.max(1, Math.round(data.entry.durationMinutes));
+    toast(`Logged ${loggedMinutes}m on ${timer.taskTitle}`, 'success');
     renderPage();
+    // Resize the block agencyTimerStart placed on the day planner to match
+    // how long the session actually ran, so what's left on the calendar
+    // afterwards reflects the real work done, not a guessed default duration.
+    agencyTaskPatchAndRefresh(timer.taskId, { durationMinutes: loggedMinutes });
   } catch(err){
     toast('Could not stop timer: ' + friendlyErr(err.message), 'warn');
   }
@@ -2496,6 +2510,7 @@ function agencyTaskTimeEntriesHtml(taskId){
           <span class="muted">&ndash;</span>
           <input type="time" id="ate_end_${e.id}" value="${hm(e.end)}" style="width:110px;">
           <button class="btn btn-ghost btn-sm" title="Save corrected start/finish time" onclick="agencyTimeEntrySave('${e.id}')"><i class="ti ti-device-floppy"></i></button>
+          <button class="btn btn-ghost btn-sm" title="Delete this session" onclick="agencyTimeEntryDelete('${e.id}')"><i class="ti ti-trash"></i></button>
           <span class="muted" id="ate_dur_${e.id}" style="margin-left:auto;flex-shrink:0;">${Math.round(e.durationMinutes)}m</span>
         </div>`).join('')}
       ${adding ? `
@@ -2575,6 +2590,26 @@ async function agencyTimeEntrySave(entryId){
     toast('Time updated', 'success');
   } catch(err){
     toast('Could not update: ' + friendlyErr(err.message), 'warn');
+  }
+}
+// The "accidentally saved this twice" / "logged the wrong session" case -
+// removes just this one row from Time Entries (never the task itself), so a
+// duplicate or mis-added session can be cleared without touching anything
+// else logged against the task.
+async function agencyTimeEntryDelete(entryId){
+  if(!confirm('Delete this logged session? This cannot be undone.')) return;
+  try {
+    const res = await fetch(`/api/agency/time-entries/${entryId}`, { method:'DELETE' });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
+    if(Array.isArray(window.__agencyTimeEntries)){
+      const i = window.__agencyTimeEntries.findIndex(e => e.id === entryId);
+      if(i>-1) window.__agencyTimeEntries.splice(i,1);
+    }
+    toast('Session deleted', 'success');
+    if(window.__agencyTaskFormId) openAgencyTaskForm(window.__agencyTaskFormId);
+  } catch(err){
+    toast('Could not delete: ' + friendlyErr(err.message), 'warn');
   }
 }
 

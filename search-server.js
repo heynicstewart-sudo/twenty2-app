@@ -22201,6 +22201,20 @@ app.patch('/api/agency/time-entries/:id', async (req, res) => {
   }
 });
 
+// Deletes one logged session (the "I accidentally saved this twice" case) -
+// only removes the Time Entries row, never touches the task itself, so a
+// mis-added or duplicate session can be cleared without disturbing the
+// task's own schedule or its other sessions.
+app.delete('/api/agency/time-entries/:id', async (req, res) => {
+  try {
+    await controlBaseRequest('DELETE', `?records[]=${encodeURIComponent(req.params.id)}`, undefined, TIME_ENTRIES_TABLE);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Time entry delete error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // All entries, optionally date-ranged (?from=YYYY-MM-DD&to=YYYY-MM-DD) for
 // the day/month time-and-profitability view. Same small-dataset "fetch all,
 // filter client-side" approach as GET /api/agency/tasks.
