@@ -12204,12 +12204,21 @@ function renderMsgStep(c, key, label, extraBodyHtml){
     }
   }
 
+  const capturing = window.__replyCapture && window.__replyCapture.cid === c.id && window.__replyCapture.key === key;
   const bodyHtml = step
-    ? `<div class="reply-toggle">
+    ? (capturing ? `
+      <div class="reply-capture" onclick="event.stopPropagation()">
+        <span class="muted" style="font-size:11.5px;">What did they say?</span>
+        <textarea id="replyCaptureText-${c.id}-${key}" rows="3" placeholder="Paste or type their reply..." style="margin-top:4px;width:100%;"></textarea>
+        <div style="display:flex;gap:6px;margin-top:6px;">
+          <button class="btn btn-primary btn-sm" onclick="confirmReplyWithText('${c.id}','${key}')"><i class="ti ti-device-floppy"></i> Save reply</button>
+          <button class="btn btn-ghost btn-sm" onclick="cancelReplyCapture()">Cancel</button>
+        </div>
+      </div>` : `<div class="reply-toggle">
         <span class="muted" style="font-size:11.5px;">Reply?</span>
-        <button class="reply-btn ${step.replied?'active-yes':''}" onclick="setReply('${c.id}','${key}',true)">Yes</button>
+        <button class="reply-btn ${step.replied?'active-yes':''}" onclick="event.stopPropagation();startReplyCapture('${c.id}','${key}')">Yes</button>
         <button class="reply-btn ${!step.replied?'active-no':''}" onclick="setReply('${c.id}','${key}',false)">No</button>
-      </div>`
+      </div>`)
     : lockedReason
       ? `<span class="muted" style="font-size:11.5px;"><i class="ti ti-lock" style="font-size:12px;"></i> ${esc(lockedReason)}</span>`
       : `<button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();openGenerateModal('${c.id}','${key}', ()=>renderPage())"><i class="ti ti-copy"></i> Write &amp; copy ${isEmailRoadmap() ? 'email' : 'message'}</button>
@@ -12431,6 +12440,46 @@ async function markSent(cid, key){
 // logs a "Reply to Message N" Touch Point on the first "yes" - it never moves
 // Sequence Stage, which only ever advances on a send. The reply flag is what
 // unlocks the next message's Write & copy button.
+// Inline "what did they say" capture on the Roadmap card's own Yes/No
+// toggle - clicking Yes opens a small textarea right there instead of just
+// flipping a boolean, so the reply itself gets saved without opening the
+// contact drawer separately. Saves through the exact same path the drawer's
+// own "Conversation History > Save history" box uses
+// (saveContactConversationHistory) - a Touch Point (Type "LinkedIn
+// Conversation") plus the same background AI-Summary refresh - so a reply
+// logged from either place looks identical afterward.
+function startReplyCapture(cid, key){
+  window.__replyCapture = { cid, key };
+  renderPage();
+}
+function cancelReplyCapture(){
+  window.__replyCapture = null;
+  renderPage();
+}
+async function confirmReplyWithText(cid, key){
+  const ta = document.getElementById(`replyCaptureText-${cid}-${key}`);
+  const text = (ta ? ta.value : '').trim();
+  window.__replyCapture = null;
+  await setReply(cid, key, true);
+  if(!text) return;
+  const c = state.contacts.find(x => x.id === cid);
+  if(!c) return;
+  const campaign = state.campaigns.find(x => x.id === window.__roadmapCampaignId) || activeCampaignForContact(c);
+  try {
+    const res = await fetch('/api/airtable/touchpoint', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contactName: c.name, type: 'LinkedIn Conversation', notes: text, campaignName: campaign ? campaign.name : undefined })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Save failed');
+    toast('Reply saved', 'success');
+    fetch('/api/contacts/update-summary', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: c.name, noteText: text }) })
+      .catch(err => console.warn('Background summary update failed:', err.message));
+  } catch(err){
+    toast('Marked as replied, but could not save the reply text: ' + friendlyErr(err.message), 'warn');
+  }
+}
 async function setReply(cid, key, val){
   const c = state.contacts.find(x=>x.id===cid);
   if(!c.thread[key]) c.thread[key] = { sent: isoDate(TODAY), replied: val };
