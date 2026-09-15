@@ -6989,9 +6989,23 @@ async function updateAllOfferMetrics() {
 app.post('/api/campaign/:id/deals', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   const campaignName = decodeURIComponent(req.params.id);
-  const { contactId, companyId, outcome, dealValue, assigneeId, notes, date, sentiment } = req.body;
+  const { contactId, outcome, dealValue, assigneeId, notes, date, sentiment } = req.body;
+  let { companyId } = req.body;
   if (!contactId) return res.status(400).json({ error: 'contactId is required' });
   try {
+    // Callers like confirmBooking() (the Roadmap's "Mark as meeting booked")
+    // only ever have the contact, not its linked Company record id, so a
+    // deal logged from there previously saved with no Company - it showed up
+    // on the Calendar page but wasn't attached to any account. Resolve it
+    // from the contact when the caller didn't already have it to pass.
+    if (!companyId) {
+      try {
+        const contactRecord = await airtableGetRecord('Contacts', contactId);
+        companyId = (contactRecord.fields['Company'] || [])[0] || null;
+      } catch (lookupErr) {
+        console.warn('Could not resolve company for deal (non-fatal):', lookupErr.message);
+      }
+    }
     const campaignRecord = await findCampaignRecordByName(campaignName);
     const fields = {
       'Contact': [contactId],

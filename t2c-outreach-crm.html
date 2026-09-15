@@ -465,6 +465,14 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .grid-table th{background:var(--surface-2);padding:12px 14px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:var(--label-tracking);color:var(--muted);border-bottom:1px solid var(--border);white-space:nowrap;}
 .grid-table td{padding:10px 14px;border-bottom:1px solid var(--border);vertical-align:top;min-width:190px;}
 .grid-table tr:last-child td{border-bottom:none;}
+/* Freeze the Company column so it stays in view once the row/title columns scroll
+   under it - needs its own opaque background (the table itself has none) so
+   scrolled-under cells don't show through, and a shadow to read as "floating"
+   above them rather than just another column. */
+.grid-table th:first-child,.grid-table td.company-cell{position:sticky;left:0;background:var(--surface);box-shadow:2px 0 4px -2px rgba(0,0,0,.15);}
+.grid-table th:first-child{background:var(--surface-2);z-index:2;}
+.grid-table td.company-cell{z-index:1;}
+.unassigned-row td.company-cell{background:var(--surface-2);}
 .grid-col-remove{margin-left:6px;border:none;background:transparent;color:var(--muted);cursor:pointer;font-size:13px;line-height:1;padding:2px 4px;border-radius:4px;vertical-align:middle;}
 .grid-col-remove:hover{background:var(--danger);color:#fff;}
 .grid-col-search{margin-left:4px;border:none;background:transparent;color:var(--muted);cursor:pointer;font-size:13px;line-height:1;padding:2px 4px;border-radius:4px;vertical-align:middle;}
@@ -14849,6 +14857,30 @@ async function generateMessageForModal(cid, stageKey){
   const seq = state.sequences.find(s=>s.id===c.seqId) || state.sequences[0];
   const st = STAGE_META.find(s=>s.key===stageKey);
   const notes = document.getElementById('genNotes') ? document.getElementById('genNotes').value : c.notes;
+
+  // A campaign contact's draft is built server-side by buildCampaignOutreachPrompt,
+  // which reads Notes straight from Airtable rather than trusting whatever this
+  // request's contact.notes says - so notes typed here but never saved (the
+  // "Save notes" button is a separate, easy-to-skip click) silently never reached
+  // the draft. Persist any unsaved edit first, same write saveGenModalNotes does,
+  // so Generate always drafts against what's actually in the box.
+  if(notes !== c.notes){
+    try {
+      await fetch(`/api/contacts/${encodeURIComponent(cid)}/notes`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes })
+      });
+      c.notes = notes;
+      if(window.__drawerContactProfile && window.__drawerContactProfile.contact.id === cid) window.__drawerContactProfile.contact.notes = notes;
+      if(notes.trim()){
+        fetch('/api/contacts/update-summary', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: c.name, noteText: notes }) })
+          .catch(err => console.warn('Background summary update failed:', err.message));
+      }
+    } catch(err){
+      console.warn('Could not save notes before generating (non-fatal, draft will still use the fallback contact.notes path):', err.message);
+    }
+  }
 
   // Same campaign resolution as openGenerateModal - use the one the modal
   // was opened against so the LinkedIn/email decision matches the UI.
