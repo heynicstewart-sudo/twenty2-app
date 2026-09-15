@@ -9570,7 +9570,7 @@ function renderUnassignedGridRow(grid, cols){
 // showing one contact per (company, role) pair.
 function renderCompanyRows(company, cols){
   const rowCount = Math.max(1, ...cols.map(role => contactsForCell(company, role).length));
-  const companyCell = `<td class="company-cell"><span style="cursor:pointer;" onclick="openCompanyDrawer('${esc(company)}')">${esc(company)}</span>${renderCompanyLinkedInIcon(company)}</td>`;
+  const companyCell = `<td class="company-cell"><span style="cursor:pointer;" onclick="openCompanyDrawer('${esc(company)}')">${esc(company)}</span>${renderCompanyLinkedInIcon(company)} <button type="button" class="grid-col-remove" title="Remove this company from the grid" onclick="event.stopPropagation();removeGridCompany('${esc(company).replace(/'/g,"\\'")}')">&times;</button></td>`;
   let rowsHtml = '';
   for(let i = 0; i < rowCount; i++){
     rowsHtml += `<tr>${companyCell}${cols.map(role => renderGridCell(company, role, i)).join('')}</tr>`;
@@ -9953,6 +9953,37 @@ function addGridCompany(){
   }
 }
 
+// Removes a company from the grid - the counterpart to addGridCompany, for
+// when the wrong one gets added by mistake. Only edits the grid's own
+// companies list: no Companies or Contacts Airtable record is touched, so a
+// contact at that company just stops showing on this grid's matrix until
+// the company is added back - same non-destructive removal as
+// removeGridColumn uses for job-title columns.
+function removeGridCompany(company){
+  const grid = currentGrid();
+  if(grid.virtual) return;
+  const occupied = gridContacts(grid.id).filter(c => c.company === company && !isContactExcludedFromGrid(c)).length;
+  if(occupied){
+    const body = `<p style="font-size:13px;">${occupied} contact${occupied===1?' is':'s are'} at "${esc(company)}" on this grid. Removing it hides ${occupied===1?'it':'them'} from this grid. They stay in the database and keep their company, and they'll show again if you add the company back.</p>`;
+    const footer = `
+      <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" style="background:var(--danger);border-color:var(--danger);" onclick="doRemoveGridCompany('${esc(company).replace(/'/g,"\\'")}')"><i class="ti ti-trash"></i> Remove company</button>
+    `;
+    openModal(`Remove "${esc(company)}"`, body, footer);
+    return;
+  }
+  doRemoveGridCompany(company);
+}
+function doRemoveGridCompany(company){
+  const grid = currentGrid();
+  if(grid.virtual) return;
+  grid.companies = grid.companies.filter(c => c !== company);
+  touchGrid(grid.id);
+  closeModal();
+  renderPage();
+  toast('Company "'+company+'" removed','success');
+}
+
 // Same write addGridCompany makes by hand above, but silent and a no-op if
 // the company is already on the grid - used by the Apollo import flow so a
 // contact whose company isn't on the grid yet still lands in the right row
@@ -10260,6 +10291,7 @@ function openAddContactModal(){
     <div class="field"><label>Company</label><input id="addContactCompany" placeholder="e.g. BHP" list="addContactCompanyOptions"></div>
     <datalist id="addContactCompanyOptions">${grid.companies.map(c => `<option value="${esc(c)}">`).join('')}</datalist>
     <div class="field"><label>LinkedIn URL</label><input id="addContactUrl" placeholder="https://linkedin.com/in/..."></div>
+    <div class="field"><label>Email (optional)</label><input id="addContactEmail" type="email" placeholder="jane@company.com"></div>
     <p class="muted" style="font-size:12px;">"Search for details" saves the contact, then runs the same research enrichment used elsewhere in the app (needs a LinkedIn URL). "Save manually" just saves what you've typed, no research.</p>
   `;
   const footer = `
@@ -10298,15 +10330,16 @@ function readAddContactFields(){
     name: document.getElementById('addContactName').value.trim(),
     role: document.getElementById('addContactRole').value.trim(),
     company: document.getElementById('addContactCompany').value.trim(),
-    url: document.getElementById('addContactUrl').value.trim()
+    url: document.getElementById('addContactUrl').value.trim(),
+    email: document.getElementById('addContactEmail').value.trim()
   };
 }
 
 function saveManualContactConfirmed(){
-  const { name, role, company, url } = readAddContactFields();
+  const { name, role, company, url, email } = readAddContactFields();
   if(!name || !company){ toast('Name and company are required', 'warn'); return; }
 
-  createManualGridContact(name, role, company, url);
+  createManualGridContact(name, role, company, url, '', email);
   closeModal();
   renderPage();
   toast(name+' added', 'success');
@@ -10319,14 +10352,14 @@ function saveManualContactConfirmed(){
 // Airtable step (it looks the contact up by name) finds a record to attach
 // the profile to.
 async function searchContactDetailsConfirmed(){
-  const { name, role, company, url } = readAddContactFields();
+  const { name, role, company, url, email } = readAddContactFields();
   if(!name || !company){ toast('Name and company are required', 'warn'); return; }
   if(!url){ toast('A LinkedIn URL is required to search for details', 'warn'); return; }
 
   const btn = document.getElementById('addContactSearchBtn');
   if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Searching...'; }
 
-  const contact = createManualGridContact(name, role, company, url);
+  const contact = createManualGridContact(name, role, company, url, '', email);
 
   try {
     const res = await fetch('/api/enrich/contact', {
