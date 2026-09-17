@@ -430,14 +430,15 @@ label{font-size:var(--label-size);font-weight:700;color:var(--muted);display:blo
 
 /* Tags / badges */
 .tag{display:inline-flex;align-items:center;padding:3px 10px;border-radius:var(--radius-pill);font-size:11px;font-weight:600;}
-/* Journey Stage colour scheme: Found=blue, Connection pending=amber,
-   Connection made=green, Messaging=purple, Booked=gold. Applied here (the
-   grid's per-contact tag) and mirrored in the .cell-* grid-cell backgrounds
-   and the Roadmap kanban column accents below. 'opened' predates a
-   connection ever being sent and isn't part of that 5-stage scheme, so it
-   keeps its own colour. */
+/* Journey Stage colour scheme: Found=blue, Engagement made=orange,
+   Connection pending=amber, Connection made=green, Messaging=purple,
+   Booked=gold. Applied here (the grid's per-contact tag) and mirrored in
+   the .cell-* grid-cell backgrounds and the Roadmap kanban column accents
+   below. 'engaged' (Sequence/Journey Stage "Engagement Made") sits between
+   Found and Connection Pending - a deliberate first touch (viewing/liking/
+   commenting on their profile) before a connection request ever goes out. */
 .tag-found{background:var(--tint-blue-bg);color:var(--tint-blue-fg);}
-.tag-opened{background:var(--tint-orange-bg);color:var(--tint-orange-fg);}
+.tag-engaged,.tag-opened{background:var(--tint-orange-bg);color:var(--tint-orange-fg);}
 .tag-connectionPending{background:var(--tint-amber-bg);color:var(--tint-amber-fg);}
 .tag-connected{background:var(--tint-green-bg);color:var(--tint-green-fg);}
 .tag-messaging{background:var(--tint-purple-bg);color:var(--tint-purple-fg);}
@@ -482,7 +483,7 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .company-cell{font-weight:700;white-space:nowrap;}
 .grid-cell{border-radius:var(--radius-badge);padding:10px;min-height:64px;}
 .cell-found{background:var(--tint-blue-bg);}
-.cell-opened{background:var(--tint-orange-bg);}
+.cell-engaged{background:var(--tint-orange-bg);}
 .cell-connectionPending{background:var(--tint-amber-bg);}
 .cell-connected{background:var(--tint-green-bg);}
 .cell-messaging{background:var(--tint-purple-bg);}
@@ -1198,7 +1199,7 @@ let rawState = {
       thread:{ connSent:'2026-08-05', m1:{sent:'2026-08-08',replied:false}, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[] },
     { id:'c4', gridId:'grid_wa_market_map', name:'Helen Joe', company:'Water Corporation', role:'Transformation Lead', url:'https://linkedin.com/in/helen-joe-watercorp', seqId:'seniorLeaders', state:'found', foundDate:'2026-08-16', connReqDate:null, connDate:null, notes:'',
       thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[] },
-    { id:'c5', gridId:'grid_wa_market_map', name:'Vicky Hetherington', company:'ATCO Australia', role:'Product Owner', url:'https://linkedin.com/in/vicky-hetherington-atco', seqId:'seniorLeaders', state:'opened', foundDate:'2026-08-14', connReqDate:null, connDate:null, notes:'Profile viewed, connection request not yet sent.',
+    { id:'c5', gridId:'grid_wa_market_map', name:'Vicky Hetherington', company:'ATCO Australia', role:'Product Owner', url:'https://linkedin.com/in/vicky-hetherington-atco', seqId:'seniorLeaders', state:'engaged', foundDate:'2026-08-14', connReqDate:null, connDate:null, notes:'Profile viewed, connection request not yet sent.',
       thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[] },
     { id:'c6', gridId:'grid_wa_market_map', name:'Claire Hall', company:'Hancock Iron Ore', role:'Digital and Tech', url:'https://linkedin.com/in/claire-hall-hancock', seqId:'digitalTech', state:'connected', foundDate:'2026-08-10', connReqDate:'2026-08-11', connDate:'2026-08-16', notes:'Runs the agile coaching guild internally.',
       thread:{ connSent:'2026-08-16', m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[] },
@@ -1207,7 +1208,7 @@ let rawState = {
       touchPoints:[ { id:'tp4', date:'2026-08-01', type:'LinkedIn message', notes:'Replied same day, keen to keep talking.' } ] },
     { id:'c8', gridId:'grid_wa_market_map', name:'Shawn Fernando', company:'RAC WA', role:'Digital and Tech', url:'https://linkedin.com/in/shawn-fernando-rac', seqId:'digitalTech', state:'found', foundDate:'2026-08-17', connReqDate:null, connDate:null, notes:'',
       thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[] },
-    { id:'c9', gridId:'grid_wa_market_map', name:'Hume Saunders', company:'Fortescue', role:'Product Owner', url:'https://linkedin.com/in/hume-saunders-fmg', seqId:'seniorLeaders', state:'opened', foundDate:'2026-08-03', connReqDate:'2026-08-06', connDate:null, notes:'Connection request sent, no response yet.',
+    { id:'c9', gridId:'grid_wa_market_map', name:'Hume Saunders', company:'Fortescue', role:'Product Owner', url:'https://linkedin.com/in/hume-saunders-fmg', seqId:'seniorLeaders', state:'engaged', foundDate:'2026-08-03', connReqDate:'2026-08-06', connDate:null, notes:'Connection request sent, no response yet.',
       thread:{ connSent:null, m1:null, m2:null, cta:null, booked:false }, generated:{}, touchPoints:[] },
     { id:'c10', gridId:'grid_wa_market_map', name:'Tenille Frichot', company:'Western Power', role:'Digital and Tech', url:'https://linkedin.com/in/tenille-frichot-wp', seqId:'digitalTech', state:'messaging', foundDate:'2026-07-28', connReqDate:'2026-07-29', connDate:'2026-08-02', notes:'Leading a platform modernisation squad.',
       thread:{ connSent:'2026-08-02', m1:{sent:'2026-08-05',replied:true}, m2:{sent:'2026-08-11',replied:true}, cta:null, booked:false }, generated:{}, touchPoints:[] }
@@ -6642,11 +6643,12 @@ function initLoggerConnections(){
 // Journey Stage "Connection Pending") - 'found' is a stage earlier than
 // that (no request sent yet) and was wrongly included before, which meant
 // a contact whose request actually IS pending never showed up as a
-// candidate at all. 'opened' is kept only for the local mock/demo seed
-// data (rawState.contacts), which uses it the same way; real hydration
-// never produces that value, so it's a no-op in production.
+// candidate at all. 'engaged' (Journey Stage "Engagement Made" - a first
+// touch before any request went out) is included too, as a safety net for
+// someone who turns out to already be an accepted connection despite the
+// app never having logged a request for them.
 function loggerConnectionCandidates(){
-  return state.contacts.filter(c => (c.state==='connectionPending' || c.state==='opened') && !c.connDate);
+  return state.contacts.filter(c => (c.state==='connectionPending' || c.state==='engaged') && !c.connDate);
 }
 
 function renderLoggerConnectionsMode(){
@@ -7395,6 +7397,9 @@ function getFastActionForCampaignContact(c, campaign){
     || (campaign.connectionNoteMode === 'No note' ? 'No note' : 'Note');
 
   if(stage === 'Found'){
+    return { type:'Engage', stageLabel: stage, campaignName: campaign.name, daysSinceTouch: null, isFastAction: true };
+  }
+  if(stage === 'Engagement Made'){
     return { type:'Send connection', stageLabel: stage, campaignName: campaign.name, connectionArm: arm, daysSinceTouch: null, isFastAction: true };
   }
   if(stage === 'Connected'){
@@ -7429,7 +7434,7 @@ function getFastActionForCampaignContact(c, campaign){
 }
 
 function getNaturalContactAction(c){
-  if(c.state === 'found' || c.state === 'opened') return null;
+  if(c.state === 'found' || c.state === 'engaged') return null;
 
   const lastTouch = lastTouchPointDate(c);
   const daysSince = (dateStr) => dateStr ? daysBetween(dateStr) : null;
@@ -7845,19 +7850,24 @@ function renderReplyBackActionCard(a){
 // Stage drives one specific action - exactly one button, no touch-point
 // logger or brief generator clutter, per stage (see WAITING_SEQUENCE_STAGES/
 // getFastActionForCampaignContact above for the full state machine):
-//   Found               -> Send connection (opens LinkedIn, advances stage)
+//   Found               -> Engage (opens LinkedIn, advances to Engagement Made)
+//   Engagement Made     -> Send connection (opens LinkedIn, advances stage)
 //   Connection Pending  -> hidden (sent, not yet accepted)
 //   Connected           -> Generate message (message 1)
 //   Message 1 Sent      -> hidden (waiting for a reply)
 //   Ready for Message 2 -> Generate message (message 2, a reply came in)
 //   Message 2 Sent      -> hidden (waiting for a reply)
 //   Ready for Message 3 -> Generate message (message 3, a reply came in)
+// Found and Engagement Made are deliberately two separate clicks/stages, not
+// one - visiting/liking/commenting on a profile (Engage) is its own no-agenda
+// touch, done before ever sending the actual connection request (Send
+// connection), rather than the two being conflated into a single action.
 // "Generate message" swaps itself for the drafted text plus a single
 // "Copy & mark sent" button once clicked (handleGenerateFastMessage).
 function renderFastActionCard(a){
   const c = a.contact;
   const email = campaignTypeByName(a.campaignName) === 'email';
-  const isMessage = a.type !== 'Send connection';
+  const isMessage = a.type !== 'Send connection' && a.type !== 'Engage';
   const enriched = !!(window.__enrichmentProfiles && window.__enrichmentProfiles[c.id]);
   const stageLabel = email ? stageLabelFor(a.stage || 'connect', 'email') : a.stageLabel;
   return `
@@ -7874,9 +7884,11 @@ function renderFastActionCard(a){
     </div>
     <div class="todo-item-actions">
       <div id="fastActionArea-${c.id}" style="display:contents;">
-        ${(!email && a.type === 'Send connection')
-          ? `<a class="btn btn-primary btn-sm" href="${esc(c.url||'#')}" target="_blank" rel="noopener" onclick="handleContactLinkedInOpened('${c.id}')"><i class="ti ti-brand-linkedin"></i> ${a.connectionArm === 'No note' ? 'Send (no note)' : 'Send connection'}</a>`
-          : `<button class="btn btn-primary btn-sm" onclick="handleGenerateFastMessage('${c.id}')"><i class="ti ti-sparkles"></i> ${email ? 'Draft email' : 'Generate message'}</button>`}
+        ${(!email && a.type === 'Engage')
+          ? `<a class="btn btn-primary btn-sm" href="${esc(c.url||'#')}" target="_blank" rel="noopener" onclick="handleContactEngaged('${c.id}')"><i class="ti ti-eye"></i> Engage</a>`
+          : (!email && a.type === 'Send connection')
+            ? `<a class="btn btn-primary btn-sm" href="${esc(c.url||'#')}" target="_blank" rel="noopener" onclick="handleContactLinkedInOpened('${c.id}')"><i class="ti ti-brand-linkedin"></i> ${a.connectionArm === 'No note' ? 'Send (no note)' : 'Send connection'}</a>`
+            : `<button class="btn btn-primary btn-sm" onclick="handleGenerateFastMessage('${c.id}')"><i class="ti ti-sparkles"></i> ${email ? 'Draft email' : 'Generate message'}</button>`}
       </div>
       ${(!email && a.type === 'Send connection' && a.connectionArm === 'No note') ? `<span class="muted" style="font-size:11px;align-self:center;">A/B: send this one <strong>without</strong> a note</span>` : ''}
       ${(!email && a.type === 'Send connection' && a.connectionArm === 'Note' && campaignHasNoteMode(a.campaignName, 'Split test')) ? `<span class="muted" style="font-size:11px;align-self:center;">A/B: send this one <strong>with</strong> a note</span>` : ''}
@@ -7992,13 +8004,15 @@ function toggleQuickTouchPoint(cid){
   el.style.display = el.style.display === 'none' ? 'block' : 'none';
 }
 
-// Fires whenever a contact's LinkedIn URL is opened anywhere in the app -
-// the Today's Actions "Send connection" link, a Grid cell's LinkedIn icon,
-// or any future one (e.g. the Roadmap) - the href already opens their
-// profile in a new tab natively, so this never calls preventDefault(). `e`
-// is optional and only needed when the link sits inside another clickable
-// element (a Grid cell's onclick opens the contact drawer) that a bare
-// click would otherwise also trigger.
+// Fires whenever a contact's LinkedIn URL is opened as the "send the actual
+// connection request" step - the Today's Actions "Send connection" link
+// (now shown once a contact has reached Engagement Made, see
+// handleContactEngaged below for the step before this one) or a Grid cell's
+// LinkedIn icon - the href already opens their profile in a new tab
+// natively, so this never calls preventDefault(). `e` is optional and only
+// needed when the link sits inside another clickable element (a Grid cell's
+// onclick opens the contact drawer) that a bare click would otherwise also
+// trigger.
 //
 // Removes their Today's Actions card immediately if one is currently
 // rendered (rather than waiting on the round trip below, or leaving it to
@@ -8039,6 +8053,45 @@ async function handleContactLinkedInOpened(cid, e){
     renderPage();
   } catch(err){
     console.warn('Could not update stage to Connection Pending:', err.message);
+    toast('LinkedIn opened, but could not update stage: ' + friendlyErr(err.message), 'warn');
+  }
+}
+
+// The step before handleContactLinkedInOpened - fired by the Today's
+// Actions "Engage" link on a Found contact (visiting/liking/commenting on
+// their profile, deliberately before any connection request goes out).
+// Same optimistic-UI/background-sync shape, but advances to "Engagement
+// Made" instead - see the "Engagement Made" branch of PATCH
+// /api/context/contact-fields, which never touches Connection Sent Date.
+async function handleContactEngaged(cid, e){
+  if(e) e.stopPropagation();
+  const cardEl = document.getElementById('todaysAction-' + cid);
+  if(cardEl) cardEl.remove();
+  delete (window.__todaysActions || {})[cid];
+
+  const c = state.contacts.find(x => x.id === cid);
+  if(!c) return;
+  if(!isAirtableRecordId(cid)){
+    console.warn('Skipping Airtable Journey Stage sync - contact has no Airtable record id yet:', cid);
+    toast('LinkedIn opened, but this contact has not synced to the database yet - press "Sync" first.', 'warn');
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/context/contact-fields', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contactId: cid, journeyStage: 'Engagement Made', sequenceStage: 'Engagement Made' })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+
+    c.state = 'engaged';
+    const campaign = activeCampaignForContact(c);
+    if(campaign) await loadCampaignSequenceStages(campaign);
+    renderPage();
+  } catch(err){
+    console.warn('Could not update stage to Engagement Made:', err.message);
     toast('LinkedIn opened, but could not update stage: ' + friendlyErr(err.message), 'warn');
   }
 }
@@ -9637,7 +9690,7 @@ function renderGridViewArea(grid, cols){
   </div>
   <div class="legend">
     <div class="legend-item"><span class="legend-swatch" style="background:var(--tint-blue-bg);"></span> Found</div>
-    <div class="legend-item"><span class="legend-swatch" style="background:var(--tint-orange-bg);"></span> Opened</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:var(--tint-orange-bg);"></span> Engaged</div>
     <div class="legend-item"><span class="legend-swatch" style="background:var(--tint-amber-bg);"></span> Connection pending</div>
     <div class="legend-item"><span class="legend-swatch" style="background:var(--tint-green-bg);"></span> Connected</div>
     <div class="legend-item"><span class="legend-swatch" style="background:rgba(139,92,246,0.08);"></span> Messaging</div>
@@ -9849,7 +9902,7 @@ function gridConnectionSentDateFor(gridId, contactName){
   return map ? (map[contactName.trim().toLowerCase()] || null) : null;
 }
 
-// 'found'/'opened' predate a connection request ever going out, so the Grid
+// 'found'/'engaged' predate a connection request ever going out, so the Grid
 // day badge for those still shows days-in-pipeline (days since found).
 // Everything from 'connectionPending' onward has an actual Connection Sent
 // Date (in Airtable, once the grid's linked campaign's Campaign Contacts
@@ -9878,6 +9931,7 @@ function sequenceStageToGridState(stage){
   if(!stage) return null;
   if(stage === 'Connected') return 'connected';
   if(stage === 'Connection Pending') return 'connectionPending';
+  if(stage === 'Engagement Made') return 'engaged';
   if(stage === 'Found' || stage === 'Connection Requested') return 'found';
   if(/^Message \d Sent$/.test(stage) || /^Pending Reply/.test(stage) || /^Ready for Message/.test(stage)) return 'messaging';
   return null;
@@ -11284,7 +11338,7 @@ async function syncAllContactsToAirtable(){
 // 'Identified' is kept alongside 'Found' for contacts synced before
 // mapStateToStage (search-server.js) was fixed to write 'Found' - both mean
 // the same local 'found' state.
-const JOURNEY_STAGE_TO_STATE = { 'Found':'found', 'Identified':'found', 'Connection Pending':'connectionPending', 'Connected':'connected', 'Messaging':'messaging', 'Booked':'booked' };
+const JOURNEY_STAGE_TO_STATE = { 'Found':'found', 'Identified':'found', 'Engagement Made':'engaged', 'Connection Pending':'connectionPending', 'Connected':'connected', 'Messaging':'messaging', 'Booked':'booked' };
 
 // Mirrors the server's parseContactEnrichment (search-server.js) - reads the
 // ENRICHMENT_JSON block persisted at the start of Contacts.AI Summary by
@@ -11565,7 +11619,7 @@ function csvField(val){
   return str;
 }
 
-const EXPORTABLE_STATES = ['found','opened','connected','messaging','booked'];
+const EXPORTABLE_STATES = ['found','engaged','connected','messaging','booked'];
 
 function exportContactsCsv(){
   const gridId = currentGrid().id;
@@ -11647,9 +11701,10 @@ async function readConnectionsScreenshot(){
   // acceptance contact has once hydrated from Airtable (see
   // JOURNEY_STAGE_TO_STATE) - 'found' is an earlier stage (no request sent
   // yet) and was wrongly included here before, which meant this never
-  // matched anyone against a real screenshot. 'opened' stays for the local
-  // mock/demo seed data only; real hydration never produces it.
-  const candidates = state.contacts.filter(c => (c.state==='connectionPending' || c.state==='opened') && !c.connDate);
+  // matched anyone against a real screenshot. 'engaged' (Engagement Made -
+  // a first touch before any request went out) is included as a safety
+  // net for someone who turns out to already be connected.
+  const candidates = state.contacts.filter(c => (c.state==='connectionPending' || c.state==='engaged') && !c.connDate);
   if(!candidates.length){ toast('No pending contacts to match against a screenshot','warn'); return; }
 
   const btn = document.getElementById('readConnectionsBtn');
@@ -12213,7 +12268,7 @@ function emailThreadStepFromStage(key, stage){
 // LinkedIn Sequence Stage now only ever advances on a send. For a given step
 // (message 1/2/3), work out from the campaign's live Sequence Stage + Reply
 // Received flag whether it has been sent, is due next, or is still locked.
-const LINKEDIN_STAGE_ORDER = ['Found','Connection Pending','Connected','Message 1 Sent','Message 2 Sent','Message 3 Sent','Meeting Booked'];
+const LINKEDIN_STAGE_ORDER = ['Found','Engagement Made','Connection Pending','Connected','Message 1 Sent','Message 2 Sent','Message 3 Sent','Meeting Booked'];
 function linkedInStepInfo(n, liveStage, replied){
   const order = LINKEDIN_STAGE_ORDER;
   const cur = order.indexOf(collapseLegacyStage(liveStage || 'Found'));
@@ -21265,7 +21320,7 @@ function renderSalesPeriodSelector(period){
 // ordering, so a contact's "furthest reached" is well-defined even if its
 // Stage History bounced around.
 const FUNNEL_LADDER_CLIENT = [
-  'Found','Connection Pending','Connected',
+  'Found','Engagement Made','Connection Pending','Connected',
   'Message 1 Sent','Pending Reply M1','Ready for Message 2',
   'Message 2 Sent','Pending Reply M2','Ready for Message 3',
   'Message 3 Sent','Pending Reply M3','Meeting Booked'

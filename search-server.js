@@ -2602,7 +2602,7 @@ app.patch('/api/airtable/contact/stage', async (req, res) => {
 function mapStateToStage(state) {
   const map = {
     'found': 'Found',
-    'opened': 'Found',
+    'engaged': 'Engagement Made',
     'connectionPending': 'Connection Pending',
     'connected': 'Connected',
     'messaging': 'Messaging',
@@ -5471,7 +5471,7 @@ const CONNECTED_OR_LATER_STAGES = ['Connected', 'Message 1 Sent', 'Pending Reply
  * as their own buckets beside the funnel.
  */
 const FUNNEL_LADDER = [
-  'Found', 'Connection Pending', 'Connected',
+  'Found', 'Engagement Made', 'Connection Pending', 'Connected',
   'Message 1 Sent', 'Pending Reply M1', 'Ready for Message 2',
   'Message 2 Sent', 'Pending Reply M2', 'Ready for Message 3',
   'Message 3 Sent', 'Pending Reply M3',
@@ -11533,7 +11533,7 @@ async function setContactConnectionStatus(contactId, status) {
       records: [{ id: contactId, fields: { 'Journey Stage': 'Connection Pending', 'Connection Sent Date': today } }], typecast: true
     });
     const rows = await fetchCampaignContactsRows();
-    const pending = rows.filter(r => (r.fields['Contact'] || []).includes(contactId) && ['Connection Requested', 'Found'].includes(r.fields['Sequence Stage'] || ''));
+    const pending = rows.filter(r => (r.fields['Contact'] || []).includes(contactId) && ['Connection Requested', 'Found', 'Engagement Made'].includes(r.fields['Sequence Stage'] || ''));
     if (pending.length) {
       await airtableBatchPatch(CAMPAIGN_CONTACTS_TABLE, pending.map(r => ({
         id: r.id,
@@ -11546,7 +11546,7 @@ async function setContactConnectionStatus(contactId, status) {
       records: [{ id: contactId, fields: { 'Journey Stage': 'Connected' } }], typecast: true
     });
     const rows = await fetchCampaignContactsRows();
-    const accepted = rows.filter(r => (r.fields['Contact'] || []).includes(contactId) && ['Connection Pending', 'Connection Requested', 'Found'].includes(r.fields['Sequence Stage'] || ''));
+    const accepted = rows.filter(r => (r.fields['Contact'] || []).includes(contactId) && ['Connection Pending', 'Connection Requested', 'Found', 'Engagement Made'].includes(r.fields['Sequence Stage'] || ''));
     if (accepted.length) {
       await airtableBatchPatch(CAMPAIGN_CONTACTS_TABLE, accepted.map(r => ({
         id: r.id, fields: { 'Sequence Stage': 'Connected', 'Stage History': appendStageHistory(r.fields['Stage History'], 'Connected', today) }
@@ -16158,9 +16158,9 @@ app.get('/api/context/data', async (req, res) => {
         const myCampaignRows = campaignRowsByContact[r.id] || [];
         // Eligible for the CSV upload to advance to "Connected" if any
         // campaign row is still short of it: not yet requested at all
-        // ("Connection Requested"/"Found") or requested but not yet
-        // accepted ("Connection Pending" - see PATCH /api/context/contact-fields).
-        const hasPendingConnection = myCampaignRows.some(cr => ['Connection Requested', 'Found', 'Connection Pending'].includes(cr.fields['Sequence Stage'] || ''));
+        // ("Connection Requested"/"Found"/"Engagement Made") or requested but
+        // not yet accepted ("Connection Pending" - see PATCH /api/context/contact-fields).
+        const hasPendingConnection = myCampaignRows.some(cr => ['Connection Requested', 'Found', 'Engagement Made', 'Connection Pending'].includes(cr.fields['Sequence Stage'] || ''));
         let sequenceStage = '', nextMessageDraft = '', campaignContactId = null;
         if (campaignRecord) {
           const myRow = myCampaignRows.find(cr => (cr.fields['Campaign'] || []).includes(campaignRecord.id));
@@ -16203,16 +16203,22 @@ app.get('/api/context/data', async (req, res) => {
 // - reusing it would have meant overloading it with a second, unrelated
 // update shape.
 //
-// Two sequenceStage values this route handles, both syncing every one of
+// Three sequenceStage values this route handles, all syncing every one of
 // this contact's Campaign Contacts rows rather than just the active
-// campaign's, since sending/accepting a LinkedIn connection request is true
-// account-wide, not per campaign:
+// campaign's, since engaging/sending/accepting a LinkedIn connection request
+// is true account-wide, not per campaign:
+// - 'Engagement Made': fired by the Today's Actions "Engage" click (a
+//   contact's first-ever touch - visiting/liking/commenting on their profile
+//   before ever sending a request) - advances rows still at Found/
+//   "Connection Requested" forward. No Connection Sent Date stamp - nothing
+//   has been sent yet, this is deliberately a step before that.
 // - 'Connection Pending': fired by the Today's Actions "Send connection"
-//   click (sequenceStage) and by dragging a Roadmap card into the Connection
-//   Pending column (journeyStage only, via syncJourneyStageForColumn) -
-//   either one advances rows still at Found/"Connection Requested" forward
-//   and stamps Connection Sent Date for the Roadmap day-counter and
-//   Strategy tab timeout check.
+//   click (sequenceStage, now shown once a contact has reached Engagement
+//   Made) and by dragging a Roadmap card into the Connection Pending column
+//   (journeyStage only, via syncJourneyStageForColumn) - either one advances
+//   rows still at Found/"Connection Requested"/Engagement Made forward and
+//   stamps Connection Sent Date for the Roadmap day-counter and Strategy tab
+//   timeout check.
 // - 'Connected': fired by the LinkedIn Connections CSV upload card once it
 //   matches a contact - advances rows still at "Connection Pending" (sent,
 //   not yet accepted) forward to "Connected" (accepted). Must stay a
@@ -16226,8 +16232,8 @@ app.patch('/api/context/contact-fields', async (req, res) => {
 
   const { contactId, journeyStage, sequenceStage, jobTitle } = req.body;
   if (!contactId) return res.status(400).json({ error: 'contactId is required' });
-  if (!journeyStage && !jobTitle && !['Connection Pending', 'Connected'].includes(sequenceStage)) {
-    return res.status(400).json({ error: 'journeyStage or jobTitle is required, or sequenceStage must be "Connection Pending" or "Connected"' });
+  if (!journeyStage && !jobTitle && !['Engagement Made', 'Connection Pending', 'Connected'].includes(sequenceStage)) {
+    return res.status(400).json({ error: 'journeyStage or jobTitle is required, or sequenceStage must be "Engagement Made", "Connection Pending" or "Connected"' });
   }
 
   try {
@@ -16244,9 +16250,23 @@ app.patch('/api/context/contact-fields', async (req, res) => {
     }
 
     let campaignContactRowsSynced = 0;
-    if (sequenceStage === 'Connection Pending' || journeyStage === 'Connection Pending') {
+    if (sequenceStage === 'Engagement Made' || journeyStage === 'Engagement Made') {
+      // Deliberately no Connection Sent Date here - engaging with a profile
+      // (viewing/liking/commenting) isn't sending a request, it's the step
+      // before that; see the route comment above.
       const rows = await fetchCampaignContactsRows();
-      const pendingRows = rows.filter(r => (r.fields['Contact'] || []).includes(contactId) && ['Connection Requested', 'Found'].includes(r.fields['Sequence Stage'] || ''));
+      const foundRows = rows.filter(r => (r.fields['Contact'] || []).includes(contactId) && ['Connection Requested', 'Found'].includes(r.fields['Sequence Stage'] || ''));
+      if (foundRows.length) {
+        const today = new Date().toISOString().slice(0, 10);
+        await airtableBatchPatch(CAMPAIGN_CONTACTS_TABLE, foundRows.map(r => ({
+          id: r.id,
+          fields: { 'Sequence Stage': 'Engagement Made', 'Stage History': appendStageHistory(r.fields['Stage History'], 'Engagement Made', today) }
+        })));
+        campaignContactRowsSynced = foundRows.length;
+      }
+    } else if (sequenceStage === 'Connection Pending' || journeyStage === 'Connection Pending') {
+      const rows = await fetchCampaignContactsRows();
+      const pendingRows = rows.filter(r => (r.fields['Contact'] || []).includes(contactId) && ['Connection Requested', 'Found', 'Engagement Made'].includes(r.fields['Sequence Stage'] || ''));
       if (pendingRows.length) {
         const today = new Date().toISOString().slice(0, 10);
         await airtableBatchPatch(CAMPAIGN_CONTACTS_TABLE, pendingRows.map(r => ({
