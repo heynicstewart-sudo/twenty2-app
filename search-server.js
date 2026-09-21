@@ -1772,7 +1772,7 @@ app.post('/api/airtable/campaign', async (req, res) => {
   // so they're folded into the existing "Strategy Notes" field as
   // labelled sections rather than dropped - that field already exists and
   // is semantically the right home for them.
-  const { name, goal, product, targetIcp, contactIds, gridIds, sequenceTemplates, strategyNotes, pitchAngle, objectionHandling, successMetric, startDate, status, ctas, contentContext, campaignType, connectionNoteMode, sequenceLength, ctaMessage, angleLibrary, framingMode, decisionMakerCriteria, icpAlignment } = req.body;
+  const { name, goal, product, targetIcp, contactIds, gridIds, sequenceTemplates, strategyNotes, pitchAngle, objectionHandling, successMetric, startDate, status, ctas, triggers, contentContext, campaignType, connectionNoteMode, sequenceLength, ctaMessage, angleLibrary, framingMode, decisionMakerCriteria, icpAlignment } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
   const normalizedType = (campaignType || '').toLowerCase() === 'email' ? 'Email' : ((campaignType || '').toLowerCase() === 'linkedin' ? 'LinkedIn' : '');
   const normalizedNoteMode = ['Note', 'No note', 'Split test'].includes(connectionNoteMode) ? connectionNoteMode : '';
@@ -1813,6 +1813,7 @@ app.post('/api/airtable/campaign', async (req, res) => {
       if (startDate) patchFields['Start Date'] = startDate;
       if (status) patchFields['Status'] = status;
       if (ctas) patchFields['CTAs'] = ctas;
+      if (triggers) patchFields['Triggers'] = triggers;
       if (contentContext) patchFields['Content Context'] = contentContext;
       if (normalizedType) patchFields['Campaign Type'] = normalizedType;
       if (normalizedNoteMode) patchFields['Connection Note Mode'] = normalizedNoteMode;
@@ -1868,6 +1869,7 @@ app.post('/api/airtable/campaign', async (req, res) => {
       'Start Date': startDate || '',
       'Status': status || 'Draft',
       'CTAs': ctas || '',
+      'Triggers': triggers || '',
       'Content Context': contentContext || '',
       'Campaign Type': normalizedType || 'LinkedIn'
     };
@@ -12764,7 +12766,7 @@ for (let n = 1; n <= 7; n++) MESSAGE_NUMBER_FOR_STAGE[`Message ${n} Sent`] = n +
 // stages ("Ready for Message N", "Pending Reply MN") are no longer written -
 // these helpers collapse any that still exist on old rows back to the send
 // milestone they followed, so read-paths stay correct during the transition.
-const LINKEDIN_STAGE_ORDER = ['Found', 'Connection Pending', 'Connected',
+const LINKEDIN_STAGE_ORDER = ['Found', 'Engagement Made', 'Connection Pending', 'Connected',
   'Message 1 Sent', 'Message 2 Sent', 'Message 3 Sent', 'Message 4 Sent',
   'Message 5 Sent', 'Message 6 Sent', 'Message 7 Sent', 'Message 8 Sent', 'Meeting Booked'];
 const LEGACY_STAGE_COLLAPSE = {
@@ -12777,6 +12779,73 @@ function collapseLegacyStage(stage) {
 }
 function linkedInStageRank(stage) {
   return LINKEDIN_STAGE_ORDER.indexOf(collapseLegacyStage(stage));
+}
+
+// The 14-day cadence from the outreach video, mapped onto this app's real
+// stage chain. Two differences from a literal read of the video, both
+// deliberate: (1) this app leads with engagement (Engagement Made comes
+// BEFORE Connection Pending, not after connecting like the video's day 1
+// connect / day 2 engage) - see the recent "Add Engagement Made" stage
+// commit - so every day number here is that cadence shifted by one day
+// relative to the video. (2) "Connected" has no day of its own: accepting a
+// request is the other person's action, not something a rep schedules, so
+// flagging it "overdue" while waiting would be noise - the existing
+// stale-connection-request check already covers that wait separately (see
+// "Stale requests to withdraw"). Days 4/6/8/11 (Engage) and 7/13/14 (Email,
+// manual - this app never sends it) aren't trackable stages, so they exist
+// only in the client-side display map (CADENCE_14_DAY_STEPS in
+// t2c-outreach-crm.html), not here.
+const CADENCE_TARGET_DAY = {
+  'Engagement Made': 1,
+  'Connection Pending': 2,
+  'Message 1 Sent': 3,
+  'Message 2 Sent': 5,
+  'Message 3 Sent': 9,
+  'Message 4 Sent': 10,
+  'Message 5 Sent': 12,
+  'Message 6 Sent': 14,
+  'Message 7 Sent': 14,
+  'Message 8 Sent': 14
+};
+
+// Where a Campaign Contacts row sits against the 14-day cadence, computed
+// from Stage History (the dated per-transition log - see appendStageHistory)
+// rather than Connection Sent Date, since the cadence now starts at
+// Engagement Made, a stage with no date field of its own. Returns null when
+// the cadence hasn't started yet (still at Found, or no history logged) so
+// the caller can render "not started" instead of a misleading Day 1.
+function computeCadenceProgress(stageHistoryText, currentStageRaw) {
+  const stage = collapseLegacyStage(currentStageRaw);
+  // Checked on the live stage, not just history: a re-engaged contact's
+  // Stage History carries a "Found (re-engaged on signal)" line (see POST
+  // /api/campaign/:id/contacts/:contactId/reengage) while its actual
+  // Sequence Stage resets to plain 'Found' - without this, that history
+  // line (not literally "Found") would wrongly anchor a cadence that
+  // hasn't actually restarted yet.
+  if (stage === 'Found') return null;
+  const entries = parseStageHistory(stageHistoryText);
+  const started = entries.find(e => e.stage && e.stage !== 'Found');
+  if (!started) return null;
+
+  const startDate = new Date(started.date + 'T00:00:00Z');
+  const today = new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00Z');
+  const cadenceDay = Math.max(1, Math.round((today - startDate) / 86400000) + 1);
+
+  if (stage === 'Meeting Booked') {
+    return { cadenceDay, targetDay: null, nextStage: null, nextTargetDay: null, status: 'complete', startDate: started.date };
+  }
+
+  const rank = linkedInStageRank(stage);
+  const nextStage = (rank >= 0 && rank < LINKEDIN_STAGE_ORDER.length - 1) ? LINKEDIN_STAGE_ORDER[rank + 1] : null;
+  const nextTargetDay = nextStage ? (CADENCE_TARGET_DAY[nextStage] || null) : null;
+
+  let status = 'on-track';
+  if (nextTargetDay != null) {
+    if (cadenceDay > nextTargetDay + 1) status = 'overdue';
+    else if (cadenceDay >= nextTargetDay) status = 'due';
+  }
+
+  return { cadenceDay, targetDay: CADENCE_TARGET_DAY[stage] || null, nextStage, nextTargetDay, status, startDate: started.date };
 }
 // A legacy "Ready for Message N" row means a reply already cleared the gate, so
 // treat it as reply-received even before the checkbox exists on that row.
@@ -13043,18 +13112,20 @@ app.get('/api/campaign/:id/campaign-contacts', async (req, res) => {
     const result = myRows
       .map(r => {
         const contactId = (r.fields['Contact'] || [])[0] || null;
+        const sequenceStage = collapseLegacyStage(normalizeSequenceStage(r.fields['Sequence Stage']));
         return {
           campaignContactId: r.id,
           contactId,
           contactName: contactId ? (nameById[contactId] || '') : '',
-          sequenceStage: collapseLegacyStage(normalizeSequenceStage(r.fields['Sequence Stage'])),
+          sequenceStage,
           replyReceived: rowReplyReceived(r),
           nextMessageDraft: r.fields['Next Message Draft'] || '',
           connectionSentDate: r.fields['Connection Sent Date'] || null,
           replySentiment: r.fields['Reply Sentiment'] || null,
           lastReplyAt: r.fields['Last Reply At'] || null,
           replyNeedsAttention: !!r.fields['Reply Needs Attention'],
-          connectionArm: r.fields['Connection Arm'] || null
+          connectionArm: r.fields['Connection Arm'] || null,
+          cadence: computeCadenceProgress(r.fields['Stage History'], sequenceStage)
         };
       })
       .filter(r => r.contactName);
@@ -13341,6 +13412,54 @@ function ctaOptionsPromptText(ctaOptions) {
   return `\n\nThis campaign has more than one CTA on file - pick whichever one actually fits what the contact has said rather than defaulting to the same one every time:\n${ctaOptions.map(c => `- ${c}`).join('\n')}`;
 }
 
+// Campaigns.Triggers (one per line, same shape as CTAs) - the reason a rep
+// is reaching out at all: a mutual connection, a case study with a similar
+// company, the contact's company hiring for a relevant role, a stated pain
+// point, recent LinkedIn activity. Distinct from CTAs (what you're asking
+// for) and from a company's Active Programs signal (a detected buying
+// trigger) - this is a rep-curated library of openers a human would
+// actually use, fed to the drafter so the "why I'm reaching out" line has
+// something concrete to reach for instead of generic change-management
+// phrasing. Unlike ctaOptionsPromptText this fires on a single trigger too
+// (there's no "pick between two" judgment call to make - a lone trigger is
+// still worth citing).
+function triggersPromptText(triggers) {
+  if (!triggers || !triggers.length) return '';
+  return `\n\nThis campaign has these reasons-to-reach-out on file ("triggers") - when the message calls for a stated reason (introducing value, opening with context, or making the ask), reach for whichever one actually fits this contact rather than a generic pitch. Don't force one in if none fit, and don't list them back - work the chosen one in naturally:\n${triggers.map(t => `- ${t}`).join('\n')}`;
+}
+
+// Maps a message's position in the sequence to the beat the 14-day
+// LinkedIn cadence (connect -> engage -> soft opener -> engage -> trigger/
+// value -> engage -> email follow-up -> engage -> second value point ->
+// nudge -> engage -> final ping) assigns it, so consecutive messages read
+// as a real unfolding conversation instead of five interchangeable
+// "outreach messages". Layered alongside ctaStrategyNoteText, which still
+// separately governs whether/how hard to make the ask - this only shapes
+// the *content angle* of the message, not the ask itself. Message 1 is a
+// hard rule (no exceptions - see the video this cadence is drawn from: the
+// single biggest reputation-burner is pitching before the connection is
+// even warm). Messages past 5 repeat the "nudge" beat rather than running
+// out of guidance.
+function messageBeatNote(messageNumber) {
+  const num = messageNumber || 0;
+  if (num === 1) {
+    return ' This is message 1, sent right after connecting - it must be a soft opener only: light, warm, genuinely curious about them or their work. No pitch, no stated reason for reaching out, no trigger, no CTA, whatever the cadence config says - that all comes later. Think "good to connect" energy, not a sales open.';
+  }
+  if (num === 2) {
+    return ' This is message 2 - the first message that can introduce a reason for reaching out. Bring in a trigger (see the list below, if this campaign has one) or the researched context on this contact/company, and hint at the value on offer without a hard pitch yet.';
+  }
+  if (num === 3) {
+    return ' This is message 3 - open it like something you forgot to mention last time ("meant to say...", "one more thing...") and add a second, different value point or detail rather than repeating message 2\'s angle.';
+  }
+  if (num === 4) {
+    return ' This is message 4 - move the conversation forward with a gentle nudge. Reference that you haven\'t heard back without making them feel chased, and give them an easy, low-effort way to respond.';
+  }
+  if (num >= 5) {
+    return ' This is a late message in the sequence - keep it a soft, low-pressure ping. Give them a genuine, no-hard-feelings way to opt out ("no worries if now\'s not the time") while leaving the door open, rather than pushing harder the later it gets.';
+  }
+  return '';
+}
+
 // The 'cta' branch used to be an unconditional command ("make the ask
 // directly here... don't hold back") regardless of what the contact had
 // actually said - cadence alone decided it was time to pitch, with no
@@ -13365,8 +13484,9 @@ function ctaStrategyNoteText(stageKey, messageNumber, messagesBeforeCta) {
   // undersell what they raised, offer a lighter next step instead - a
   // coffee, a quick call, an informal chat - framed with no pressure.
   const judgment = `Read what the contact has actually said so far before deciding whether to make any kind of ask. Treat a direct pitch as earned only once they've shown a real signal: asked what you do, asked for detail, described a specific concrete problem the offer speaks to, or replied at length with clear common ground. General warmth or mild interest is a reason to keep building the relationship, not to pitch. Where a signal is there but the full scripted pitch would undersell what they raised, offer a lighter next step instead - a coffee, a quick call, an informal chat - with no pressure.`;
+  const bookingNote = ` Where the ask is to get time in the diary, make it maximally easy to say yes to: offer two concrete time options (e.g. "Tuesday 2pm or Thursday 10am") rather than a generic scheduling link or an open-ended "let me know when suits".`;
   if (stageKey === 'cta') {
-    return `Strategy: this is the CTA step - the cadence expects the ask around message ${num}${num > n ? ` (already past the usual message ${n} target, so don't let it drift further without a forward step)` : ''}. ${judgment} If nothing in the conversation shows that kind of signal yet, still make a forward step, but keep it soft rather than the full scripted ask.`;
+    return `Strategy: this is the CTA step - the cadence expects the ask around message ${num}${num > n ? ` (already past the usual message ${n} target, so don't let it drift further without a forward step)` : ''}. ${judgment} If nothing in the conversation shows that kind of signal yet, still make a forward step, but keep it soft rather than the full scripted ask.${bookingNote}`;
   }
   if (!num) return '';
   if (num < n) {
@@ -13842,6 +13962,7 @@ async function buildCampaignOutreachPrompt({ campaignRecord, contactRecord, mess
   const stageKey = stageKeyForMessage(messageNumber, ctaMessage);
   const template = extractStageTemplate(camp['Sequence Templates'], messageNumber);
   const ctaOptions = stageKey === 'cta' ? parseCtaList(camp['CTAs']) : [];
+  const triggers = parseCtaList(camp['Triggers']);
   const styleCorrections = parseStyleCorrections(camp['Style Corrections']);
 
   // Earlier than the campaign's CTA-message target -> the offer is context
@@ -13877,7 +13998,7 @@ Contact: ${cf['Full Name'] || 'Unknown'}, ${cf['Job Title'] || ''}. Profile note
 Recent posts (last 30 days only): ${recentPosts}${enrichmentNote}${imageNote ? '\n' + imageNote : ''}
 ${offerNote}${await angleLibraryNote(campaignRecord, contactRecord)}${await accountEnrichmentPromptNote(contactRecord, rows)}
 
-${ctaStrategyNoteText(stageKey, messageNumber, ctaMessage)}${stageOneNote}${ctaOptionsPromptText(ctaOptions)}
+${ctaStrategyNoteText(stageKey, messageNumber, ctaMessage)}${emailMode ? '' : messageBeatNote(messageNumber)}${stageOneNote}${ctaOptionsPromptText(ctaOptions)}${triggersPromptText(triggers)}
 
 ${voiceRulesPromptText(voice, emailMode)}${styleCorrectionsPromptText(styleCorrections, stageKey)}${steerPromptText(steer)}
 
@@ -13927,6 +14048,7 @@ async function buildCampaignReplyPrompt({ campaignRecord, contactRecord, steer }
     : '';
 
   const ctaOptions = parseCtaList(camp['CTAs']);
+  const triggers = parseCtaList(camp['Triggers']);
   const styleCorrections = parseStyleCorrections(camp['Style Corrections']);
 
   const enrichmentProfile = parseContactEnrichment(cf['AI Summary']);
@@ -13947,7 +14069,7 @@ ${offerNote}${await angleLibraryNote(campaignRecord, contactRecord)}${await acco
 Full conversation so far (most recent entry first if dated; "Marcus:" is you, the other name is them):
 ${cf['Conversation Context'] || '(no thread captured - treat their most recent message as a short positive reply and move things forward)'}
 
-Your job: reply to what they actually said in their most recent message. Move the conversation one concrete step toward ${ctaOptions.length ? 'one of this campaign\'s CTAs' : 'a short call or coffee'}, but only as hard as their reply has earned - if they asked a question, answer it plainly first; if they're warm and it's time, make the ask; if they raised an objection, address it without being defensive. Never reintroduce yourself or repeat an earlier message.${stageOneNote}${ctaOptionsPromptText(ctaOptions)}
+Your job: reply to what they actually said in their most recent message. Move the conversation one concrete step toward ${ctaOptions.length ? 'one of this campaign\'s CTAs' : 'a short call or coffee'}, but only as hard as their reply has earned - if they asked a question, answer it plainly first; if they're warm and it's time, make the ask; if they raised an objection, address it without being defensive. Never reintroduce yourself or repeat an earlier message. Where the ask is to get time in the diary, offer two concrete time options rather than a generic scheduling link.${stageOneNote}${ctaOptionsPromptText(ctaOptions)}${triggersPromptText(triggers)}
 
 ${voiceRulesPromptText(voice, false)}${styleCorrectionsPromptText(styleCorrections, 'reply')}${steerPromptText(steer)}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${examplesNote}
 
@@ -14117,13 +14239,14 @@ app.post('/api/messages/generate', async (req, res) => {
     } else {
       const campaignNote = campaign ? `\n\nThis contact is part of the active campaign "${campaign.name}" (goal: ${campaign.goal || 'not recorded'}). Campaign strategy: ${campaign.strategyBrief || 'none recorded'}. Write in line with this strategy.` : '';
       const ctaOptions = (campaignRecord && stage.key === 'cta') ? parseCtaList(campaignRecord.fields['CTAs']) : [];
+      const triggers = campaignRecord ? parseCtaList(campaignRecord.fields['Triggers']) : [];
       styleCorrections = campaignRecord ? parseStyleCorrections(campaignRecord.fields['Style Corrections']) : emptyStyleCorrections();
       stageKey = stage.key;
       resolvedVoice = voice;
       if (emailMode) {
         promptText = `You are drafting a cold outreach email to a business on behalf of T2C Outreach, Twenty2 Collective's outreach CRM.\n\nBusiness: ${contact.company || contact.name}. Contact: ${contact.name}${contact.role ? `, ${contact.role}` : ''}. Profile notes: ${contact.notes || 'none'}.${conversationNote}${stage.template ? `\n\nTemplate / angle to work from:\n${stage.template}` : ''}\n\n${voiceRulesPromptText(voice, true)}${imageNote}${campaignNote}${enrichmentNote}${styleCorrectionsPromptText(styleCorrections, stage.key)}${steerPromptText(steer)}\n\nWrite the cold email to this business now. If there is a prior reply in the conversation above, respond to what they actually said rather than reintroducing yourself.${GROUND_IN_SPECIFICS_NOTE}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${draftJsonContract(true)}`;
       } else {
-        promptText = `Template for this stage:\n${stage.template || ''}\n\nContact: ${contact.name}, ${contact.role || ''} at ${contact.company || ''}. Sequence stage: ${stage.label || stage.key} (message ${stage.messageNumber || 'n/a'} in the sequence). Profile notes: ${contact.notes || 'none'}.${conversationNote}\n\n${ctaStrategyNoteText(stage.key, stage.messageNumber, voice && voice.messagesBeforeCta)}${ctaOptionsPromptText(ctaOptions)}\n\n${voiceRulesPromptText(voice, false)}${imageNote}${campaignNote}${enrichmentNote}${styleCorrectionsPromptText(styleCorrections, stage.key)}${steerPromptText(steer)}\n\nWrite the actual message for this specific contact, replacing placeholders naturally - if the conversation so far shows they've already replied, respond to what they actually said rather than reintroducing yourself.${GROUND_IN_SPECIFICS_NOTE}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${draftJsonContract(false)}`;
+        promptText = `Template for this stage:\n${stage.template || ''}\n\nContact: ${contact.name}, ${contact.role || ''} at ${contact.company || ''}. Sequence stage: ${stage.label || stage.key} (message ${stage.messageNumber || 'n/a'} in the sequence). Profile notes: ${contact.notes || 'none'}.${conversationNote}\n\n${ctaStrategyNoteText(stage.key, stage.messageNumber, voice && voice.messagesBeforeCta)}${messageBeatNote(stage.messageNumber)}${ctaOptionsPromptText(ctaOptions)}${triggersPromptText(triggers)}\n\n${voiceRulesPromptText(voice, false)}${imageNote}${campaignNote}${enrichmentNote}${styleCorrectionsPromptText(styleCorrections, stage.key)}${steerPromptText(steer)}\n\nWrite the actual message for this specific contact, replacing placeholders naturally - if the conversation so far shows they've already replied, respond to what they actually said rather than reintroducing yourself.${GROUND_IN_SPECIFICS_NOTE}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${draftJsonContract(false)}`;
       }
     }
 
@@ -14170,7 +14293,7 @@ app.post('/api/messages/generate-template', async (req, res) => {
 
   try {
     const roleList = (Array.isArray(roles) ? roles : []).join(', ') || 'senior leaders';
-    const promptText = `Write a LinkedIn outreach template for the "${stageLabel}" stage of a sequence targeting ${roleList} at WA companies.\n\n${ctaStrategyNoteText(stageKey, messageNumber, voice && voice.messagesBeforeCta)}\n\n${voiceRulesPromptText(voice)}\n\nUse {{first}}, {{company}}, {{role}} as placeholders. Return only the message text.`;
+    const promptText = `Write a LinkedIn outreach template for the "${stageLabel}" stage of a sequence targeting ${roleList} at WA companies.\n\n${ctaStrategyNoteText(stageKey, messageNumber, voice && voice.messagesBeforeCta)}${messageBeatNote(messageNumber)}\n\n${voiceRulesPromptText(voice)}\n\nUse {{first}}, {{company}}, {{role}} as placeholders. Return only the message text.`;
 
     const message = await callClaudeText(promptText, 300);
     res.json({ success: true, message });

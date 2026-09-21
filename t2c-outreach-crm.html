@@ -799,6 +799,19 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .funnel-strip-conv{font-size:11px;font-weight:700;color:var(--success);margin-top:4px;}
 .funnel-strip-conv.is-drop{color:var(--danger);}
 .funnel-strip-arrow{display:flex;align-items:center;color:var(--border);flex-shrink:0;}
+/* 14-day cadence tracker (Roadmap thread) - colour-coded by beat, same
+   spirit as the video this cadence is drawn from: orange=connect,
+   blue=LinkedIn message, grey=engage, gold=manual email. */
+.cadence-strip{display:flex;gap:3px;overflow-x:auto;padding-bottom:2px;}
+.cadence-cell{flex:1 1 0;min-width:40px;text-align:center;padding:6px 2px;border-radius:8px;opacity:.55;}
+.cadence-cell.is-done{opacity:1;}
+.cadence-cell.is-today{outline:2px solid var(--accent);outline-offset:1px;opacity:1;}
+.cadence-cell-day{font-size:12px;font-weight:800;line-height:1.2;}
+.cadence-cell-label{font-size:9.5px;font-weight:700;margin-top:2px;text-transform:uppercase;letter-spacing:.01em;white-space:nowrap;}
+.cadence-connect{background:var(--tint-orange-bg);color:var(--tint-orange-fg);}
+.cadence-message{background:var(--tint-blue-bg);color:var(--tint-blue-fg);}
+.cadence-engage{background:var(--tint-grey-bg);color:var(--tint-grey-fg);}
+.cadence-email{background:var(--tint-gold-bg);color:var(--tint-gold-fg);}
 /* Campaign scorecard — HeyReach-style KPI tiles */
 .kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;}
 .kpi-tile{background:var(--surface-2);border:1px solid var(--border-light);border-radius:var(--radius-card);padding:14px 16px;}
@@ -11595,6 +11608,7 @@ async function hydrateCampaignsFromAirtable(){
         status: f['Status'] || 'Draft',
         type: (f['Campaign Type'] || 'LinkedIn').toLowerCase() === 'email' ? 'email' : 'linkedin',
         ctas: f['CTAs'] || '',
+        triggers: f['Triggers'] || '',
         connectionNoteMode: ['Note','No note','Split test'].includes(f['Connection Note Mode']) ? f['Connection Note Mode'] : 'Note',
         sequenceLength: (Number.isFinite(+f['Sequence Length']) && +f['Sequence Length'] >= 1 && +f['Sequence Length'] <= 8) ? Math.round(+f['Sequence Length']) : 3,
         ctaMessage: (Number.isFinite(+f['CTA Message']) && +f['CTA Message'] >= 1 && +f['CTA Message'] <= 8) ? Math.round(+f['CTA Message']) : 3,
@@ -11864,12 +11878,35 @@ function renderRoadmap(contactsOverride){
 
 function toggleArchive(){ state.archiveOpen = !state.archiveOpen; renderPage(); }
 
+// Colour for the Day X/14 badge - reuses the existing day-green/amber/red
+// tint classes (day-badge) so it reads consistently with the "days pending"
+// badge already on every card, rather than introducing a fourth palette.
+function cadenceDayBadgeClass(status){
+  if(status === 'overdue') return 'day-red';
+  if(status === 'due') return 'day-amber';
+  return 'day-green';
+}
+
+// The Day X/14 badge - only meaningful for LinkedIn campaigns (the 14-day
+// cadence this maps to is LinkedIn-only; email campaigns have their own
+// separate step flow). null cadence means Engagement Made hasn't happened
+// yet, so the cadence clock hasn't started.
+function cadenceBadgeHtml(cadence){
+  if(!cadence) return `<span class="tp-badge" title="Cadence not started yet - engage with their profile to start the clock"><i class="ti ti-calendar-event"></i> Not started</span>`;
+  if(cadence.status === 'complete') return `<span class="tp-badge" title="Meeting booked - 14-day cadence complete"><i class="ti ti-calendar-check"></i> Complete</span>`;
+  const dayLabel = cadence.cadenceDay > 14 ? '14+' : cadence.cadenceDay;
+  const titleParts = [`Day ${cadence.cadenceDay} of the 14-day cadence`];
+  if(cadence.nextStage && cadence.nextTargetDay) titleParts.push(`${cadence.nextStage} due by day ${cadence.nextTargetDay}`);
+  return `<span class="day-badge ${cadenceDayBadgeClass(cadence.status)}" title="${esc(titleParts.join(' - '))}"><i class="ti ti-calendar-event"></i> Day ${dayLabel}/14</span>`;
+}
+
 function renderKCard(c, colKey){
   const isPending = colKey === 'pending';
   const days = isPending ? getPendingDays(c) : daysBetween(c.connDate);
   const flagged = isPending && days >= state.settings.timeoutDays;
   const seqStage = window.__roadmapCampaignId ? campaignSequenceStageFor(c.name) : '';
   const email = isEmailRoadmap();
+  const cadence = (window.__roadmapCampaignId && !email) ? campaignCadenceFor(c.name) : undefined;
   const subline = email
     ? esc([ (c.role && c.role !== c.name) ? c.role : '', (c.company && c.company !== c.name) ? c.company : '' ].filter(Boolean).join(' · ') || c.email || '')
     : esc(c.role) + ' · ' + esc(c.company);
@@ -11879,7 +11916,10 @@ function renderKCard(c, colKey){
       <div>
         <div class="kcard-name">${esc(c.name)}</div>
         <div class="kcard-role">${subline}</div>
-        ${seqStage ? `<div style="margin-top:4px;"><span class="tp-badge" title="Sequence stage in this campaign"><i class="ti ti-route"></i> ${esc(seqStage)}</span></div>` : ''}
+        ${seqStage || cadence !== undefined ? `<div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px;">
+          ${seqStage ? `<span class="tp-badge" title="Sequence stage in this campaign"><i class="ti ti-route"></i> ${esc(seqStage)}</span>` : ''}
+          ${cadence !== undefined ? cadenceBadgeHtml(cadence) : ''}
+        </div>` : ''}
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
         <span class="day-badge ${dayBadgeClass(days)}">${days == null ? '–' : days + 'd'}</span>
@@ -12208,11 +12248,87 @@ async function copyEnrichmentProfile(cid){
   toast('Enrichment profile copied to clipboard', 'success');
 }
 
+// Full stage chain for cadence-rank comparisons (day-of-cadence math) -
+// deliberately separate from the LINKEDIN_STAGE_ORDER just above
+// (linkedInStepInfo), which is intentionally truncated to 3 messages for
+// the m1/m2/cta thread-step UI and shouldn't be extended for this. Mirrors
+// the server's LINKEDIN_STAGE_ORDER (search-server.js) exactly.
+const CADENCE_STAGE_ORDER = ['Found','Engagement Made','Connection Pending','Connected',
+  'Message 1 Sent','Message 2 Sent','Message 3 Sent','Message 4 Sent',
+  'Message 5 Sent','Message 6 Sent','Message 7 Sent','Message 8 Sent','Meeting Booked'];
+function cadenceStageRank(stage){ return CADENCE_STAGE_ORDER.indexOf(collapseLegacyStage(stage)); }
+
+// The 14-day cadence from the outreach video, mapped onto this app's real
+// stages (see the CADENCE_TARGET_DAY comment in search-server.js for why
+// day 1 is Engagement Made rather than Connect, and why Connected has no
+// day of its own). Days without a `stage` (Engage/Email) aren't tracked
+// actions - see the "manual" cells - so they're marked done purely by
+// elapsed time, not by anything logged in Airtable.
+const CADENCE_14_DAY_STEPS = [
+  { day:1,  type:'engage',  label:'Engage',   stage:'Engagement Made' },
+  { day:2,  type:'connect', label:'Connect',  stage:'Connection Pending' },
+  { day:3,  type:'message', label:'Msg 1',    stage:'Message 1 Sent' },
+  { day:4,  type:'engage',  label:'Engage' },
+  { day:5,  type:'message', label:'Msg 2',    stage:'Message 2 Sent' },
+  { day:6,  type:'engage',  label:'Engage' },
+  { day:7,  type:'email',   label:'Email' },
+  { day:8,  type:'engage',  label:'Engage' },
+  { day:9,  type:'message', label:'Msg 3',    stage:'Message 3 Sent' },
+  { day:10, type:'message', label:'Msg 4',    stage:'Message 4 Sent' },
+  { day:11, type:'engage',  label:'Engage' },
+  { day:12, type:'message', label:'Msg 5',    stage:'Message 5 Sent' },
+  { day:13, type:'email',   label:'Email 2' },
+  { day:14, type:'email',   label:'Email 3' }
+];
+
+// Per-contact 14-day cadence tracker shown in the expanded thread - the
+// literal "which day of the video's cadence is this person on" view. A
+// stage-backed cell (Connect/Msg 1-5) is marked done once the contact's
+// live Sequence Stage has reached or passed it; an Engage/Email cell has no
+// stage of its own (nothing in Airtable tracks "engaged between messages"
+// or "sent the manual email"), so it's only ever marked done once that
+// calendar day has elapsed - it's informational, not something this app
+// sends or checks off for you.
+function renderCadenceStrip(c){
+  const stage = window.__roadmapCampaignId ? campaignSequenceStageFor(c.name) : '';
+  const cadence = window.__roadmapCampaignId ? campaignCadenceFor(c.name) : null;
+  if(!cadence){
+    return `<div class="card" style="margin-bottom:10px;">
+      <div class="section-title" style="margin-bottom:4px;"><i class="ti ti-calendar-event"></i> 14-day cadence</div>
+      <div class="muted" style="font-size:11.5px;">Not started - engaging with their profile (the "Engage" action) kicks off day 1.</div>
+    </div>`;
+  }
+  const rank = cadenceStageRank(stage);
+  const todayNum = Math.min(cadence.cadenceDay, 14);
+  const cells = CADENCE_14_DAY_STEPS.map(step => {
+    const done = step.stage ? (rank >= cadenceStageRank(step.stage)) : (cadence.cadenceDay > step.day);
+    const isToday = !done && step.day === todayNum;
+    const cls = ['cadence-cell', `cadence-${step.type}`, done ? 'is-done' : '', isToday ? 'is-today' : ''].filter(Boolean).join(' ');
+    return `<div class="${cls}" title="Day ${step.day}: ${esc(step.label)}${step.stage ? '' : ' (manual, not tracked here)'}">
+      <div class="cadence-cell-day">${done ? '<i class="ti ti-check"></i>' : step.day}</div>
+      <div class="cadence-cell-label">${esc(step.label)}</div>
+    </div>`;
+  }).join('');
+  const statusText = cadence.status === 'complete'
+    ? 'Meeting booked - cadence complete.'
+    : cadence.status === 'overdue'
+      ? `Day ${cadence.cadenceDay} of 14 - ${esc(cadence.nextStage || 'next step')} was due by day ${cadence.nextTargetDay}, running behind.`
+      : cadence.status === 'due'
+        ? `Day ${cadence.cadenceDay} of 14 - ${esc(cadence.nextStage || 'next step')} is due now.`
+        : `Day ${cadence.cadenceDay} of 14${cadence.nextStage ? ` - on track for ${esc(cadence.nextStage)} by day ${cadence.nextTargetDay}` : ''}.`;
+  return `<div class="card" style="margin-bottom:10px;">
+    <div class="section-title" style="margin-bottom:8px;"><i class="ti ti-calendar-event"></i> 14-day cadence</div>
+    <div class="cadence-strip">${cells}</div>
+    <div class="muted" style="font-size:11px;margin-top:8px;">${statusText}</div>
+  </div>`;
+}
+
 function renderThread(c){
   const t = c.thread;
   const email = isEmailRoadmap();
   return `
   <div class="thread" onclick="event.stopPropagation()">
+    ${email ? '' : renderCadenceStrip(c)}
     ${email ? renderBusinessResearchSection(c) : renderEnrichmentSection(c)}
     ${email ? '' : `
     <div class="thread-step">
@@ -15750,10 +15866,14 @@ function saveCampaignToDraft(){
   });
 
   const offerToSave = chat.offer;
+  const isNewCampaign = !chat.editingCampaignId;
   syncCampaignToAirtable(campaign, () => { if(offerToSave) saveOfferForCampaign(campaign, offerToSave); });
   toast(`Campaign "${campaign.name}" saved to Draft with ${contactIds.length} matched contact${contactIds.length===1?'':'s'}`, 'success');
   window.__campaignChat = null;
-  openCampaignDetail(campaign.id);
+  // A brand-new campaign lands on Setup rather than Actions - that's where
+  // Triggers/CTAs/cadence get filled in, and where the account-wide Trigger
+  // suggestions (accountTriggerChipsHtml) are surfaced for picking from.
+  openCampaignDetail(campaign.id, isNewCampaign ? 'strategy' : undefined);
 }
 
 // Writes the offer set during campaign creation (or regenerated on the
@@ -16386,6 +16506,7 @@ async function loadCampaignSequenceStages(campaign){
     const dateMap = {};
     const replyMap = {};
     const armMap = {};
+    const cadenceMap = {};
     (data.rows||[]).forEach(r => {
       if(!r.contactName) return;
       const key = r.contactName.trim().toLowerCase();
@@ -16393,6 +16514,7 @@ async function loadCampaignSequenceStages(campaign){
       dateMap[key] = r.connectionSentDate || null;
       replyMap[key] = !!r.replyReceived;
       armMap[key] = r.connectionArm || null;
+      cadenceMap[key] = r.cadence || null;
     });
     window.__campaignSequenceStages = window.__campaignSequenceStages || {};
     window.__campaignSequenceStages[campaign.id] = map;
@@ -16402,6 +16524,8 @@ async function loadCampaignSequenceStages(campaign){
     window.__campaignReplyReceived[campaign.id] = replyMap;
     window.__campaignConnectionArm = window.__campaignConnectionArm || {};
     window.__campaignConnectionArm[campaign.id] = armMap;
+    window.__campaignCadence = window.__campaignCadence || {};
+    window.__campaignCadence[campaign.id] = cadenceMap;
   } catch(err){
     console.warn('Could not load campaign sequence stages:', err.message);
     window.__campaignSequenceStages = window.__campaignSequenceStages || {};
@@ -16410,6 +16534,8 @@ async function loadCampaignSequenceStages(campaign){
     window.__campaignConnectionSentDates[campaign.id] = {};
     window.__campaignReplyReceived = window.__campaignReplyReceived || {};
     window.__campaignReplyReceived[campaign.id] = {};
+    window.__campaignCadence = window.__campaignCadence || {};
+    window.__campaignCadence[campaign.id] = {};
   }
   if(window.__campaignView === 'detail' && window.__campaignDetailId === campaign.id && ['roadmap','analytics','actions'].includes(window.__campaignDetailTab)) renderPage();
   // Both Grid view modes depend on this now - Table already did (sequence
@@ -16438,6 +16564,14 @@ function campaignSequenceStageFor(contactName){
 
 function campaignConnectionSentDateFor(contactName){
   const map = window.__roadmapCampaignId && window.__campaignConnectionSentDates && window.__campaignConnectionSentDates[window.__roadmapCampaignId];
+  return map ? (map[contactName.trim().toLowerCase()] || null) : null;
+}
+
+// Where this contact sits against the 14-day cadence (see CADENCE_TARGET_DAY
+// in search-server.js) - {cadenceDay, targetDay, nextStage, nextTargetDay,
+// status} or null if the cadence hasn't started (still at Found).
+function campaignCadenceFor(contactName){
+  const map = window.__roadmapCampaignId && window.__campaignCadence && window.__campaignCadence[window.__roadmapCampaignId];
   return map ? (map[contactName.trim().toLowerCase()] || null) : null;
 }
 
@@ -16714,6 +16848,50 @@ function renderCampaignPipelineTab(campaign){
   `;
 }
 
+// Distinct trigger lines used across every campaign's Strategy > Triggers
+// field (Campaigns.Triggers), case-insensitively deduped, most-used first -
+// so setting up a new campaign surfaces the reasons-to-reach-out the team
+// has already found value in, instead of starting from a blank list every
+// time. First-seen casing wins for the display label.
+function accountTriggerLibrary(){
+  const counts = new Map();
+  (state.campaigns||[]).forEach(c => {
+    (c.triggers||'').split(/\r?\n/).map(s=>s.trim()).filter(Boolean).forEach(t => {
+      const key = t.toLowerCase();
+      if(!counts.has(key)) counts.set(key, { label: t, count: 0 });
+      counts.get(key).count++;
+    });
+  });
+  return Array.from(counts.values()).sort((a,b) => b.count - a.count || a.label.localeCompare(b.label));
+}
+
+// Suggestion chips for the Strategy tab's Triggers field - every account-wide
+// trigger this campaign doesn't already have. encodeURIComponent (not esc())
+// guards the onclick attribute here since a trigger is free text and may
+// contain an apostrophe or quote that would otherwise break out of it.
+function accountTriggerChipsHtml(campaign){
+  const mine = new Set((campaign.triggers||'').split(/\r?\n/).map(s => s.trim().toLowerCase()).filter(Boolean));
+  const suggestions = accountTriggerLibrary().filter(t => !mine.has(t.label.toLowerCase()));
+  if(!suggestions.length) return '';
+  return `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">
+    <div class="muted" style="font-size:11px;width:100%;">Used elsewhere in the account - click to add:</div>
+    ${suggestions.map(t => `<button type="button" class="btn btn-ghost btn-sm" style="font-size:11.5px;padding:3px 9px;" onclick="addAccountTrigger('${encodeURIComponent(t.label)}')" title="Used in ${t.count} campaign${t.count===1?'':'s'}"><i class="ti ti-plus"></i> ${esc(t.label)}</button>`).join('')}
+  </div>`;
+}
+
+// Appends a suggested trigger straight into the open Strategy tab's textarea
+// (no full re-render, so any other unsaved edits in the form aren't lost) -
+// still requires "Save changes" to persist, same as typing it in by hand.
+function addAccountTrigger(encodedLabel){
+  const el = document.getElementById('stratTriggers');
+  if(!el) return;
+  const label = decodeURIComponent(encodedLabel);
+  const existing = el.value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  if(existing.some(e => e.toLowerCase() === label.toLowerCase())) return;
+  el.value = existing.concat([label]).join('\n');
+  el.focus();
+}
+
 function renderCampaignStrategyTab(campaign){
   return `
   ${renderCampaignOfferSection(campaign)}
@@ -16736,6 +16914,12 @@ function renderCampaignStrategyTab(campaign){
 
     <div class="uf-label" style="display:block;margin:18px 0 10px;">CTAs &amp; targeting rules</div>
     <div class="field"><label>CTAs (one per line)</label><textarea id="stratCtas" rows="3" placeholder="e.g. Change Value Check&#10;Free session&#10;Community Connect event">${esc(campaign.ctas||'')}</textarea><div class="muted" style="font-size:11px;margin-top:4px;">Used by the Sales tab's "CTA converting to bookings" chart - match these labels when logging touch points for best results.</div></div>
+    <div class="field">
+      <label>Triggers (one per line)</label>
+      <textarea id="stratTriggers" rows="3" placeholder="e.g. Mutual connection&#10;Case study with a similar company&#10;Hiring for a relevant role&#10;Recently posted about...">${esc(campaign.triggers||'')}</textarea>
+      ${accountTriggerChipsHtml(campaign)}
+      <div class="muted" style="font-size:11px;margin-top:4px;">The stated reason for reaching out - fed to the drafter so message 2 onward cites a concrete trigger instead of a generic pitch. Add new ones freely; suggestions above are triggers already used elsewhere in the account.</div>
+    </div>
     <div class="field"><label>Decision Maker Criteria (one keyword per line)</label><textarea id="stratDecisionMakerCriteria" rows="3" placeholder="e.g. CEO&#10;Director&#10;Head of">${esc(campaign.decisionMakerCriteria||'')}</textarea><div class="muted" style="font-size:11px;margin-top:4px;">Case-insensitive substring match against a contact's Job Title - defines who counts as "the right person" for this campaign's Pipeline tab. A fixed mechanical rule, not Engine-judged, so the bar can't drift.</div></div>
     ${(campaign.type||'linkedin')!=='email' ? `
     <div class="uf-label" style="display:block;margin:18px 0 10px;">Sequence mechanics</div>
@@ -16757,6 +16941,10 @@ function renderCampaignStrategyTab(campaign){
       </div>
     </div>
     <div class="muted" style="font-size:11px;margin-top:-6px;">Default is 3 messages with the CTA on message 3. Increase the length to test a longer runway before the ask.</div>
+    <div class="field" style="margin-top:14px;">
+      <div class="uf-label" style="display:block;margin-bottom:6px;"><i class="ti ti-mail"></i> Email follow-up (manual)</div>
+      <div class="muted" style="font-size:11px;">Part of the process, not automated here. Around message 2-3, if there's been no reply on LinkedIn, follow up manually by email on the same trigger you've already raised - it opens a second channel and often surfaces replies from people who missed the LinkedIn message. Send it yourself; this app doesn't send email for LinkedIn campaigns.</div>
+    </div>
     ` : ''}
     <div style="display:flex;gap:10px;margin-top:12px;">
       <button class="btn btn-primary btn-sm" onclick="saveCampaignStrategy('${campaign.id}')"><i class="ti ti-device-floppy"></i> Save changes</button>
@@ -20482,6 +20670,8 @@ function saveCampaignStrategy(campaignId){
   campaign.objectionHandling = document.getElementById('stratObjections').value.trim();
   campaign.successMetric = document.getElementById('stratSuccessMetric').value.trim();
   campaign.ctas = document.getElementById('stratCtas').value.trim();
+  const triggersEl = document.getElementById('stratTriggers');
+  if(triggersEl) campaign.triggers = triggersEl.value.trim();
   campaign.decisionMakerCriteria = document.getElementById('stratDecisionMakerCriteria').value.trim();
   const typeEl = document.getElementById('stratCampaignType');
   if(typeEl) campaign.type = typeEl.value === 'email' ? 'email' : 'linkedin';
@@ -22125,6 +22315,7 @@ function syncCampaignToAirtable(campaign, onSynced){
       startDate: campaign.createdAt,
       status: campaign.status,
       ctas: campaign.ctas || '',
+      triggers: campaign.triggers || '',
       campaignType: campaign.type || 'linkedin',
       connectionNoteMode: campaign.connectionNoteMode || 'Note',
       sequenceLength: campaign.sequenceLength || 3,
