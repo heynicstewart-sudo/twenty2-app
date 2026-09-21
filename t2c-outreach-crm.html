@@ -804,16 +804,27 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 /* 14-day cadence tracker (Roadmap thread) - colour-coded by beat, same
    spirit as the video this cadence is drawn from: orange=connect,
    blue=LinkedIn message, grey=engage, gold=manual email. */
-.cadence-strip{display:flex;gap:3px;overflow-x:auto;padding-bottom:2px;}
-.cadence-cell{flex:1 1 0;min-width:40px;text-align:center;padding:6px 2px;border-radius:8px;opacity:.55;}
-.cadence-cell.is-done{opacity:1;}
-.cadence-cell.is-today{outline:2px solid var(--accent);outline-offset:1px;opacity:1;}
-.cadence-cell-day{font-size:12px;font-weight:800;line-height:1.2;}
-.cadence-cell-label{font-size:9.5px;font-weight:700;margin-top:2px;text-transform:uppercase;letter-spacing:.01em;white-space:nowrap;}
+/* Fixed-size cells that never shrink below legibility, scrolling the strip
+   horizontally instead - the old flex:1 1 0 cells were being squeezed
+   under their own min-width inside the ~250px kanban column, overlapping
+   their word labels. No text label per cell any more either (see the
+   legend below, said once instead of 14 times) - just a colour, a
+   checkmark once done, and the day number on today's cell only. */
+.cadence-strip{display:flex;gap:4px;overflow-x:auto;padding-bottom:4px;}
+.cadence-cell{flex:0 0 22px;width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;}
+.cadence-cell.is-done{color:#fff;}
+.cadence-cell.is-today{outline:2px solid var(--accent);outline-offset:2px;}
+.cadence-legend{display:flex;flex-wrap:wrap;gap:5px 12px;margin-top:9px;}
+.cadence-legend span{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;color:var(--muted);}
+.cadence-legend-dot{width:9px;height:9px;border-radius:3px;display:inline-block;flex-shrink:0;}
 .cadence-connect{background:var(--tint-orange-bg);color:var(--tint-orange-fg);}
+.cadence-connect.is-done{background:var(--tint-orange-fg);}
 .cadence-message{background:var(--tint-blue-bg);color:var(--tint-blue-fg);}
+.cadence-message.is-done{background:var(--tint-blue-fg);}
 .cadence-engage{background:var(--tint-grey-bg);color:var(--tint-grey-fg);}
+.cadence-engage.is-done{background:var(--tint-grey-fg);}
 .cadence-email{background:var(--tint-gold-bg);color:var(--tint-gold-fg);}
+.cadence-email.is-done{background:var(--tint-gold-fg);}
 /* Campaign scorecard — HeyReach-style KPI tiles */
 .kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;}
 .kpi-tile{background:var(--surface-2);border:1px solid var(--border-light);border-radius:var(--radius-card);padding:14px 16px;}
@@ -8098,6 +8109,21 @@ async function handleContactEngaged(cid, e){
   }
 }
 
+// Roadmap kanban card's "Engage/Connect on LinkedIn" button (renderKCard) -
+// same handlers Today's Actions uses, then an extra explicit refresh of
+// THIS board's campaign specifically. handleContactEngaged/
+// handleContactLinkedInOpened already refresh via activeCampaignForContact,
+// which picks the first Live campaign this contact is in - almost always
+// the one being viewed, but not guaranteed for a contact in more than one
+// live campaign, and the whole point of clicking this from the Roadmap is
+// to see the card jump columns immediately.
+async function linkedInFastAction(cid, colKey){
+  if(colKey === 'Found') await handleContactEngaged(cid);
+  else await handleContactLinkedInOpened(cid);
+  const campaign = state.campaigns.find(cp => cp.id === window.__roadmapCampaignId);
+  if(campaign) await loadCampaignSequenceStages(campaign);
+}
+
 // Resolves which campaign a Skip click should exclude the contact from -
 // the Grid's linked campaign when on the Grid page (currentGridCampaignName,
 // only resolves when the grid is linked to exactly one), the Roadmap's
@@ -11927,6 +11953,19 @@ function renderKCard(c, colKey){
   const subline = email
     ? esc([ (c.role && c.role !== c.name) ? c.role : '', (c.company && c.company !== c.name) ? c.company : '' ].filter(Boolean).join(' · ') || c.email || '')
     : esc(c.role) + ' · ' + esc(c.company);
+  // One-click "do the real-world thing and log it" button for the two
+  // pre-connection columns - opens the actual LinkedIn profile and, in the
+  // same click, advances the Sequence Stage (handleContactEngaged /
+  // handleContactLinkedInOpened, the same handlers Today's Actions already
+  // uses). Stops at Connection Pending on purpose - accepting a request
+  // isn't something a rep can click into happening, and everything past
+  // Connected (messaging, replies) already has its own richer flow in the
+  // expanded thread below.
+  const linkedInAction = (!email && (colKey === 'Found' || colKey === 'Engagement Made'))
+    ? (c.url
+        ? `<a class="btn btn-primary btn-sm" style="width:100%;justify-content:center;margin-top:8px;" href="${esc(c.url)}" target="_blank" rel="noopener" onclick="linkedInFastAction('${c.id}','${colKey}')"><i class="ti ti-brand-linkedin"></i> ${colKey === 'Found' ? 'Engage on LinkedIn' : 'Connect on LinkedIn'}</a>`
+        : `<div class="muted" style="font-size:11px;margin-top:8px;">No LinkedIn URL on file</div>`)
+    : '';
   return `
   <div class="kcard" draggable="true" id="kcard-${c.id}" data-id="${c.id}" ondragstart="onCardDragStart(event,'${c.id}')" ondragend="onCardDragEnd(event)" oncontextmenu="showContextMenu(event,'${c.id}')">
     <div class="kcard-head" onclick="toggleThread('${c.id}')">
@@ -11941,6 +11980,7 @@ function renderKCard(c, colKey){
         <button class="btn btn-ghost btn-sm" style="padding:2px 6px;" onclick="event.stopPropagation();handleSkipContact('${c.id}')" title="Skip - exclude from this campaign"><i class="ti ti-player-skip-forward"></i></button>
       </div>
     </div>
+    ${linkedInAction}
     ${flagged ? `<div class="kcard-flag"><span><i class="ti ti-flag-3"></i> Remove? ${days} days pending</span><button class="btn btn-danger btn-sm" onclick="event.stopPropagation();removeDeadContact('${c.id}')">Remove</button></div>` : ''}
     <div id="thread-${c.id}" style="display:none;">${renderThread(c)}</div>
   </div>`;
@@ -12314,14 +12354,22 @@ function renderCadenceStrip(c){
   }
   const rank = cadenceStageRank(stage);
   const todayNum = Math.min(cadence.cadenceDay, 14);
+  // Cards live inside a fixed ~250px kanban column, nowhere near enough
+  // room for 14 cells with word labels (they were overlapping/truncating -
+  // "CONNEC", "EN"). Cells are now plain numbered/checked squares, colour
+  // coded by beat; what each colour means moves into the legend below
+  // (said once, not squeezed into every cell), and which exact step is
+  // still available on hover via title.
   const cells = CADENCE_14_DAY_STEPS.map(step => {
     const done = step.stage ? (rank >= cadenceStageRank(step.stage)) : (cadence.cadenceDay > step.day);
     const isToday = !done && step.day === todayNum;
     const cls = ['cadence-cell', `cadence-${step.type}`, done ? 'is-done' : '', isToday ? 'is-today' : ''].filter(Boolean).join(' ');
-    return `<div class="${cls}" title="Day ${step.day}: ${esc(step.label)}${step.stage ? '' : ' (manual, not tracked here)'}">
-      <div class="cadence-cell-day">${done ? '<i class="ti ti-check"></i>' : step.day}</div>
-      <div class="cadence-cell-label">${esc(step.label)}</div>
-    </div>`;
+    const inner = done ? '<i class="ti ti-check"></i>' : (isToday ? step.day : '');
+    return `<div class="${cls}" title="Day ${step.day}: ${esc(step.label)}${step.stage ? '' : ' (manual, not tracked here)'}">${inner}</div>`;
+  }).join('');
+  const legend = ['engage','connect','message','email'].map(type => {
+    const label = { engage:'Engage', connect:'Connect', message:'Message', email:'Email (manual)' }[type];
+    return `<span><i class="cadence-legend-dot cadence-${type} is-done"></i>${label}</span>`;
   }).join('');
   const statusText = cadence.status === 'complete'
     ? 'Meeting booked - cadence complete.'
@@ -12333,7 +12381,8 @@ function renderCadenceStrip(c){
   return `<div class="card" style="margin-bottom:10px;">
     <div class="section-title" style="margin-bottom:8px;"><i class="ti ti-calendar-event"></i> 14-day cadence</div>
     <div class="cadence-strip">${cells}</div>
-    <div class="muted" style="font-size:11px;margin-top:8px;">${statusText}</div>
+    <div class="cadence-legend">${legend}</div>
+    <div class="muted" style="font-size:11.5px;font-weight:600;margin-top:8px;">${statusText}</div>
   </div>`;
 }
 
