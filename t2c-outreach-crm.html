@@ -508,24 +508,26 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 @keyframes pulse{0%{opacity:1;}50%{opacity:.35;}100%{opacity:1;}}
 @keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
 
-/* Kanban / Roadmap */
-.kanban{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;align-items:start;}
-.kanban-col{background:var(--surface-2);border:1px solid var(--border-light);border-top:2px solid var(--border);border-radius:var(--radius-card);padding:14px;min-height:200px;}
+/* Kanban / Roadmap - one column per exact Sequence Stage (up to ~11 columns
+   for a full LinkedIn cadence), so a fixed 4-up grid no longer fits: each
+   column gets a fixed width and the row scrolls horizontally instead. */
+.kanban{display:flex;gap:14px;align-items:start;overflow-x:auto;padding-bottom:6px;}
+.kanban-col{background:var(--surface-2);border:1px solid var(--border-light);border-top:2px solid var(--border);border-radius:var(--radius-card);padding:14px;min-height:200px;flex:0 0 250px;width:250px;}
 .kanban-col-header{display:flex;justify-content:space-between;align-items:center;font-weight:700;font-size:13px;letter-spacing:-0.01em;margin-bottom:12px;padding:0 2px;}
 .kanban-col-header .count{background:var(--ink);color:#fff;border-radius:var(--radius-pill);min-width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;padding:0 6px;font-size:11px;font-weight:700;}
-/* Column colour accents, matching the Journey Stage scheme used by the
-   Grid's tags/cells above: Connection pending=amber, Connection made=green,
-   Messaging=purple, Booked=gold. There's no "Found" column on the Roadmap
-   (it starts once a connection is pending), so that colour only appears on
-   the Grid. */
-.kanban-col[data-col="pending"]{border-top-color:var(--warning);}
-.kanban-col[data-col="pending"] .kanban-col-header{color:var(--warning);}
-.kanban-col[data-col="made"]{border-top-color:var(--success);}
-.kanban-col[data-col="made"] .kanban-col-header{color:var(--success);}
-.kanban-col[data-col="messaging"]{border-top-color:var(--purple);}
-.kanban-col[data-col="messaging"] .kanban-col-header{color:var(--purple);}
-.kanban-col[data-col="booked"]{border-top-color:var(--tint-gold-fg);}
-.kanban-col[data-col="booked"] .kanban-col-header{color:var(--tint-gold-fg);}
+/* Column colour accents by stage TYPE (found/connected/message/booked),
+   not by the old 4-bucket key - see campaignCadenceColumns. Pre-connection
+   stages (Found/Engagement Made/Connection Pending) share the amber "not
+   yet connected" colour; Connected is green; every Message N Sent column is
+   purple; Meeting Booked is gold. */
+.kanban-col[data-col-type="found"]{border-top-color:var(--warning);}
+.kanban-col[data-col-type="found"] .kanban-col-header{color:var(--warning);}
+.kanban-col[data-col-type="connected"]{border-top-color:var(--success);}
+.kanban-col[data-col-type="connected"] .kanban-col-header{color:var(--success);}
+.kanban-col[data-col-type="message"]{border-top-color:var(--purple);}
+.kanban-col[data-col-type="message"] .kanban-col-header{color:var(--purple);}
+.kanban-col[data-col-type="booked"]{border-top-color:var(--tint-gold-fg);}
+.kanban-col[data-col-type="booked"] .kanban-col-header{color:var(--tint-gold-fg);}
 .kanban-cards{display:flex;flex-direction:column;gap:10px;min-height:60px;}
 .kanban-col.dragover{background:var(--accent-dim);}
 .kcard{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card-sm);padding:14px;cursor:grab;box-shadow:var(--shadow-sm);transition:box-shadow .14s ease;}
@@ -1120,7 +1122,6 @@ html{scrollbar-width:thin;scrollbar-color:rgba(83,40,34,.2) transparent;}
   .stat-grid{grid-template-columns:repeat(2,1fr);}
   .two-col{grid-template-columns:1fr;}
   .mini-cards{grid-template-columns:1fr;}
-  .kanban{grid-template-columns:1fr;}
   .flow{grid-template-columns:1fr;}
   .flow-3{grid-template-columns:1fr;}
   .analytics-stat-grid{grid-template-columns:repeat(2,1fr);}
@@ -1493,38 +1494,26 @@ const ROADMAP_EXCLUDED_SEQUENCE_STAGES = ['Excluded', 'Lost'];
 // sets window.__roadmapCampaignId before calling renderRoadmap - so this is
 // always reading the current campaign's live Sequence Stage (fetched into
 // window.__campaignSequenceStages by loadCampaignSequenceStages, a real
-// GET /api/campaign/:id/campaign-contacts call), not local state.
+// GET /api/campaign/:id/campaign-contacts call), not local state. Returns
+// the exact stage as the column key (collapseLegacyStage already folds the
+// retired reply-gated email stages onto their send milestone - see its own
+// comment) - no separate email branch needed, campaignCadenceColumns
+// already builds a different column set for email vs LinkedIn.
 function getRoadmapColumn(c){
   const liveStage = window.__roadmapCampaignId ? campaignSequenceStageFor(c.name) : '';
-  if(ROADMAP_EXCLUDED_SEQUENCE_STAGES.includes(liveStage)) return null;
-  if(c.thread.booked) return 'booked';
-
-  // Email campaigns: no connection step. The columns read "To contact /
-  // Emailed / In conversation / Booked", so:
-  //   made ("Emailed")        = at least one email sent, no reply yet
-  //   messaging ("In convo")  = they replied (gate cleared to "Ready for
-  //                             Message N", or a booked-meeting stage)
-  // Everything pre-send stays in "To contact".
-  if(isEmailRoadmap()){
-    if(/^Ready for Message/.test(liveStage) || liveStage === 'Meeting Booked') return 'messaging';
-    if(/^Message \d Sent$/.test(liveStage) || /^Pending Reply/.test(liveStage)) return 'made';
-    if(!liveStage && c.state === 'messaging') return (c.thread.m1 && c.thread.m1.replied) ? 'messaging' : 'made';
-    return 'pending';
-  }
-
-  if(liveStage === 'Meeting Booked') return 'booked';
-  if(liveStage === 'Connected') return 'made';
-  if(/^Message \d Sent$/.test(liveStage) || /^Pending Reply/.test(liveStage) || /^Ready for Message/.test(liveStage)) return 'messaging';
-  // Found/Connection Requested/Connection Pending all land here, same as
-  // before this stage read sequence stage at all - as does the brief window
-  // before this campaign's Sequence Stage map has finished loading
-  // (liveStage === ''), falling back to local state just so the board isn't
-  // empty for that one render.
+  const collapsed = collapseLegacyStage(liveStage || 'Found');
+  if(ROADMAP_EXCLUDED_SEQUENCE_STAGES.includes(collapsed)) return null;
+  if(c.thread.booked) return 'Meeting Booked';
   if(!liveStage){
-    if(c.state === 'messaging') return 'messaging';
-    if(c.state === 'connected') return 'made';
+    // Sequence Stage map hasn't loaded yet, or this is a local-only
+    // contact with no Airtable row - fall back to local session state so
+    // the board isn't empty for that one render, same as before this
+    // rewrite.
+    if(c.state === 'messaging') return 'Message 1 Sent';
+    if(c.state === 'connected') return 'Connected';
+    return 'Found';
   }
-  return 'pending';
+  return collapsed;
 }
 
 // Days pending is calculated from Airtable's Connection Sent Date (written
@@ -11804,21 +11793,35 @@ function markContactsConnected(contacts){
 
 /* ===================== ROADMAP PAGE ===================== */
 
-const ROADMAP_COLS = [
-  { key:'pending', label:'Connection pending' },
-  { key:'made', label:'Connection made' },
-  { key:'messaging', label:'Messaging' },
-  { key:'booked', label:'Booked' }
-];
-// Email campaigns keep the same four columns / underlying stages, just
-// relabelled so the board reads as email not LinkedIn.
-const ROADMAP_COLS_EMAIL = [
-  { key:'pending', label:'To contact' },
-  { key:'made', label:'Emailed' },
-  { key:'messaging', label:'In conversation' },
-  { key:'booked', label:'Booked' }
-];
-function roadmapCols(){ return isEmailRoadmap() ? ROADMAP_COLS_EMAIL : ROADMAP_COLS; }
+// One column per EXACT Sequence Stage, built from the campaign's own
+// config (sequence length, LinkedIn vs email) - replaces the old fixed
+// 4-bucket board (pending/made/messaging/booked), which lumped every
+// message number into one "Messaging" column and Found/Engagement Made/
+// Connection Pending into one "Connection pending" column. `key` is the
+// literal Sequence Stage value written to Airtable - see getRoadmapColumn
+// and moveContactToStage, which both key off it directly rather than
+// through a bucket map. `type` only drives the column's accent colour.
+function campaignCadenceColumns(campaign){
+  const email = campaign && campaign.type === 'email';
+  const seqLen = Math.max(1, Math.min(8, (campaign && campaign.sequenceLength) || 3));
+  const cols = [];
+  if(email){
+    // Email has no connection step (see getRoadmapColumn's old email
+    // branch, which this replaces) - it goes straight from Found to
+    // Message 1 Sent.
+    cols.push({ key:'Found', label:'To contact', type:'found' });
+  } else {
+    cols.push({ key:'Found', label:'Found', type:'found' });
+    cols.push({ key:'Engagement Made', label:'Engaged', type:'found' });
+    cols.push({ key:'Connection Pending', label:'Connection sent', type:'found' });
+    cols.push({ key:'Connected', label:'Connected', type:'connected' });
+  }
+  for(let n=1;n<=seqLen;n++){
+    cols.push({ key:`Message ${n} Sent`, label: email ? `Email ${n}` : `Message ${n}`, type:'message' });
+  }
+  cols.push({ key:'Meeting Booked', label:'Booked', type:'booked' });
+  return cols;
+}
 
 // contactsOverride scopes the board to a subset of contacts (used by the
 // campaign Roadmap tab, which shows only that campaign's contacts). The
@@ -11827,22 +11830,33 @@ function roadmapCols(){ return isEmailRoadmap() ? ROADMAP_COLS_EMAIL : ROADMAP_C
 // record rather than pretending it's scoped.
 function renderRoadmap(contactsOverride){
   const contactsList = contactsOverride || state.contacts;
-  const grouped = { pending:[], made:[], messaging:[], booked:[] };
+  const campaign = state.campaigns.find(cp => cp.id === window.__roadmapCampaignId) || null;
+  const cols = campaignCadenceColumns(campaign);
+  const grouped = {};
+  cols.forEach(col => { grouped[col.key] = []; });
   // getRoadmapColumn returns null for an Excluded/Lost contact - skip
   // pushing rather than crashing on grouped[null], since they shouldn't
-  // appear in any column at all.
+  // appear in any column at all. A stage outside the campaign's configured
+  // range (e.g. Message 6 Sent after Sequence Length was shortened to 3)
+  // gets its own extra column rather than silently dropping that contact.
   let excludedCount = 0;
+  const extraCols = [];
   contactsList.forEach(c => {
     const col = getRoadmapColumn(c);
-    if(col) grouped[col].push(c);
-    else if(window.__roadmapCampaignId && ROADMAP_EXCLUDED_SEQUENCE_STAGES.includes(campaignSequenceStageFor(c.name))) excludedCount++;
+    if(!col){ excludedCount++; return; }
+    if(!grouped[col]){
+      grouped[col] = [];
+      extraCols.push({ key:col, label:col, type: /^Message \d+ Sent$/.test(col) ? 'message' : 'found' });
+    }
+    grouped[col].push(c);
   });
+  const allCols = cols.concat(extraCols);
 
   return `
   <div class="kanban" id="kanbanBoard">
-    ${roadmapCols().map(col => `
-      <div class="kanban-col" data-col="${col.key}" ondragover="onColDragOver(event)" ondrop="onColDrop(event,'${col.key}')">
-        <div class="kanban-col-header"><span>${col.label}</span><span class="count">${grouped[col.key].length}</span></div>
+    ${allCols.map(col => `
+      <div class="kanban-col" data-col-type="${col.type}" ondragover="onColDragOver(event)" ondrop="onColDrop(event,'${esc(col.key)}')">
+        <div class="kanban-col-header"><span>${esc(col.label)}</span><span class="count">${grouped[col.key].length}</span></div>
         <div class="kanban-cards">
           ${grouped[col.key].map(c => renderKCard(c, col.key)).join('') || '<div class="empty-state" style="padding:14px;">No contacts</div>'}
         </div>
@@ -11901,10 +11915,13 @@ function cadenceBadgeHtml(cadence){
 }
 
 function renderKCard(c, colKey){
-  const isPending = colKey === 'pending';
+  // The stale-connection-request flag only ever made sense for the exact
+  // Connection Pending stage - before the granular board, "pending" was a
+  // 3-stage bucket that wrongly caught Found/Engagement Made contacts too
+  // (who can't be "days pending" on a request that was never sent).
+  const isPending = colKey === 'Connection Pending';
   const days = isPending ? getPendingDays(c) : daysBetween(c.connDate);
   const flagged = isPending && days >= state.settings.timeoutDays;
-  const seqStage = window.__roadmapCampaignId ? campaignSequenceStageFor(c.name) : '';
   const email = isEmailRoadmap();
   const cadence = (window.__roadmapCampaignId && !email) ? campaignCadenceFor(c.name) : undefined;
   const subline = email
@@ -11916,10 +11933,7 @@ function renderKCard(c, colKey){
       <div>
         <div class="kcard-name">${esc(c.name)}</div>
         <div class="kcard-role">${subline}</div>
-        ${seqStage || cadence !== undefined ? `<div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px;">
-          ${seqStage ? `<span class="tp-badge" title="Sequence stage in this campaign"><i class="ti ti-route"></i> ${esc(seqStage)}</span>` : ''}
-          ${cadence !== undefined ? cadenceBadgeHtml(cadence) : ''}
-        </div>` : ''}
+        ${cadence !== undefined ? `<div style="margin-top:4px;">${cadenceBadgeHtml(cadence)}</div>` : ''}
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
         <span class="day-badge ${dayBadgeClass(days)}">${days == null ? '–' : days + 'd'}</span>
@@ -12786,12 +12800,6 @@ function initRoadmapDrag(){}
 function onCardDragStart(e, id){ dragCardId = id; e.target.classList.add('dragging'); e.dataTransfer.effectAllowed='move'; }
 function onCardDragEnd(e){ e.target.classList.remove('dragging'); }
 function onColDragOver(e){ e.preventDefault(); }
-// Column key -> Airtable Journey Stage value, matching the single-select
-// values the rest of the app writes (see mapStateToStage in search-server.js
-// and JOURNEY_STAGE_TO_STATE above). There's no "pending" column that maps
-// to Identified/found - the board starts at "Connection pending", so that's
-// the value synced when a card lands back in that column.
-const ROADMAP_COL_TO_JOURNEY_STAGE = { pending:'Connection Pending', made:'Connected', messaging:'Messaging', booked:'Booked' };
 
 // Airtable record ids are always "rec" + 14 alphanumeric chars. A contact
 // found via runDailySearch starts with a local uid('c') placeholder instead
@@ -12803,31 +12811,9 @@ function isAirtableRecordId(id){
   return /^rec[A-Za-z0-9]{14}$/.test(id || '');
 }
 
-async function syncJourneyStageForColumn(contactId, colKey){
-  const journeyStage = ROADMAP_COL_TO_JOURNEY_STAGE[colKey];
-  if(!journeyStage) return;
-  if(!isAirtableRecordId(contactId)){
-    console.warn('Skipping Airtable Journey Stage sync - contact has no Airtable record id yet:', contactId);
-    toast('Moved locally, but this contact has not synced to the database yet - press "Sync" first.', 'warn');
-    return;
-  }
-  try {
-    const res = await fetch('/api/context/contact-fields', {
-      method: 'PATCH',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ contactId, journeyStage })
-    });
-    if(!res.ok){ const data = await res.json().catch(()=>({})); throw new Error(data.error || 'Request failed'); }
-  } catch(err){
-    console.warn('Could not sync Journey Stage to Airtable:', err.message);
-    toast('Moved locally, but could not sync stage to the database: ' + friendlyErr(err.message), 'warn');
-  }
-}
-
-// When a Campaign Contact reaches "Connection Made" (Airtable Sequence /
-// Journey Stage "Connected"), mirror them into Omnisend so the email
-// programme can pick them up. Fire-and-forget: the stage change itself has
-// already been written by syncJourneyStageForColumn above, so a failure
+// When a Campaign Contact reaches "Connected", mirror them into Omnisend so
+// the email programme can pick them up. Fire-and-forget: the stage change
+// itself has already been written by the time this is called, so a failure
 // here only shows a small toast and never blocks the move.
 async function pushConnectedContactToOmnisend(contactId){
   if(!isAirtableRecordId(contactId)) return;
@@ -12845,38 +12831,66 @@ async function pushConnectedContactToOmnisend(contactId){
   }
 }
 
-async function onColDrop(e, colKey){
+// Drags a card onto a column - now that every column is an exact Sequence
+// Stage (see campaignCadenceColumns/getRoadmapColumn), this is a direct
+// manual correction to that stage rather than a bucket-level guess.
+// Found/Engagement Made/Connection Pending/Connected go through the same
+// dedicated endpoint Today's Actions already uses (it stamps Connection
+// Sent Date correctly for Connection Pending, which the generic stage-patch
+// route below doesn't); Message N Sent and everything else go through the
+// manual-correction route the contact drawer's stage dropdown already uses
+// (PATCH /api/campaign/:id/contacts/:contactId/stage). Meeting Booked keeps
+// opening the booking modal rather than blind-writing the stage, since
+// booking has its own fields (date, notes) to capture. Always re-fetches
+// the campaign's live stages afterward rather than hand-patching local
+// state, so the board reflects exactly what Airtable now says.
+async function moveContactToStage(campaign, c, stageKey){
+  if(stageKey === 'Meeting Booked'){ dragCardId = null; openBookingModal(c.id); return; }
+  if(!isAirtableRecordId(c.id)){
+    dragCardId = null;
+    toast('Moved locally, but this contact has not synced to the database yet - press "Sync" first.', 'warn');
+    return;
+  }
+  try {
+    if(['Engagement Made','Connection Pending','Connected'].includes(stageKey)){
+      const res = await fetch('/api/context/contact-fields', {
+        method: 'PATCH', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ contactId: c.id, sequenceStage: stageKey })
+      });
+      if(!res.ok){ const d = await res.json().catch(()=>({})); throw new Error(d.error || 'Request failed'); }
+      if(stageKey === 'Connected'){
+        const activityEntry = { type:'connected', text:`${c.name} (${c.company}) accepted your connection`, date: isoDate(TODAY) };
+        state.activity.unshift(activityEntry);
+        syncActivityToAirtable(activityEntry);
+        notifyWebhook(c);
+        pushConnectedContactToOmnisend(c.id);
+      }
+    } else {
+      const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/contacts/${c.id}/stage`, {
+        method: 'PATCH', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ stage: stageKey })
+      });
+      if(!res.ok){ const d = await res.json().catch(()=>({})); throw new Error(d.error || 'Request failed'); }
+    }
+  } catch(err){
+    toast('Could not move stage: ' + friendlyErr(err.message), 'warn');
+    dragCardId = null;
+    return;
+  }
+  dragCardId = null;
+  await loadCampaignSequenceStages(campaign);
+  renderPage();
+}
+
+function onColDrop(e, colKey){
   e.preventDefault();
   if(!dragCardId) return;
   const c = state.contacts.find(x=>x.id===dragCardId);
-  if(!c) return;
+  const campaign = state.campaigns.find(cp => cp.id === window.__roadmapCampaignId);
+  if(!c || !campaign){ dragCardId = null; return; }
   const fromCol = getRoadmapColumn(c);
-  if(fromCol === colKey){ dragCardId=null; return; }
-  syncJourneyStageForColumn(c.id, colKey);
-  const order = ['pending','made','messaging','booked'];
-  const forward = order.indexOf(colKey) > order.indexOf(fromCol);
-
-  if(colKey === 'made'){
-    c.state = 'connected';
-    c.connReqDate = c.connReqDate || isoDate(TODAY);
-    c.connDate = isoDate(TODAY);
-    c.thread.connSent = isoDate(TODAY);
-    const activityEntry = { type:'connected', text:`${c.name} (${c.company}) accepted your connection`, date: isoDate(TODAY) };
-    state.activity.unshift(activityEntry);
-    syncActivityToAirtable(activityEntry);
-    notifyWebhook(c);
-    pushConnectedContactToOmnisend(c.id);
-    renderPage();
-  } else if(colKey === 'messaging'){
-    if(forward) openGenerateModal(c.id, c.thread.m1 ? 'm2' : 'm1', ()=>renderPage());
-    else { c.state='messaging'; renderPage(); }
-  } else if(colKey === 'booked'){
-    openBookingModal(c.id);
-  } else if(colKey === 'pending'){
-    c.state = 'found'; c.connDate=null; c.thread.connSent=null;
-    renderPage();
-  }
-  dragCardId = null;
+  if(fromCol === colKey){ dragCardId = null; return; }
+  moveContactToStage(campaign, c, colKey);
 }
 
 /* Context menu */

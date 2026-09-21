@@ -16123,7 +16123,12 @@ app.post('/api/campaign/:id/contacts/:contactId/exclude', async (req, res) => {
 // so a rep can manually correct a contact's stage when mark-sent and a
 // stray "Reply?" click land close enough together to walk it further than
 // what was actually sent (this route was the only per-Campaign-Contacts
-// write with no manual way back for that vocabulary before).
+// write with no manual way back for that vocabulary before). Message 4-8
+// Sent were added alongside the granular per-stage Roadmap board (every
+// exact stage is now its own kanban column, up to the campaign's configured
+// Sequence Length of up to 8), which drags a card onto this same route -
+// the map previously stopped at 3 because no caller needed further than
+// that until now.
 const DRAWER_STAGE_TO_SEQUENCE_STAGE = {
   'Found': 'Found',
   'Connection Pending': 'Connection Pending',
@@ -16136,6 +16141,11 @@ const DRAWER_STAGE_TO_SEQUENCE_STAGE = {
   'Ready for Message 3': 'Ready for Message 3',
   'Message 3 Sent': 'Message 3 Sent',
   'Pending Reply M3': 'Pending Reply M3',
+  'Message 4 Sent': 'Message 4 Sent',
+  'Message 5 Sent': 'Message 5 Sent',
+  'Message 6 Sent': 'Message 6 Sent',
+  'Message 7 Sent': 'Message 7 Sent',
+  'Message 8 Sent': 'Message 8 Sent',
   'Meeting Booked': 'Meeting Booked',
   'Lost': 'Lost',
   'Excluded': 'Excluded'
