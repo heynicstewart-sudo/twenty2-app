@@ -5482,6 +5482,7 @@ const FUNNEL_LADDER = [
 ];
 const OFF_LADDER_STAGES = new Set(['Excluded', 'Lost', 'Timed Out', 'Withdrawn']);
 const RUNG = {
+  engaged: FUNNEL_LADDER.indexOf('Engagement Made'),
   connectionSent: FUNNEL_LADDER.indexOf('Connection Pending'),
   connected: FUNNEL_LADDER.indexOf('Connected'),
   m1: FUNNEL_LADDER.indexOf('Message 1 Sent'),
@@ -5597,6 +5598,7 @@ function computeCampaignFunnel(funnelContacts, deals, emailMode, sequenceLength)
     { key: 'won', label: 'Won', count: wonContactIds.length, contactIds: wonContactIds }
   ] : [
     { key: 'contacts', label: 'Contacts', count: funnelContacts.length, contactIds: idsOf(funnelContacts) },
+    { key: 'engaged', label: 'Engaged', count: reached(RUNG.engaged), contactIds: idsOf(reachedContacts(RUNG.engaged)) },
     { key: 'connectionSent', label: 'Connection sent', count: active.filter(c => c.connectionSentDate || c.furthestRung >= RUNG.connectionSent).length, contactIds: idsOf(active.filter(c => c.connectionSentDate || c.furthestRung >= RUNG.connectionSent)) },
     { key: 'connected', label: 'Connected', count: reached(RUNG.connected), contactIds: idsOf(reachedContacts(RUNG.connected)) },
     ...messageSteps,
@@ -16360,10 +16362,24 @@ app.get('/api/context/data', async (req, res) => {
 //   "just sent" from "accepted" and either shows "Generate message 1"
 //   before the connection is accepted or never shows it at all.
 // Rows already further along in a given campaign are left alone either way.
+//
+// Optional campaignId/campaignName: a contact who's never been touched in
+// any campaign yet (added to a campaign via Grid/contactIds membership,
+// but Airtable has no Campaign Contacts row for them at all - the Roadmap
+// still shows them under "Found" via the client's local-state fallback,
+// see getRoadmapColumn) has nothing for the three branches below to PATCH -
+// they filter existing rows, and there are none. Previously that meant a
+// silent no-op: the route returned success, campaignContactRowsSynced was
+// 0, and the click that was supposed to advance them to Engagement Made/
+// Connection Pending/Connected visibly did nothing (reported live: the
+// Roadmap's "Engage on LinkedIn" button). When a caller supplies
+// campaignId, a stage with zero matching rows now creates one directly at
+// the target stage instead, via the same getOrCreateCampaignContactRow
+// used by the manual stage-correction route.
 app.patch('/api/context/contact-fields', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
 
-  const { contactId, journeyStage, sequenceStage, jobTitle } = req.body;
+  const { contactId, journeyStage, sequenceStage, jobTitle, campaignId, campaignName } = req.body;
   if (!contactId) return res.status(400).json({ error: 'contactId is required' });
   if (!journeyStage && !jobTitle && !['Engagement Made', 'Connection Pending', 'Connected'].includes(sequenceStage)) {
     return res.status(400).json({ error: 'journeyStage or jobTitle is required, or sequenceStage must be "Engagement Made", "Connection Pending" or "Connected"' });
@@ -16396,6 +16412,16 @@ app.patch('/api/context/contact-fields', async (req, res) => {
           fields: { 'Sequence Stage': 'Engagement Made', 'Stage History': appendStageHistory(r.fields['Stage History'], 'Engagement Made', today) }
         })));
         campaignContactRowsSynced = foundRows.length;
+      } else if (campaignId) {
+        // No row anywhere for this contact yet - see the route comment.
+        const today = new Date().toISOString().slice(0, 10);
+        const contactRecord = await airtableGetRecord('Contacts', contactId);
+        const created = await getOrCreateCampaignContactRow(
+          contactId, (contactRecord && contactRecord.fields['Full Name']) || contactId,
+          campaignId, campaignName || campaignId, rows,
+          { 'Sequence Stage': 'Engagement Made', 'Stage History': appendStageHistory('', 'Engagement Made', today) }
+        );
+        campaignContactRowsSynced = created ? 1 : 0;
       }
     } else if (sequenceStage === 'Connection Pending' || journeyStage === 'Connection Pending') {
       const rows = await fetchCampaignContactsRows();
@@ -16411,6 +16437,15 @@ app.patch('/api/context/contact-fields', async (req, res) => {
           }
         })));
         campaignContactRowsSynced = pendingRows.length;
+      } else if (campaignId) {
+        const today = new Date().toISOString().slice(0, 10);
+        const contactRecord = await airtableGetRecord('Contacts', contactId);
+        const created = await getOrCreateCampaignContactRow(
+          contactId, (contactRecord && contactRecord.fields['Full Name']) || contactId,
+          campaignId, campaignName || campaignId, rows,
+          { 'Sequence Stage': 'Connection Pending', 'Stage History': appendStageHistory('', 'Connection Pending', today), 'Connection Sent Date': today }
+        );
+        campaignContactRowsSynced = created ? 1 : 0;
       }
     } else if (sequenceStage === 'Connected') {
       const rows = await fetchCampaignContactsRows();

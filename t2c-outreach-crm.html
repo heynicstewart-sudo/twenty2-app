@@ -7410,10 +7410,10 @@ function getFastActionForCampaignContact(c, campaign){
     || (campaign.connectionNoteMode === 'No note' ? 'No note' : 'Note');
 
   if(stage === 'Found'){
-    return { type:'Engage', stageLabel: stage, campaignName: campaign.name, daysSinceTouch: null, isFastAction: true };
+    return { type:'Engage', stageLabel: stage, campaignName: campaign.name, campaignId: campaign.recordId || campaign.id, daysSinceTouch: null, isFastAction: true };
   }
   if(stage === 'Engagement Made'){
-    return { type:'Send connection', stageLabel: stage, campaignName: campaign.name, connectionArm: arm, daysSinceTouch: null, isFastAction: true };
+    return { type:'Send connection', stageLabel: stage, campaignName: campaign.name, campaignId: campaign.recordId || campaign.id, connectionArm: arm, daysSinceTouch: null, isFastAction: true };
   }
   if(stage === 'Connected'){
     return { type:'Generate message', stageLabel: stage, messageNumber: 1, campaignName: campaign.name, daysSinceTouch: null, isFastAction: true };
@@ -7898,9 +7898,9 @@ function renderFastActionCard(a){
     <div class="todo-item-actions">
       <div id="fastActionArea-${c.id}" style="display:contents;">
         ${(!email && a.type === 'Engage')
-          ? `<a class="btn btn-primary btn-sm" href="${esc(c.url||'#')}" target="_blank" rel="noopener" onclick="handleContactEngaged('${c.id}')"><i class="ti ti-eye"></i> Engage</a>`
+          ? `<a class="btn btn-primary btn-sm" href="${esc(c.url||'#')}" target="_blank" rel="noopener" onclick="handleContactEngaged('${c.id}', event, '${esc(a.campaignId||'')}')"><i class="ti ti-eye"></i> Engage</a>`
           : (!email && a.type === 'Send connection')
-            ? `<a class="btn btn-primary btn-sm" href="${esc(c.url||'#')}" target="_blank" rel="noopener" onclick="handleContactLinkedInOpened('${c.id}')"><i class="ti ti-brand-linkedin"></i> ${a.connectionArm === 'No note' ? 'Send (no note)' : 'Send connection'}</a>`
+            ? `<a class="btn btn-primary btn-sm" href="${esc(c.url||'#')}" target="_blank" rel="noopener" onclick="handleContactLinkedInOpened('${c.id}', event, '${esc(a.campaignId||'')}')"><i class="ti ti-brand-linkedin"></i> ${a.connectionArm === 'No note' ? 'Send (no note)' : 'Send connection'}</a>`
             : `<button class="btn btn-primary btn-sm" onclick="handleGenerateFastMessage('${c.id}')"><i class="ti ti-sparkles"></i> ${email ? 'Draft email' : 'Generate message'}</button>`}
       </div>
       ${(!email && a.type === 'Send connection' && a.connectionArm === 'No note') ? `<span class="muted" style="font-size:11px;align-self:center;">A/B: send this one <strong>without</strong> a note</span>` : ''}
@@ -8037,7 +8037,27 @@ function toggleQuickTouchPoint(cid){
 // (see search-server.js) - then refreshes this campaign's cached Sequence
 // Stage map and repaints so the Grid cell's colour and Today's Actions both
 // reflect it.
-async function handleContactLinkedInOpened(cid, e){
+// campaignId/campaignName let a caller that already knows exactly which
+// campaign this click belongs to (Today's Actions fast-action cards, the
+// Roadmap's linkedInFastAction) hand it over explicitly, rather than
+// relying on activeCampaignForContact's "first Live campaign this contact
+// is in" guess - plain id/name strings rather than a whole object so an
+// inline onclick="" attribute can pass them without embedding a JS object
+// literal in an HTML string. This is also what lets the server create this
+// contact's very first Campaign Contacts row on the spot if one doesn't
+// exist yet (see the route comment in search-server.js) instead of
+// silently no-oping, which is what used to happen for a contact only ever
+// added via a Grid/campaign.contactIds link and never otherwise touched in
+// Airtable. Prefers the real campaign object out of state.campaigns (has
+// everything loadCampaignSequenceStages might want) over a synthetic one
+// built from just the two strings.
+function resolveCampaignRef(campaignId, campaignName, c){
+  if(campaignId){
+    return state.campaigns.find(cp => (cp.recordId || cp.id) === campaignId) || { id: campaignId, recordId: campaignId, name: campaignName };
+  }
+  return activeCampaignForContact(c);
+}
+async function handleContactLinkedInOpened(cid, e, campaignId, campaignName){
   if(e) e.stopPropagation();
   const cardEl = document.getElementById('todaysAction-' + cid);
   if(cardEl) cardEl.remove();
@@ -8051,17 +8071,17 @@ async function handleContactLinkedInOpened(cid, e){
     return;
   }
 
+  const campaign = resolveCampaignRef(campaignId, campaignName, c);
   try {
     const res = await fetch('/api/context/contact-fields', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contactId: cid, journeyStage: 'Connection Pending', sequenceStage: 'Connection Pending' })
+      body: JSON.stringify({ contactId: cid, journeyStage: 'Connection Pending', sequenceStage: 'Connection Pending', campaignId: campaign && (campaign.recordId || campaign.id), campaignName: campaign && campaign.name })
     });
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
 
     c.state = 'connectionPending';
-    const campaign = activeCampaignForContact(c);
     if(campaign) await loadCampaignSequenceStages(campaign);
     renderPage();
   } catch(err){
@@ -8076,7 +8096,8 @@ async function handleContactLinkedInOpened(cid, e){
 // Same optimistic-UI/background-sync shape, but advances to "Engagement
 // Made" instead - see the "Engagement Made" branch of PATCH
 // /api/context/contact-fields, which never touches Connection Sent Date.
-async function handleContactEngaged(cid, e){
+// campaignId/campaignName: see handleContactLinkedInOpened above.
+async function handleContactEngaged(cid, e, campaignId, campaignName){
   if(e) e.stopPropagation();
   const cardEl = document.getElementById('todaysAction-' + cid);
   if(cardEl) cardEl.remove();
@@ -8090,17 +8111,17 @@ async function handleContactEngaged(cid, e){
     return;
   }
 
+  const campaign = resolveCampaignRef(campaignId, campaignName, c);
   try {
     const res = await fetch('/api/context/contact-fields', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contactId: cid, journeyStage: 'Engagement Made', sequenceStage: 'Engagement Made' })
+      body: JSON.stringify({ contactId: cid, journeyStage: 'Engagement Made', sequenceStage: 'Engagement Made', campaignId: campaign && (campaign.recordId || campaign.id), campaignName: campaign && campaign.name })
     });
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Request failed');
 
     c.state = 'engaged';
-    const campaign = activeCampaignForContact(c);
     if(campaign) await loadCampaignSequenceStages(campaign);
     renderPage();
   } catch(err){
@@ -8110,17 +8131,23 @@ async function handleContactEngaged(cid, e){
 }
 
 // Roadmap kanban card's "Engage/Connect on LinkedIn" button (renderKCard) -
-// same handlers Today's Actions uses, then an extra explicit refresh of
-// THIS board's campaign specifically. handleContactEngaged/
-// handleContactLinkedInOpened already refresh via activeCampaignForContact,
-// which picks the first Live campaign this contact is in - almost always
-// the one being viewed, but not guaranteed for a contact in more than one
-// live campaign, and the whole point of clicking this from the Roadmap is
-// to see the card jump columns immediately.
+// same handlers Today's Actions uses, but hands over THIS board's campaign
+// explicitly (campaignOverride) instead of leaving it to
+// activeCampaignForContact's "first Live campaign this contact is in"
+// guess. That matters for two reasons: it's not guaranteed to pick the
+// campaign actually being viewed for a contact in more than one live
+// campaign, and - the bug this was written to fix - a contact shown as
+// "Found" purely via the Roadmap's local-state fallback (no Campaign
+// Contacts row exists for them at all yet) needs a campaign id for the
+// server to create that first row against; without it the click silently
+// did nothing. Also does an extra explicit refresh of this board's
+// campaign afterward so the card visibly jumps columns.
 async function linkedInFastAction(cid, colKey){
-  if(colKey === 'Found') await handleContactEngaged(cid);
-  else await handleContactLinkedInOpened(cid);
   const campaign = state.campaigns.find(cp => cp.id === window.__roadmapCampaignId);
+  const campaignId = campaign && (campaign.recordId || campaign.id);
+  const campaignName = campaign && campaign.name;
+  if(colKey === 'Found') await handleContactEngaged(cid, null, campaignId, campaignName);
+  else await handleContactLinkedInOpened(cid, null, campaignId, campaignName);
   if(campaign) await loadCampaignSequenceStages(campaign);
 }
 
