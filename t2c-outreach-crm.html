@@ -10708,18 +10708,28 @@ function markGridSearchFinished(gridId){
   if(window.__runningGridSearchGridIds) window.__runningGridSearchGridIds.delete(gridId);
 }
 
-// Contacts on this grid missing exactly one of company/role - candidates
-// for the "fill missing field" half of runDailySearch below. Only contacts
+// Contacts on this grid missing exactly one of company/role, OR missing
+// their LinkedIn URL while both company and role are known (e.g. a CSV
+// import - the import mapping has no LinkedIn URL column at all, so every
+// row lands with a name/company/title and a blank URL) - candidates for
+// the "fill missing field" half of runDailySearch below. Only contacts
 // already synced to Airtable (a real record id) are included, since the
 // server patches the missing field straight onto their Contacts record -
 // a locally-added contact with no Airtable id yet has nothing to patch.
+// The LinkedIn case deliberately requires BOTH company and role already
+// known (not just one) - that's the same context depth the confident-match
+// heuristic (isConfidentMatch, search-server.js) needs to trust a result
+// enough to write it back automatically.
 function incompleteGridContacts(gridId){
   return gridContacts(gridId).filter(c => {
     if(isContactExcludedFromGrid(c)) return false;
     if(!/^rec[A-Za-z0-9]{14}$/.test(c.id)) return false;
     const hasCompany = !!(c.company||'').trim();
     const hasRole = !!(c.role||'').trim();
-    return hasCompany !== hasRole;
+    const hasLinkedin = !!(c.url||'').trim();
+    if(hasCompany !== hasRole) return true;
+    if(hasCompany && hasRole && !hasLinkedin) return true;
+    return false;
   });
 }
 
@@ -10777,7 +10787,7 @@ async function runDailySearch(roleFilter){
     linkedinUrl: c.url,
     knownCompany: c.company,
     knownRole: c.role,
-    missingField: c.company ? 'role' : 'company',
+    missingField: !c.company ? 'company' : !c.role ? 'role' : 'linkedin',
     gridName: grid.name
   }));
 
@@ -11025,6 +11035,8 @@ function applyFillMissingFieldResult(grid, result){
   if(missingField === 'role'){
     contact.role = value;
     if(value === 'Digital and Tech') contact.seqId = 'digitalTech';
+  } else if(missingField === 'linkedin'){
+    contact.url = value;
   } else {
     contact.company = value;
     ensureGridCompany(grid, value);

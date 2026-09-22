@@ -110,6 +110,24 @@ function isConfidentMatch(result, companyWords, titleWords){
   return hasTitle && hasCompany && isValidName(extractName(result.title));
 }
 
+// Used only by searchMissingContactField's 'linkedin' branch - unlike
+// isConfidentMatch above (which accepts ANY person matching a company+
+// title, because it's finding a brand new contact it doesn't have a name
+// for yet), backfilling a LinkedIn URL for an already-named contact has to
+// confirm the result is actually THIS person, not just someone with the
+// same job title at the same company. Requires the known contact's first
+// and last name to both appear in the candidate result's extracted name -
+// tolerant of middle names, punctuation and ordering, not of a different
+// person entirely.
+function namesRoughlyMatch(knownName, candidateName){
+  const norm = s => (s || '').toLowerCase().replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(Boolean);
+  const known = norm(knownName);
+  const candidate = norm(candidateName);
+  if(known.length < 2 || !candidate.length) return false;
+  const first = known[0], last = known[known.length - 1];
+  return candidate.includes(first) && candidate.includes(last);
+}
+
 // Shared LinkedIn search - used by GET /api/search-contact (client-driven,
 // one cell at a time) and POST /api/grid/run-search (server-driven, a whole
 // grid's empty cells in one job). Throws with a `.status` of 500 when
@@ -1194,19 +1212,45 @@ async function findOrCreateCompanyRecord(name, gridName) {
 }
 
 // Reverse lookup for the fillMissing half of runDailySearch: given a
-// contact's name (and whichever of company/role is already known), finds
-// the other one. Distinct from searchContactViaSerper above, which finds a
-// brand new person for a known (company, role) pair - this instead
-// confirms one missing fact about an already-known person, so it's a
-// single targeted Serper query plus a Claude extraction pass rather than
-// searchContactViaSerper's confident-match heuristics (there's no LinkedIn
-// URL match to score here, just "what does the text say").
+// contact's name and whichever of company/role/LinkedIn URL is already
+// known, finds whichever one is missing. Distinct from searchContactViaSerper
+// above, which finds a brand new person for a known (company, role) pair -
+// this instead confirms one missing fact about an already-known person.
+//
+// The 'linkedin' branch is a different shape from 'company'/'role': those
+// two ask Claude to read search-result snippets and extract a free-text
+// value ("what does the text say"), which works because there's nothing to
+// verify against - any plausible answer is useful. A LinkedIn URL isn't
+// safe to hand back on "plausible" alone (a wrong URL messages the wrong
+// human), so it reuses searchContactViaSerper's isConfidentMatch heuristic
+// (matching a result's actual link against the known company/title) plus
+// namesRoughlyMatch to confirm the result is this specific named person,
+// not just someone else with the same title at the same company - no
+// Claude call needed at all for this branch.
 async function searchMissingContactField({ name, linkedinUrl, knownCompany, knownRole, missingField }) {
   if (!process.env.SERPER_API_KEY) {
     const err = new Error('SERPER_API_KEY is not configured');
     err.status = 500;
     throw err;
   }
+
+  if (missingField === 'linkedin') {
+    const query = `${name} ${knownRole || ''} ${knownCompany || ''} linkedin`.replace(/\s+/g, ' ').trim();
+    const serperRes = await fetch(SERPER_URL, {
+      method: 'POST',
+      headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ q: query, gl: 'au', location: 'Australia' })
+    });
+    if (!serperRes.ok) throw new Error(`Serper API error: ${serperRes.status}`);
+    const data = await serperRes.json();
+    const companyWords = (knownCompany || '').toLowerCase().split(/\s+/).filter(Boolean);
+    const titleWords = (knownRole || '').toLowerCase().split(/\s+/).filter(Boolean);
+    const match = (data.organic || []).find(r =>
+      isConfidentMatch(r, companyWords, titleWords) && namesRoughlyMatch(name, extractName(r.title))
+    );
+    return match ? { found: true, value: match.link } : { found: false };
+  }
+
   if (!process.env.ANTHROPIC_API_KEY) {
     const err = new Error('ANTHROPIC_API_KEY is not configured');
     err.status = 500;
@@ -1278,6 +1322,8 @@ async function runGridSearchJob(job, cells, campaignName, gridName) {
           const patchFields = {};
           if (missingField === 'role') {
             patchFields['Job Title'] = searchResult.value;
+          } else if (missingField === 'linkedin') {
+            patchFields['LinkedIn URL'] = searchResult.value;
           } else {
             const companyRecord = await findOrCreateCompanyRecord(searchResult.value, gridName);
             patchFields['Company'] = [companyRecord.id];
