@@ -1987,6 +1987,11 @@ async function hydrateSession(){
     applyClientBranding(s.activeClient);
     ensureAgencyNav(s);
     renderClientSwitcher(s);
+    // Marketing's generation-UI gate (contentGenerationEnabled) reads
+    // window.__session.controlPlane, which is only known once this resolves
+    // - re-render if the page already painted before that, same as
+    // applyClientBranding does for 'home'.
+    if(state.currentPage === 'content') renderPage();
   } catch(e){ /* non-fatal - app still works single-client */ }
 }
 
@@ -23247,6 +23252,25 @@ function renderLearningResult(kind, data, recordCount){
 // name to its Airtable record id itself, same as sales-overview/deals).
 
 const CONTENT_SUBTABS = [['signals','Signals'],['drafts','Draft Centre'],['calendar','Calendar'],['sep'],['performance','LinkedIn'],['seo','SEO'],['aeo','AEO'],['googleads','Google Ads'],['email','Email'],['sep'],['settings','Settings']];
+// Writing the actual marketing copy (Draft Centre, SEO, AEO, Email,
+// Settings) only ever happens from Nic's local, unlocked agency install -
+// the deployed, single-tenant Twenty2 site should read as ideas + analytics
+// only, never reveal that an Engine writes the content. window.__session
+// .controlPlane already tells us which install this is (set by
+// GET /api/session, true only when AGENCY_CONTROL_BASE_ID is configured -
+// the same flag the client switcher hides behind), so it doubles as the
+// generation-UI gate with no new server round trip.
+const CONTENT_GENERATION_SUBTABS = new Set(['drafts','seo','aeo','email','settings']);
+function contentGenerationEnabled(){
+  return !!(window.__session && window.__session.controlPlane);
+}
+function visibleContentSubtabs(){
+  if(contentGenerationEnabled()) return CONTENT_SUBTABS;
+  const kept = CONTENT_SUBTABS.filter(t => !CONTENT_GENERATION_SUBTABS.has(t[0]));
+  // Drop a 'sep' left dangling at the start/end or doubled up once the
+  // generation tabs around it are gone.
+  return kept.filter((t, i) => !(t[0]==='sep' && (i===0 || i===kept.length-1 || kept[i-1][0]==='sep')));
+}
 const CONTENT_FORMATS = ['LinkedIn Post','Blog','Newsletter'];
 const CONTENT_FORMAT_META = {
   'LinkedIn Post': { dotClass:'format-linkedin', label:'LinkedIn' },
@@ -23268,14 +23292,18 @@ function setContentSubTab(tab){
 }
 
 function renderContent(){
-  const tab = window.__contentSubTab || 'signals';
+  // Falls back to 'signals' for a generation subtab reached any other way
+  // than clicking its (now-hidden) tab - e.g. state left over from before
+  // the session loaded, or a manually-poked window.__contentSubTab.
+  let tab = window.__contentSubTab || 'signals';
+  if(!contentGenerationEnabled() && CONTENT_GENERATION_SUBTABS.has(tab)) tab = 'signals';
   return `
   <div class="page-head">
     <h1 class="page-h1">Marketing</h1>
-    <div class="page-sub">The content engine that feeds outreach: buying signals to write about, drafts and calendar, and channel performance.</div>
+    <div class="page-sub">Buying signals to write about, the content calendar, and channel performance.</div>
   </div>
   <div class="seq-tabs">
-    ${CONTENT_SUBTABS.map(t => t[0]==='sep' ? '<div class="seq-tab-sep"></div>' : `<div class="seq-tab ${tab===t[0]?'active':''}" onclick="setContentSubTab('${t[0]}')">${t[1]}</div>`).join('')}
+    ${visibleContentSubtabs().map(t => t[0]==='sep' ? '<div class="seq-tab-sep"></div>' : `<div class="seq-tab ${tab===t[0]?'active':''}" onclick="setContentSubTab('${t[0]}')">${t[1]}</div>`).join('')}
   </div>
   ${tab==='signals' ? renderContentSignalsTab() : ''}
   ${tab==='drafts' ? renderContentDraftsTab() : ''}
@@ -23399,7 +23427,7 @@ function renderContentSignalsList(signals, opts){
           ${s.suggestedIcpTargets ? `<div class="muted" style="font-size:11px;margin-top:6px;">ICP: ${esc(s.suggestedIcpTargets)}</div>` : ''}
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0;">
-          <button class="btn btn-primary btn-sm" onclick="draftFromSignal('${s.id}', ${opts.campaignName ? `'${esc(opts.campaignName)}'` : 'null'})"><i class="ti ti-sparkles"></i> Draft this</button>
+          ${contentGenerationEnabled() ? `<button class="btn btn-primary btn-sm" onclick="draftFromSignal('${s.id}', ${opts.campaignName ? `'${esc(opts.campaignName)}'` : 'null'})"><i class="ti ti-sparkles"></i> Draft this</button>` : ''}
           <button class="btn btn-ghost btn-sm" onclick="dismissContentSignal('${s.id}')"><i class="ti ti-x"></i> Dismiss</button>
         </div>
       </div>
@@ -23922,7 +23950,7 @@ function renderContentCalendarTab(){
         const events = drafts.filter(dr=>dr.targetPublishDate === dateStr);
         return `<div class="cal-cell ${isToday?'today':''}">
           <div class="cal-date">${d}</div>
-          ${events.map(ev => `<div class="event-chip" style="background:transparent;border-left:3px solid ${ev.format==='Blog'?'#44A574':(ev.format==='Newsletter'?'#8b5cf6':'#0084C5')};padding-left:4px;cursor:pointer;" onclick="setContentSubTab('drafts');openContentEditor('${ev.id}')">${esc(ev.title||'Untitled')}
+          ${events.map(ev => `<div class="event-chip" style="background:transparent;border-left:3px solid ${ev.format==='Blog'?'#44A574':(ev.format==='Newsletter'?'#8b5cf6':'#0084C5')};padding-left:4px;${contentGenerationEnabled()?'cursor:pointer;':''}" ${contentGenerationEnabled()?`onclick="setContentSubTab('drafts');openContentEditor('${ev.id}')"`:''}>${esc(ev.title||'Untitled')}
             <div class="event-tooltip">${esc(ev.title)} · ${esc(CONTENT_FORMAT_META[ev.format]?CONTENT_FORMAT_META[ev.format].label:ev.format)}</div>
           </div>`).join('')}
         </div>`;
@@ -27019,6 +27047,7 @@ async function runGoogleAdsDraftCampaign(){
 }
 
 function renderGoogleAdsDraftSection(){
+  if(!contentGenerationEnabled()) return '';
   const draft = window.__googleAdsDraft;
   const g = window.__googleAdsDraftForm || {};
   let preview = '';
@@ -28766,13 +28795,13 @@ function renderCampaignContentTab(campaign){
     ${renderContentSignalsList(window.__campaignContentSignals, { campaignName: campaign.name })}
   </div>
 
-  <div class="card">
+  ${contentGenerationEnabled() ? `<div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
       <div class="section-title" style="margin-bottom:0;"><i class="ti ti-notes"></i> Draft Centre</div>
       <button class="btn btn-primary btn-sm" onclick="openNewContentDraftModal({campaignName:'${esc(campaign.name)}'})"><i class="ti ti-plus"></i> New draft</button>
     </div>
     ${renderContentDraftsList(window.__campaignContentDrafts)}
-  </div>
+  </div>` : ''}
   `;
 }
 

@@ -1,4 +1,15 @@
 // v2
+// Loads a local .env into process.env for local dev (npm run start:local).
+// No-op on Railway: there's no .env file there and dotenv never overwrites
+// an env var that's already set, so deployed config vars are untouched.
+try { require('dotenv').config(); } catch (e) { /* dotenv not installed - fine on Railway */ }
+// Some Mac networks resolve Airtable/etc's hostnames to a working IPv4
+// address but a dead-end IPv6 one, and Node's built-in fetch (unlike curl)
+// tries that IPv6 result first - every outbound call then fails with the
+// generic "fetch failed" until it times out. Preferring IPv4 resolution
+// sidesteps it; harmless on Railway, where IPv6 isn't broken and this is a
+// no-op either way.
+require('dns').setDefaultResultOrder('ipv4first');
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -257,6 +268,33 @@ const AGENCY_CONTROL_BASE_ID = process.env.AGENCY_CONTROL_BASE_ID || '';
 const CLIENTS_TABLE = 'Clients';
 const ACTIVE_CLIENT_COOKIE = 't2c_active_client';
 const CLIENTS_CACHE_TTL_MS = 5 * 60 * 1000;
+
+// Writing marketing content (drafts, SEO posts, AEO answers, Google Ads
+// campaign drafts, email copy) only ever runs from Nic's local, unlocked
+// multi-client install - the deployed, single-tenant Twenty2 site should
+// surface ideas and analytics, never the fact that an Engine writes the
+// copy. Reuses the same AGENCY_CONTROL_BASE_ID flag the client switcher
+// already keys off: unset it on Railway and the switcher, Agency
+// Dashboard, AND these generation routes all disappear together.
+const CONTENT_GENERATION_ROUTES = new Set([
+  'POST /api/content/draft',
+  'POST /api/aeo/suggest-products',
+  'POST /api/seo/generate-post',
+  'POST /api/seo/generate-service-page',
+  'POST /api/seo/generate-youtube-script',
+  'POST /api/seo/generate-linkedin-post',
+  'POST /api/seo/publish',
+  'POST /api/omnisend/generate-email-copy',
+  'POST /api/google-ads/draft-campaign',
+]);
+app.use((req, res, next) => {
+  if (AGENCY_CONTROL_BASE_ID) return next();
+  const isAeoGenerate = req.method === 'POST' && /^\/api\/aeo\/prompts\/[^/]+\/generate$/.test(req.path);
+  if (isAeoGenerate || CONTENT_GENERATION_ROUTES.has(`${req.method} ${req.path}`)) {
+    return res.status(404).json({ error: 'not_available' });
+  }
+  next();
+});
 let clientsCache = [DEFAULT_TENANT];
 let clientsCacheAt = 0;
 let clientsCacheLoading = null;
