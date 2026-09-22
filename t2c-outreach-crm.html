@@ -16453,12 +16453,106 @@ async function confirmImportCompany(){
 function createGridForCampaign(campaignId){
   const campaign = state.campaigns.find(c => c.id === campaignId);
   if(!campaign) return;
-  const name = (prompt('New grid name:') || '').trim();
-  if(!name) return;
+  window.__newGridDraft = { campaignId, titles: new Set(), suggested: null };
+  openModal('New grid for "'+esc(campaign.name)+'"', renderNewCampaignGridModalBody(campaign), `
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="confirmCreateGridForCampaign()"><i class="ti ti-plus"></i> Create grid</button>
+  `);
+}
+
+// Job titles are the grid's columns (each company x title cell gets
+// searched for a real person) - this suggests some from the campaign's own
+// goal/target segment/strategy notes (POST /api/grid/suggest-job-titles)
+// instead of leaving a brand-new grid with zero columns and no starting
+// point. Suggestions are opt-in checkboxes, not auto-added, and a rep can
+// always type their own on top - this never invents contacts or companies,
+// only offers title ideas to search for.
+function renderNewCampaignGridModalBody(campaign){
+  const draft = window.__newGridDraft;
+  const suggested = draft.suggested;
+  return `
+    <div class="field">
+      <label>Grid name</label>
+      <input id="newGridNameInput" value="${esc(campaign.name)}">
+    </div>
+    <div class="field">
+      <label style="display:flex;justify-content:space-between;align-items:center;">
+        <span>Job titles to search for</span>
+        <button type="button" class="btn btn-secondary btn-sm" ${suggested==='loading'?'disabled':''} onclick="suggestGridJobTitles()" id="suggestTitlesBtn"><i class="ti ${suggested==='loading'?'ti-loader-2':'ti-sparkles'}"></i> ${suggested==='loading'?'Suggesting...':'Suggest titles'}</button>
+      </label>
+      ${suggested===null ? `<div class="muted" style="font-size:11.5px;margin-top:4px;">Press "Suggest titles" for ideas based on this campaign's goal, or just add your own below.</div>` : ''}
+      ${suggested && suggested.error ? `<div class="muted" style="font-size:11.5px;margin-top:4px;">Could not suggest titles: ${esc(friendlyErr(suggested.error))}</div>` : ''}
+      ${Array.isArray(suggested) ? (suggested.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;">
+        ${suggested.map(t => `<label class="pill" style="cursor:pointer;display:inline-flex;align-items:center;gap:5px;">
+          <input type="checkbox" ${draft.titles.has(t)?'checked':''} onchange="toggleNewGridTitle('${esc(t).replace(/'/g,"\\'")}', this.checked)"> ${esc(t)}
+        </label>`).join('')}
+      </div>` : `<div class="muted" style="font-size:11.5px;margin-top:4px;">No suggestions came back - add titles by hand below.</div>`) : ''}
+      <div style="display:flex;gap:6px;margin-top:10px;">
+        <input id="newGridManualTitleInput" placeholder="Or type a title and press Add" onkeydown="if(event.key==='Enter'){event.preventDefault();addManualNewGridTitle();}">
+        <button type="button" class="btn btn-secondary" onclick="addManualNewGridTitle()">Add</button>
+      </div>
+      ${draft.titles.size ? `<div class="muted" style="font-size:11px;margin-top:8px;"><strong>Will add as columns:</strong> ${[...draft.titles].map(esc).join(', ')}</div>` : ''}
+    </div>
+  `;
+}
+
+function refreshNewCampaignGridModal(){
+  const campaign = state.campaigns.find(c => c.id === window.__newGridDraft.campaignId);
+  const bodyEl = document.querySelector('#modalOverlay .modal-body');
+  if(bodyEl) bodyEl.innerHTML = renderNewCampaignGridModalBody(campaign);
+}
+
+async function suggestGridJobTitles(){
+  const campaign = state.campaigns.find(c => c.id === window.__newGridDraft.campaignId);
+  if(!campaign) return;
+  window.__newGridDraft.suggested = 'loading';
+  refreshNewCampaignGridModal();
+  try {
+    const res = await fetch('/api/grid/suggest-job-titles', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ campaignName: campaign.name, goal: campaign.goal, targetSegmentSummary: campaign.targetSegmentSummary, strategyBrief: campaign.strategyBrief })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Request failed');
+    window.__newGridDraft.suggested = data.titles || [];
+    // Suggestions start pre-checked - they're meant to be useful defaults,
+    // not just a menu to pick through one at a time.
+    window.__newGridDraft.suggested.forEach(t => window.__newGridDraft.titles.add(t));
+  } catch(err){
+    window.__newGridDraft.suggested = { error: err.message };
+  }
+  refreshNewCampaignGridModal();
+}
+
+function toggleNewGridTitle(title, checked){
+  if(checked) window.__newGridDraft.titles.add(title);
+  else window.__newGridDraft.titles.delete(title);
+  refreshNewCampaignGridModal();
+}
+
+function addManualNewGridTitle(){
+  const input = document.getElementById('newGridManualTitleInput');
+  const val = input ? input.value.trim() : '';
+  if(!val) return;
+  window.__newGridDraft.titles.add(val);
+  input.value = '';
+  refreshNewCampaignGridModal();
+}
+
+function confirmCreateGridForCampaign(){
+  const draft = window.__newGridDraft;
+  const campaign = state.campaigns.find(c => c.id === draft.campaignId);
+  if(!campaign) return;
+  const nameInput = document.getElementById('newGridNameInput');
+  const name = (nameInput ? nameInput.value : '').trim();
+  if(!name){ toast('Grid needs a name', 'warn'); return; }
   const grid = createGrid(name);
+  grid.columns = [...draft.titles];
+  touchGrid(grid.id);
   if(!campaign.gridIds) campaign.gridIds = [];
   campaign.gridIds.push(grid.id);
   syncCampaignToAirtable(campaign);
+  closeModal();
   toast('Grid "'+name+'" created and linked to '+campaign.name, 'success');
   openGridFromCampaign(grid.id, campaign.id);
 }

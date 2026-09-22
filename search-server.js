@@ -1428,6 +1428,39 @@ app.post('/api/grid/cancel-search', (req, res) => {
   res.json({ success: true, jobId: job.id });
 });
 
+// Job-title suggestions for a brand-new grid, built off a campaign's own
+// goal/target segment/strategy notes rather than a generic seniority list -
+// so a networking-style "Direct Target" campaign at one named company
+// suggests roles that make sense at that kind of organisation, and a
+// sector-wide campaign suggests the persona its goal actually describes.
+// Cheap Sonnet call, not Opus - same cost-control convention as the other
+// ambient/suggestion endpoints (see AMBIENT_MODEL).
+app.post('/api/grid/suggest-job-titles', async (req, res) => {
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  const { campaignName, goal, targetSegmentSummary, strategyBrief } = req.body || {};
+  if (!goal && !campaignName) return res.status(400).json({ error: 'goal or campaignName is required' });
+  try {
+    const prompt = `A rep is building a contact-finding grid (companies as rows, job titles as columns - each cell gets searched for a real person to reach out to on LinkedIn) for this outreach campaign:
+
+Campaign: "${campaignName || 'Untitled'}"
+Goal: ${goal || 'not recorded'}
+Target segment: ${targetSegmentSummary || 'not recorded'}
+Strategy notes: ${strategyBrief || 'none recorded'}
+
+Suggest 5-8 job titles that are the most relevant people to reach out to for this campaign's goal - real, specific titles someone would actually hold (e.g. "Change Manager", not "Decision Maker"), ordered most-relevant first. If the campaign targets a specific company or sector, tailor the titles to how that kind of organisation is actually structured rather than generic seniority labels.
+
+Return ONLY a JSON object: {"titles": ["...", "...", ...]}`;
+    const data = await callClaudeJson(prompt, 500, AMBIENT_MODEL);
+    const titles = Array.isArray(data.titles)
+      ? Array.from(new Set(data.titles.filter(t => typeof t === 'string' && t.trim()).map(t => t.trim()))).slice(0, 8)
+      : [];
+    res.json({ titles });
+  } catch (err) {
+    console.error('Suggest job titles error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Create a Contact from a website lead webhook (e.g. an AI profile/scorecard
 // tool). Always creates a new record - unlike POST /api/airtable/contact,
 // there's no skip-if-existing check here since each webhook payload
