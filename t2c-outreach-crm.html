@@ -12380,6 +12380,50 @@ const CADENCE_14_DAY_STEPS = [
 // or "sent the manual email"), so it's only ever marked done once that
 // calendar day has elapsed - it's informational, not something this app
 // sends or checks off for you.
+// A "Set day 1 by hand" control for contacts whose Stage History doesn't
+// give the cadence a real anchor - carried over from before this cadence
+// existed, or moved onto a new strategy mid-campaign so their old history
+// no longer means anything. Writes Campaign Contacts."Cadence Start
+// Override", which computeCadenceProgress (search-server.js) prefers
+// outright over Stage History's own first-non-Found entry.
+function cadenceStartOverrideHtml(c, cadence){
+  const current = (cadence && cadence.manualStart) ? cadence.startDate : '';
+  return `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border-light);">
+    <div class="muted" style="font-size:11px;margin-bottom:4px;">${current ? 'Day 1 set by hand:' : 'Switched strategy, or this contact predates the cadence? Set their day 1 by hand:'}</div>
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+      <input type="date" id="cadenceStartInput-${c.id}" value="${esc(current)}" style="flex:1;min-width:120px;" onclick="event.stopPropagation();">
+      <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();setCadenceStartOverride('${c.id}')"><i class="ti ti-calendar-event"></i> Set</button>
+      ${current ? `<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();clearCadenceStartOverride('${c.id}')" title="Go back to automatic tracking"><i class="ti ti-x"></i> Clear</button>` : ''}
+    </div>
+  </div>`;
+}
+
+async function patchCadenceStartOverride(contactId, date){
+  const campaign = state.campaigns.find(x => x.id === window.__roadmapCampaignId);
+  if(!campaign) return;
+  try {
+    const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/contacts/${contactId}/cadence-start`, {
+      method:'PATCH', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ date })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Request failed');
+    toast(date ? `Cadence day 1 set to ${fmtDate(date)}` : 'Cadence override cleared - back to automatic tracking', 'success');
+    await loadCampaignSequenceStages(campaign);
+  } catch(err){
+    toast('Could not update cadence: ' + friendlyErr(err.message), 'warn');
+  }
+}
+function setCadenceStartOverride(contactId){
+  const input = document.getElementById(`cadenceStartInput-${contactId}`);
+  const date = input ? input.value : '';
+  if(!date){ toast('Pick a date first', 'warn'); return; }
+  patchCadenceStartOverride(contactId, date);
+}
+function clearCadenceStartOverride(contactId){
+  patchCadenceStartOverride(contactId, null);
+}
+
 function renderCadenceStrip(c){
   const stage = window.__roadmapCampaignId ? campaignSequenceStageFor(c.name) : '';
   const cadence = window.__roadmapCampaignId ? campaignCadenceFor(c.name) : null;
@@ -12387,6 +12431,7 @@ function renderCadenceStrip(c){
     return `<div class="card" style="margin-bottom:10px;">
       <div class="section-title" style="margin-bottom:4px;"><i class="ti ti-calendar-event"></i> 14-day cadence</div>
       <div class="muted" style="font-size:11.5px;">Not started - engaging with their profile (the "Engage" action) kicks off day 1.</div>
+      ${cadenceStartOverrideHtml(c, null)}
     </div>`;
   }
   const rank = cadenceStageRank(stage);
@@ -12420,6 +12465,7 @@ function renderCadenceStrip(c){
     <div class="cadence-strip">${cells}</div>
     <div class="cadence-legend">${legend}</div>
     <div class="muted" style="font-size:11.5px;font-weight:600;margin-top:8px;">${statusText}</div>
+    ${cadence.status === 'complete' ? '' : cadenceStartOverrideHtml(c, cadence)}
   </div>`;
 }
 
@@ -12897,26 +12943,6 @@ function isAirtableRecordId(id){
   return /^rec[A-Za-z0-9]{14}$/.test(id || '');
 }
 
-// When a Campaign Contact reaches "Connected", mirror them into Omnisend so
-// the email programme can pick them up. Fire-and-forget: the stage change
-// itself has already been written by the time this is called, so a failure
-// here only shows a small toast and never blocks the move.
-async function pushConnectedContactToOmnisend(contactId){
-  if(!isAirtableRecordId(contactId)) return;
-  try {
-    const res = await fetch('/api/omnisend/push-contact', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contactId })
-    });
-    if(!res.ok){ const d = await res.json().catch(()=>({})); throw new Error(d.error || 'Request failed'); }
-    toast('Contact synced to Omnisend', 'success');
-  } catch(err){
-    console.warn('Omnisend push-contact failed:', err.message);
-    toast('Could not sync contact to Omnisend', 'warn');
-  }
-}
-
 // Drags a card onto a column - now that every column is an exact Sequence
 // Stage (see campaignCadenceColumns/getRoadmapColumn), this is a direct
 // manual correction to that stage rather than a bucket-level guess.
@@ -12941,7 +12967,7 @@ async function moveContactToStage(campaign, c, stageKey){
     if(['Engagement Made','Connection Pending','Connected'].includes(stageKey)){
       const res = await fetch('/api/context/contact-fields', {
         method: 'PATCH', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ contactId: c.id, sequenceStage: stageKey })
+        body: JSON.stringify({ contactId: c.id, sequenceStage: stageKey, campaignId: campaign.id, campaignName: campaign.name })
       });
       if(!res.ok){ const d = await res.json().catch(()=>({})); throw new Error(d.error || 'Request failed'); }
       if(stageKey === 'Connected'){
@@ -12949,7 +12975,6 @@ async function moveContactToStage(campaign, c, stageKey){
         state.activity.unshift(activityEntry);
         syncActivityToAirtable(activityEntry);
         notifyWebhook(c);
-        pushConnectedContactToOmnisend(c.id);
       }
     } else {
       const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/contacts/${c.id}/stage`, {
@@ -13628,6 +13653,35 @@ async function setContactFollowUpReminder(days){
     // (see the afterRender hook) - clearing the cache here means the next
     // Home visit picks up a reminder that's due immediately (days=0 isn't
     // offered above, but this keeps the two in sync regardless).
+    window.__dueReminders = undefined;
+  } catch(err){
+    toast('Could not set reminder: ' + friendlyErr(err.message), 'warn');
+  } finally {
+    if(wrap) wrap.querySelectorAll('button').forEach(b => b.disabled = false);
+  }
+}
+
+// Same reminder as setContactFollowUpReminder above, wired to whichever
+// contact/campaign the "Write message" modal (openGenerateModal) is
+// currently open for instead of the profile drawer's globals - lets a
+// reminder be set right where a rep is already looking at this contact
+// mid-draft, without a separate trip to their drawer.
+async function setGenModalFollowUpReminder(days){
+  const ctx = window.__genCtx;
+  const c = ctx && state.contacts.find(x => x.id === ctx.cid);
+  if(!c) return;
+  const campaign = ctx.campaignId ? state.campaigns.find(cp => cp.id === ctx.campaignId) : null;
+  const wrap = document.getElementById('genFollowUpReminderBtns');
+  if(wrap) wrap.querySelectorAll('button').forEach(b => b.disabled = true);
+  try {
+    const res = await fetch('/api/contacts/set-reminder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: c.name, days, campaignName: campaign ? campaign.name : undefined })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Could not set reminder');
+    toast(`Reminder set - reach out to ${c.name} on ${fmtDate(data.dueDate)}`, 'success');
     window.__dueReminders = undefined;
   } catch(err){
     toast('Could not set reminder: ' + friendlyErr(err.message), 'warn');
@@ -14969,6 +15023,13 @@ function openGenerateModal(cid, stageKey, onDone){
       </label>
       <textarea id="genNotes" rows="2">${esc(c.notes)}</textarea>
       <div class="muted" style="font-size:11px;margin-top:4px;">Saves straight to this contact's Notes and feeds their profile summary, same as the profile drawer - so future message generation (here or anywhere else) reads it too.${isEmailCamp && !(c.notes||'').trim() ? ' <strong>Tip:</strong> run "Research business" from the roadmap card for a sharper draft.' : ''}</div>
+    </div>
+    <div class="field">
+      <label>Follow-up reminder</label>
+      <div class="muted" style="font-size:11px;margin-bottom:6px;">Sets a reminder that shows up in Today's Actions once it's due - use this instead of (or as well as) writing a date into the note above.</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;" id="genFollowUpReminderBtns">
+        ${FOLLOW_UP_REMINDER_PRESETS.map(days => `<button type="button" class="btn btn-secondary btn-sm" onclick="setGenModalFollowUpReminder(${days})">In ${days} days</button>`).join('')}
+      </div>
     </div>
     ${isEmailCamp ? '' : `
     <div class="field">

@@ -12854,7 +12854,13 @@ const CADENCE_TARGET_DAY = {
 // Engagement Made, a stage with no date field of its own. Returns null when
 // the cadence hasn't started yet (still at Found, or no history logged) so
 // the caller can render "not started" instead of a misleading Day 1.
-function computeCadenceProgress(stageHistoryText, currentStageRaw) {
+// manualStartDate (Campaign Contacts."Cadence Start Override", YYYY-MM-DD)
+// lets a contact carried over from before this stage/cadence existed - or
+// moved onto a new strategy mid-campaign - get a real day-1 anchor by hand,
+// instead of "Not started" or a day-count silently wrong because History
+// only has stale entries from the old process. When set, it wins outright:
+// Stage History's own first-non-Found entry is what it's overriding.
+function computeCadenceProgress(stageHistoryText, currentStageRaw, manualStartDate) {
   const stage = collapseLegacyStage(currentStageRaw);
   // Checked on the live stage, not just history: a re-engaged contact's
   // Stage History carries a "Found (re-engaged on signal)" line (see POST
@@ -12863,16 +12869,23 @@ function computeCadenceProgress(stageHistoryText, currentStageRaw) {
   // line (not literally "Found") would wrongly anchor a cadence that
   // hasn't actually restarted yet.
   if (stage === 'Found') return null;
-  const entries = parseStageHistory(stageHistoryText);
-  const started = entries.find(e => e.stage && e.stage !== 'Found');
-  if (!started) return null;
 
-  const startDate = new Date(started.date + 'T00:00:00Z');
+  let startDateStr;
+  if (manualStartDate) {
+    startDateStr = manualStartDate;
+  } else {
+    const entries = parseStageHistory(stageHistoryText);
+    const started = entries.find(e => e.stage && e.stage !== 'Found');
+    if (!started) return null;
+    startDateStr = started.date;
+  }
+
+  const startDate = new Date(startDateStr + 'T00:00:00Z');
   const today = new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00Z');
   const cadenceDay = Math.max(1, Math.round((today - startDate) / 86400000) + 1);
 
   if (stage === 'Meeting Booked') {
-    return { cadenceDay, targetDay: null, nextStage: null, nextTargetDay: null, status: 'complete', startDate: started.date };
+    return { cadenceDay, targetDay: null, nextStage: null, nextTargetDay: null, status: 'complete', startDate: startDateStr, manualStart: !!manualStartDate };
   }
 
   const rank = linkedInStageRank(stage);
@@ -12885,7 +12898,7 @@ function computeCadenceProgress(stageHistoryText, currentStageRaw) {
     else if (cadenceDay >= nextTargetDay) status = 'due';
   }
 
-  return { cadenceDay, targetDay: CADENCE_TARGET_DAY[stage] || null, nextStage, nextTargetDay, status, startDate: started.date };
+  return { cadenceDay, targetDay: CADENCE_TARGET_DAY[stage] || null, nextStage, nextTargetDay, status, startDate: startDateStr, manualStart: !!manualStartDate };
 }
 // A legacy "Ready for Message N" row means a reply already cleared the gate, so
 // treat it as reply-received even before the checkbox exists on that row.
@@ -13165,7 +13178,8 @@ app.get('/api/campaign/:id/campaign-contacts', async (req, res) => {
           lastReplyAt: r.fields['Last Reply At'] || null,
           replyNeedsAttention: !!r.fields['Reply Needs Attention'],
           connectionArm: r.fields['Connection Arm'] || null,
-          cadence: computeCadenceProgress(r.fields['Stage History'], sequenceStage)
+          cadenceStartOverride: r.fields['Cadence Start Override'] || null,
+          cadence: computeCadenceProgress(r.fields['Stage History'], sequenceStage, r.fields['Cadence Start Override'] || null)
         };
       })
       .filter(r => r.contactName);
@@ -13402,7 +13416,26 @@ const RESPECT_SUMMARY_INSTRUCTIONS_NOTE = " If the AI summary, profile notes, or
 // phrasing ("driving meaningful change", "keeping momentum", "complex
 // multi-site operations", "the organisation has seen it all before"). This
 // forces at least one concrete, this-person-only detail into every message.
-const GROUND_IN_SPECIFICS_NOTE = `\n\nGround this message in this specific person. The profile notes, enrichment profile and AI summary above contain concrete detail - a named site or refinery, a system they've rolled out, headcount or a contractor base they carry, a specific specialism (e.g. IR in heavy industry), a named prior role, a "best outreach angle", a stated likely pain point. Pick ONE of those specifics and build the observation around it, in Marcus's own words. A message that would read the same sent to anyone with this job title has failed - do not fall back on generic change-management phrasing like "driving meaningful change", "keeping momentum", "complex multi-site operations" or "the organisation has seen it all before". If genuinely nothing specific is available, say less rather than padding with generic lines.`;
+//
+// Message 1 is the one exception, and it needs its own, much lighter
+// wording rather than just being skipped - the blanket version below was
+// still being appended after messageBeatNote()'s "soft opener only, no
+// pitch, no reason for reaching out" instruction, and the model was
+// resolving that conflict by keeping message 1 pitch-free while still
+// building the whole message around a researched hook (a career move, a
+// named project) - reported live: a message-1 draft that opened with a
+// contact's move between employers and a mobilisation-cycles question,
+// nothing like the video's own example ("good to connect, John, whatever").
+// A hard instruction to ground the message always wins against a softer
+// instruction to keep it light, so message 1 gets a version that
+// explicitly forbids building an observation or question around a
+// specific - not just a suggestion to tone it down.
+function groundInSpecificsNote(messageNumber) {
+  if (messageNumber === 1) {
+    return `\n\nThis is message 1 - do NOT ground it in a researched specific (a prior role, a career move, a named project, a pain point). That's for message 2 onward. Keep this one as generic as "good to connect" allows: their first name is personalization enough. If the profile notes/enrichment/AI summary above are tempting, ignore them here - referencing one of them now (even lightly, even as a question) is exactly the over-researched opener this rule exists to prevent.`;
+  }
+  return `\n\nGround this message in this specific person. The profile notes, enrichment profile and AI summary above contain concrete detail - a named site or refinery, a system they've rolled out, headcount or a contractor base they carry, a specific specialism (e.g. IR in heavy industry), a named prior role, a "best outreach angle", a stated likely pain point. Pick ONE of those specifics and build the observation around it, in Marcus's own words. A message that would read the same sent to anyone with this job title has failed - do not fall back on generic change-management phrasing like "driving meaningful change", "keeping momentum", "complex multi-site operations" or "the organisation has seen it all before". If genuinely nothing specific is available, say less rather than padding with generic lines.`;
+}
 
 // Turns the enrichment profile (currentTitle/company/workHistory/education/
 // location/bio/recentActivity/likelyPainPoints/bestOutreachAngle - see the
@@ -13483,7 +13516,7 @@ function triggersPromptText(triggers) {
 function messageBeatNote(messageNumber) {
   const num = messageNumber || 0;
   if (num === 1) {
-    return ' This is message 1, sent right after connecting - it must be a soft opener only: light, warm, genuinely curious about them or their work. No pitch, no stated reason for reaching out, no trigger, no CTA, whatever the cadence config says - that all comes later. Think "good to connect" energy, not a sales open.';
+    return ' This is message 1, sent right after connecting - it must be a bare soft opener, nothing more. Literally as minimal as "Good to connect, [first name]" or "Hi [first name], great to connect!" - that\'s the whole message, maybe one warm sentence at most. No pitch, no stated reason for reaching out, no trigger, no CTA, and critically: no question, no observation, and no reference to anything from their profile, work history, or research - that starts at message 2. Resist the pull to personalise this one with a researched detail; a generic-sounding message 1 is correct, not a failure.';
   }
   if (num === 2) {
     return ' This is message 2 - the first message that can introduce a reason for reaching out. Bring in a trigger (see the list below, if this campaign has one) or the researched context on this contact/company, and hint at the value on offer without a hard pitch yet.';
@@ -14042,7 +14075,7 @@ ${ctaStrategyNoteText(stageKey, messageNumber, ctaMessage)}${emailMode ? '' : me
 
 ${voiceRulesPromptText(voice, emailMode)}${styleCorrectionsPromptText(styleCorrections, stageKey)}${steerPromptText(steer)}
 
-${writeInstruction}${GROUND_IN_SPECIFICS_NOTE}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${examplesNote}${performanceNote}${framingInstructionText(campaignRecord)}${draftJsonContract(emailMode)}`;
+${writeInstruction}${emailMode ? groundInSpecificsNote() : groundInSpecificsNote(messageNumber)}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${examplesNote}${performanceNote}${framingInstructionText(campaignRecord)}${draftJsonContract(emailMode)}`;
 
   return { promptText, stageKey, styleCorrections, voice, emailMode };
 }
@@ -14284,9 +14317,9 @@ app.post('/api/messages/generate', async (req, res) => {
       stageKey = stage.key;
       resolvedVoice = voice;
       if (emailMode) {
-        promptText = `You are drafting a cold outreach email to a business on behalf of T2C Outreach, Twenty2 Collective's outreach CRM.\n\nBusiness: ${contact.company || contact.name}. Contact: ${contact.name}${contact.role ? `, ${contact.role}` : ''}. Profile notes: ${contact.notes || 'none'}.${conversationNote}${stage.template ? `\n\nTemplate / angle to work from:\n${stage.template}` : ''}\n\n${voiceRulesPromptText(voice, true)}${imageNote}${campaignNote}${enrichmentNote}${styleCorrectionsPromptText(styleCorrections, stage.key)}${steerPromptText(steer)}\n\nWrite the cold email to this business now. If there is a prior reply in the conversation above, respond to what they actually said rather than reintroducing yourself.${GROUND_IN_SPECIFICS_NOTE}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${draftJsonContract(true)}`;
+        promptText = `You are drafting a cold outreach email to a business on behalf of T2C Outreach, Twenty2 Collective's outreach CRM.\n\nBusiness: ${contact.company || contact.name}. Contact: ${contact.name}${contact.role ? `, ${contact.role}` : ''}. Profile notes: ${contact.notes || 'none'}.${conversationNote}${stage.template ? `\n\nTemplate / angle to work from:\n${stage.template}` : ''}\n\n${voiceRulesPromptText(voice, true)}${imageNote}${campaignNote}${enrichmentNote}${styleCorrectionsPromptText(styleCorrections, stage.key)}${steerPromptText(steer)}\n\nWrite the cold email to this business now. If there is a prior reply in the conversation above, respond to what they actually said rather than reintroducing yourself.${groundInSpecificsNote()}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${draftJsonContract(true)}`;
       } else {
-        promptText = `Template for this stage:\n${stage.template || ''}\n\nContact: ${contact.name}, ${contact.role || ''} at ${contact.company || ''}. Sequence stage: ${stage.label || stage.key} (message ${stage.messageNumber || 'n/a'} in the sequence). Profile notes: ${contact.notes || 'none'}.${conversationNote}\n\n${ctaStrategyNoteText(stage.key, stage.messageNumber, voice && voice.messagesBeforeCta)}${messageBeatNote(stage.messageNumber)}${ctaOptionsPromptText(ctaOptions)}${triggersPromptText(triggers)}\n\n${voiceRulesPromptText(voice, false)}${imageNote}${campaignNote}${enrichmentNote}${styleCorrectionsPromptText(styleCorrections, stage.key)}${steerPromptText(steer)}\n\nWrite the actual message for this specific contact, replacing placeholders naturally - if the conversation so far shows they've already replied, respond to what they actually said rather than reintroducing yourself.${GROUND_IN_SPECIFICS_NOTE}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${draftJsonContract(false)}`;
+        promptText = `Template for this stage:\n${stage.template || ''}\n\nContact: ${contact.name}, ${contact.role || ''} at ${contact.company || ''}. Sequence stage: ${stage.label || stage.key} (message ${stage.messageNumber || 'n/a'} in the sequence). Profile notes: ${contact.notes || 'none'}.${conversationNote}\n\n${ctaStrategyNoteText(stage.key, stage.messageNumber, voice && voice.messagesBeforeCta)}${messageBeatNote(stage.messageNumber)}${ctaOptionsPromptText(ctaOptions)}${triggersPromptText(triggers)}\n\n${voiceRulesPromptText(voice, false)}${imageNote}${campaignNote}${enrichmentNote}${styleCorrectionsPromptText(styleCorrections, stage.key)}${steerPromptText(steer)}\n\nWrite the actual message for this specific contact, replacing placeholders naturally - if the conversation so far shows they've already replied, respond to what they actually said rather than reintroducing yourself.${groundInSpecificsNote(stage.messageNumber)}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${draftJsonContract(false)}`;
       }
     }
 
@@ -16232,6 +16265,41 @@ app.patch('/api/campaign/:id/contacts/:contactId/stage', async (req, res) => {
   }
 });
 
+// Manually backdates (or clears) a contact's 14-day cadence clock - see
+// computeCadenceProgress's manualStartDate param. For contacts whose Stage
+// History predates this cadence, or who moved onto a new strategy mid
+// campaign so their old history no longer means anything, this is the only
+// way to give them a real day-1 without rewriting Stage History itself.
+app.patch('/api/campaign/:id/contacts/:contactId/cadence-start', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+
+  const campaignName = decodeURIComponent(req.params.id);
+  const contactId = req.params.contactId;
+  const { date } = req.body || {};
+  if (date !== null && !/^\d{4}-\d{2}-\d{2}$/.test(date || '')) {
+    return res.status(400).json({ error: 'date must be a YYYY-MM-DD string, or null to clear the override' });
+  }
+
+  try {
+    const campaignRecord = await findCampaignRecordByName(campaignName);
+    if (!campaignRecord) return res.status(404).json({ error: `Campaign "${campaignName}" not found` });
+
+    const rows = await fetchCampaignContactsRows();
+    const existing = findCampaignContactRow(rows, contactId, campaignRecord.id);
+    if (!existing) return res.status(404).json({ error: 'This contact has no Campaign Contacts row in this campaign yet' });
+
+    await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, {
+      records: [{ id: existing.id, fields: { 'Cadence Start Override': date } }],
+      typecast: true
+    });
+
+    res.json({ success: true, date: date || null });
+  } catch (err) {
+    console.error('Set cadence start error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Necessary supporting infrastructure, not itself one of the requested
 // changes: the only existing way to write Next Message Draft onto a
 // Campaign Contacts row was buried inside the server-side generate-message
@@ -16436,13 +16504,31 @@ app.patch('/api/context/contact-fields', async (req, res) => {
       await airtableWriteAllowingMissingCtaFields('PATCH', 'Contacts', { records: [{ id: contactId, fields: contactFields }], typecast: true });
     }
 
+    // When the caller names a campaign (the Roadmap kanban always does),
+    // scope the row match to that campaign and drop the "must currently be
+    // at the expected previous stage" restriction below - a manual drag can
+    // move a card backward (e.g. Message 1 back to Connected) just as
+    // easily as forward, and the stage-restricted match used to silently
+    // no-op on anything but the one forward transition it was written for.
+    // Callers with no campaign context (bulk syncs elsewhere in this file)
+    // keep the old, narrower behaviour unchanged.
+    let campaignRecordId = null;
+    if (campaignName) {
+      try {
+        const campaignRecord = await findCampaignRecordByName(campaignName);
+        if (campaignRecord) campaignRecordId = campaignRecord.id;
+      } catch (e) { console.warn('Could not resolve campaign for contact-fields scoping (non-fatal):', e.message); }
+    }
+
     let campaignContactRowsSynced = 0;
     if (sequenceStage === 'Engagement Made' || journeyStage === 'Engagement Made') {
       // Deliberately no Connection Sent Date here - engaging with a profile
       // (viewing/liking/commenting) isn't sending a request, it's the step
       // before that; see the route comment above.
       const rows = await fetchCampaignContactsRows();
-      const foundRows = rows.filter(r => (r.fields['Contact'] || []).includes(contactId) && ['Connection Requested', 'Found'].includes(r.fields['Sequence Stage'] || ''));
+      const foundRows = campaignRecordId
+        ? rows.filter(r => (r.fields['Contact'] || []).includes(contactId) && (r.fields['Campaign'] || []).includes(campaignRecordId))
+        : rows.filter(r => (r.fields['Contact'] || []).includes(contactId) && ['Connection Requested', 'Found'].includes(r.fields['Sequence Stage'] || ''));
       if (foundRows.length) {
         const today = new Date().toISOString().slice(0, 10);
         await airtableBatchPatch(CAMPAIGN_CONTACTS_TABLE, foundRows.map(r => ({
@@ -16463,7 +16549,9 @@ app.patch('/api/context/contact-fields', async (req, res) => {
       }
     } else if (sequenceStage === 'Connection Pending' || journeyStage === 'Connection Pending') {
       const rows = await fetchCampaignContactsRows();
-      const pendingRows = rows.filter(r => (r.fields['Contact'] || []).includes(contactId) && ['Connection Requested', 'Found', 'Engagement Made'].includes(r.fields['Sequence Stage'] || ''));
+      const pendingRows = campaignRecordId
+        ? rows.filter(r => (r.fields['Contact'] || []).includes(contactId) && (r.fields['Campaign'] || []).includes(campaignRecordId))
+        : rows.filter(r => (r.fields['Contact'] || []).includes(contactId) && ['Connection Requested', 'Found', 'Engagement Made'].includes(r.fields['Sequence Stage'] || ''));
       if (pendingRows.length) {
         const today = new Date().toISOString().slice(0, 10);
         await airtableBatchPatch(CAMPAIGN_CONTACTS_TABLE, pendingRows.map(r => ({
@@ -16487,7 +16575,9 @@ app.patch('/api/context/contact-fields', async (req, res) => {
       }
     } else if (sequenceStage === 'Connected') {
       const rows = await fetchCampaignContactsRows();
-      const acceptedRows = rows.filter(r => (r.fields['Contact'] || []).includes(contactId) && (r.fields['Sequence Stage'] || '') === 'Connection Pending');
+      const acceptedRows = campaignRecordId
+        ? rows.filter(r => (r.fields['Contact'] || []).includes(contactId) && (r.fields['Campaign'] || []).includes(campaignRecordId))
+        : rows.filter(r => (r.fields['Contact'] || []).includes(contactId) && (r.fields['Sequence Stage'] || '') === 'Connection Pending');
       if (acceptedRows.length) {
         const today = new Date().toISOString().slice(0, 10);
         await airtableBatchPatch(CAMPAIGN_CONTACTS_TABLE, acceptedRows.map(r => ({
