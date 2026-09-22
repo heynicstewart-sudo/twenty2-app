@@ -16640,25 +16640,40 @@ function renderCampaignRoadmapTab(campaign){
 // (b) collapses any contact with more than one row down to the furthest-
 // along one, merging the useful fields up first. Runs a dry-run and shows
 // the exact plan before changing anything.
+// contactIds/contactNames scope repair-contacts' new "create missing rows"
+// step to exactly the contacts this campaign's own client-side membership
+// (direct contactIds + every linked grid's contacts - see campaignContacts)
+// already says belong here, rather than the server trying to re-derive
+// grid membership itself from Airtable. Covers the CSV-import case: 300+
+// contacts can land in a linked grid with real Airtable Contacts records
+// but no Campaign Contacts row yet (that row is otherwise only ever
+// created lazily, the first time a real action - Engage on LinkedIn, a
+// drag on the Roadmap - touches that one contact), so without this every
+// one of them sits invisible to the Sequence board/funnel until someone
+// clicks into them individually.
 async function repairCampaignContacts(campaignId){
   const campaign = state.campaigns.find(c => c.id === campaignId);
   if(!campaign) return;
   const campaignName = campaign.name;
+  const members = campaignContacts(campaign);
+  const contactIds = members.map(c => c.id);
+  const contactNames = {}; members.forEach(c => { contactNames[c.id] = c.name; });
   const btn = document.getElementById('repairCcBtn');
   if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Checking...'; }
   try {
     const res = await fetch(`/api/campaign/${encodeURIComponent(campaignName)}/repair-contacts`, {
-      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ dryRun:true })
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ dryRun:true, contactIds, contactNames })
     });
     const data = await res.json();
     if(!res.ok || !data.success) throw new Error(data.error || 'Check failed');
     const p = data.plan;
 
-    const nothingToDo = !p.primaryNameBackfill && !p.linklessRelinked.length && !p.linklessDeleted.length && !p.duplicateContacts.length;
+    const nothingToDo = !p.primaryNameBackfill && !p.linklessRelinked.length && !p.linklessDeleted.length && !p.duplicateContacts.length && !(p.newContactsToAdd||[]).length;
     if(nothingToDo){ toast('Junction table is already clean, nothing to repair.', 'success'); return; }
 
     const lines = [];
     if(p.primaryNameBackfill) lines.push(`<li>Set the campaign's name field (currently blank, shows as "Unnamed record")</li>`);
+    if((p.newContactsToAdd||[]).length) lines.push(`<li><strong>${p.newContactsToAdd.length}</strong> contact(s) already in this campaign (direct or via a linked grid) have <strong>no pipeline row yet</strong> - one will be <strong>created</strong> for each, starting at "Found": ${esc(p.newContactsToAdd.slice(0,8).join(', '))}${p.newContactsToAdd.length>8?'…':''}</li>`);
     if(p.linklessRelinked.length) lines.push(`<li><strong>${p.linklessRelinked.length}</strong> row(s) missing their contact link will be <strong>re-linked</strong> to the right contact: ${esc(p.linklessRelinked.slice(0,8).join(', '))}${p.linklessRelinked.length>8?'…':''}</li>`);
     if(p.linklessDeleted.length) lines.push(`<li><strong>${p.linklessDeleted.length}</strong> row(s) that link to nobody and match no contact will be <strong>removed</strong> (no progress is stored on these): ${esc(p.linklessDeleted.slice(0,8).map(d=>d.contactName).join(', '))}${p.linklessDeleted.length>8?'…':''}</li>`);
     if(p.duplicateContacts.length){
@@ -16684,23 +16699,78 @@ async function repairCampaignContacts(campaignId){
 async function runRepairCampaignContacts(campaignId){
   const campaign = state.campaigns.find(c => c.id === campaignId);
   if(!campaign) return;
+  const members = campaignContacts(campaign);
+  const contactIds = members.map(c => c.id);
+  const contactNames = {}; members.forEach(c => { contactNames[c.id] = c.name; });
   const go = document.getElementById('repairGoBtn');
-  if(go){ go.disabled = true; go.innerHTML = '<i class="ti ti-loader-2"></i> Repairing...'; }
+  if(go){ go.disabled = true; go.innerHTML = '<i class="ti ti-loader-2"></i> Starting...'; }
   try {
     const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/repair-contacts`, {
-      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({})
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ contactIds, contactNames })
     });
     const data = await res.json();
     if(!res.ok || !data.success) throw new Error(data.error || 'Repair failed');
+    await pollRepairContactsJob(data.jobId, campaignId, campaign.name, data.total);
+  } catch(err){
+    toast('Repair failed: ' + friendlyErr(err.message), 'warn');
+    if(go){ go.disabled = false; go.innerHTML = '<i class="ti ti-check"></i> Run repair'; }
+  }
+}
+
+function renderRepairProgressModal(job){
+  const body = `
+    <p style="font-size:12.5px;margin-bottom:10px;">Creating pipeline rows and tidying up junction data - safe to stop early if you've already got what you need, everything done so far stays done.</p>
+    <div style="font-size:12.5px;margin-bottom:6px;"><i class="ti ti-loader-2"></i> ${job.completed} of ${job.total}</div>
+    <div class="muted" style="font-size:11.5px;">${job.created||0} created, ${job.relinked||0} re-linked, ${job.merged||0} merged, ${job.deleted||0} removed so far.</div>
+  `;
+  const footer = `<button class="btn btn-secondary" id="repairCancelBtn" onclick="cancelRepairContactsJob('${job.id}')"><i class="ti ti-player-stop"></i> Stop here</button>`;
+  openModal('Repairing...', body, footer);
+}
+
+// "I've found enough, stop spending on the rest" - job.cancelled is only
+// checked between items server-side (search-server.js,
+// runRepairContactsJob), so whatever's already in flight still finishes
+// and is saved; this just stops the next one from starting.
+async function cancelRepairContactsJob(jobId){
+  const btn = document.getElementById('repairCancelBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2"></i> Stopping...'; }
+  try {
+    await fetch(`/api/campaign/repair-contacts/${jobId}/cancel`, { method:'POST' });
+  } catch(err){
+    console.warn('Could not cancel repair job:', err.message);
+  }
+}
+
+async function pollRepairContactsJob(jobId, campaignId, campaignName, total){
+  let job = { id: jobId, completed: 0, total, created: 0, relinked: 0, merged: 0, deleted: 0 };
+  renderRepairProgressModal(job);
+  for(;;){
+    await sleep(1000);
+    let res, data;
+    try {
+      res = await fetch(`/api/campaign/repair-contacts/${jobId}`);
+      data = await res.json();
+    } catch(err){
+      continue; // transient - just try again on the next tick
+    }
+    if(!res.ok){ toast('Lost track of the repair job: ' + friendlyErr(data.error||'unknown error'), 'warn'); return; }
+    job = data;
+    if(job.status === 'running'){ renderRepairProgressModal(job); continue; }
+
     closeModal();
-    toast(`Done: re-linked ${data.relinked}, merged ${data.merged}, removed ${data.deleted}. ${data.remaining} rows now.`, 'success');
     window.__campaignFunnels = window.__campaignFunnels || {};
     delete window.__campaignFunnels[campaignId];
     if(window.__campaignSequenceStages) delete window.__campaignSequenceStages[campaignId];
     renderPage();
-  } catch(err){
-    toast('Repair failed: ' + friendlyErr(err.message), 'warn');
-    if(go){ go.disabled = false; go.innerHTML = '<i class="ti ti-check"></i> Run repair'; }
+
+    if(job.status === 'error'){
+      toast('Repair failed: ' + friendlyErr(job.error||'unknown error'), 'warn');
+    } else if(job.status === 'cancelled'){
+      toast(`Stopped: created ${job.created}, re-linked ${job.relinked}, merged ${job.merged}, removed ${job.deleted}. ${job.remaining} rows now.`, 'success');
+    } else {
+      toast(`Done: created ${job.created}, re-linked ${job.relinked}, merged ${job.merged}, removed ${job.deleted}. ${job.remaining} rows now.`, 'success');
+    }
+    return;
   }
 }
 

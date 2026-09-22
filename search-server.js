@@ -13061,10 +13061,91 @@ app.post('/api/campaign/:id/contacts/link', async (req, res) => {
 // POST body { dryRun: true } returns the full plan without changing anything.
 const REPAIR_MERGE_FIELDS = ['Final Message Sent', 'Original Message Draft', 'Next Message Draft', 'Connection Sent Date', 'Draft Outcome', 'Sentiment', 'CTA Judgement Note', 'Skip Reason', 'Skip Note'];
 
+// In-memory job store for the "create missing rows" half of repair-contacts
+// (below) - mirrors gridSearchJobs/runningGridSearchJobs exactly, same
+// reason: creating a row is one Airtable POST per contact (no batch API for
+// it, unlike relink/merge/delete which can go 10-at-a-time), so a large CSV
+// import's worth of contacts (a few hundred is realistic) takes long enough
+// that a rep needs a progress bar and a way to stop it once they've decided
+// they have enough, rather than a single blocking request with no way back.
+const repairContactsJobs = new Map();
+const runningRepairContactsCampaigns = new Set();
+const REPAIR_CONTACTS_JOB_TTL_MS = 15 * 60 * 1000;
+
+async function runRepairContactsJob(job, ctx) {
+  const { campaignRecord, canonicalName, primaryNeedsBackfill, backfills, patchSurvivors, toDelete, missingContacts, rowsBefore } = ctx;
+  const finish = (status, error) => {
+    // Computed here, not just on the success path, so a cancelled job's
+    // poll response reflects whatever actually landed before the stop
+    // (partial creates/deletes still happened) rather than reporting 0.
+    job.remaining = rowsBefore - job.deleted + job.created;
+    job.status = status;
+    if (error) job.error = error;
+    job.finishedAt = Date.now();
+    setTimeout(() => repairContactsJobs.delete(job.id), REPAIR_CONTACTS_JOB_TTL_MS);
+  };
+  try {
+    if (primaryNeedsBackfill) {
+      await airtableRequest('PATCH', 'Campaigns', { records: [{ id: campaignRecord.id, fields: { 'Campaign Name': canonicalName } }], typecast: true });
+    }
+    for (let i = 0; i < backfills.length; i += 10) {
+      if (job.cancelled) return finish('cancelled');
+      await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, {
+        records: backfills.slice(i, i + 10).map(b => ({ id: b.rowId, fields: { 'Contact': [b.contactId] } })),
+        typecast: true
+      });
+      job.relinked += Math.min(10, backfills.length - i);
+      job.completed += Math.min(10, backfills.length - i);
+    }
+    for (let i = 0; i < patchSurvivors.length; i += 10) {
+      if (job.cancelled) return finish('cancelled');
+      await airtableWriteAllowingMissingCtaFields('PATCH', CAMPAIGN_CONTACTS_TABLE, { records: patchSurvivors.slice(i, i + 10), typecast: true });
+      job.merged += Math.min(10, patchSurvivors.length - i);
+      job.completed += Math.min(10, patchSurvivors.length - i);
+    }
+    for (let i = 0; i < toDelete.length; i += 10) {
+      if (job.cancelled) return finish('cancelled');
+      const batch = toDelete.slice(i, i + 10);
+      const qs = batch.map(id => `records[]=${encodeURIComponent(id)}`).join('&');
+      const resp = await airtableFetchWithRetry(`${atUrl()}/${encodeURIComponent(CAMPAIGN_CONTACTS_TABLE)}?${qs}`, {
+        method: 'DELETE', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` }
+      });
+      if (resp.ok) job.deleted += batch.length;
+      else console.warn('repair-contacts delete batch failed:', await resp.text());
+    }
+    // The slow, credit/time-costly part - see the comment above. Checked
+    // before every single contact (not every N, unlike the batched steps
+    // above) since this is exactly where a rep wants to stop early.
+    const rows = await fetchCampaignContactsRows();
+    for (const mc of missingContacts) {
+      if (job.cancelled) return finish('cancelled');
+      try {
+        await getOrCreateCampaignContactRow(mc.id, mc.name, campaignRecord.id, canonicalName, rows, { 'Sequence Stage': 'Found' });
+        job.created++;
+      } catch (err) {
+        console.warn('repair-contacts: could not create row for', mc.name, '-', err.message);
+      }
+      job.completed++;
+    }
+    finish('done');
+  } catch (err) {
+    console.error('Repair-contacts job failed:', err.message);
+    finish('error', err.message);
+  }
+}
+
 app.post('/api/campaign/:id/repair-contacts', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   const campaignName = decodeURIComponent(req.params.id);
   const dryRun = !!(req.body && req.body.dryRun);
+  // Client-supplied: this campaign's own membership (direct contactIds plus
+  // every contact in a linked grid - see campaignContacts, t2c-outreach-
+  // crm.html), which the server has no independent way to reconstruct
+  // (grid membership only exists client-side). contactNames is just for the
+  // dry-run preview text and the new row's Name field - best-effort, not
+  // required for correctness.
+  const requestedContactIds = Array.isArray(req.body && req.body.contactIds) ? req.body.contactIds.filter(isAirtableRecordId) : [];
+  const contactNames = (req.body && req.body.contactNames) || {};
 
   try {
     const campaignRecord = await findCampaignRecordByName(campaignName);
@@ -13149,6 +13230,22 @@ app.post('/api/campaign/:id/repair-contacts', async (req, res) => {
       });
     }
 
+    // --- Plan the missing rows - contacts the client says belong to this
+    // campaign (requestedContactIds) that have no Campaign Contacts row at
+    // all yet, not even a linkless one. This is the CSV-import case: a
+    // contact can have a real Airtable Contacts record and sit in a grid
+    // linked to this campaign, but no pipeline row was ever created for it
+    // (that normally only happens lazily, the first time a real action -
+    // Engage on LinkedIn, a drag on the Roadmap - touches that one
+    // contact). linkedContactIds already includes anything backfills is
+    // about to re-link, so it isn't double-counted here.
+    const missingContacts = requestedContactIds
+      .filter(id => !linkedContactIds.has(id))
+      .map(id => ({ id, name: contactNames[id] || id }));
+
+    const patchSurvivors = dupPlans.filter(d => Object.keys(d._merged).length).map(d => ({ id: d.keepRowId, fields: d._merged }));
+    const toDelete = [...linklessDeletes.map(d => d.rowId), ...dupPlans.flatMap(d => d.deleteRowIds)];
+
     const plan = {
       campaign: canonicalName,
       primaryNameBackfill: primaryNeedsBackfill,
@@ -13157,46 +13254,73 @@ app.post('/api/campaign/:id/repair-contacts', async (req, res) => {
       linklessRelinked: backfills.map(b => b.contactName),
       linklessDeleted: linklessDeletes,
       duplicateContacts: dupPlans.map(d => ({ contact: d.contactName, keepStage: d.keepStage, extraRowsRemoved: d.deleteRowIds.length, fieldsMergedUp: d.mergedFieldNames })),
-      rowsToDelete: linklessDeletes.length + dupPlans.reduce((n, d) => n + d.deleteRowIds.length, 0),
+      newContactsToAdd: missingContacts.map(mc => mc.name),
+      rowsToDelete: toDelete.length,
       contactsAffected: 0
     };
-    plan.contactsAffected = backfills.length + dupPlans.length;
+    plan.contactsAffected = backfills.length + dupPlans.length + missingContacts.length;
 
     if (dryRun) return res.json({ success: true, dryRun: true, plan });
 
-    // --- Execute ---
-    if (primaryNeedsBackfill) {
-      await airtableRequest('PATCH', 'Campaigns', { records: [{ id: campaignRecord.id, fields: { 'Campaign Name': canonicalName } }], typecast: true });
-    }
-    // Backfill links onto salvageable linkless rows.
-    for (let i = 0; i < backfills.length; i += 10) {
-      await airtableRequest('PATCH', CAMPAIGN_CONTACTS_TABLE, {
-        records: backfills.slice(i, i + 10).map(b => ({ id: b.rowId, fields: { 'Contact': [b.contactId] } })),
-        typecast: true
-      });
-    }
-    // Merge donor fields onto each survivor, then delete the losers.
-    const patchSurvivors = dupPlans.filter(d => Object.keys(d._merged).length).map(d => ({ id: d.keepRowId, fields: d._merged }));
-    for (let i = 0; i < patchSurvivors.length; i += 10) {
-      await airtableWriteAllowingMissingCtaFields('PATCH', CAMPAIGN_CONTACTS_TABLE, { records: patchSurvivors.slice(i, i + 10), typecast: true });
-    }
-    const toDelete = [...linklessDeletes.map(d => d.rowId), ...dupPlans.flatMap(d => d.deleteRowIds)];
-    let deleted = 0;
-    for (let i = 0; i < toDelete.length; i += 10) {
-      const batch = toDelete.slice(i, i + 10);
-      const qs = batch.map(id => `records[]=${encodeURIComponent(id)}`).join('&');
-      const resp = await airtableFetchWithRetry(`${atUrl()}/${encodeURIComponent(CAMPAIGN_CONTACTS_TABLE)}?${qs}`, {
-        method: 'DELETE', headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` }
-      });
-      if (resp.ok) deleted += batch.length;
-      else console.warn('repair-contacts delete batch failed:', await resp.text());
+    if (runningRepairContactsCampaigns.has(campaignRecord.id)) {
+      return res.status(409).json({ error: 'A repair is already running for this campaign' });
     }
 
-    res.json({ success: true, plan, relinked: backfills.length, merged: patchSurvivors.length, deleted, remaining: rows.length - deleted });
+    const jobId = crypto.randomUUID();
+    const job = {
+      id: jobId,
+      campaignId: campaignRecord.id,
+      status: 'running',
+      total: backfills.length + patchSurvivors.length + missingContacts.length,
+      completed: 0,
+      relinked: 0, merged: 0, deleted: 0, created: 0, remaining: 0,
+      error: null,
+      cancelled: false,
+      startedAt: Date.now()
+    };
+    repairContactsJobs.set(jobId, job);
+    runningRepairContactsCampaigns.add(campaignRecord.id);
+
+    runRepairContactsJob(job, {
+      campaignRecord, canonicalName, primaryNeedsBackfill, backfills, patchSurvivors, toDelete, missingContacts,
+      rowsBefore: rows.length
+    })
+      .catch(err => {
+        console.error('Repair-contacts job failed:', err.message);
+        job.status = 'error';
+        job.error = err.message;
+      })
+      .finally(() => runningRepairContactsCampaigns.delete(campaignRecord.id));
+
+    res.json({ success: true, jobId, total: job.total, plan });
   } catch (err) {
     console.error('Campaign repair-contacts error:', err.message);
     res.status(500).json({ error: err.message });
   }
+});
+
+// Poll a repair-contacts job's progress - same shape/cadence as
+// GET /api/grid/run-search/:jobId, for the same reason (a bar + Cancel).
+app.get('/api/campaign/repair-contacts/:jobId', (req, res) => {
+  const job = repairContactsJobs.get(req.params.jobId);
+  if (!job) return res.status(404).json({ error: 'job not found' });
+  res.json({
+    jobId: job.id, status: job.status, total: job.total, completed: job.completed,
+    relinked: job.relinked, merged: job.merged, deleted: job.deleted, created: job.created,
+    remaining: job.remaining, error: job.error
+  });
+});
+
+// Stops a running repair-contacts job - the "I've found enough, stop
+// spending on the rest" button. Same not-mid-flight guarantee as
+// /api/grid/cancel-search: job.cancelled is only checked between items
+// (every single contact for the create-rows step, every batch of 10 for
+// the others), so whatever's already in flight finishes and is saved.
+app.post('/api/campaign/repair-contacts/:jobId/cancel', (req, res) => {
+  const job = repairContactsJobs.get(req.params.jobId);
+  if (!job) return res.json({ success: false, message: 'No running repair found for this job' });
+  job.cancelled = true;
+  res.json({ success: true });
 });
 
 // Feeds the campaign Roadmap tab's per-card Sequence Stage badge - the
