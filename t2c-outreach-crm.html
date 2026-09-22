@@ -456,6 +456,7 @@ label{font-size:var(--label-size);font-weight:700;color:var(--muted);display:blo
 .day-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 9px;border-radius:var(--radius-pill);font-size:11px;font-weight:800;}
 .day-green{background:var(--tint-green-bg);color:var(--tint-green-fg);}
 .day-amber{background:var(--tint-amber-bg);color:var(--tint-amber-fg);}
+.day-orange{background:var(--tint-orange-bg);color:var(--tint-orange-fg);}
 .day-red{background:var(--tint-red-bg);color:var(--tint-red-fg);}
 
 /* Grid page */
@@ -11953,10 +11954,14 @@ function toggleArchive(){ state.archiveOpen = !state.archiveOpen; renderPage(); 
 // Colour for the Day X/14 badge - reuses the existing day-green/amber/red
 // tint classes (day-badge) so it reads consistently with the "days pending"
 // badge already on every card, rather than introducing a fourth palette.
+// Orange while waiting on the clock (nothing to do yet), green the day the
+// next step becomes due (go), red once that day's passed without it
+// happening (overdue) - a plain go/wait/late traffic-light reading, scannable
+// across a whole kanban column without opening any card.
 function cadenceDayBadgeClass(status){
   if(status === 'overdue') return 'day-red';
-  if(status === 'due') return 'day-amber';
-  return 'day-green';
+  if(status === 'due') return 'day-green';
+  return 'day-orange';
 }
 
 // The Day X/14 badge - only meaningful for LinkedIn campaigns (the 14-day
@@ -15536,6 +15541,7 @@ function renderCampaignListView(){
           <th title="Distinct contacts who replied (of connected, or of emailed for Email campaigns)">Reply rate</th>
           <th title="Meetings booked (from the Deals table)">Meetings</th>
           <th>Last modified</th>
+          <th></th>
         </tr></thead>
         <tbody>
           ${campaigns.map(renderCampaignListRow).join('')}
@@ -15568,6 +15574,7 @@ function renderCampaignListRow(campaign){
     <td>${cell ?? (m.replyRate === null ? '–' : m.replyRate + '%')}</td>
     <td>${cell ?? n(m.meetings)}</td>
     <td>${fmtDate(campaign.updatedAt || campaign.createdAt)}</td>
+    <td><button class="btn btn-ghost btn-sm" title="Delete campaign" onclick="event.stopPropagation();confirmDeleteCampaign('${campaign.id}')"><i class="ti ti-trash"></i></button></td>
   </tr>`;
 }
 
