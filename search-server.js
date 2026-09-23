@@ -22360,6 +22360,7 @@ app.get('/api/session', async (req, res) => {
     res.json({
       role: 'admin',
       controlPlane: !!AGENCY_CONTROL_BASE_ID,
+      operatorMode: !!process.env.OPERATOR_FEATURES,
       activeClient: publicClient(currentTenant()),
       clients: clients.map(publicClient),
     });

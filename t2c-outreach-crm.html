@@ -16627,7 +16627,7 @@ function renderCampaignRoadmapTab(campaign){
   if(!window.__campaignSequenceStages || !window.__campaignSequenceStages[campaign.id]) loadCampaignSequenceStages(campaign);
   return `
   <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:10px;">
-    <button class="btn btn-ghost btn-sm" onclick="repairCampaignContacts('${campaign.id}')" id="repairCcBtn" title="Remove junction rows that don't link a contact, and de-duplicate contacts that ended up with more than one row"><i class="ti ti-tool"></i> Repair sync</button>
+    ${(window.__session && window.__session.operatorMode) ? `<button class="btn btn-ghost btn-sm" onclick="repairCampaignContacts('${campaign.id}')" id="repairCcBtn" title="Remove junction rows that don't link a contact, and de-duplicate contacts that ended up with more than one row"><i class="ti ti-tool"></i> Repair sync</button>` : ''}
     <button class="btn btn-secondary btn-sm" onclick="openAddCampaignContactsModal('${campaign.id}')"><i class="ti ti-user-plus"></i> Add contacts</button>
   </div>
   ${renderRoadmap(campaignContacts(campaign))}
@@ -29552,11 +29552,13 @@ function renderSettings(){
     <span class="save-flash" id="saveFlash"><i class="ti ti-circle-check"></i> Settings saved</span>
   </div>
 
+  ${(window.__session && window.__session.operatorMode) ? `
   <div class="settings-section card" style="border-color:#f0c2b0;">
     <div class="section-title"><i class="ti ti-alert-triangle" style="color:var(--danger);"></i> Danger zone</div>
     <p class="muted" style="font-size:12px;margin-bottom:14px;">Permanently deletes all contacts, bookings, dead contacts and activity for everyone from the database (Contacts, Companies, Touch Points, Campaign Contacts, Deals, Content Signals, Learning Data, Bookings, Dead Contacts, Activity) - this is shared data, not just this browser's, so it affects every user. Grids, Sequences, Campaigns, Reps, Content Settings and Content are kept. This cannot be undone.</p>
     <button class="btn btn-danger" onclick="confirmResetAllData()"><i class="ti ti-trash"></i> Reset all data</button>
   </div>
+  ` : ''}
   `;
 }
 
