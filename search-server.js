@@ -11918,6 +11918,10 @@ app.post('/api/programs/bulk-capture', async (req, res) => {
 });
 
 // ---- Program discovery agent: run / read / triage the queue / settings ----
+// Gated behind OPERATOR_FEATURES - disabled for client-facing installs.
+// Set OPERATOR_FEATURES=true locally to re-enable.
+const DISCOVERY_ENABLED = !!process.env.OPERATOR_FEATURES;
+const discoveryDisabled = (req, res) => res.status(403).json({ error: 'Program discovery is disabled on this instance.' });
 
 // One run at a time, in-process. A full scan can take minutes, so the run
 // endpoint kicks it off in the background and the client polls GET /discovery
@@ -11936,6 +11940,7 @@ async function runProgramDiscoveryTracked(opts) {
 // Run a scan now. Background by default (returns immediately); pass wait:true
 // (the weekly cron does) to block until the summary is ready. Bounded + never throws.
 app.post('/api/programs/discovery/run', async (req, res) => {
+  if (!DISCOVERY_ENABLED) return discoveryDisabled(req, res);
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
   if (programDiscoveryRunState.running) return res.status(409).json({ error: 'A discovery run is already in progress', running: true });
@@ -11950,14 +11955,16 @@ app.post('/api/programs/discovery/run', async (req, res) => {
 // currently on, then exits its loop early instead of hard-killing the
 // request mid-write (which could leave a company's Programs (JSON) field
 // half-updated). Whatever it found before stopping is still saved.
-app.post('/api/programs/discovery/stop', async (req, res) => {
+app.post("/api/programs/discovery/stop", async (req, res) => {
+  if (!DISCOVERY_ENABLED) return discoveryDisabled(req, res);
   if (!programDiscoveryRunState.running) return res.status(409).json({ error: 'No discovery run is in progress' });
   programDiscoveryRunState.stopRequested = true;
   res.json({ ok: true });
 });
 
 // The Home card + review queue read this.
-app.get('/api/programs/discovery', async (req, res) => {
+app.get("/api/programs/discovery", async (req, res) => {
+  if (!DISCOVERY_ENABLED) return res.json({ queue: [], pendingCount: 0, running: false, lastRun: null, settings: {} });
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   try {
     const state = await loadProgramDiscoveryState();
@@ -11979,7 +11986,8 @@ app.get('/api/programs/discovery', async (req, res) => {
   }
 });
 
-app.post('/api/programs/discovery/queue/:id/accept', async (req, res) => {
+app.post("/api/programs/discovery/queue/:id/accept", async (req, res) => {
+  if (!DISCOVERY_ENABLED) return discoveryDisabled(req, res);
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   try {
     const state = await loadProgramDiscoveryState();
@@ -12000,7 +12008,8 @@ app.post('/api/programs/discovery/queue/:id/accept', async (req, res) => {
   }
 });
 
-app.post('/api/programs/discovery/queue/:id/reject', async (req, res) => {
+app.post("/api/programs/discovery/queue/:id/reject", async (req, res) => {
+  if (!DISCOVERY_ENABLED) return discoveryDisabled(req, res);
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   try {
     const state = await loadProgramDiscoveryState();
@@ -12014,7 +12023,8 @@ app.post('/api/programs/discovery/queue/:id/reject', async (req, res) => {
   }
 });
 
-app.post('/api/programs/discovery/settings', async (req, res) => {
+app.post("/api/programs/discovery/settings", async (req, res) => {
+  if (!DISCOVERY_ENABLED) return discoveryDisabled(req, res);
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   try {
     const state = await loadProgramDiscoveryState();
