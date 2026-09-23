@@ -1024,6 +1024,8 @@ async function createOrUpdateAirtableContact({ name, company, role, linkedinUrl,
         console.warn('Best-effort Grid Name field write failed (add a "Grid Name" text field to Contacts to enable this):', gridNameErr.message);
       }
     }
+    // Also sync updates to existing contacts to Monday (best-effort).
+    syncContactIdToMonday(existing.id).catch(() => {});
     return { success: true, skipped: true, recordId: existing.id };
   }
 
@@ -1071,6 +1073,10 @@ async function createOrUpdateAirtableContact({ name, company, role, linkedinUrl,
   // contact-fields once this contact actually reaches Sequence Stage
   // "Connected" - not here at creation, so a contact that's found but never
   // connects with never gets an unnecessary Trigify search opened for them.
+
+  // Push new contact to Monday CRM (best-effort, non-blocking).
+  syncContactIdToMonday(recordId).catch(() => {});
+
   return { success: true, skipped: false, recordId };
 }
 
@@ -11684,6 +11690,9 @@ async function setContactConnectionStatus(contactId, status) {
       records: [{ id: contactId, fields: { 'Journey Stage': 'Found', 'Connection Sent Date': null } }], typecast: true
     });
   }
+  // Sync updated stage to Monday (best-effort).
+  syncContactIdToMonday(contactId).catch(() => {});
+
   return { campaignContactRowsSynced };
 }
 
@@ -14894,6 +14903,9 @@ app.post('/api/campaign/:id/contacts/:contactId/mark-sent', async (req, res) => 
       });
     }
 
+    // Sync updated contact stage to Monday after a message is sent (best-effort).
+    if (advanced) syncContactIdToMonday(contactId).catch(() => {});
+
     res.json({ success: true, newStage: nextStage, advanced });
   } catch (err) {
     console.error('Mark sent error:', err.message);
@@ -15308,6 +15320,122 @@ async function postSlackNudge(text) {
   } catch (err) {
     console.warn('postSlackNudge failed (non-fatal):', err.message);
     return false;
+  }
+}
+
+// ===================== MONDAY.COM CONTACT SYNC (Airtable → Monday) =====================
+// One-way push: whenever a contact is created or updated in the app, push key
+// fields to the "Outreach CRM — Active Contacts" board so Twenty2 can see all
+// their outreach contacts inside Monday without juggling two CRMs.
+// Airtable is the source of truth; Monday is read-only record-keeping.
+//
+// Board ID and column IDs are hardcoded here (created once via API on 23 Sep 2026).
+// The Airtable ID column lets us find and update the right Monday item on subsequent
+// saves without a separate lookup table.
+
+const MONDAY_CONTACT_BOARD_ID = '5031508243';
+const MONDAY_CONTACT_COLS = {
+  company:      'text_mm7fx4t0',
+  jobTitle:     'text_mm7f4enk',
+  linkedin:     'link_mm7f6hs6',
+  stage:        'color_mm7fxna2',
+  campaign:     'text_mm7f9zyc',
+  lastMessage:  'date_mm7fge4e',
+  messagesSent: 'numeric_mm7f4yg9',
+  airtableId:   'text_mm7ff3hc',
+};
+
+// Stage label → Monday status index. Monday status columns use numeric indices
+// under the hood; we map our journey stages to sensible colours.
+// 0=grey, 1=orange, 2=yellow, 3=green, 4=red, 5=purple, 6=blue, 7=light-blue
+const MONDAY_STAGE_INDEX = {
+  'Found':               0,
+  'Engagement Made':     1,
+  'Connection Pending':  2,
+  'Connection Requested':2,
+  'Connected':           3,
+  'Message 1 Sent':      5,
+  'Message 2 Sent':      5,
+  'Message 3 Sent':      5,
+  'In Conversation':     6,
+  'Booked':              7,
+};
+
+// Push one contact to Monday. Idempotent: finds existing item by Airtable ID,
+// creates it if missing. Best-effort: never throws so it can't break a contact
+// save. Only runs when MONDAY_API_KEY is set.
+async function syncContactToMonday(contactRecord) {
+  if (!process.env.MONDAY_API_KEY) return;
+  try {
+    const f = contactRecord.fields || {};
+    const airtableId = contactRecord.id;
+    const name = f['Full Name'] || 'Unknown';
+    const company = (f['Company Name (Lookup)'] || f['Company'] && Array.isArray(f['Company']) ? '' : '') || '';
+    // Company name may come through as a lookup array or a plain string
+    const companyName = Array.isArray(f['Company Name (Lookup)'])
+      ? f['Company Name (Lookup)'][0] || ''
+      : (f['Company Name (Lookup)'] || '');
+    const jobTitle = f['Job Title'] || '';
+    const linkedinUrl = f['LinkedIn URL'] || '';
+    const stage = f['Journey Stage'] || 'Found';
+    const lastTouch = f['Last Touch Point Date'] || '';
+
+    // Build column_values JSON
+    const stageIdx = MONDAY_STAGE_INDEX[stage] ?? 0;
+    const colVals = {
+      [MONDAY_CONTACT_COLS.company]:      companyName,
+      [MONDAY_CONTACT_COLS.jobTitle]:     jobTitle,
+      [MONDAY_CONTACT_COLS.linkedin]:     linkedinUrl ? JSON.stringify({ url: linkedinUrl, text: 'LinkedIn' }) : '',
+      [MONDAY_CONTACT_COLS.stage]:        JSON.stringify({ index: stageIdx }),
+      [MONDAY_CONTACT_COLS.airtableId]:   airtableId,
+    };
+    if (lastTouch) colVals[MONDAY_CONTACT_COLS.lastMessage] = JSON.stringify({ date: lastTouch });
+    const colValsStr = JSON.stringify(JSON.stringify(colVals));
+
+    // Search for existing item by Airtable ID column
+    const searchRes = await mondayGraphQL(`{
+      items_page_by_column_values(board_id: ${MONDAY_CONTACT_BOARD_ID}, limit: 1,
+        columns: [{ column_id: "${MONDAY_CONTACT_COLS.airtableId}", column_values: ["${airtableId}"] }]
+      ) { items { id } }
+    }`);
+    const existing = searchRes.items_page_by_column_values &&
+                     searchRes.items_page_by_column_values.items &&
+                     searchRes.items_page_by_column_values.items[0];
+
+    if (existing) {
+      // Update existing item
+      await mondayGraphQL(`mutation {
+        change_multiple_column_values(
+          board_id: ${MONDAY_CONTACT_BOARD_ID},
+          item_id: ${existing.id},
+          column_values: ${colValsStr}
+        ) { id }
+      }`);
+    } else {
+      // Create new item
+      const safeName = name.replace(/"/g, '\\"');
+      await mondayGraphQL(`mutation {
+        create_item(
+          board_id: ${MONDAY_CONTACT_BOARD_ID},
+          item_name: "${safeName}",
+          column_values: ${colValsStr}
+        ) { id }
+      }`);
+    }
+  } catch (err) {
+    console.warn('Monday contact sync (non-fatal):', err.message);
+  }
+}
+
+// Fetch the full contact record then push it to Monday.
+// Call this after any Airtable contact write when you only have the record ID.
+async function syncContactIdToMonday(contactId) {
+  if (!process.env.MONDAY_API_KEY || !AIRTABLE_API_KEY) return;
+  try {
+    const rec = await airtableGetRecord('Contacts', contactId);
+    if (rec) await syncContactToMonday(rec);
+  } catch (err) {
+    console.warn('Monday contact sync by ID (non-fatal):', err.message);
   }
 }
 
