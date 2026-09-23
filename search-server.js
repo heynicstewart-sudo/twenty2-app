@@ -15338,7 +15338,7 @@ const MONDAY_CONTACT_COLS = {
   company:      'text_mm7fx4t0',
   jobTitle:     'text_mm7f4enk',
   linkedin:     'link_mm7f6hs6',
-  stage:        'color_mm7fxna2',
+  stage:        'text_mm7f2r83',   // text column — the status column (color_mm7fxna2) had no custom labels
   campaign:     'text_mm7f9zyc',
   lastMessage:  'date_mm7fge4e',
   messagesSent: 'numeric_mm7f4yg9',
@@ -15381,12 +15381,11 @@ async function syncContactToMonday(contactRecord) {
     const lastTouch = f['Last Touch Point Date'] || '';
 
     // Build column_values JSON
-    const stageIdx = MONDAY_STAGE_INDEX[stage] ?? 0;
     const colVals = {
       [MONDAY_CONTACT_COLS.company]:      companyName,
       [MONDAY_CONTACT_COLS.jobTitle]:     jobTitle,
       [MONDAY_CONTACT_COLS.linkedin]:     linkedinUrl ? JSON.stringify({ url: linkedinUrl, text: 'LinkedIn' }) : '',
-      [MONDAY_CONTACT_COLS.stage]:        JSON.stringify({ index: stageIdx }),
+      [MONDAY_CONTACT_COLS.stage]:        stage,
       [MONDAY_CONTACT_COLS.airtableId]:   airtableId,
     };
     if (lastTouch) colVals[MONDAY_CONTACT_COLS.lastMessage] = JSON.stringify({ date: lastTouch });
@@ -15723,6 +15722,150 @@ async function mondayRecordSyncHealth(patch) {
     console.error('Failed to record Monday sync health (non-fatal):', err.message);
   }
 }
+
+// One-off bulk backfill: push every Airtable contact to Monday, grouped by campaign.
+// Operator-only. Streams newline-delimited JSON progress events so the UI can show
+// a live counter. Safe to re-run — existing items are updated, not duplicated.
+app.post('/api/monday/backfill-contacts', async (req, res) => {
+  if (!process.env.OPERATOR_FEATURES) return res.status(403).json({ error: 'operator only' });
+  if (!process.env.MONDAY_API_KEY) return res.status(400).json({ error: 'MONDAY_API_KEY not set' });
+  if (!AIRTABLE_API_KEY) return res.status(400).json({ error: 'AIRTABLE_API_KEY not set' });
+
+  res.setHeader('Content-Type', 'application/x-ndjson');
+  res.setHeader('Transfer-Encoding', 'chunked');
+  res.flushHeaders();
+
+  const send = (obj) => { try { res.write(JSON.stringify(obj) + '\n'); } catch (_) {} };
+
+  try {
+    send({ status: 'fetching', message: 'Fetching contacts from Airtable…' });
+
+    // Pull all contacts with their campaign name (lookup field) + stage
+    const allContacts = await airtableFetchAllPaginated('Contacts',
+      'fields[]=Full+Name&fields[]=Job+Title&fields[]=LinkedIn+URL&fields[]=Journey+Stage' +
+      '&fields[]=Last+Touch+Point+Date&fields[]=Company+Name+(Lookup)&fields[]=Campaign+Name+(Lookup)'
+    );
+    send({ status: 'fetching', message: `Found ${allContacts.length} contacts. Building campaign groups…` });
+
+    // Discover distinct campaign names
+    const campaignNames = [...new Set(
+      allContacts.map(c => {
+        const raw = c.fields['Campaign Name (Lookup)'];
+        return (Array.isArray(raw) ? raw[0] : raw) || null;
+      }).filter(Boolean)
+    )].sort();
+
+    // Create one Monday group per campaign (plus No Campaign fallback)
+    const groupIdByName = {};  // campaignName → monday group id
+
+    const createGroup = async (name) => {
+      const safeName = name.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      const data = await mondayGraphQL(`mutation {
+        create_group(board_id: ${MONDAY_CONTACT_BOARD_ID}, group_name: "${safeName}") { id }
+      }`);
+      return data.create_group && data.create_group.id;
+    };
+
+    for (const campaign of campaignNames) {
+      try {
+        const gid = await createGroup(campaign);
+        if (gid) groupIdByName[campaign] = gid;
+        send({ status: 'progress', message: `Created group: ${campaign}` });
+      } catch (err) {
+        send({ status: 'warn', message: `Could not create group "${campaign}": ${err.message}` });
+      }
+      await new Promise(r => setTimeout(r, 300));
+    }
+
+    // Create "No Campaign" fallback group
+    try {
+      const gid = await createGroup('No Campaign');
+      if (gid) groupIdByName['__none__'] = gid;
+    } catch (err) {
+      send({ status: 'warn', message: `Could not create "No Campaign" group: ${err.message}` });
+    }
+
+    send({ status: 'syncing', message: `Syncing ${allContacts.length} contacts to Monday…`, total: allContacts.length });
+
+    let done = 0, errors = 0;
+    const BATCH = 8;
+    const DELAY = 700; // ms between batches — Monday allows ~100 mutations/min
+
+    for (let i = 0; i < allContacts.length; i += BATCH) {
+      const batch = allContacts.slice(i, i + BATCH);
+      await Promise.all(batch.map(async (c) => {
+        try {
+          const f = c.fields || {};
+          const airtableId = c.id;
+          const name = f['Full Name'] || 'Unknown';
+          const companyName = Array.isArray(f['Company Name (Lookup)'])
+            ? f['Company Name (Lookup)'][0] || ''
+            : (f['Company Name (Lookup)'] || '');
+          const campaignRaw = f['Campaign Name (Lookup)'];
+          const campaignName = (Array.isArray(campaignRaw) ? campaignRaw[0] : campaignRaw) || null;
+          const jobTitle = f['Job Title'] || '';
+          const linkedinUrl = f['LinkedIn URL'] || '';
+          const stage = f['Journey Stage'] || 'Found';
+          const lastTouch = f['Last Touch Point Date'] || '';
+          const colVals = {
+            [MONDAY_CONTACT_COLS.company]:      companyName,
+            [MONDAY_CONTACT_COLS.jobTitle]:     jobTitle,
+            [MONDAY_CONTACT_COLS.linkedin]:     linkedinUrl ? JSON.stringify({ url: linkedinUrl, text: 'LinkedIn' }) : '',
+            [MONDAY_CONTACT_COLS.stage]:        stage,
+            [MONDAY_CONTACT_COLS.campaign]:     campaignName || '',
+            [MONDAY_CONTACT_COLS.airtableId]:   airtableId,
+          };
+          if (lastTouch) colVals[MONDAY_CONTACT_COLS.lastMessage] = JSON.stringify({ date: lastTouch });
+          const colValsStr = JSON.stringify(JSON.stringify(colVals));
+
+          // Check if item already exists
+          const searchRes = await mondayGraphQL(`{
+            items_page_by_column_values(board_id: ${MONDAY_CONTACT_BOARD_ID}, limit: 1,
+              columns: [{ column_id: "${MONDAY_CONTACT_COLS.airtableId}", column_values: ["${airtableId}"] }]
+            ) { items { id } }
+          }`);
+          const existing = searchRes.items_page_by_column_values &&
+                           searchRes.items_page_by_column_values.items &&
+                           searchRes.items_page_by_column_values.items[0];
+
+          if (existing) {
+            await mondayGraphQL(`mutation {
+              change_multiple_column_values(
+                board_id: ${MONDAY_CONTACT_BOARD_ID},
+                item_id: ${existing.id},
+                column_values: ${colValsStr}
+              ) { id }
+            }`);
+          } else {
+            const groupId = (campaignName && groupIdByName[campaignName]) || groupIdByName['__none__'];
+            const safeName = name.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+            const groupArg = groupId ? `, group_id: "${groupId}"` : '';
+            await mondayGraphQL(`mutation {
+              create_item(
+                board_id: ${MONDAY_CONTACT_BOARD_ID},
+                item_name: "${safeName}"${groupArg},
+                column_values: ${colValsStr}
+              ) { id }
+            }`);
+          }
+          done++;
+        } catch (err) {
+          errors++;
+          console.warn('Backfill item error (non-fatal):', err.message);
+        }
+      }));
+
+      send({ status: 'progress', done, total: allContacts.length, errors });
+      if (i + BATCH < allContacts.length) await new Promise(r => setTimeout(r, DELAY));
+    }
+
+    send({ status: 'done', done, total: allContacts.length, errors, message: `Backfill complete. ${done} contacts synced, ${errors} errors.` });
+    res.end();
+  } catch (err) {
+    send({ status: 'error', message: err.message });
+    res.end();
+  }
+});
 
 app.get('/api/monday/sync-health', async (req, res) => {
   try {

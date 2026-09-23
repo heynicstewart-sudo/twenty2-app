@@ -29562,6 +29562,12 @@ function renderSettings(){
   </div>
 
   ${(window.__session && window.__session.operatorMode) ? `
+  <div class="settings-section card" style="border-color:#b5cfe8;">
+    <div class="section-title"><i class="ti ti-brand-monday" style="color:#6161ff;"></i> Monday.com contact backfill</div>
+    <p class="muted" style="font-size:12px;margin-bottom:14px;">Push all existing Airtable contacts into the Monday "Outreach CRM — Active Contacts" board, grouped by campaign. Safe to re-run — existing items are updated, not duplicated. Takes ~5 minutes for ~800 contacts due to Monday API rate limits.</p>
+    <button class="btn btn-secondary" id="mondayBackfillBtn" onclick="startMondayBackfill()"><i class="ti ti-upload"></i> Backfill contacts to Monday</button>
+    <div id="mondayBackfillProgress" style="margin-top:10px;font-size:12px;display:none;"></div>
+  </div>
   <div class="settings-section card" style="border-color:#f0c2b0;">
     <div class="section-title"><i class="ti ti-alert-triangle" style="color:var(--danger);"></i> Danger zone</div>
     <p class="muted" style="font-size:12px;margin-bottom:14px;">Permanently deletes all contacts, bookings, dead contacts and activity for everyone from the database (Contacts, Companies, Touch Points, Campaign Contacts, Deals, Content Signals, Learning Data, Bookings, Dead Contacts, Activity) - this is shared data, not just this browser's, so it affects every user. Grids, Sequences, Campaigns, Reps, Content Settings and Content are kept. This cannot be undone.</p>
@@ -29569,6 +29575,58 @@ function renderSettings(){
   </div>
   ` : ''}
   `;
+}
+
+async function startMondayBackfill() {
+  const btn = document.getElementById('mondayBackfillBtn');
+  const prog = document.getElementById('mondayBackfillProgress');
+  if (!btn || !prog) return;
+  btn.disabled = true;
+  btn.innerHTML = '<i class="ti ti-loader-2 spin"></i> Running…';
+  prog.style.display = 'block';
+  prog.innerHTML = 'Starting…';
+
+  try {
+    const res = await fetch('/api/monday/backfill-contacts', { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const ev = JSON.parse(line);
+          if (ev.status === 'done') {
+            prog.innerHTML = `<span style="color:var(--success)"><i class="ti ti-circle-check"></i> ${ev.message}</span>`;
+            btn.disabled = false;
+            btn.innerHTML = '<i class="ti ti-check"></i> Backfill complete';
+          } else if (ev.status === 'error') {
+            prog.innerHTML = `<span style="color:var(--danger)"><i class="ti ti-alert-circle"></i> Error: ${ev.message}</span>`;
+            btn.disabled = false;
+            btn.innerHTML = '<i class="ti ti-upload"></i> Backfill contacts to Monday';
+          } else if (ev.status === 'progress' && ev.total) {
+            const pct = Math.round((ev.done / ev.total) * 100);
+            prog.innerHTML = `<div style="margin-bottom:4px;">${ev.done} / ${ev.total} contacts synced (${pct}%)${ev.errors ? ` — ${ev.errors} errors` : ''}</div><div style="height:4px;background:var(--border-color);border-radius:2px;"><div style="height:4px;width:${pct}%;background:var(--accent);border-radius:2px;transition:width 0.3s;"></div></div>`;
+          } else {
+            prog.innerHTML = ev.message || '';
+          }
+        } catch (_) {}
+      }
+    }
+  } catch (err) {
+    prog.innerHTML = `<span style="color:var(--danger)"><i class="ti ti-alert-circle"></i> ${friendlyErr(err.message)}</span>`;
+    btn.disabled = false;
+    btn.innerHTML = '<i class="ti ti-upload"></i> Backfill contacts to Monday';
+  }
 }
 
 // The single most destructive action in the app - it wipes shared data for
