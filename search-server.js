@@ -4666,7 +4666,7 @@ Guidance:
       },
       body: JSON.stringify({
         model: 'claude-opus-4-6',
-        max_tokens: 2000,
+        max_tokens: 8192,
         messages: [{ role: 'user', content: clientize(prompt) }]
       })
     });
@@ -4685,6 +4685,7 @@ Guidance:
       const jsonMatch = block.text.match(/\{[\s\S]*\}/);
       campaign = JSON.parse(jsonMatch ? jsonMatch[0] : block.text);
     } catch (parseErr) {
+      console.error('Campaign build JSON parse error. Stop reason:', aiData.stop_reason, 'Raw text (first 500):', (block.text || '').slice(0, 500));
       throw new Error('Could not parse Claude response as JSON');
     }
 

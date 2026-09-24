@@ -1954,13 +1954,20 @@ const AGENCY_DASH_NAV_ITEMS = [
   ['tasks','Tasks','ti-checklist'],
   ['calendar','Calendar','ti-calendar'],
 ];
-function exitAgencyDash(){ navigate('home'); }
+function exitAgencyDash(){
+  // In agency controller mode the CRM pages are hidden; go to Marketing.
+  // On Railway (client mode) go back to the Targets home page.
+  const agencyOnly = !!(window.__session && window.__session.controlPlane);
+  navigate(agencyOnly ? 'content' : 'home');
+}
 function renderSidebar(){
   const nav = document.getElementById('sidebarNav');
   if(state.currentPage === 'agencydash'){
     const activeTab = window.__agencyDashTab || 'dashboard';
+    const agencyOnly = !!(window.__session && window.__session.controlPlane);
+    const backLabel = agencyOnly ? 'Marketing' : 'Back to clients';
     nav.innerHTML =
-      '<button class="nav-item" onclick="exitAgencyDash()"><i class="ti ti-arrow-left"></i><span>Back to clients</span></button>'+
+      '<button class="nav-item" onclick="exitAgencyDash()"><i class="ti ti-arrow-left"></i><span>'+backLabel+'</span></button>'+
       '<div style="height:1px;background:var(--border-light);margin:8px 14px;"></div>'+
       AGENCY_DASH_NAV_ITEMS.map(([id,label,icon]) =>
         '<button class="nav-item '+(activeTab===id?'active':'')+'" onclick="setAgencyDashTab(\''+id+'\')"><i class="ti '+icon+'"></i><span>'+label+'</span></button>'
@@ -1985,18 +1992,49 @@ async function hydrateSession(){
     if(!res.ok) return;
     const s = await res.json();
     window.__session = s;
-    applyClientBranding(s.activeClient);
-    ensureAgencyNav(s);
-    // Show Marketing tab only for operator instances (OPERATOR_FEATURES=true).
-    const contentNav = NAV.find(n => n.id === 'content');
-    if(contentNav) contentNav.hidden = !s.operatorMode;
-    renderNav();
-    renderClientSwitcher(s);
-    // Marketing's generation-UI gate (contentGenerationEnabled) reads
-    // window.__session.controlPlane, which is only known once this resolves
-    // - re-render if the page already painted before that, same as
-    // applyClientBranding does for 'home'.
-    if(state.currentPage === 'content') renderPage();
+
+    if(s.controlPlane) {
+      // ── Agency controller mode (local only) ──────────────────────────────
+      // All Twenty2 Collective CRM pages live on the Railway deployment.
+      // This local instance is the agency view: tasks, time keeping, and
+      // marketing generation. Hide all client-facing CRM nav items and
+      // surface only the agency + marketing pages.
+      ['home','campaigns','companyuniverse','profile'].forEach(id => {
+        const n = NAV.find(e => e.id === id); if(n) n.hidden = true;
+      });
+      ['agencydash','settings'].forEach(id => {
+        const n = NAV.find(e => e.id === id); if(n) n.hidden = false;
+      });
+      // Agency sidebar branding — not client branding
+      const mark = document.getElementById('sidebarLogoMark');
+      const lname = document.getElementById('sidebarLogoName');
+      const footer = document.getElementById('sidebarFooter');
+      if(mark) mark.textContent = 'AG';
+      if(lname) lname.textContent = 'Agency';
+      if(footer) footer.textContent = '';
+      // Marketing tab: visible only on the agency controller install
+      const contentNav = NAV.find(n => n.id === 'content');
+      if(contentNav) contentNav.hidden = !s.operatorMode;
+      renderSidebar();
+      renderClientSwitcher(s);
+      if(state.currentPage === 'content') renderPage();
+      // Redirect away from any hidden CRM page (e.g. restored from localStorage)
+      const crmPages = ['home','campaigns','companyuniverse','profile','grid','grids','calendar','replies'];
+      if(crmPages.includes(state.currentPage)) navigate('agencydash');
+    } else {
+      // ── Client (Railway) mode ─────────────────────────────────────────────
+      // Standard CRM view for Twenty2 Collective. Marketing is always hidden;
+      // agency dashboard stays hidden.
+      applyClientBranding(s.activeClient);
+      ensureAgencyNav(s);
+      // Marketing is only for the agency controller — never show it here
+      const contentNav = NAV.find(n => n.id === 'content');
+      if(contentNav) contentNav.hidden = true;
+      renderSidebar();
+      renderClientSwitcher(s);
+      // Re-render if Marketing was already open (edge case)
+      if(state.currentPage === 'content') renderPage();
+    }
   } catch(e){ /* non-fatal - app still works single-client */ }
 }
 
