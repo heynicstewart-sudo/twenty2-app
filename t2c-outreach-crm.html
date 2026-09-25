@@ -535,6 +535,12 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .kcard:hover{box-shadow:var(--shadow-md);}
 .kcard.dragging{opacity:0.4;}
 .kcard-head{display:flex;justify-content:space-between;align-items:flex-start;cursor:pointer;}
+.kcard.selected{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-dim);}
+.kcard-sel{width:16px;height:16px;margin:2px 8px 0 0;flex:0 0 auto;cursor:pointer;accent-color:var(--accent);}
+.kcol-sel{width:15px;height:15px;margin:0 8px 0 0;cursor:pointer;accent-color:var(--accent);vertical-align:-2px;}
+.bulk-bar{position:sticky;bottom:16px;z-index:40;margin:14px auto 0;width:max-content;max-width:100%;display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--ink);color:#fff;border-radius:var(--radius-pill);padding:10px 14px 10px 18px;box-shadow:var(--shadow-md);}
+.bulk-bar select{width:auto;padding:5px 8px;font-size:12.5px;}
+.bulk-bar .btn-ghost{color:#fff;}
 .kcard-name{font-weight:700;font-size:13.5px;}
 .kcard-role{font-size:11.5px;color:var(--muted);margin-top:2px;}
 .kcard-flag{margin-top:8px;background:var(--tint-red-bg);color:var(--tint-red-fg);border-radius:var(--radius-badge);padding:6px 8px;font-size:11.5px;display:flex;justify-content:space-between;align-items:center;font-weight:700;}
@@ -8230,18 +8236,21 @@ function handleSkipContact(cid, e){
   openSkipReasonModal(cid);
 }
 
-function openSkipReasonModal(cid){
-  const c = state.contacts.find(x => x.id === cid);
-  if(!c) return;
+function openSkipReasonModal(cid, bulkIds){
+  const bulk = Array.isArray(bulkIds) && bulkIds.length ? bulkIds : null;
+  const c = bulk ? null : state.contacts.find(x => x.id === cid);
+  if(!bulk && !c) return;
   const optionLabelStyle = 'text-transform:none;font-weight:600;color:var(--text);display:flex;align-items:center;gap:8px;margin-bottom:0;cursor:pointer;';
+  // "Wrong job title" needs one corrected title per person, so it is only
+  // offered when skipping a single contact.
   const body = `
     <div class="field">
-      <label>Why are you skipping ${esc(c.name)}?</label>
+      <label>${bulk ? `Why are you skipping these ${bulk.length} contacts?` : `Why are you skipping ${esc(c.name)}?`}</label>
       <div style="display:flex;flex-direction:column;gap:12px;margin-top:8px;">
-        <div>
+        ${bulk ? '' : `<div>
           <label style="${optionLabelStyle}"><input type="radio" name="skipReason" value="wrongTitle" style="width:auto;" onchange="updateSkipReasonFields()"> Wrong job title for this campaign</label>
           <input type="text" id="skipWrongTitle" placeholder="Correct job title" style="margin-top:6px;display:none;">
-        </div>
+        </div>`}
         <div>
           <label style="${optionLabelStyle}"><input type="radio" name="skipReason" value="alreadyConnected" style="width:auto;" onchange="updateSkipReasonFields()"> Already connected</label>
         </div>
@@ -8262,40 +8271,105 @@ function openSkipReasonModal(cid){
   `;
   const footer = `
     <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-    <button class="btn btn-danger" onclick="confirmSkipContact('${cid}')"><i class="ti ti-player-skip-forward"></i> Skip contact</button>
+    <button class="btn btn-danger" onclick="${bulk ? 'confirmBulkSkip()' : `confirmSkipContact('${cid}')`}"><i class="ti ti-player-skip-forward"></i> ${bulk ? `Skip ${bulk.length} contacts` : 'Skip contact'}</button>
   `;
-  openModal(`Skip contact`, body, footer);
+  window.__bulkSkipIds = bulk;
+  openModal(bulk ? `Skip ${bulk.length} contacts` : `Skip contact`, body, footer);
 }
 
 function updateSkipReasonFields(){
   const checked = document.querySelector('input[name="skipReason"]:checked');
-  document.getElementById('skipWrongTitle').style.display = checked && checked.value === 'wrongTitle' ? 'block' : 'none';
+  const wt = document.getElementById('skipWrongTitle');
+  if(wt) wt.style.display = checked && checked.value === 'wrongTitle' ? 'block' : 'none';
   document.getElementById('skipHistoryStage').style.display = checked && checked.value === 'hasHistory' ? 'block' : 'none';
   document.getElementById('skipOtherNote').style.display = checked && checked.value === 'other' ? 'block' : 'none';
+}
+
+// Reads the reason picked in the skip modal. Returns null (after a toast)
+// when nothing valid is chosen yet.
+function readSkipReason(){
+  const reasonEl = document.querySelector('input[name="skipReason"]:checked');
+  if(!reasonEl){ toast('Pick a reason first', 'warn'); return null; }
+  const reason = reasonEl.value;
+  if(reason === 'wrongTitle'){
+    const newJobTitle = (document.getElementById('skipWrongTitle').value || '').trim();
+    if(!newJobTitle){ toast('Enter the correct job title', 'warn'); return null; }
+    return { reason, reasonLabel:'Wrong job title for this campaign', note:`Job title updated to "${newJobTitle}"`, newJobTitle };
+  }
+  if(reason === 'alreadyConnected') return { reason, reasonLabel:'Already connected', note:'', newJobTitle:'' };
+  if(reason === 'hasHistory') return { reason, reasonLabel:'Already has messaging history', note: document.getElementById('skipHistoryStage').value, newJobTitle:'' };
+  return { reason, reasonLabel:'Other', note:(document.getElementById('skipOtherNote').value || '').trim(), newJobTitle:'' };
+}
+
+// The database half of a skip (contact-fields patch + campaign exclude).
+// Throws on failure; returns 'no-campaign' when there was nothing to
+// exclude them from.
+async function applySkipRequests(c, campaign, r){
+  if(r.reason === 'wrongTitle'){
+    await fetch('/api/context/contact-fields', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contactId: c.id, jobTitle: r.newJobTitle })
+    });
+  } else if(r.reason === 'alreadyConnected'){
+    await fetch('/api/context/contact-fields', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contactId: c.id, journeyStage: 'Connected' })
+    });
+  }
+  if(!campaign) return 'no-campaign';
+  const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/contacts/${c.id}/exclude`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason: r.reasonLabel, note: r.note })
+  });
+  const data = await res.json();
+  if(!res.ok) throw new Error(data.error || 'Request failed');
+  return 'ok';
+}
+
+// Bulk version of confirmSkipContact - one reason applied to every selected
+// contact. Removes them from the board immediately, then works through the
+// database writes a few at a time and reports a single summary.
+async function confirmBulkSkip(){
+  const ids = window.__bulkSkipIds || [];
+  const r = readSkipReason();
+  if(!r) return;
+  closeModal();
+  const contacts = ids.map(id => state.contacts.find(x => x.id === id)).filter(Boolean);
+  if(!contacts.length) return;
+  const jobs = contacts.map(c => ({ c, campaign: campaignForSkipContext(c) }));
+  const idSet = new Set(ids);
+  state.contacts = state.contacts.filter(x => !idSet.has(x.id));
+  seqSelection().clear();
+  renderPage();
+
+  let ok = 0, unsynced = 0, noCampaign = 0, failed = 0;
+  const queue = jobs.slice();
+  const worker = async () => {
+    while(queue.length){
+      const { c, campaign } = queue.shift();
+      if(!isAirtableRecordId(c.id)){ unsynced++; continue; }
+      try {
+        const out = await applySkipRequests(c, campaign, r);
+        if(out === 'no-campaign') noCampaign++; else ok++;
+      } catch(err){
+        console.warn('Bulk skip failed for', c.name, err.message);
+        failed++;
+      }
+    }
+  };
+  await Promise.all([worker(), worker(), worker(), worker()]);
+  const problems = [];
+  if(failed) problems.push(`${failed} could not be saved to the database`);
+  if(unsynced) problems.push(`${unsynced} not synced yet (press "Sync")`);
+  if(noCampaign) problems.push(`${noCampaign} had no linked campaign`);
+  toast(`Skipped ${contacts.length} contact${contacts.length === 1 ? '' : 's'}` + (problems.length ? ` - ${problems.join(', ')}` : ''), problems.length ? 'warn' : 'success');
 }
 
 async function confirmSkipContact(cid){
   const c = state.contacts.find(x => x.id === cid);
   if(!c) return;
-  const reasonEl = document.querySelector('input[name="skipReason"]:checked');
-  if(!reasonEl){ toast('Pick a reason first', 'warn'); return; }
-  const reason = reasonEl.value;
-
-  let reasonLabel, note = '', newJobTitle = '';
-  if(reason === 'wrongTitle'){
-    newJobTitle = (document.getElementById('skipWrongTitle').value || '').trim();
-    if(!newJobTitle){ toast('Enter the correct job title', 'warn'); return; }
-    reasonLabel = 'Wrong job title for this campaign';
-    note = `Job title updated to "${newJobTitle}"`;
-  } else if(reason === 'alreadyConnected'){
-    reasonLabel = 'Already connected';
-  } else if(reason === 'hasHistory'){
-    reasonLabel = 'Already has messaging history';
-    note = document.getElementById('skipHistoryStage').value;
-  } else {
-    reasonLabel = 'Other';
-    note = (document.getElementById('skipOtherNote').value || '').trim();
-  }
+  const r = readSkipReason();
+  if(!r) return;
 
   closeModal();
 
@@ -8310,29 +8384,11 @@ async function confirmSkipContact(cid){
   }
 
   try {
-    if(reason === 'wrongTitle'){
-      await fetch('/api/context/contact-fields', {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contactId: cid, jobTitle: newJobTitle })
-      });
-    } else if(reason === 'alreadyConnected'){
-      await fetch('/api/context/contact-fields', {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contactId: cid, journeyStage: 'Connected' })
-      });
-    }
-
-    if(!campaign){
+    const out = await applySkipRequests(c, campaign, r);
+    if(out === 'no-campaign'){
       toast(`${c.name} skipped, but no linked campaign was found to exclude them from`, 'warn');
       return;
     }
-
-    const res = await fetch(`/api/campaign/${encodeURIComponent(campaign.name)}/contacts/${cid}/exclude`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reason: reasonLabel, note })
-    });
-    const data = await res.json();
-    if(!res.ok) throw new Error(data.error || 'Request failed');
     toast(`${c.name} skipped and excluded from ${campaign.name}`, 'success');
   } catch(err){
     console.warn('Could not process skip:', err.message);
@@ -11945,6 +12001,7 @@ function renderRoadmap(contactsOverride){
   const contactsList = contactsOverride || state.contacts;
   const campaign = state.campaigns.find(cp => cp.id === window.__roadmapCampaignId) || null;
   const cols = campaignCadenceColumns(campaign);
+  { const live = new Set(contactsList.map(c => c.id)); seqSelection().forEach(id => { if(!live.has(id)) seqSelection().delete(id); }); }
   const grouped = {};
   cols.forEach(col => { grouped[col.key] = []; });
   // getRoadmapColumn returns null for an Excluded/Lost contact - skip
@@ -11968,14 +12025,15 @@ function renderRoadmap(contactsOverride){
   return `
   <div class="kanban" id="kanbanBoard">
     ${allCols.map(col => `
-      <div class="kanban-col" data-col-type="${col.type}" ondragover="onColDragOver(event)" ondrop="onColDrop(event,'${esc(col.key)}')">
-        <div class="kanban-col-header"><span>${esc(col.label)}</span><span class="count">${grouped[col.key].length}</span></div>
+      <div class="kanban-col" data-col-type="${col.type}" data-col-key="${esc(col.key)}" ondragover="onColDragOver(event)" ondrop="onColDrop(event,'${esc(col.key)}')">
+        <div class="kanban-col-header"><span>${grouped[col.key].length ? `<input type="checkbox" class="kcol-sel" title="Select everyone in this column" onclick="toggleColumnSelect(this)" ${grouped[col.key].every(c => seqSelection().has(c.id)) ? 'checked' : ''}>` : ''}${esc(col.label)}</span><span class="count">${grouped[col.key].length}</span></div>
         <div class="kanban-cards">
           ${grouped[col.key].map(c => renderKCard(c, col.key)).join('') || '<div class="empty-state" style="padding:14px;">No contacts</div>'}
         </div>
       </div>
     `).join('')}
   </div>
+  <div id="seqBulkBar">${renderBulkBar()}</div>
   ${excludedCount ? `<div class="muted" style="font-size:11.5px;margin-top:8px;"><i class="ti ti-user-off"></i> ${excludedCount} contact${excludedCount===1?'':'s'} excluded from this campaign (not shown on the board).</div>` : ''}
 
   <div class="archive-box">
@@ -12058,9 +12116,10 @@ function renderKCard(c, colKey){
         : `<div class="muted" style="font-size:11px;margin-top:8px;">No LinkedIn URL on file</div>`)
     : '';
   return `
-  <div class="kcard" draggable="true" id="kcard-${c.id}" data-id="${c.id}" ondragstart="onCardDragStart(event,'${c.id}')" ondragend="onCardDragEnd(event)" oncontextmenu="showContextMenu(event,'${c.id}')">
+  <div class="kcard${seqSelection().has(c.id) ? ' selected' : ''}" draggable="true" id="kcard-${c.id}" data-id="${c.id}" ondragstart="onCardDragStart(event,'${c.id}')" ondragend="onCardDragEnd(event)" oncontextmenu="showContextMenu(event,'${c.id}')">
     <div class="kcard-head" onclick="toggleThread('${c.id}')">
-      <div>
+      <input type="checkbox" class="kcard-sel" title="Select (shift-click to select a range)" onclick="toggleCardSelect(event,'${c.id}')" ${seqSelection().has(c.id) ? 'checked' : ''}>
+      <div style="flex:1;min-width:0;">
         <div class="kcard-name">${esc(c.name)}</div>
         <div class="kcard-role">${subline}</div>
         ${cadence !== undefined ? `<div style="margin-top:4px;">${cadenceBadgeHtml(cadence)}</div>` : ''}
@@ -13010,10 +13069,14 @@ function isAirtableRecordId(id){
 // booking has its own fields (date, notes) to capture. Always re-fetches
 // the campaign's live stages afterward rather than hand-patching local
 // state, so the board reflects exactly what Airtable now says.
-async function moveContactToStage(campaign, c, stageKey){
+async function moveContactToStage(campaign, c, stageKey, opts){
+  // opts.batch (bulk move): no toasts / reload / re-render per contact - the
+  // caller does that once - and resolves true/false for success.
+  const batch = !!(opts && opts.batch);
   if(stageKey === 'Meeting Booked'){ dragCardId = null; openBookingModal(c.id); return; }
   if(!isAirtableRecordId(c.id)){
     dragCardId = null;
+    if(batch) return false;
     toast('Moved locally, but this contact has not synced to the database yet - press "Sync" first.', 'warn');
     return;
   }
@@ -13038,11 +13101,13 @@ async function moveContactToStage(campaign, c, stageKey){
       if(!res.ok){ const d = await res.json().catch(()=>({})); throw new Error(d.error || 'Request failed'); }
     }
   } catch(err){
-    toast('Could not move stage: ' + friendlyErr(err.message), 'warn');
     dragCardId = null;
+    if(batch) return false;
+    toast('Could not move stage: ' + friendlyErr(err.message), 'warn');
     return;
   }
   dragCardId = null;
+  if(batch) return true;
   await loadCampaignSequenceStages(campaign);
   renderPage();
 }
@@ -13056,6 +13121,98 @@ function onColDrop(e, colKey){
   const fromCol = getRoadmapColumn(c);
   if(fromCol === colKey){ dragCardId = null; return; }
   moveContactToStage(campaign, c, colKey);
+}
+
+/* Roadmap multi-select + bulk actions */
+function seqSelection(){ return window.__seqSel || (window.__seqSel = new Set()); }
+
+function renderBulkBar(){
+  const n = seqSelection().size;
+  if(!n) return '';
+  const campaign = state.campaigns.find(cp => cp.id === window.__roadmapCampaignId) || null;
+  const stageOpts = campaign
+    ? campaignCadenceColumns(campaign).filter(col => col.key !== 'Meeting Booked')
+        .map(col => `<option value="${esc(col.key)}">${esc(col.label)}</option>`).join('')
+    : '';
+  return `<div class="bulk-bar">
+    <strong>${n} selected</strong>
+    <button class="btn btn-danger btn-sm" onclick="bulkSkipSelected()"><i class="ti ti-player-skip-forward"></i> Skip</button>
+    ${stageOpts ? `<select onchange="bulkMoveSelected(this)"><option value="">Move to...</option>${stageOpts}</select>` : ''}
+    <button class="btn btn-ghost btn-sm" onclick="clearSeqSelection()">Clear</button>
+  </div>`;
+}
+
+// Selection changes patch the DOM in place (no renderPage) so expanded
+// threads and scroll position on the board are left alone.
+function refreshSeqSelectionUI(){
+  const sel = seqSelection();
+  document.querySelectorAll('#kanbanBoard .kcard').forEach(el => {
+    const on = sel.has(el.dataset.id);
+    el.classList.toggle('selected', on);
+    const cb = el.querySelector('.kcard-sel'); if(cb) cb.checked = on;
+  });
+  document.querySelectorAll('#kanbanBoard .kanban-col').forEach(col => {
+    const cards = col.querySelectorAll('.kcard');
+    const cb = col.querySelector('.kcol-sel');
+    if(cb) cb.checked = cards.length > 0 && Array.from(cards).every(el => sel.has(el.dataset.id));
+  });
+  const bar = document.getElementById('seqBulkBar');
+  if(bar) bar.innerHTML = renderBulkBar();
+}
+
+let lastSelectedCardId = null;
+function toggleCardSelect(e, id){
+  e.stopPropagation();
+  const sel = seqSelection();
+  const on = e.target.checked;
+  if(e.shiftKey && lastSelectedCardId && lastSelectedCardId !== id){
+    // Range within the column the clicked card is in.
+    const col = e.target.closest('.kanban-col');
+    const ids = Array.from(col.querySelectorAll('.kcard')).map(el => el.dataset.id);
+    const i = ids.indexOf(id), j = ids.indexOf(lastSelectedCardId);
+    if(i !== -1 && j !== -1){
+      ids.slice(Math.min(i, j), Math.max(i, j) + 1).forEach(x => on ? sel.add(x) : sel.delete(x));
+    } else { on ? sel.add(id) : sel.delete(id); }
+  } else {
+    on ? sel.add(id) : sel.delete(id);
+  }
+  lastSelectedCardId = id;
+  refreshSeqSelectionUI();
+}
+
+function toggleColumnSelect(cb){
+  const sel = seqSelection();
+  cb.closest('.kanban-col').querySelectorAll('.kcard').forEach(el => cb.checked ? sel.add(el.dataset.id) : sel.delete(el.dataset.id));
+  refreshSeqSelectionUI();
+}
+
+function clearSeqSelection(){ seqSelection().clear(); refreshSeqSelectionUI(); }
+
+function bulkSkipSelected(){
+  const ids = Array.from(seqSelection()).filter(id => state.contacts.some(c => c.id === id));
+  if(!ids.length) return;
+  openSkipReasonModal(null, ids);
+}
+
+async function bulkMoveSelected(select){
+  const stageKey = select.value;
+  if(!stageKey) return;
+  const campaign = state.campaigns.find(cp => cp.id === window.__roadmapCampaignId);
+  const contacts = Array.from(seqSelection()).map(id => state.contacts.find(c => c.id === id)).filter(Boolean)
+    .filter(c => getRoadmapColumn(c) !== stageKey);
+  if(!campaign || !contacts.length){ select.value = ''; return; }
+  const label = (campaignCadenceColumns(campaign).find(col => col.key === stageKey) || {}).label || stageKey;
+  if(!confirm(`Move ${contacts.length} contact${contacts.length === 1 ? '' : 's'} to "${label}"?`)){ select.value = ''; return; }
+  toast(`Moving ${contacts.length} contacts...`, 'info');
+  let ok = 0;
+  for(const c of contacts){
+    if(await moveContactToStage(campaign, c, stageKey, { batch:true })) ok++;
+  }
+  seqSelection().clear();
+  await loadCampaignSequenceStages(campaign);
+  renderPage();
+  const failed = contacts.length - ok;
+  toast(`Moved ${ok} contact${ok === 1 ? '' : 's'} to ${label}` + (failed ? ` - ${failed} failed or not synced yet` : ''), failed ? 'warn' : 'success');
 }
 
 /* Context menu */
