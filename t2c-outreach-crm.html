@@ -543,7 +543,9 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .bulk-bar .btn-ghost{color:#fff;}
 .kcard-name{font-weight:700;font-size:13.5px;}
 .kcard-role{font-size:11.5px;color:var(--muted);margin-top:2px;}
-.kcard-flag{margin-top:8px;background:var(--tint-red-bg);color:var(--tint-red-fg);border-radius:var(--radius-badge);padding:6px 8px;font-size:11.5px;display:flex;justify-content:space-between;align-items:center;font-weight:700;}
+.kcard-profile{margin-left:6px;color:var(--muted);font-size:14px;vertical-align:-1px;text-decoration:none;}
+.kcard-profile:hover{color:var(--accent);}
+.kcard-flag{flex-wrap:wrap;gap:6px;margin-top:8px;background:var(--tint-red-bg);color:var(--tint-red-fg);border-radius:var(--radius-badge);padding:6px 8px;font-size:11.5px;display:flex;justify-content:space-between;align-items:center;font-weight:700;}
 
 /* Targets board (its own styling - the .kanban above is tuned for the
    contact Roadmap, which has different card content and no editable columns) */
@@ -12115,12 +12117,21 @@ function renderKCard(c, colKey){
         ? `<a class="btn btn-primary btn-sm" style="width:100%;justify-content:center;margin-top:8px;" href="${esc(c.url)}" target="_blank" rel="noopener" onclick="linkedInFastAction('${c.id}','${colKey}')"><i class="ti ti-brand-linkedin"></i> ${colKey === 'Found' ? 'Engage on LinkedIn' : 'Connect on LinkedIn'}</a>`
         : `<div class="muted" style="font-size:11px;margin-top:8px;">No LinkedIn URL on file</div>`)
     : '';
+  // Opens their LinkedIn profile in a new tab without expanding the card or
+  // logging anything - e.g. to withdraw a stale connection request there
+  // before hitting Remove.
+  const profileLink = c.url
+    ? `<a class="kcard-profile" href="${esc(c.url)}" target="_blank" rel="noopener" title="Open LinkedIn profile" onclick="event.stopPropagation()"><i class="ti ti-brand-linkedin"></i></a>`
+    : '';
+  const profileBtn = c.url
+    ? `<a class="btn btn-secondary btn-sm" href="${esc(c.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open their LinkedIn profile to withdraw the request first"><i class="ti ti-brand-linkedin"></i> Profile</a>`
+    : '';
   return `
   <div class="kcard${seqSelection().has(c.id) ? ' selected' : ''}" draggable="true" id="kcard-${c.id}" data-id="${c.id}" ondragstart="onCardDragStart(event,'${c.id}')" ondragend="onCardDragEnd(event)" oncontextmenu="showContextMenu(event,'${c.id}')">
     <div class="kcard-head" onclick="toggleThread('${c.id}')">
       <input type="checkbox" class="kcard-sel" title="Select (shift-click to select a range)" onclick="toggleCardSelect(event,'${c.id}')" ${seqSelection().has(c.id) ? 'checked' : ''}>
       <div style="flex:1;min-width:0;">
-        <div class="kcard-name">${esc(c.name)}</div>
+        <div class="kcard-name">${esc(c.name)}${profileLink}</div>
         <div class="kcard-role">${subline}</div>
         ${cadence !== undefined ? `<div style="margin-top:4px;">${cadenceBadgeHtml(cadence)}</div>` : ''}
       </div>
@@ -12131,7 +12142,7 @@ function renderKCard(c, colKey){
       </div>
     </div>
     ${linkedInAction}
-    ${flagged ? `<div class="kcard-flag"><span><i class="ti ti-flag-3"></i> Remove? ${days} days pending</span><button class="btn btn-danger btn-sm" onclick="event.stopPropagation();removeDeadContact('${c.id}')">Remove</button></div>` : ''}
+    ${flagged ? `<div class="kcard-flag"><span><i class="ti ti-flag-3"></i> Remove? ${days} days pending</span><span style="display:flex;gap:6px;flex-shrink:0;">${profileBtn}<button class="btn btn-danger btn-sm" onclick="event.stopPropagation();removeDeadContact('${c.id}')">Remove</button></span></div>` : ''}
     <div id="thread-${c.id}" style="display:none;">${renderThread(c)}</div>
   </div>`;
 }
