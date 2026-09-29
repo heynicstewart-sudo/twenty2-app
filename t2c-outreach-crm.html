@@ -538,7 +538,11 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
 .kcard.selected{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-dim);}
 .kcard-sel{width:16px;height:16px;margin:2px 8px 0 0;flex:0 0 auto;cursor:pointer;accent-color:var(--accent);}
 .kcol-sel{width:15px;height:15px;margin:0 8px 0 0;cursor:pointer;accent-color:var(--accent);vertical-align:-2px;}
-.bulk-bar{position:sticky;bottom:16px;z-index:40;margin:14px auto 0;width:max-content;max-width:100%;display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--ink);color:#fff;border-radius:var(--radius-pill);padding:10px 14px 10px 18px;box-shadow:var(--shadow-md);}
+/* Fixed, not sticky: the kanban row is one flex row sized to its tallest
+   column, so a sticky bar placed after it can sit thousands of px down the
+   page - it wouldn't float into view until you scrolled past every column,
+   not just the one you're selecting in. Fixed pins it to the viewport instead. */
+.bulk-bar{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:40;width:max-content;max-width:calc(100% - 32px);display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--ink);color:#fff;border-radius:var(--radius-pill);padding:10px 14px 10px 18px;box-shadow:var(--shadow-md);}
 .bulk-bar select{width:auto;padding:5px 8px;font-size:12.5px;}
 .bulk-bar .btn-ghost{color:#fff;}
 .kcard-name{font-weight:700;font-size:13.5px;}
