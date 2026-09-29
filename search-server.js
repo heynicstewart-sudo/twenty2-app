@@ -12959,6 +12959,20 @@ const CADENCE_TARGET_DAY = {
 // instead of "Not started" or a day-count silently wrong because History
 // only has stale entries from the old process. When set, it wins outright:
 // Stage History's own first-non-Found entry is what it's overriding.
+// Weekday (Mon-Fri) count between two UTC-midnight dates, inclusive of both
+// ends - so cadence day only advances on business days and holds steady over
+// a weekend instead of quietly running the cadence "overdue" by Monday.
+function countBusinessDays(startDate, endDate) {
+  let count = 0;
+  const cur = new Date(startDate);
+  while (cur <= endDate) {
+    const dow = cur.getUTCDay();
+    if (dow !== 0 && dow !== 6) count++;
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return count;
+}
+
 function computeCadenceProgress(stageHistoryText, currentStageRaw, manualStartDate) {
   const stage = collapseLegacyStage(currentStageRaw);
   // Checked on the live stage, not just history: a re-engaged contact's
@@ -12981,7 +12995,7 @@ function computeCadenceProgress(stageHistoryText, currentStageRaw, manualStartDa
 
   const startDate = new Date(startDateStr + 'T00:00:00Z');
   const today = new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00Z');
-  const cadenceDay = Math.max(1, Math.round((today - startDate) / 86400000) + 1);
+  const cadenceDay = Math.max(1, countBusinessDays(startDate, today));
 
   if (stage === 'Meeting Booked') {
     return { cadenceDay, targetDay: null, nextStage: null, nextTargetDay: null, status: 'complete', startDate: startDateStr, manualStart: !!manualStartDate };
@@ -14635,13 +14649,6 @@ app.post('/api/campaign/:id/contacts/:contactId/generate-message', async (req, r
     if (messageNumber > seqLen) {
       return res.status(400).json({ error: `This campaign's sequence is ${seqLen} message${seqLen === 1 ? '' : 's'} - nothing further to draft for this contact.` });
     }
-    // LinkedIn: a follow-up (message N+1) only becomes draftable once a reply
-    // to message N has been logged - the stage stays "Message N Sent" until
-    // the follow-up is actually sent, so the reply is the gate.
-    if (!isEmailCampaign(campaignRecord) && /^Message [1-7] Sent$/.test(stage) && !rowReplyReceived(row)) {
-      return res.status(400).json({ error: `Message ${messageNumber - 1} was sent but no reply is logged yet - mark the reply first.` });
-    }
-
     const camp = campaignRecord.fields || {};
 
     // Resolved once regardless of message number - the profiling gate below

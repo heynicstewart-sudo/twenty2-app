@@ -12654,6 +12654,7 @@ function emailThreadStepFromStage(key, stage){
 // LinkedIn Sequence Stage now only ever advances on a send. For a given step
 // (message 1/2/3), work out from the campaign's live Sequence Stage + Reply
 // Received flag whether it has been sent, is due next, or is still locked.
+// Later messages are never gated on a reply.
 const LINKEDIN_STAGE_ORDER = ['Found','Engagement Made','Connection Pending','Connected','Message 1 Sent','Message 2 Sent','Message 3 Sent','Meeting Booked'];
 function linkedInStepInfo(n, liveStage, replied){
   const order = LINKEDIN_STAGE_ORDER;
@@ -12665,7 +12666,9 @@ function linkedInStepInfo(n, liveStage, replied){
   if(cur === sentAt) return { state:'sent', replied: !!replied };    // this is the latest send
   if(cur < prevSentAt) return { state:'locked', reason: n === 1 ? 'Waiting for the connection to be accepted' : `Send message ${n-1} first` };
   if(n === 1) return { state:'ready' };
-  return replied ? { state:'ready' } : { state:'locked', reason:`Log the reply to message ${n-1} first` };
+  // A follow-up is available whether or not a reply came in - plenty of
+  // profiles never respond and a second message is still worth sending.
+  return { state:'ready' };
 }
 
 function renderMsgStep(c, key, label, extraBodyHtml){
