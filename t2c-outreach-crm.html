@@ -825,7 +825,8 @@ table.grid-table{border-collapse:collapse;width:100%;min-width:820px;}
    checkmark once done, and the day number on today's cell only. */
 .cadence-strip{display:flex;gap:4px;overflow-x:auto;padding-bottom:4px;}
 .cadence-cell{flex:0 0 22px;width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;}
-.cadence-cell.is-done{color:#fff;}
+.cadence-cell.is-done{color:#fff;cursor:pointer;}
+.cadence-cell.is-done:hover{outline:2px solid var(--ink);outline-offset:2px;}
 .cadence-cell.is-today{outline:2px solid var(--accent);outline-offset:2px;}
 .cadence-legend{display:flex;flex-wrap:wrap;gap:5px 12px;margin-top:9px;}
 .cadence-legend span{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;color:var(--muted);}
@@ -12552,6 +12553,31 @@ function clearCadenceStartOverride(contactId){
   patchCadenceStartOverride(contactId, null);
 }
 
+// Walks back from today counting only weekdays, mirroring countBusinessDays
+// in search-server.js - so the date this returns, sent as a Cadence Start
+// Override, recomputes to exactly targetDay. Lets a past cell in the strip
+// be clicked to rewind the clock (a day you didn't work got over-counted)
+// without the user having to work out and type a real date by hand.
+function cadenceStartDateForDay(targetDay){
+  const today = new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00Z');
+  const cur = new Date(today);
+  let count = 0;
+  for(let guard = 0; guard < 3650; guard++){
+    const dow = cur.getUTCDay();
+    if(dow !== 0 && dow !== 6){
+      count++;
+      if(count === targetDay) return cur.toISOString().slice(0, 10);
+    }
+    cur.setUTCDate(cur.getUTCDate() - 1);
+  }
+  return cur.toISOString().slice(0, 10);
+}
+
+function rewindCadenceToDay(contactId, day){
+  if(!confirm(`Skipped a day? Set this contact's cadence clock back to Day ${day} of 14.`)) return;
+  patchCadenceStartOverride(contactId, cadenceStartDateForDay(day));
+}
+
 function renderCadenceStrip(c){
   const stage = window.__roadmapCampaignId ? campaignSequenceStageFor(c.name) : '';
   const cadence = window.__roadmapCampaignId ? campaignCadenceFor(c.name) : null;
@@ -12575,7 +12601,9 @@ function renderCadenceStrip(c){
     const isToday = !done && step.day === todayNum;
     const cls = ['cadence-cell', `cadence-${step.type}`, done ? 'is-done' : '', isToday ? 'is-today' : ''].filter(Boolean).join(' ');
     const inner = done ? '<i class="ti ti-check"></i>' : (isToday ? step.day : '');
-    return `<div class="${cls}" title="Day ${step.day}: ${esc(step.label)}${step.stage ? '' : ' (manual, not tracked here)'}">${inner}</div>`;
+    const title = `Day ${step.day}: ${esc(step.label)}${step.stage ? '' : ' (manual, not tracked here)'}${done ? ' - click to rewind the clock to here' : ''}`;
+    const click = done ? ` onclick="event.stopPropagation();rewindCadenceToDay('${c.id}',${step.day})"` : '';
+    return `<div class="${cls}" title="${title}"${click}>${inner}</div>`;
   }).join('');
   const legend = ['engage','connect','message','email'].map(type => {
     const label = { engage:'Engage', connect:'Connect', message:'Message', email:'Email (manual)' }[type];
