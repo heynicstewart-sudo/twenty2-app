@@ -13885,7 +13885,13 @@ function ctaBroughtForwardEarly(messageNumber, messagesBeforeCta, ctaIncluded) {
 // Mirrors the client's voiceRulesText() - ported here for the same reason.
 // Email-type campaigns get email rules instead of the LinkedIn-DM ones
 // (clientize() still swaps names/descriptors on top of either).
-function voiceRulesPromptText(voice, email) {
+// signOff (LinkedIn only - email always signs off, normal email etiquette)
+// defaults to true so existing callers that don't pass it keep prior
+// behaviour. Nic's call: LinkedIn already shows the recipient exactly who's
+// messaging them, so a "cheers, Marcus" on a short early-sequence touch reads
+// as a formatted template, the same tell this function was already fighting -
+// reserve the explicit sign-off for the longer, closing/cta-stage message.
+function voiceRulesPromptText(voice, email, signOff = true) {
   const v = voice || {};
   if (email) {
     const p = (currentTenant().profile || {});
@@ -13893,7 +13899,10 @@ function voiceRulesPromptText(voice, email) {
     const co = currentTenant().name || 'the business';
     return `Voice rules: ${p.englishVariant || 'UK English, no em dashes'}, ${(v.tone || 'warm and direct').toLowerCase()} tone. This is a cold outreach EMAIL to a business, not a LinkedIn message. Write a short specific subject line (no clickbait, no "Quick question"). Keep the body to one or two short paragraphs: a line that shows you know who they are and why you're writing, the offer or reason to talk in plain terms, then one clear low-friction ask. No hard sell, no fake familiarity, no "I hope this email finds you well". Sign off with just "${rep}" then "${co}" on the next line. ${v.voiceInstructions || ''}`;
   }
-  return `Voice rules: UK English, no em dashes, ${(v.tone || 'peer to peer').toLowerCase()} tone, one observation and one question per message, 3 to 4 sentences, signed off as "Marcus" (first name only, never the company name), conditional CTA framing (never pushy). Make the observation from your own vantage point (what you're seeing across similar leaders), never by telling the contact what they already know, what they'd "know well", or how their own role feels. Connection requests should be ${(v.connLength || 'short').toLowerCase()}. Follow-up cadence is ${(v.cadence || 'steady').toLowerCase()}. ${v.voiceInstructions || ''}`;
+  const signOffClause = signOff
+    ? `Sign off as "Marcus" (first name only, never the company name).`
+    : `Don't add a sign-off or name at the end - LinkedIn already shows the recipient exactly who's messaging them, so closing with "Marcus"/"cheers" here just reads as a formatted template. End on the message itself.`;
+  return `Voice rules: UK English, no em dashes, ${(v.tone || 'peer to peer').toLowerCase()} tone. Write like a real person messaging a peer, not scripted copy - plain and a little loose, imperfect is fine. State the reason for reaching out as a simple, direct sentence (a real trigger: their own move, a shared context, a plain fact about them) rather than dressing it up as a crafted observation, and don't force a question onto the end just to have one - a statement plus a soft, conditional ask is a complete message on its own. Avoid AI-outreach tells: no "I noticed/couldn't help but notice" compliment openers, no "curious what/how" curiosity hooks, no engineered "X vs Y" contrasts. 3 to 4 sentences. ${signOffClause} Conditional CTA framing (never pushy). Connection requests should be ${(v.connLength || 'short').toLowerCase()}. Follow-up cadence is ${(v.cadence || 'steady').toLowerCase()}. ${v.voiceInstructions || ''}`;
 }
 
 // Same defaults as the client's state.settings.strategy (t2c-outreach-crm.html,
@@ -14310,7 +14319,7 @@ ${offerNote}${await angleLibraryNote(campaignRecord, contactRecord)}${await acco
 
 ${ctaStrategyNoteText(stageKey, messageNumber, ctaMessage)}${emailMode ? '' : messageBeatNote(messageNumber)}${stageOneNote}${ctaOptionsPromptText(ctaOptions)}${triggersPromptText(triggers)}
 
-${voiceRulesPromptText(voice, emailMode)}${styleCorrectionsPromptText(styleCorrections, stageKey)}${steerPromptText(steer)}
+${voiceRulesPromptText(voice, emailMode, stageKey === 'cta')}${styleCorrectionsPromptText(styleCorrections, stageKey)}${steerPromptText(steer)}
 
 ${writeInstruction}${emailMode ? groundInSpecificsNote() : groundInSpecificsNote(messageNumber)}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${examplesNote}${performanceNote}${framingInstructionText(campaignRecord)}${draftJsonContract(emailMode)}`;
 
@@ -14381,7 +14390,7 @@ ${cf['Conversation Context'] || '(no thread captured - treat their most recent m
 
 Your job: reply to what they actually said in their most recent message. Move the conversation one concrete step toward ${ctaOptions.length ? 'one of this campaign\'s CTAs' : 'a short call or coffee'}, but only as hard as their reply has earned - if they asked a question, answer it plainly first; if they're warm and it's time, make the ask; if they raised an objection, address it without being defensive. Never reintroduce yourself or repeat an earlier message. Where the ask is to get time in the diary, offer two concrete time options rather than a generic scheduling link.${stageOneNote}${ctaOptionsPromptText(ctaOptions)}${triggersPromptText(triggers)}
 
-${voiceRulesPromptText(voice, false)}${styleCorrectionsPromptText(styleCorrections, 'reply')}${steerPromptText(steer)}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${examplesNote}
+${voiceRulesPromptText(voice, false, false)}${styleCorrectionsPromptText(styleCorrections, 'reply')}${steerPromptText(steer)}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${examplesNote}
 
 Also decide whether this reply needs a human at Twenty2 to weigh in before it can be sent - true only if answering properly needs something you can't know: custom pricing or a quote, a technical/scoping question about deliverables, contract or legal terms, or the contact is upset and it needs a careful human touch. A normal question you can answer from the campaign context above is NOT one of these.
 ${framingInstructionText(campaignRecord)}
@@ -14556,7 +14565,7 @@ app.post('/api/messages/generate', async (req, res) => {
       if (emailMode) {
         promptText = `You are drafting a cold outreach email to a business on behalf of T2C Outreach, Twenty2 Collective's outreach CRM.\n\nBusiness: ${contact.company || contact.name}. Contact: ${contact.name}${contact.role ? `, ${contact.role}` : ''}. Profile notes: ${contact.notes || 'none'}.${conversationNote}${stage.template ? `\n\nTemplate / angle to work from:\n${stage.template}` : ''}\n\n${voiceRulesPromptText(voice, true)}${imageNote}${campaignNote}${enrichmentNote}${styleCorrectionsPromptText(styleCorrections, stage.key)}${steerPromptText(steer)}\n\nWrite the cold email to this business now. If there is a prior reply in the conversation above, respond to what they actually said rather than reintroducing yourself.${groundInSpecificsNote()}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${draftJsonContract(true)}`;
       } else {
-        promptText = `Template for this stage:\n${stage.template || ''}\n\nContact: ${contact.name}, ${contact.role || ''} at ${contact.company || ''}. Sequence stage: ${stage.label || stage.key} (message ${stage.messageNumber || 'n/a'} in the sequence). Profile notes: ${contact.notes || 'none'}.${conversationNote}\n\n${ctaStrategyNoteText(stage.key, stage.messageNumber, voice && voice.messagesBeforeCta)}${messageBeatNote(stage.messageNumber)}${ctaOptionsPromptText(ctaOptions)}${triggersPromptText(triggers)}\n\n${voiceRulesPromptText(voice, false)}${imageNote}${campaignNote}${enrichmentNote}${styleCorrectionsPromptText(styleCorrections, stage.key)}${steerPromptText(steer)}\n\nWrite the actual message for this specific contact, replacing placeholders naturally - if the conversation so far shows they've already replied, respond to what they actually said rather than reintroducing yourself.${groundInSpecificsNote(stage.messageNumber)}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${draftJsonContract(false)}`;
+        promptText = `Template for this stage:\n${stage.template || ''}\n\nContact: ${contact.name}, ${contact.role || ''} at ${contact.company || ''}. Sequence stage: ${stage.label || stage.key} (message ${stage.messageNumber || 'n/a'} in the sequence). Profile notes: ${contact.notes || 'none'}.${conversationNote}\n\n${ctaStrategyNoteText(stage.key, stage.messageNumber, voice && voice.messagesBeforeCta)}${messageBeatNote(stage.messageNumber)}${ctaOptionsPromptText(ctaOptions)}${triggersPromptText(triggers)}\n\n${voiceRulesPromptText(voice, false, stage.key === 'cta')}${imageNote}${campaignNote}${enrichmentNote}${styleCorrectionsPromptText(styleCorrections, stage.key)}${steerPromptText(steer)}\n\nWrite the actual message for this specific contact, replacing placeholders naturally - if the conversation so far shows they've already replied, respond to what they actually said rather than reintroducing yourself.${groundInSpecificsNote(stage.messageNumber)}${RESPECT_SUMMARY_INSTRUCTIONS_NOTE}${draftJsonContract(false)}`;
       }
     }
 
@@ -14603,7 +14612,7 @@ app.post('/api/messages/generate-template', async (req, res) => {
 
   try {
     const roleList = (Array.isArray(roles) ? roles : []).join(', ') || 'senior leaders';
-    const promptText = `Write a LinkedIn outreach template for the "${stageLabel}" stage of a sequence targeting ${roleList} at WA companies.\n\n${ctaStrategyNoteText(stageKey, messageNumber, voice && voice.messagesBeforeCta)}${messageBeatNote(messageNumber)}\n\n${voiceRulesPromptText(voice)}\n\nUse {{first}}, {{company}}, {{role}} as placeholders. Return only the message text.`;
+    const promptText = `Write a LinkedIn outreach template for the "${stageLabel}" stage of a sequence targeting ${roleList} at WA companies.\n\n${ctaStrategyNoteText(stageKey, messageNumber, voice && voice.messagesBeforeCta)}${messageBeatNote(messageNumber)}\n\n${voiceRulesPromptText(voice, false, stageKey === 'cta')}\n\nUse {{first}}, {{company}}, {{role}} as placeholders. Return only the message text.`;
 
     const message = await callClaudeText(promptText, 300);
     res.json({ success: true, message });
