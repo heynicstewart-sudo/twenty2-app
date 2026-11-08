@@ -17861,7 +17861,11 @@ const KEYWORDS_TABLE = 'Keywords';
 const SITEMAP_TABLE = 'Sitemap';
 const SERVICE_PAGE_QUEUE_TABLE = 'Service Page Queue';
 
-const DEFAULT_SEO_VOICE_PROFILE = `Twenty2 Collective (T2C) is a Perth, WA-based Agile and change consultancy. Write with authority and practical insight for corporate professionals - programme leads, transformation execs, PMO heads - who are tired of theory and want what actually works on the ground. Tone: direct, no jargon for its own sake, occasional dry humour, always backed by a concrete example, stat, or story from real client work. T2C has opinions: Agile theatre without genuine behaviour change wastes a budget; most transformation failures are change management failures, not process failures; frameworks are a starting point, not a religion. UK/AU English, no em dashes.`;
+const DEFAULT_SEO_VOICE_PROFILE = `Twenty2 Collective (T2C) is a Perth, WA-based Agile and change consultancy. Write with authority and practical insight for corporate professionals - programme leads, transformation execs, PMO heads - who are tired of theory and want what actually works on the ground. Tone: direct, no jargon for its own sake, occasional dry humour, always backed by a concrete example, stat, or story from real client work. T2C has opinions: Agile theatre without genuine behaviour change wastes a budget; most transformation failures are change management failures, not process failures; frameworks are a starting point, not a religion. UK/AU English, no em dashes.
+
+T2C's hero product is the APMG Change Management Foundation & Practitioner course (online and in-person Perth) - accredited, internationally recognised, exam fees included, 100% pass rate. Where contextually relevant, posts should reference or link to the training programme at /training/apmg-change-management-foundation-practitioner as the natural next step for practitioners who want a formal credential.
+
+WRITING QUALITY: Write as if a senior T2C consultant is drafting this for peer review — specific, opinionated, grounded in real examples. Never use generic AI-tell phrases: "it's important to", "in today's fast-paced world", "in conclusion", "furthermore", "it is worth noting", "leverage" (use "use"), or "game-changer". Every claim needs a reason or a concrete example behind it. If you cannot back a claim with something specific, cut the claim. Varied sentence lengths; short sentences land the key point, longer ones carry the context. Never summarise what you just said.`;
 
 // ---- Airtable schema provisioning ----
 // airtableRequest's typecast:true only converts a value into an *existing*
@@ -18572,6 +18576,14 @@ app.get('/api/seo/suggest-keywords', async (req, res) => {
 
     const prompt = `You are an SEO content strategist for T2C Outreach, Twenty2 Collective, a Perth-based Agile and change consultancy.
 
+T2C's HERO PRODUCT: APMG Change Management Foundation & Practitioner certification course (online and in-person Perth). Posts that build topical authority around change management certification, the APMG framework, and practitioner credentials are the highest strategic priority — they funnel traffic toward this course.
+
+KEYWORD STRATEGY: T2C is a relatively new domain building authority from scratch. Without a large backlink profile, broad single-word keywords ("change management", "agile") are unwinnable. The strategy is:
+1. BOTTOM-OF-FUNNEL first (highest commercial value, easier to rank): comparison keywords ("APMG vs Prosci change management"), alternatives ("change management certification alternatives"), situational ("change management certification for project managers"), pricing/ROI keywords, "best X for [specific role/industry]"
+2. LONG-TAIL cluster (3+ word phrases, <300 monthly searches, low KD): these build topical authority and start ranking within 3-6 months on a newer domain
+3. MID-FUNNEL how-to: "how to get change management certified australia", "how long does APMG practitioner take"
+4. TOP-OF-FUNNEL (suggest sparingly): only if nothing better exists and volume is worth it
+
 Analyse this real activity from the CRM to find blog keyword opportunities:
 
 RECENT TOUCH POINT NOTES (${recentTouchPoints.length}):
@@ -18583,10 +18595,15 @@ ${JSON.stringify(cvcInsights)}
 JOB CHANGE SIGNALS (${jobChangeSignals.length}):
 ${JSON.stringify(jobChangeSignals)}
 
-Identify the language, pain points, and topics being discussed, and suggest 5-10 blog post keywords that would resonate with this audience and have plausible search intent. For each, give a one-line explanation of why it's relevant based on what you found above.
+Identify the language, pain points, and topics being discussed. Suggest 8-12 blog post keywords that would:
+- Resonate with this audience
+- Support T2C's topical authority cluster around APMG Change Management certification
+- Prioritise bottom-of-funnel and long-tail keywords a newer domain can actually rank for
+
+For each suggestion, include: the keyword, funnel position (bottom/mid/top), estimated difficulty tier (easy <30 KD / medium 30-50 / hard 50+), and a one-line reason grounded in what you found above.
 
 Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
-{ "suggestions": [ { "keyword": string, "reason": string } ] }`;
+{ "suggestions": [ { "keyword": string, "funnel": string, "difficulty": string, "reason": string } ] }`;
 
     const parsed = await callClaudeJson(prompt, 2000, AMBIENT_MODEL);
     const payload = { suggestions: parsed.suggestions || [], generatedAt: new Date().toISOString() };
@@ -18659,20 +18676,23 @@ function stripHtmlToText(s) {
 }
 
 const SEO_CHECKLIST = `Apply this on-page SEO checklist:
-1. Primary keyword in the H1
-2. Primary keyword in the meta title
+1. Primary keyword in the H1 — write the H1 as if it were the URL slug (the page "filename"). It is the strongest on-page signal Google reads.
+2. Primary keyword starts the meta title (keyword first, brand last or omitted). Do NOT start the meta title with the brand name.
 3. Primary keyword in the meta description
-4. Primary keyword in the first paragraph (within the first 100 words)
-5. At least 3 subheadings (H2/H3) beyond the H1
-6. A keyword cluster of 5-8 closely related terms woven naturally throughout, not just the primary keyword repeated
-7. Natural keyword density between 1-2% for the primary keyword
-8. Exactly one H1, multiple H2s, and H3s nested under relevant H2s where useful
-9. Prose written so that internal links to other T2C /research/ articles could sit naturally in the body - do not invent placeholder internal links or slugs yourself; real internal links are added in a later pass
-10. 2-3 external links to real, relevant, authoritative outside sources
-11. An FAQ section with 4-6 questions targeting related search queries, each with a real answer, formatted as an open accordion: each question is a <details open><summary>Question</summary><p>Answer</p></details> block
-12. A clear call to action at the end, pointing to a specific T2C service
-13. Meta title under 60 characters
-14. Meta description under 160 characters`;
+4. Answer the search query directly within the first 100 words — the reader should not have to scroll to find out what the page is about. Google rewards pages that answer fast.
+5. Primary keyword in the first paragraph (within the first 100 words)
+6. At least 3 subheadings (H2/H3) beyond the H1 — write H2s as the exact phrasing of People Also Ask questions where possible (PAA questions are real user language and become keyword targets in their own right)
+7. A keyword cluster of 5-8 closely related terms woven naturally throughout — do NOT repeat the exact primary keyword phrase more than once per 150 words; variation is both more natural and avoids AI-content spam signals
+8. Natural keyword density between 1-2% for the primary keyword
+9. Exactly one H1, multiple H2s, and H3s nested under relevant H2s where useful
+10. Prose written so that internal links to other T2C /research/ articles could sit naturally in the body - do not invent placeholder internal links or slugs yourself; real internal links are added in a later pass. At least one passage should lead naturally to T2C's APMG Change Management certification course (/training/apmg-change-management-foundation-practitioner) if contextually relevant.
+11. 2-3 external links to real, relevant, authoritative outside sources
+12. An FAQ section with 4-6 questions targeting related search queries, each with a real answer, formatted as an open accordion: each question is a <details open><summary>Question</summary><p>Answer</p></details> block
+13. A clear call to action at the end pointing to a specific T2C service or the APMG training page
+14. Meta title under 60 characters
+15. Meta description under 160 characters
+16. If this is a comparison keyword ("X vs Y"), alternatives keyword ("alternatives to X"), or situational keyword ("change management for [specific scenario]") — these are highest commercial intent. Go deeper: use specific numbers, real differentiators, and direct comparison where possible. These posts convert at 9x the rate of informational posts.
+17. Never use these AI-tell phrases anywhere in the post: "it's important to", "in today's fast-paced world", "in conclusion", "furthermore", "it is worth noting", "leverage" (use "use" instead), "game-changer", "delve into", "tapestry". These phrases trigger Google's AI content quality filters and damage domain authority over time.`;
 
 // Reddit/Quora/social results rank highly for plenty of keywords, but a
 // thread's replies aren't real editorial H1/H2 structure to imitate -
