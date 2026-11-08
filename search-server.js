@@ -17863,7 +17863,10 @@ const SERVICE_PAGE_QUEUE_TABLE = 'Service Page Queue';
 
 const DEFAULT_SEO_VOICE_PROFILE = `Twenty2 Collective (T2C) is a Perth, WA-based Agile and change consultancy. Write with authority and practical insight for corporate professionals - programme leads, transformation execs, PMO heads - who are tired of theory and want what actually works on the ground. Tone: direct, no jargon for its own sake, occasional dry humour, always backed by a concrete example, stat, or story from real client work. T2C has opinions: Agile theatre without genuine behaviour change wastes a budget; most transformation failures are change management failures, not process failures; frameworks are a starting point, not a religion. UK/AU English, no em dashes.
 
-T2C's hero product is the APMG Change Management Foundation & Practitioner course (online and in-person Perth) - accredited, internationally recognised, exam fees included, 100% pass rate. Where contextually relevant, posts should reference or link to the training programme at /training/apmg-change-management-foundation-practitioner as the natural next step for practitioners who want a formal credential.
+T2C's hero products are:
+1. APMG Change Management Foundation & Practitioner (online and in-person Perth) - APMG-accredited, exam fees included, 100% pass rate. Reference or link to /training/apmg-change-management-foundation-practitioner for change management credential content.
+2. PRINCE2 Foundation & Practitioner (online self-paced and in-person Perth) - PeopleCert-accredited, exam fees included, 100% pass rate. Reference or link to /training/prince2-foundation-practitioner for project management credential content.
+Where contextually relevant, posts should reference the appropriate course as the natural next step.
 
 WRITING QUALITY: Write as if a senior T2C consultant is drafting this for peer review — specific, opinionated, grounded in real examples. Never use generic AI-tell phrases: "it's important to", "in today's fast-paced world", "in conclusion", "furthermore", "it is worth noting", "leverage" (use "use"), or "game-changer". Every claim needs a reason or a concrete example behind it. If you cannot back a claim with something specific, cut the claim. Varied sentence lengths; short sentences land the key point, longer ones carry the context. Never summarise what you just said.`;
 
@@ -19099,14 +19102,15 @@ async function generateQuestionPostForKeyword(keywordRecord) {
   // Detect location-specific keywords so the generator writes genuinely local
   // content rather than generic content with a city name appended.
   const isLocalKeyword = /\bperth\b|\bwa\b|\bwestern australia\b/i.test(keyword);
+  const isPrince2Keyword = /\bprince2\b/i.test(keyword);
   const localContextBlock = isLocalKeyword ? `
 LOCAL CONTEXT (Perth / WA — use this to make the post genuinely local, not just the generic answer with "Perth" appended):
-- Western Australian industries where change management certification is most valued: mining and resources (BHP, Rio Tinto, Woodside, Fortescue), state and federal government agencies, construction and infrastructure, professional services, utilities
-- Many WA professionals previously had to travel to Sydney or Melbourne for accredited change management training — Twenty2 Collective's Perth-based cohorts remove that barrier
-- Twenty2 Collective runs APMG Foundation & Practitioner training in-person at Purpose Studio, Level 3/256 Adelaide Terrace, Perth WA 6000 — small cohorts (max 12), exam fees included, 100% pass rate in 2026
-- Also available fully online for professionals across WA who cannot attend in person
-- The Change Management Institute has an active WA chapter — APMG certification is recognised and valued locally
-- WA procurement and project delivery frameworks increasingly specify formal change management credentials for programme roles on major capital projects
+- Western Australian industries where project and change management certification is most valued: mining and resources (BHP, Rio Tinto, Woodside, Fortescue), state and federal government agencies, construction and infrastructure, professional services, utilities
+- Many WA professionals previously had to travel to Sydney or Melbourne for accredited training — Twenty2 Collective's Perth-based cohorts remove that barrier
+- Twenty2 Collective runs ${isPrince2Keyword ? 'PRINCE2 Foundation & Practitioner training (PeopleCert-accredited) in-person at Purpose Studio, Level 3/256 Adelaide Terrace, Perth WA 6000 — cohorts up to 16, in-person from $3,495, online from $2,255, exam fees included, 100% pass rate in 2026. Also runs APMG Change Management Foundation & Practitioner at the same venue.' : 'APMG Change Management Foundation & Practitioner training in-person at Purpose Studio, Level 3/256 Adelaide Terrace, Perth WA 6000 — small cohorts (max 12), exam fees included, 100% pass rate in 2026. Also runs PRINCE2 Foundation & Practitioner (PeopleCert-accredited) at the same venue.'}
+- Both courses also available fully online for professionals across WA who cannot attend in person
+- ${isPrince2Keyword ? 'WA government and major capital projects increasingly specify PRINCE2 or equivalent structured methodology for project governance roles' : 'The Change Management Institute has an active WA chapter — APMG certification is recognised and valued locally'}
+- WA procurement and major project delivery frameworks specify formal credentials for programme and project roles — having a local provider matters for teams sending multiple staff
 
 The post must reflect WA-specific context in its examples, industries, and framing. Do NOT just insert "Perth" or "Western Australia" generically into sentences that could have been written about anywhere. Every locally-specific claim must follow from the context above.
 ` : '';
