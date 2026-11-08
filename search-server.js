@@ -19096,13 +19096,28 @@ async function generateQuestionPostForKeyword(keywordRecord) {
     ? `\nThe following is reference content provided by Twenty2 Collective. Use it as the primary source for specific facts, examples, and opinions — do not invent information.\n---\n${referenceContent}\n---\n`
     : '';
 
+  // Detect location-specific keywords so the generator writes genuinely local
+  // content rather than generic content with a city name appended.
+  const isLocalKeyword = /\bperth\b|\bwa\b|\bwestern australia\b/i.test(keyword);
+  const localContextBlock = isLocalKeyword ? `
+LOCAL CONTEXT (Perth / WA — use this to make the post genuinely local, not just the generic answer with "Perth" appended):
+- Western Australian industries where change management certification is most valued: mining and resources (BHP, Rio Tinto, Woodside, Fortescue), state and federal government agencies, construction and infrastructure, professional services, utilities
+- Many WA professionals previously had to travel to Sydney or Melbourne for accredited change management training — Twenty2 Collective's Perth-based cohorts remove that barrier
+- Twenty2 Collective runs APMG Foundation & Practitioner training in-person at Purpose Studio, Level 3/256 Adelaide Terrace, Perth WA 6000 — small cohorts (max 12), exam fees included, 100% pass rate in 2026
+- Also available fully online for professionals across WA who cannot attend in person
+- The Change Management Institute has an active WA chapter — APMG certification is recognised and valued locally
+- WA procurement and project delivery frameworks increasingly specify formal change management credentials for programme roles on major capital projects
+
+The post must reflect WA-specific context in its examples, industries, and framing. Do NOT just insert "Perth" or "Western Australia" generically into sentences that could have been written about anywhere. Every locally-specific claim must follow from the context above.
+` : '';
+
   const prompt = `You are writing a short, focused SEO question-and-answer post for Twenty2 Collective.
 
 VOICE PROFILE:
 ${voiceProfile}
 
 THE QUESTION TO ANSWER: "${keyword}"
-${referenceContentBlock}
+${referenceContentBlock}${localContextBlock}
 STRUCTURE RULES (strict):
 - H1: the question itself, phrased naturally (this becomes the URL slug — keyword must appear in it)
 - Opening paragraph (100 words max): give the direct, complete answer immediately. Do NOT make the reader scroll. Answer first, explain after.
