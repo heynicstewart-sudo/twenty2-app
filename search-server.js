@@ -19138,8 +19138,23 @@ Write as clean HTML using h1/h2/p/ul/li/a tags only. No <html>/<head>/<body> wra
 
 Also write an excerpt: 1–2 plain text sentences that answer the question in a click-worthy way.
 
+META TITLE RULES (strict):
+- Format: {Primary keyword phrase} | Twenty2 Collective
+- Keyword-first. Never start with "Twenty2 Collective" or the brand name.
+- Under 60 characters total (count carefully — include the " | Twenty2 Collective" suffix).
+- No years, no dates (e.g. never "2026 Pricing" or "— 2027 Guide"). Dates make titles go stale the moment they publish.
+- No em dashes (—). Use a pipe ( | ) as the only separator.
+- Example: "Change Management Certification Cost Perth | Twenty2 Collective"
+
+META DESCRIPTION RULES (strict):
+- Target 150–160 characters (aim for 155+). Too short wastes click-through potential.
+- Must include the primary keyword within the first 20 words.
+- State a specific benefit or differentiator (e.g. price, pass rate, location, what's included).
+- End with a natural sentence — no truncation with "…" or mid-sentence cuts.
+- No years or dates.
+
 Return ONLY valid JSON, no markdown, in exactly this shape:
-{ "title": string, "html": string, "excerpt": string, "metaTitle": string (under 60 chars, keyword first, no brand at start), "metaDescription": string (under 160 chars) }`;
+{ "title": string, "html": string, "excerpt": string, "metaTitle": string (under 60 chars, keyword first, pipe separator before brand, no dates), "metaDescription": string (150-160 chars, keyword included, benefit-focused, no dates) }`;
 
   const drafted = await callClaudeJson(prompt, 6000);
   const html = await humanizeSeoHtml(drafted.html || '');
@@ -19219,8 +19234,23 @@ Write a full SEO blog post as clean HTML - a single string of HTML using h1/h2/h
 
 Also write an "excerpt": a 2-3 sentence plain text summary of the post, written to entice clicks. Plain text only, no HTML tags, no markdown.
 
+META TITLE RULES (strict):
+- Format: {Primary keyword phrase} | Twenty2 Collective
+- Keyword-first. Never start with "Twenty2 Collective" or the brand name.
+- Under 60 characters total (count carefully — include the " | Twenty2 Collective" suffix).
+- No years, no dates (e.g. never "2026 Pricing" or "— 2027 Guide"). Dates make titles go stale the moment they publish.
+- No em dashes (—). Use a pipe ( | ) as the only separator.
+- Example: "Change Management Certification Perth | Twenty2 Collective"
+
+META DESCRIPTION RULES (strict):
+- Target 150–160 characters (aim for 155+). Too short wastes click-through potential.
+- Must include the primary keyword within the first 20 words.
+- State a specific benefit or differentiator (e.g. price, pass rate, location, what's included).
+- End with a natural sentence — no truncation with "…" or mid-sentence cuts.
+- No years or dates.
+
 Return ONLY valid JSON, no markdown, no commentary, in exactly this shape:
-{ "title": string, "html": string, "excerpt": string (2-3 plain-text sentences, no HTML tags), "metaTitle": string (under 60 characters), "metaDescription": string (under 160 characters) }`;
+{ "title": string, "html": string, "excerpt": string (2-3 plain-text sentences, no HTML tags), "metaTitle": string (under 60 chars, keyword first, pipe separator before brand, no dates), "metaDescription": string (150-160 chars, keyword included, benefit-focused, no dates) }`;
 
   const drafted = await callClaudeJson(prompt, 20000);
   let html = await ensureValidSeoStructure(drafted.html || '', keyword);
