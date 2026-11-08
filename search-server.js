@@ -18371,6 +18371,7 @@ app.get('/api/seo/keywords', async (req, res) => {
         suggestedReason: r.fields['Notes'] || '',
         referenceContent: r.fields['Reference Content'] || '',
         postType: r.fields['Post Type'] || 'Guide',
+        cluster: r.fields['Cluster'] || '',
         createdDate: r.fields['Created Date'] || ''
       }))
       .sort((a, b) => (b.volume || 0) - (a.volume || 0));

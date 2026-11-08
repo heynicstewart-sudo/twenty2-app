@@ -25636,6 +25636,13 @@ function renderContentSeoTab(){
   <div class="card" style="margin-bottom:18px;">
     <div class="section-title"><i class="ti ti-list-check"></i> Content Queue</div>
     <p class="muted" style="font-size:12px;margin-bottom:10px;">Queued keywords, highest search volume first.</p>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">
+      ${['All','Change Management','PRINCE2'].map(c => {
+        const active = (window.__seoQueueCluster||'All') === c;
+        const color = c === 'Change Management' ? '#2A6B7C' : c === 'PRINCE2' ? '#3b6fa0' : '';
+        return `<button onclick="setSeoQueueCluster('${c}')" style="padding:5px 14px;border-radius:20px;border:1.5px solid ${active?(color||'var(--accent)'):'var(--border)'};background:${active?(color||'var(--accent)'):'transparent'};color:${active?'#fff':'var(--text-muted)'};font-size:12px;font-weight:600;cursor:pointer;">${c}</button>`;
+      }).join('')}
+    </div>
     ${renderSeoKeywordTable(seoQueuedKeywords())}
   </div>
 
@@ -25957,10 +25964,15 @@ function seoFilteredKeywords(){
 function seoQueuedKeywords(){
   const list = window.__seoKeywords;
   if(!Array.isArray(list)) return list;
-  return list.filter(k => k.status === 'Queued').slice().sort((a,b) => (b.volume||0) - (a.volume||0));
+  const cluster = window.__seoQueueCluster || 'All';
+  return list
+    .filter(k => k.status === 'Queued')
+    .filter(k => cluster === 'All' || (k.cluster || '') === cluster)
+    .slice().sort((a,b) => (b.volume||0) - (a.volume||0));
 }
 
 function setSeoKeywordFilter(val){ window.__seoKeywordFilter = val; renderPage(); }
+function setSeoQueueCluster(val){ window.__seoQueueCluster = val; renderPage(); }
 
 function renderSeoKeywordFilterBar(){
   return `
