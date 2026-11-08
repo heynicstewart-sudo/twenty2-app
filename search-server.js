@@ -18367,6 +18367,7 @@ app.get('/api/seo/keywords', async (req, res) => {
         publishedUrl: r.fields['Published URL'] || '',
         suggestedReason: r.fields['Notes'] || '',
         referenceContent: r.fields['Reference Content'] || '',
+        postType: r.fields['Post Type'] || 'Guide',
         createdDate: r.fields['Created Date'] || ''
       }))
       .sort((a, b) => (b.volume || 0) - (a.volume || 0));
@@ -18386,6 +18387,17 @@ async function ensureKeywordsReferenceContentField() {
     return await ensureAirtableField(KEYWORDS_TABLE, 'Reference Content', { type: 'multilineText' });
   } catch (err) {
     warnOnce('provision:keywords-reference-content-field', 'Could not auto-provision the Keywords Reference Content field (add it by hand if it does not exist yet):', err.message);
+  }
+}
+
+async function ensureKeywordsPostTypeField() {
+  try {
+    return await ensureAirtableField(KEYWORDS_TABLE, 'Post Type', {
+      type: 'singleSelect',
+      options: { choices: [{ name: 'Guide' }, { name: 'Question' }] }
+    });
+  } catch (err) {
+    warnOnce('provision:keywords-post-type-field', 'Could not auto-provision the Keywords Post Type field (add it by hand if it does not exist yet):', err.message);
   }
 }
 
@@ -18413,6 +18425,22 @@ app.post('/api/seo/keywords/:id/reference-content', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('Save SEO reference content error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/seo/keywords/:id/post-type', async (req, res) => {
+  if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
+  const postType = (req.body && req.body.postType) === 'Question' ? 'Question' : 'Guide';
+  try {
+    await ensureKeywordsPostTypeField();
+    await airtableRequest('PATCH', KEYWORDS_TABLE, {
+      records: [{ id: req.params.id, fields: { 'Post Type': postType } }],
+      typecast: true
+    });
+    res.json({ success: true, postType });
+  } catch (err) {
+    console.error('Save SEO post type error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -19056,6 +19084,56 @@ async function humanizeLinkedInPost(text) {
   return stripEnEmDashes(out);
 }
 
+async function generateQuestionPostForKeyword(keywordRecord) {
+  const keyword = keywordRecord.fields['Keyword'];
+
+  const settingsRecord = await getSettingsRecord();
+  const savedVoiceProfile = settingsRecord && settingsRecord.fields['SEO Voice Profile'];
+  const voiceProfile = (savedVoiceProfile && savedVoiceProfile.trim()) ? savedVoiceProfile : DEFAULT_SEO_VOICE_PROFILE;
+
+  const referenceContent = (keywordRecord.fields['Reference Content'] || '').trim();
+  const referenceContentBlock = referenceContent
+    ? `\nThe following is reference content provided by Twenty2 Collective. Use it as the primary source for specific facts, examples, and opinions — do not invent information.\n---\n${referenceContent}\n---\n`
+    : '';
+
+  const prompt = `You are writing a short, focused SEO question-and-answer post for Twenty2 Collective.
+
+VOICE PROFILE:
+${voiceProfile}
+
+THE QUESTION TO ANSWER: "${keyword}"
+${referenceContentBlock}
+STRUCTURE RULES (strict):
+- H1: the question itself, phrased naturally (this becomes the URL slug — keyword must appear in it)
+- Opening paragraph (100 words max): give the direct, complete answer immediately. Do NOT make the reader scroll. Answer first, explain after.
+- 2–4 H2 subheadings: each answers a natural follow-up question someone would have after reading the answer. Phrase each H2 as a question. Keep each section to 100–150 words.
+- Target total length: 450–650 words. No padding.
+- Closing CTA paragraph (no heading): 2–3 sentences pointing the reader to Twenty2 Collective's APMG Change Management Foundation & Practitioner course. Example closing: "If you are preparing to sit the APMG Change Management exam, Twenty2 Collective runs accredited Foundation and Practitioner training in Perth and online — [see course details](/training/apmg-change-management-foundation-practitioner)." Adapt naturally to the question topic.
+- No FAQ accordion section — the whole post IS the Q&A.
+- No invented internal links to other /research/ pages — a single CTA link to /training/apmg-change-management-foundation-practitioner at the close is the only link added here; real internal links from other pages to this one are added separately.
+- 1 external link to a relevant, well-known source where it adds value.
+- UK/AU English. No em dashes. No AI-tell phrases: "it's important to", "in today's fast-paced world", "leverage", "game-changer", "furthermore", "it is worth noting".
+
+Write as clean HTML using h1/h2/p/ul/li/a tags only. No <html>/<head>/<body> wrapper, no <img> tags.
+
+Also write an excerpt: 1–2 plain text sentences that answer the question in a click-worthy way.
+
+Return ONLY valid JSON, no markdown, in exactly this shape:
+{ "title": string, "html": string, "excerpt": string, "metaTitle": string (under 60 chars, keyword first, no brand at start), "metaDescription": string (under 160 chars) }`;
+
+  const drafted = await callClaudeJson(prompt, 6000);
+  const html = await humanizeSeoHtml(drafted.html || '');
+
+  return {
+    title: drafted.title || keyword,
+    html,
+    excerpt: stripHtmlToText(drafted.excerpt || '').trim(),
+    metaTitle: (drafted.metaTitle || '').slice(0, 60),
+    metaDescription: (drafted.metaDescription || '').slice(0, 160),
+    usedCustomVoiceProfile: !!(savedVoiceProfile && savedVoiceProfile.trim())
+  };
+}
+
 async function generateSeoPostForKeyword(keywordRecord) {
   const keyword = keywordRecord.fields['Keyword'];
 
@@ -19346,9 +19424,8 @@ Return ONLY valid JSON, no markdown, no commentary, an object in exactly this sh
 app.post('/api/seo/generate-post', async (req, res) => {
   if (!AIRTABLE_API_KEY) return res.status(500).json({ error: 'AIRTABLE_API_KEY not configured' });
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
-  if (!process.env.SERPER_API_KEY) return res.status(500).json({ error: 'SERPER_API_KEY not configured' });
 
-  const { keywordId } = req.body;
+  const { keywordId, postType: requestPostType } = req.body;
   if (!keywordId) return res.status(400).json({ error: 'keywordId is required' });
 
   let keywordRecord;
@@ -19358,29 +19435,36 @@ app.post('/api/seo/generate-post', async (req, res) => {
     await ensureSitemapTable();
     keywordRecord = await airtableGetRecord(KEYWORDS_TABLE, keywordId);
     if (!keywordRecord) return res.status(404).json({ error: 'Keyword not found' });
-    await airtableRequest('PATCH', KEYWORDS_TABLE, { records: [{ id: keywordId, fields: { 'Status': 'Generating' } }], typecast: true });
+    // Determine post type: request body wins, falls back to what's stored on the record
+    const resolvedPostType = requestPostType || keywordRecord.fields['Post Type'] || 'Guide';
+    const isQuestion = resolvedPostType === 'Question';
+    if (!isQuestion && !process.env.SERPER_API_KEY) return res.status(500).json({ error: 'SERPER_API_KEY not configured' });
+    await airtableRequest('PATCH', KEYWORDS_TABLE, { records: [{ id: keywordId, fields: { 'Status': 'Generating', 'Post Type': resolvedPostType } }], typecast: true });
   } catch (err) {
     console.error('Generate SEO post kickoff error:', err.message);
     return res.status(500).json({ error: err.message });
   }
 
-  // A full post is a Serper search, three page scrapes, the draft, a
-  // structure-check pass and three humanizer passes - several minutes, well
-  // past any proxy's request timeout. Run it in the background and let the
-  // browser poll GET /api/seo/keywords for the Status flip
-  // (Generating -> Generated, or back to Queued with the reason in Notes).
+  // Question posts are fast (no Serper scraping) — still run in background
+  // for consistency with the polling UI. Guide posts are several minutes.
   res.json({ started: true, keywordId });
 
   (async () => {
     try {
-      const post = await generateSeoPostForKeyword(keywordRecord);
+      const resolvedPostType = requestPostType || keywordRecord.fields['Post Type'] || 'Guide';
+      const isQuestion = resolvedPostType === 'Question';
+      const post = isQuestion
+        ? await generateQuestionPostForKeyword(keywordRecord)
+        : await generateSeoPostForKeyword(keywordRecord);
 
-      try {
-        const sitemapRecords = await airtableFetchAllRecords(SITEMAP_TABLE);
-        const linked = await injectInternalLinks(post.html, keywordRecord.fields['Keyword'], sitemapRecords);
-        post.html = linked.html;
-      } catch (err) {
-        console.warn('Internal linking skipped:', err.message);
+      if (!isQuestion) {
+        try {
+          const sitemapRecords = await airtableFetchAllRecords(SITEMAP_TABLE);
+          const linked = await injectInternalLinks(post.html, keywordRecord.fields['Keyword'], sitemapRecords);
+          post.html = linked.html;
+        } catch (err) {
+          console.warn('Internal linking skipped:', err.message);
+        }
       }
 
       await airtableRequest('PATCH', KEYWORDS_TABLE, {

@@ -25979,14 +25979,17 @@ function renderSeoKeywordTable(list){
   return `
   <div class="perf-table-wrap">
   <table class="perf-table">
-    <thead><tr><th>Keyword</th><th>Volume</th><th>KD</th><th>Intent</th><th>Status</th><th></th></tr></thead>
+    <thead><tr><th>Keyword</th><th>Volume</th><th>KD</th><th>Type</th><th>Status</th><th></th></tr></thead>
     <tbody>
-    ${list.map(k => `
+    ${list.map(k => {
+      const isQuestion = (k.postType || 'Guide') === 'Question';
+      const typeBadge = `<button class="btn btn-ghost btn-sm" title="Toggle post type" style="font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;color:${isQuestion ? 'var(--accent)' : 'var(--muted)'};" onclick="toggleSeoPostType('${k.id}',${isQuestion})">${isQuestion ? 'Q&A' : 'Guide'}</button>`;
+      return `
       <tr>
         <td>${esc(k.keyword)}</td>
         <td>${k.volume ? k.volume.toLocaleString() : '–'}</td>
         <td>${k.kd || '–'}</td>
-        <td>${esc(k.intent || '–')}</td>
+        <td>${typeBadge}</td>
         <td>${seoStatusTag(k.status)}</td>
         <td style="white-space:nowrap;">
           ${k.status === 'Generated' || k.status === 'Published'
@@ -25996,8 +25999,8 @@ function renderSeoKeywordTable(list){
           <button class="btn btn-ghost btn-sm" title="${k.referenceContent ? 'Edit reference content' : 'Add reference content'}" onclick="openSeoReferenceContentModal('${k.id}')"><i class="ti ${k.referenceContent ? 'ti-file-check' : 'ti-file-plus'}"></i> ${k.referenceContent ? 'Context' : 'Add context'}</button>
           <button class="btn btn-ghost btn-sm" title="Remove keyword" onclick="deleteSeoKeyword('${k.id}','${esc(k.keyword).replace(/'/g,"\\'")}')"><i class="ti ti-trash"></i></button>
         </td>
-      </tr>
-    `).join('')}
+      </tr>`;
+    }).join('')}
     </tbody>
   </table>
   </div>`;
@@ -26217,6 +26220,27 @@ async function saveSeoVoiceProfile(){
   }
 }
 
+async function toggleSeoPostType(id, currentlyQuestion){
+  const list = window.__seoKeywords;
+  const k = Array.isArray(list) ? list.find(x=>x.id===id) : null;
+  if(!k) return;
+  const newType = currentlyQuestion ? 'Guide' : 'Question';
+  k.postType = newType;
+  renderPage();
+  try {
+    const res = await fetch(`/api/seo/keywords/${id}/post-type`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ postType: newType })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Could not update post type');
+  } catch(err){
+    if(k) k.postType = currentlyQuestion ? 'Question' : 'Guide';
+    toast('Could not update post type: ' + friendlyErr(err.message), 'warn');
+    renderPage();
+  }
+}
+
 async function generateSeoPost(id){
   const list = window.__seoKeywords;
   const k = Array.isArray(list) ? list.find(x=>x.id===id) : null;
@@ -26225,12 +26249,13 @@ async function generateSeoPost(id){
   try {
     const res = await fetch('/api/seo/generate-post', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ keywordId: id })
+      body: JSON.stringify({ keywordId: id, postType: k ? (k.postType || 'Guide') : 'Guide' })
     });
     let data = {};
     try { data = await res.json(); } catch(e){}
     if(!res.ok) throw new Error(data.error || 'Could not start generation');
-    toast('Generating post - this takes a few minutes, you can keep working', 'success');
+    const isQ = k && k.postType === 'Question';
+    toast(isQ ? 'Generating Q&A post — should be ready in under a minute' : 'Generating post — this takes a few minutes, you can keep working', 'success');
     pollSeoPostStatus(id, k ? k.keyword : '');
   } catch(err){
     if(k) k.status = 'Queued';
