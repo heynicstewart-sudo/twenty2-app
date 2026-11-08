@@ -19834,11 +19834,13 @@ app.post('/api/seo/publish', async (req, res) => {
       console.warn('Publish-time internal linking skipped:', err.message);
     }
 
-    const published = await publishToFramer(post);
+    const isQuestionPost = (kf['Post Type'] || 'Guide') === 'Question';
+    const collectionKind = isQuestionPost ? 'service' : 'blog';
+    const published = await publishToFramer(post, { collectionKind });
     const today = new Date().toISOString().slice(0, 10);
 
     const sitemapWrite = await airtableRequest('POST', SITEMAP_TABLE, {
-      records: [{ fields: { 'URL': published.url, 'Title': post.title, 'Published Date': today, 'Keyword': kf['Keyword'] || '', 'Type': 'Blog' } }],
+      records: [{ fields: { 'URL': published.url, 'Title': post.title, 'Published Date': today, 'Keyword': kf['Keyword'] || '', 'Type': isQuestionPost ? 'Service Page' : 'Blog' } }],
       typecast: true
     });
     const sitemapRecordId = sitemapWrite && sitemapWrite.records && sitemapWrite.records[0] && sitemapWrite.records[0].id;
