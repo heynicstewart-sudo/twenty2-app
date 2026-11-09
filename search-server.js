@@ -19116,21 +19116,35 @@ LOCAL CONTEXT (Perth / WA — use this to make the post genuinely local, not jus
 The post must reflect WA-specific context in its examples, industries, and framing. Do NOT just insert "Perth" or "Western Australia" generically into sentences that could have been written about anywhere. Every locally-specific claim must follow from the context above.
 ` : '';
 
+  const prince2PositioningBlock = isPrince2Keyword ? `
+PRINCE2 POSITIONING (critical — read before writing):
+- This page exists to convert readers who are already interested in PRINCE2 into Twenty2 Collective PRINCE2 students. Do NOT steer them toward Change Management or any other certification.
+- Write about PRINCE2 positively and authoritatively. Answer the question honestly, but frame PRINCE2 as a worthwhile credential for the right person — not as a fallback or second-best option.
+- Do NOT compare PRINCE2 unfavourably to PMP, Agile, Change Management or any other credential. If comparisons are needed, keep them neutral and brief.
+- Do NOT suggest the reader would be better served by a different certification. The reader searched for PRINCE2 — meet them where they are.
+- The closing CTA must direct to Twenty2 Collective's PRINCE2 Foundation & Practitioner course, not to Change Management.
+` : '';
+
+  const ctaInstruction = isPrince2Keyword
+    ? `- Closing CTA paragraph (no heading): 2–3 sentences pointing the reader to Twenty2 Collective's PRINCE2 Foundation & Practitioner course. Example closing: "If you are preparing to sit the PRINCE2 exams, Twenty2 Collective runs PeopleCert-accredited Foundation and Practitioner training in Perth and online — [see course details](/training/prince2-foundation-practitioner)." Adapt naturally to the question topic.
+- No invented internal links to other /research/ pages — a single CTA link to /training/prince2-foundation-practitioner at the close is the only link added here; real internal links from other pages to this one are added separately.`
+    : `- Closing CTA paragraph (no heading): 2–3 sentences pointing the reader to Twenty2 Collective's APMG Change Management Foundation & Practitioner course. Example closing: "If you are preparing to sit the APMG Change Management exam, Twenty2 Collective runs accredited Foundation and Practitioner training in Perth and online — [see course details](/training/apmg-change-management-foundation-practitioner)." Adapt naturally to the question topic.
+- No invented internal links to other /research/ pages — a single CTA link to /training/apmg-change-management-foundation-practitioner at the close is the only link added here; real internal links from other pages to this one are added separately.`;
+
   const prompt = `You are writing a short, focused SEO question-and-answer post for Twenty2 Collective.
 
 VOICE PROFILE:
 ${voiceProfile}
 
 THE QUESTION TO ANSWER: "${keyword}"
-${referenceContentBlock}${localContextBlock}
+${referenceContentBlock}${localContextBlock}${prince2PositioningBlock}
 STRUCTURE RULES (strict):
 - H1: the question itself, phrased naturally (this becomes the URL slug — keyword must appear in it)
 - Opening paragraph (100 words max): give the direct, complete answer immediately. Do NOT make the reader scroll. Answer first, explain after.
 - 2–4 H2 subheadings: each answers a natural follow-up question someone would have after reading the answer. Phrase each H2 as a question. Keep each section to 100–150 words.
 - Target total length: 450–650 words. No padding.
-- Closing CTA paragraph (no heading): 2–3 sentences pointing the reader to Twenty2 Collective's APMG Change Management Foundation & Practitioner course. Example closing: "If you are preparing to sit the APMG Change Management exam, Twenty2 Collective runs accredited Foundation and Practitioner training in Perth and online — [see course details](/training/apmg-change-management-foundation-practitioner)." Adapt naturally to the question topic.
+${ctaInstruction}
 - No FAQ accordion section — the whole post IS the Q&A.
-- No invented internal links to other /research/ pages — a single CTA link to /training/apmg-change-management-foundation-practitioner at the close is the only link added here; real internal links from other pages to this one are added separately.
 - 1 external link to a relevant, well-known source where it adds value.
 - UK/AU English. No em dashes. No AI-tell phrases: "it's important to", "in today's fast-paced world", "leverage", "game-changer", "furthermore", "it is worth noting".
 
